@@ -1,52 +1,51 @@
 # Train Price Monitor
 <p align="center">
-  <img src="public/logo192.png" width="33%"/>
+  <img src="public/logo192.png" width="20%"/></br>
+  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>
+  <a href="https://github.com/wolfm89/train-price-monitor/tree/develop"><img src="https://badge.fury.io/gh/tterb%2FHyde.svg"></a>
 </p>
+
 Train price monitoring WebApp that sends notifications to users when prices increase above a certain threshold, built on a serverless and low-cost tech stack using React, TypeScript, and AWS services such as API Gateway, Lambda, DynamoDB, and SNS.
 
-# Getting Started with Create React App
+## Table of Contents
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+- [Features](#features)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
+- [Technologies](#technologies)
+- [Contributing](#contributing)
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- Monitor train ticket prices between two locations
+- Get notified when the ticket price exceeds a certain threshold
+- Sign up and log in securely
+- Responsive design for mobile and desktop
 
-### `npm start`
+## Getting Started
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+To get a local copy of the project up and running, follow these steps:
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+1. Clone the repository: `git clone https://github.com/wolfm89/train-price-monitor.git`
+2. Install dependencies: `npm install`
+3. Start the development server: `npm start`
 
-### `npm test`
+## Usage
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+To use the application, simply sign up and log in. Then, enter the departure and arrival locations, the desired date and time of travel, and the threshold price. Train Price Monitor will periodically check the ticket prices and notify you when the price exceeds your threshold.
 
-### `npm run build`
+## Technologies
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+- React
+- TypeScript
+- Material-UI
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Contributing
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Contributions are welcome! To contribute to this project, please follow these steps:
 
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
-
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+1. Fork the repository
+2. Create a new branch for your feature: `git checkout -b feature/feature-name`
+3. Make your changes and commit them: `git commit -m 'Add some feature'`
+4. Push your changes to your fork: `git push origin feature/feature-name`
+5. Submit a pull request
