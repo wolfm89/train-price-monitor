@@ -1,11 +1,26 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppBar, Toolbar, Typography, IconButton, Badge, Container, useMediaQuery, useTheme } from '@mui/material';
 import { Search as SearchIcon, AccountCircle as AccountCircleIcon, Notifications as NotificationsIcon, Train as TrainIcon } from '@mui/icons-material';
+import NotificationPopover from './NotificationPopover';
 
 const Header = () => {
     const theme = useTheme();
     const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
+
+    const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
+
+    const handleNotificationClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+        setAnchorEl(event.currentTarget);
+    };
+
+
+    const handleNotificationClose = () => {
+        setAnchorEl(null);
+    };
+
+    const open = Boolean(anchorEl);
+    const id = open ? 'notification-popover' : undefined;
 
     return (
         <AppBar position="static" sx={{ maxWidth: "lg", mx: "auto" }}>
@@ -38,7 +53,7 @@ const Header = () => {
                                 )}
                             </IconButton>
                         </Link>
-                        <IconButton color="inherit">
+                        <IconButton color="inherit" onClick={handleNotificationClick}>
                             <Badge badgeContent={4} color="error">
                                 <NotificationsIcon />
                             </Badge>
@@ -49,6 +64,12 @@ const Header = () => {
                     </div>
                 </Toolbar>
             </Container>
+            <NotificationPopover
+                anchorEl={anchorEl}
+                id={id}
+                open={open}
+                onClose={handleNotificationClose}
+            />
         </AppBar>
     );
 };
