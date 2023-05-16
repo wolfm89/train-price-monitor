@@ -8,6 +8,9 @@ export const theme = createTheme({
     },
     secondary: {
       main: '#C62D25',
-    }
+    },
+    background: {
+      paper: '#eceff1',
+    },
   },
 });
