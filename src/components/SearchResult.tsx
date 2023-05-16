@@ -9,10 +9,24 @@ interface Props {
 const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
     const theme = useTheme();
 
+    const formatDateTime = (dateTime: string) => {
+        const date = new Date(dateTime);
+        const formattedDate = date.toLocaleDateString(undefined, {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+        });
+        const formattedTime = date.toLocaleTimeString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        return `${formattedDate} ${formattedTime}`;
+    };
+
     return (
         <>
             <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                {`${searchData.departure} to ${searchData.destination}, ${searchData.date} ${searchData.time}`}
+                {`${searchData.departure} to ${searchData.destination}, ${formatDateTime(searchData.date + 'T' + searchData.time)}`}
             </Typography>
             <TableContainer>
                 <Table>
