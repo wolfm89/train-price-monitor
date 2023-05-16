@@ -28,7 +28,7 @@ const Header = () => {
                                 )}
                             </IconButton>
                         </Link>
-                        <Link to="/my-journeys" style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center' }}>
+                        <Link to="/journeys" style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center' }}>
                             <IconButton color="inherit" sx={{ borderRadius: 4 }}>
                                 <TrainIcon />
                                 {!isScreenSmall && (
