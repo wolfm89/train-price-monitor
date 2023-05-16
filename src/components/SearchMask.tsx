@@ -6,18 +6,18 @@ interface Props {
 }
 
 const SearchMask: React.FC<Props> = ({ onSearch }) => {
-    const [departure, setDeparture] = useState('');
-    const [destination, setDestination] = useState('');
-    const [date, setDate] = useState('');
-    const [time, setTime] = useState('');
-    const [formValid, setFormValid] = useState(false);
+    const [departure, setDeparture] = useState<string>('');
+    const [destination, setDestination] = useState<string>('');
+    const [date, setDate] = useState<string>('');
+    const [time, setTime] = useState<string>('');
+    const [formValid, setFormValid] = useState<boolean>(false);
 
     const handleSearchClick = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
 
         const searchData = {
-            departure,
-            destination,
+            departure: departure.trim(),
+            destination: destination.trim(),
             date,
             time
         };
