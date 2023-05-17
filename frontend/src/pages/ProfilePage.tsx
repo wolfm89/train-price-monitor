@@ -37,8 +37,11 @@ const ProfilePage: React.FC = () => {
         <Grid item xs={12} sm={6}>
           <TextField label="Last Name" variant="outlined" value={lastName} onChange={(e) => setLastName(e.target.value)} fullWidth disabled />
         </Grid>
-        <Grid item xs={12}>
+        <Grid item xs={12} sm={6}>
           <TextField label="Email" variant="outlined" value={email} onChange={(e) => setEmail(e.target.value)} fullWidth disabled />
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <Box></Box>
         </Grid>
         <Grid item xs={12} sm={6}>
           <TextField
