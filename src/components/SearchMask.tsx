@@ -12,9 +12,7 @@ const SearchMask: React.FC<Props> = ({ onSearch }) => {
     const [time, setTime] = useState<string>('');
     const [formValid, setFormValid] = useState<boolean>(false);
 
-    const handleSearchClick = (e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-
+    const handleSearchClick = () => {
         const searchData = {
             departure: departure.trim(),
             destination: destination.trim(),
@@ -46,58 +44,56 @@ const SearchMask: React.FC<Props> = ({ onSearch }) => {
     }, [departure, destination, date, time]);
 
     return (
-        <form onSubmit={handleSearchClick}>
-            <Grid container spacing={2}>
-                <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
-                    <Typography>From:</Typography>
-                </Grid>
-                <Grid item xs={9} sm={5}>
-                    <TextField
-                        id="departure"
-                        value={departure}
-                        onChange={(e) => setDeparture(e.target.value)}
-                        fullWidth
-                    />
-                </Grid>
-                <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
-                    <Typography>To:</Typography>
-                </Grid>
-                <Grid item xs={9} sm={5}>
-                    <TextField
-                        id="destination"
-                        value={destination}
-                        onChange={(e) => setDestination(e.target.value)}
-                        fullWidth
-                    />
-                </Grid>
-                <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
-                    <Typography>Departure:</Typography>
-                </Grid>
-                <Grid item xs={5} sm={3}>
-                    <TextField
-                        id="date"
-                        type="date"
-                        value={date}
-                        onChange={(e) => setDate(e.target.value)}
-                        fullWidth
-                    />
-                </Grid>
-                <Grid item xs={4} sm={2}>
-                    <TextField
-                        id="time"
-                        type="time"
-                        value={time}
-                        onChange={(e) => setTime(e.target.value)}
-                        fullWidth
-                    />
-                </Grid>
-                <Grid item sm={6} container justifyContent="right" alignItems="center">
-                    <Button variant="contained" type="submit" disabled={!formValid}>
-                        Search
-                    </Button>
-                </Grid>
+        <Grid container spacing={2}>
+            <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
+                <Typography>From:</Typography>
             </Grid>
-        </form>
+            <Grid item xs={9} sm={5}>
+                <TextField
+                    id="departure"
+                    value={departure}
+                    onChange={(e) => setDeparture(e.target.value)}
+                    fullWidth
+                />
+            </Grid>
+            <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
+                <Typography>To:</Typography>
+            </Grid>
+            <Grid item xs={9} sm={5}>
+                <TextField
+                    id="destination"
+                    value={destination}
+                    onChange={(e) => setDestination(e.target.value)}
+                    fullWidth
+                />
+            </Grid>
+            <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
+                <Typography>Departure:</Typography>
+            </Grid>
+            <Grid item xs={5} sm={3}>
+                <TextField
+                    id="date"
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    fullWidth
+                />
+            </Grid>
+            <Grid item xs={4} sm={2}>
+                <TextField
+                    id="time"
+                    type="time"
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                    fullWidth
+                />
+            </Grid>
+            <Grid item sm={6} container justifyContent="right" alignItems="center">
+                <Button variant="contained" type="submit" disabled={!formValid} onClick={handleSearchClick}>
+                    Search
+                </Button>
+            </Grid>
+        </Grid>
     );
 };
 
