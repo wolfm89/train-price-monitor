@@ -21,10 +21,17 @@ const ProfilePage: React.FC = () => {
       <Typography variant="h6" gutterBottom>
         Profile
       </Typography>
-      <Box sx={{ display: 'flex', justifyContent: 'left', alignItems: 'center', marginBottom: 4 }}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'left',
+          alignItems: 'center',
+          marginBottom: 4,
+        }}
+      >
         <Avatar alt="Profile Picture" src="/path/to/profile-picture.jpg" sx={{ width: 120, height: 120 }} />
         <Box sx={{ flexGrow: 0, marginLeft: 2 }}>
-          <Button variant="outlined" component="label" >
+          <Button variant="outlined" component="label">
             Change Picture
             <input type="file" accept="image/*" hidden onChange={handleProfilePictureChange} />
           </Button>
@@ -32,13 +39,34 @@ const ProfilePage: React.FC = () => {
       </Box>
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6}>
-          <TextField label="First Name" variant="outlined" value={firstName} onChange={(e) => setFirstName(e.target.value)} fullWidth disabled />
+          <TextField
+            label="First Name"
+            variant="outlined"
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            fullWidth
+            disabled
+          />
         </Grid>
         <Grid item xs={12} sm={6}>
-          <TextField label="Last Name" variant="outlined" value={lastName} onChange={(e) => setLastName(e.target.value)} fullWidth disabled />
+          <TextField
+            label="Last Name"
+            variant="outlined"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            fullWidth
+            disabled
+          />
         </Grid>
         <Grid item xs={12} sm={6}>
-          <TextField label="Email" variant="outlined" value={email} onChange={(e) => setEmail(e.target.value)} fullWidth disabled />
+          <TextField
+            label="Email"
+            variant="outlined"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            fullWidth
+            disabled
+          />
         </Grid>
         <Grid item xs={12} sm={6}>
           <Box></Box>

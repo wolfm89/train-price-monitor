@@ -22,7 +22,7 @@ const JourneysPage: React.FC = () => {
       date: '2023-05-20',
       time: '09:30',
       meansOfTransport: ['EC', 'RJ'],
-      currentPrice: 42.50
+      currentPrice: 42.5,
     },
     {
       id: 2,
@@ -31,8 +31,8 @@ const JourneysPage: React.FC = () => {
       date: '2023-05-22',
       time: '14:45',
       meansOfTransport: ['R'],
-      currentPrice: 28.90
-    }
+      currentPrice: 28.9,
+    },
   ];
 
   const [expandedJourneyId, setExpandedJourneyId] = useState<number | null>(null);
@@ -56,7 +56,7 @@ const JourneysPage: React.FC = () => {
             {journeys.map((journey) => (
               <ListItem key={journey.id}>
                 <Accordion
-                  sx={{ width: "100%" }}
+                  sx={{ width: '100%' }}
                   expanded={expandedJourneyId === journey.id}
                   onChange={() => toggleJourneyDetails(journey.id)}
                 >
@@ -65,9 +65,7 @@ const JourneysPage: React.FC = () => {
                       <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                         {`${journey.departure} to ${journey.destination}`}
                       </Typography>
-                      <Typography variant="body2">
-                        {`Price: €${journey.currentPrice.toFixed(2)}`}
-                      </Typography>
+                      <Typography variant="body2">{`Price: €${journey.currentPrice.toFixed(2)}`}</Typography>
                     </Grid>
                   </AccordionSummary>
                   <AccordionDetails>
