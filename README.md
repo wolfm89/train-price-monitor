@@ -1,4 +1,5 @@
 # Train Price Monitor
+
 <p align="center">
   <img src="frontend/public/logo192.png" width="20%"/></br>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>

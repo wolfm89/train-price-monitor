@@ -3,7 +3,7 @@ import { Grid, Typography } from '@mui/material';
 import SearchMask from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
 
-interface Props { }
+interface Props {}
 
 const SearchPage: React.FC<Props> = () => {
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
