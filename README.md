@@ -1,6 +1,6 @@
 # Train Price Monitor
 <p align="center">
-  <img src="public/logo192.png" width="20%"/></br>
+  <img src="frontend/public/logo192.png" width="20%"/></br>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>
   <a href="https://github.com/wolfm89/train-price-monitor/tree/develop"><img src="https://badge.fury.io/gh/tterb%2FHyde.svg"></a>
 </p>
@@ -27,8 +27,11 @@ Train price monitoring WebApp that sends notifications to users when prices incr
 To get a local copy of the project up and running, follow these steps:
 
 1. Clone the repository: `git clone https://github.com/wolfm89/train-price-monitor.git`
-2. Install dependencies: `npm install`
-3. Start the development server: `npm start`
+2. `cd frontend`
+3. Install dependencies: `npm install`
+4. Start the development server: `npm start`
+
+This will start the frontend (but not the backend!).
 
 ## Usage
 
