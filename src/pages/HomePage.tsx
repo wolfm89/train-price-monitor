@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
-import { Button, Container, Typography, Box } from '@mui/material';
+import { Button, Typography, Box } from '@mui/material';
 
 interface Props { }
 
@@ -27,7 +27,7 @@ const HomePage: React.FC<Props> = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ my: 4 }} >
+    <>
       <Typography variant="h4">
         Never overpay for train tickets again
       </Typography>
@@ -41,7 +41,7 @@ const HomePage: React.FC<Props> = () => {
         <Button variant="contained" onClick={handleLoginOpen}>Login</Button>
         <LoginModal open={loginOpen} onClose={handleLoginClose} />
       </Box>
-    </Container>
+    </>
   );
 };
 
