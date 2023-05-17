@@ -3,24 +3,36 @@ import { Link } from 'react-router-dom';
 import { AppBar, Toolbar, Typography, IconButton, Badge, Container, useMediaQuery, useTheme } from '@mui/material';
 import { Search as SearchIcon, AccountCircle as AccountCircleIcon, Notifications as NotificationsIcon, Train as TrainIcon } from '@mui/icons-material';
 import NotificationPopover from './NotificationPopover';
+import AccountMenu from "./AccountMenu";
 
 const Header = () => {
     const theme = useTheme();
     const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
 
-    const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
+    const [notificationAnchorEl, setNotificationAnchorEl] = useState<HTMLButtonElement | null>(null);
 
     const handleNotificationClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-        setAnchorEl(event.currentTarget);
+        setNotificationAnchorEl(event.currentTarget);
     };
 
 
     const handleNotificationClose = () => {
-        setAnchorEl(null);
+        setNotificationAnchorEl(null);
     };
 
-    const open = Boolean(anchorEl);
+    const open = Boolean(notificationAnchorEl);
     const id = open ? 'notification-popover' : undefined;
+
+    const [accountAnchorEl, setAccountAnchorEl] =
+        useState<HTMLButtonElement | null>(null);
+
+    const handleAccountClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+        setAccountAnchorEl(event.currentTarget);
+    };
+
+    const handleAccountClose = () => {
+        setAccountAnchorEl(null);
+    };
 
     return (
         <AppBar position="static" sx={{ maxWidth: "lg", mx: "auto" }}>
@@ -58,17 +70,21 @@ const Header = () => {
                                 <NotificationsIcon />
                             </Badge>
                         </IconButton>
-                        <IconButton aria-label="user profile" color="inherit">
+                        <IconButton aria-label="user profile" color="inherit" onClick={handleAccountClick}>
                             <AccountCircleIcon />
                         </IconButton>
                     </div>
                 </Toolbar>
             </Container>
             <NotificationPopover
-                anchorEl={anchorEl}
+                anchorEl={notificationAnchorEl}
                 id={id}
                 open={open}
                 onClose={handleNotificationClose}
+            />
+            <AccountMenu
+                anchorEl={accountAnchorEl}
+                onClose={handleAccountClose}
             />
         </AppBar>
     );
