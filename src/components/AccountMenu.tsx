@@ -1,6 +1,7 @@
 import React from 'react';
 import { Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import { AccountCircle as AccountCircleIcon, Settings as SettingsIcon, ExitToApp as ExitToAppIcon } from '@mui/icons-material';
+import { Link } from 'react-router-dom';
 
 interface Props {
   anchorEl: HTMLButtonElement | null;
@@ -30,7 +31,7 @@ const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
       open={isMenuOpen}
       onClose={handleMenuClose}
     >
-      <MenuItem onClick={handleMenuClose}>
+      <MenuItem component={Link} to="/profile" onClick={handleMenuClose}>
         <ListItemIcon>
           <AccountCircleIcon />
         </ListItemIcon>
