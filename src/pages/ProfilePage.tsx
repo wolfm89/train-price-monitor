@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Container, Typography, Grid, TextField, Button, Avatar, Box } from '@mui/material';
+import { Typography, Grid, TextField, Button, Avatar, Box } from '@mui/material';
 
 const ProfilePage: React.FC = () => {
   const [firstName, setFirstName] = useState('John');
@@ -17,7 +17,7 @@ const ProfilePage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ my: 4 }}>
+    <>
       <Typography variant="h6" gutterBottom>
         Profile
       </Typography>
@@ -66,7 +66,7 @@ const ProfilePage: React.FC = () => {
           </Button>
         </Grid>
       </Grid>
-    </Container>
+    </>
   );
 };
 

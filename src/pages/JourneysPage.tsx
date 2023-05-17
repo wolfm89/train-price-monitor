@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Container, Grid, Typography, Accordion, AccordionSummary, AccordionDetails, List, ListItem } from '@mui/material';
+import { Grid, Typography, Accordion, AccordionSummary, AccordionDetails, List, ListItem } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 
 interface Journey {
@@ -46,56 +46,54 @@ const JourneysPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ my: 4 }}>
-      <Grid container spacing={2}>
-        <Grid item xs={12}>
-          <Typography variant="h6">My Journeys</Typography>
-        </Grid>
-        <Grid item xs={12}>
-          {journeys.length > 0 ? (
-            <List>
-              {journeys.map((journey) => (
-                <ListItem key={journey.id}>
-                  <Accordion
-                    sx={{ width: "100%" }}
-                    expanded={expandedJourneyId === journey.id}
-                    onChange={() => toggleJourneyDetails(journey.id)}
-                  >
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Grid container justifyContent="space-between" alignItems="center">
-                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                          {`${journey.departure} to ${journey.destination}`}
-                        </Typography>
-                        <Typography variant="body2">
-                          {`Price: €${journey.currentPrice.toFixed(2)}`}
-                        </Typography>
-                      </Grid>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Grid container spacing={2}>
-                        <Grid item xs={12}>
-                          <Typography variant="body2">{`Date: ${journey.date}`}</Typography>
-                        </Grid>
-                        <Grid item xs={12}>
-                          <Typography variant="body2">{`Time: ${journey.time}`}</Typography>
-                        </Grid>
-                        <Grid item xs={12}>
-                          <Typography variant="body2">{`Means of Transport: ${journey.meansOfTransport.join(
-                            ', '
-                          )}`}</Typography>
-                        </Grid>
-                      </Grid>
-                    </AccordionDetails>
-                  </Accordion>
-                </ListItem>
-              ))}
-            </List>
-          ) : (
-            <Typography variant="body1">No journeys found.</Typography>
-          )}
-        </Grid>
+    <Grid container spacing={2}>
+      <Grid item xs={12}>
+        <Typography variant="h6">My Journeys</Typography>
       </Grid>
-    </Container>
+      <Grid item xs={12}>
+        {journeys.length > 0 ? (
+          <List>
+            {journeys.map((journey) => (
+              <ListItem key={journey.id}>
+                <Accordion
+                  sx={{ width: "100%" }}
+                  expanded={expandedJourneyId === journey.id}
+                  onChange={() => toggleJourneyDetails(journey.id)}
+                >
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Grid container justifyContent="space-between" alignItems="center">
+                      <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                        {`${journey.departure} to ${journey.destination}`}
+                      </Typography>
+                      <Typography variant="body2">
+                        {`Price: €${journey.currentPrice.toFixed(2)}`}
+                      </Typography>
+                    </Grid>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12}>
+                        <Typography variant="body2">{`Date: ${journey.date}`}</Typography>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <Typography variant="body2">{`Time: ${journey.time}`}</Typography>
+                      </Grid>
+                      <Grid item xs={12}>
+                        <Typography variant="body2">{`Means of Transport: ${journey.meansOfTransport.join(
+                          ', '
+                        )}`}</Typography>
+                      </Grid>
+                    </Grid>
+                  </AccordionDetails>
+                </Accordion>
+              </ListItem>
+            ))}
+          </List>
+        ) : (
+          <Typography variant="body1">No journeys found.</Typography>
+        )}
+      </Grid>
+    </Grid>
   );
 };
 
