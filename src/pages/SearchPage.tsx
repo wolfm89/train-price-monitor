@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Container, Grid, Typography } from '@mui/material';
+import { Grid, Typography } from '@mui/material';
 import SearchMask from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
 
-interface Props {}
+interface Props { }
 
 const SearchPage: React.FC<Props> = () => {
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
@@ -20,21 +20,19 @@ const SearchPage: React.FC<Props> = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ my: 4 }}>
-      <Grid container spacing={2}>
-        <Grid item xs={12}>
-          <Typography variant="h6">Search for Train Rides</Typography>
-        </Grid>
-        <Grid item xs={12}>
-          <SearchMask onSearch={handleSearchClick} />
-        </Grid>
-        {searchClicked && (
-          <Grid item xs={12}>
-            <SearchResult searchData={searchData} searchResult={searchResult} />
-          </Grid>
-        )}
+    <Grid container spacing={2}>
+      <Grid item xs={12}>
+        <Typography variant="h6">Search for Train Rides</Typography>
       </Grid>
-    </Container>
+      <Grid item xs={12}>
+        <SearchMask onSearch={handleSearchClick} />
+      </Grid>
+      {searchClicked && (
+        <Grid item xs={12}>
+          <SearchResult searchData={searchData} searchResult={searchResult} />
+        </Grid>
+      )}
+    </Grid>
   );
 };
 
