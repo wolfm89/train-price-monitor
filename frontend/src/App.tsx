@@ -19,7 +19,8 @@ export default function App() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/journeys" element={<JourneysPage />} />
             <Route path="/profile" element={<ProfilePage />} />
-          </Routes></Container>
+          </Routes>
+        </Container>
         <Footer />
       </Router>
     </React.Fragment>
