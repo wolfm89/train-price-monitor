@@ -29,7 +29,7 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id,
     >
       <List>
         {notifications.map((result: any, index: number) => (
-          <ListItemButton>
+          <ListItemButton key={index}>
             <ListItemIcon>
               <NotificationImportantIcon />
             </ListItemIcon>

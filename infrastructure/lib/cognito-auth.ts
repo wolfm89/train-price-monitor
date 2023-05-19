@@ -13,7 +13,7 @@ export class CognitoAuth extends Construct {
 
     // Create a user pool
     const userPool = new cognito.UserPool(this, 'UserPool', {
-      selfSignUpEnabled: false,
+      selfSignUpEnabled: true,
       signInAliases: {
         email: true,
       },
@@ -43,8 +43,7 @@ export class CognitoAuth extends Construct {
       },
       userVerification: {
         emailSubject: `Verify your email for ${appName}`,
-        emailBody:
-          'Hello {username},\n\nPlease verify your email address by clicking the following link: {##Verify Email##}',
+        emailBody: 'Hello,<br><br>Please verify your email address by clicking the following link: {##Verify Email##}',
         emailStyle: cognito.VerificationEmailStyle.LINK,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
