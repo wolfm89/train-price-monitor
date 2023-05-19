@@ -52,12 +52,12 @@ export class CognitoAuth extends Construct {
     });
 
     // Create a user pool app client
-    const userPoolClient = userPool.addClient('UserPoolClient', {
+    userPool.addClient('UserPoolClient', {
       generateSecret: false,
     });
 
     // Create a Cognito domain
-    const domain = userPool.addDomain('CognitoDomain', {
+    userPool.addDomain('CognitoDomain', {
       cognitoDomain: {
         domainPrefix: appName.toLowerCase().replace(/ /g, '-'),
       },
