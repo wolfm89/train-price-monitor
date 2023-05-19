@@ -1,29 +1,9 @@
 env:
-  browser: true
-  es2021: true
+  node: true
+  jest: true
 extends:
-  - eslint:recommended
-  - plugin:@typescript-eslint/recommended
-  - prettier
-overrides: []
-parser: '@typescript-eslint/parser'
-parserOptions:
-  ecmaVersion: latest
-  sourceType: module
+  - plugin:awscdk/all
 plugins:
-  - '@typescript-eslint'
-  - 'prettier'
+  - 'awscdk'
 rules:
-  indent:
-    - error
-    - 2
-  linebreak-style:
-    - error
-    - unix
-  quotes:
-    - error
-    - single
-  semi:
-    - error
-    - always
-  prettier/prettier: 2
+  '@typescript-eslint/no-var-requires': 'off'
