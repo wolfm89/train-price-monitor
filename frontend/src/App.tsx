@@ -1,16 +1,17 @@
-import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Container } from '@mui/material';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import HomePage from './pages/HomePage';
 import SearchPage from './pages/SearchPage';
 import JourneysPage from './pages/JourneysPage';
 import ProfilePage from './pages/ProfilePage';
-import { Container } from '@mui/material';
+import AlertProvider from './providers/AlertProvider';
+import AlertBar from './components/AlertBar';
 
 export default function App() {
   return (
-    <React.Fragment>
+    <AlertProvider>
       <Router>
         <Header />
         <Container maxWidth="md" sx={{ my: 4 }}>
@@ -22,7 +23,8 @@ export default function App() {
           </Routes>
         </Container>
         <Footer />
+        <AlertBar />
       </Router>
-    </React.Fragment>
+    </AlertProvider>
   );
 }
