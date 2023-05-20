@@ -1,6 +1,8 @@
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
 import React, { useState } from 'react';
 import { CognitoUserPool, CognitoUserAttribute, ISignUpResult } from 'amazon-cognito-identity-js';
+import useAlert from '../hooks/useAlert';
+import { AlertSeverity } from '../providers/AlertProvider';
 
 interface Props {
   open: boolean;
@@ -12,6 +14,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
   const [givenName, setGivenName] = useState<string>('');
   const [familyName, setFamilyName] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const { addAlert } = useAlert();
 
   const poolData = {
     UserPoolId: process.env.REACT_APP_COGNITO_USER_POOL_ID!,
@@ -46,9 +49,12 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     userPool.signUp(email, password, userAttributes, [], (err: Error | undefined, result?: ISignUpResult) => {
       if (err) {
         console.error('Error signing up:', err);
+        addAlert(err.message, AlertSeverity.Error);
         return;
       }
       console.log('Successfully signed up:', result);
+      addAlert('Sign up successful! Please check your emails and confirm your account.', AlertSeverity.Success);
+      onClose(); // Close the modal after successful signup
     });
   };
 
