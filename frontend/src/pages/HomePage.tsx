@@ -1,29 +1,44 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
 import { Button, Typography, Box } from '@mui/material';
+import { getCurrentUser, UserData } from '../utils/auth';
 
 interface Props {}
 
 const HomePage: React.FC<Props> = () => {
-  const [open, setOpen] = useState<boolean>(false);
-  const [loginOpen, setLoginOpen] = useState<boolean>(false);
+  const [signupModalOpen, setSignupModalOpen] = useState<boolean>(false);
+  const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
+  const [user, setUser] = useState<UserData>();
 
   const handleModalOpen = () => {
-    setOpen(true);
+    setSignupModalOpen(true);
   };
 
   const handleModalClose = () => {
-    setOpen(false);
+    setSignupModalOpen(false);
   };
 
   const handleLoginOpen = () => {
-    setLoginOpen(true);
+    setLoginModalOpen(true);
   };
 
   const handleLoginClose = () => {
-    setLoginOpen(false);
+    setLoginModalOpen(false);
   };
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const user = await getCurrentUser();
+        setUser(user);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    fetchUser();
+  }, [loginModalOpen]);
 
   return (
     <>
@@ -32,17 +47,19 @@ const HomePage: React.FC<Props> = () => {
         With Train Price Monitor, you can track the prices of train tickets and get notified when they increase. Sign up
         today to start monitoring your train prices!
       </Typography>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Button variant="contained" onClick={handleModalOpen}>
-          Sign up now
-        </Button>
-        <SignupModal open={open} onClose={handleModalClose} />
-        <Typography variant="body1">or</Typography>
-        <Button variant="contained" onClick={handleLoginOpen}>
-          Login
-        </Button>
-        <LoginModal open={loginOpen} onClose={handleLoginClose} />
-      </Box>
+      {!user && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Button variant="contained" onClick={handleModalOpen}>
+            Sign up now
+          </Button>
+          <SignupModal open={signupModalOpen} onClose={handleModalClose} />
+          <Typography variant="body1">or</Typography>
+          <Button variant="contained" onClick={handleLoginOpen}>
+            Login
+          </Button>
+          <LoginModal open={loginModalOpen} onClose={handleLoginClose} />
+        </Box>
+      )}
     </>
   );
 };
