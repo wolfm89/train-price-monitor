@@ -1,8 +1,8 @@
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
 import React, { useState } from 'react';
-import { CognitoUserPool, CognitoUserAttribute, ISignUpResult } from 'amazon-cognito-identity-js';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
+import { signUp } from '../utils/auth';
 
 interface Props {
   open: boolean;
@@ -16,46 +16,15 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
   const [password, setPassword] = useState<string>('');
   const { addAlert } = useAlert();
 
-  const poolData = {
-    UserPoolId: process.env.REACT_APP_COGNITO_USER_POOL_ID!,
-    ClientId: process.env.REACT_APP_COGNITO_CLIENT_ID!,
-  };
-
-  const userPool = new CognitoUserPool(poolData);
-
-  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setEmail(e.target.value);
-  };
-
-  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setPassword(e.target.value);
-  };
-
-  const handleGivenNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setGivenName(e.target.value);
-  };
-
-  const handleFamilyNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFamilyName(e.target.value);
-  };
-
-  const handleSignUp = () => {
-    const userAttributes: CognitoUserAttribute[] = [
-      new CognitoUserAttribute({ Name: 'email', Value: email }),
-      new CognitoUserAttribute({ Name: 'given_name', Value: givenName }),
-      new CognitoUserAttribute({ Name: 'family_name', Value: familyName }),
-    ];
-
-    userPool.signUp(email, password, userAttributes, [], (err: Error | undefined, result?: ISignUpResult) => {
-      if (err) {
-        console.error('Error signing up:', err);
-        addAlert(err.message, AlertSeverity.Error);
-        return;
-      }
-      console.log('Successfully signed up:', result);
-      addAlert('Sign up successful! Please check your emails and confirm your account.', AlertSeverity.Success);
-      onClose(); // Close the modal after successful signup
-    });
+  const handleSignUp = async () => {
+    try {
+      await signUp(givenName, familyName, email, password);
+    } catch (err: any) {
+      addAlert(err.message, AlertSeverity.Error);
+      return;
+    }
+    addAlert('Sign up successful! Please check your emails and confirm your account.', AlertSeverity.Success);
+    onClose();
   };
 
   return (
@@ -70,7 +39,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           type="text"
           fullWidth
           value={givenName}
-          onChange={handleGivenNameChange}
+          onChange={(e) => setGivenName(e.target.value)}
         />
         <TextField
           margin="dense"
@@ -79,16 +48,23 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           type="text"
           fullWidth
           value={familyName}
-          onChange={handleFamilyNameChange}
+          onChange={(e) => setFamilyName(e.target.value)}
         />
-        <TextField margin="dense" label="Email" type="email" fullWidth value={email} onChange={handleEmailChange} />
+        <TextField
+          margin="dense"
+          label="Email"
+          type="email"
+          fullWidth
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
         <TextField
           margin="dense"
           label="Password"
           type="password"
           fullWidth
           value={password}
-          onChange={handlePasswordChange}
+          onChange={(e) => setPassword(e.target.value)}
         />
       </DialogContent>
       <DialogActions>

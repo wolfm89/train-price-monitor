@@ -2,6 +2,7 @@ import React from 'react';
 import { Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import { AccountCircle as AccountCircleIcon, ExitToApp as ExitToAppIcon } from '@mui/icons-material';
 import { Link } from 'react-router-dom';
+import { signOut } from '../utils/auth';
 
 interface Props {
   anchorEl: HTMLButtonElement | null;
@@ -14,6 +15,11 @@ const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
   const handleMenuClose = () => {
     onClose();
   };
+
+  function handleLogout(): void {
+    signOut();
+    handleMenuClose();
+  }
 
   return (
     <Menu
@@ -37,7 +43,7 @@ const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
         </ListItemIcon>
         <ListItemText primary="Profile" />
       </MenuItem>
-      <MenuItem onClick={handleMenuClose}>
+      <MenuItem onClick={handleLogout}>
         <ListItemIcon>
           <ExitToAppIcon />
         </ListItemIcon>
