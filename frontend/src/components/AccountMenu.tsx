@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import { AccountCircle as AccountCircleIcon, ExitToApp as ExitToAppIcon } from '@mui/icons-material';
 import { Link } from 'react-router-dom';
-import { signOut } from '../utils/auth';
+import { AuthContext } from '../providers/AuthProvider';
 
 interface Props {
   anchorEl: HTMLButtonElement | null;
@@ -11,6 +11,7 @@ interface Props {
 
 const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
   const isMenuOpen = Boolean(anchorEl);
+  const { signOut } = useContext(AuthContext);
 
   const handleMenuClose = () => {
     onClose();

@@ -27,6 +27,12 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     onClose();
   };
 
+  const handleKeyPress = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      handleSignUp();
+    }
+  };
+
   return (
     <Dialog open={open} onClose={onClose}>
       <DialogTitle>Sign Up</DialogTitle>
@@ -40,6 +46,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={givenName}
           onChange={(e) => setGivenName(e.target.value)}
+          onKeyPress={handleKeyPress}
         />
         <TextField
           margin="dense"
@@ -49,6 +56,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={familyName}
           onChange={(e) => setFamilyName(e.target.value)}
+          onKeyPress={handleKeyPress}
         />
         <TextField
           margin="dense"
@@ -57,6 +65,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          onKeyPress={handleKeyPress}
         />
         <TextField
           margin="dense"
@@ -65,11 +74,12 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          onKeyPress={handleKeyPress}
         />
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSignUp} color="primary">
+        <Button onClick={handleSignUp} variant="contained" color="primary">
           Sign Up
         </Button>
       </DialogActions>
