@@ -55,45 +55,41 @@ export function signIn(email: string, password: string): Promise<CognitoUserSess
   });
 }
 
-// export function forgotPassword(email: string): Promise<void> {
-//   return new Promise((resolve, reject) => {
-//     const cognitoUser = new CognitoUser({
-//       Username: email,
-//       Pool: userPool,
-//     });
+export function forgotPassword(email: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cognitoUser = new CognitoUser({
+      Username: email,
+      Pool: userPool,
+    });
 
-//     cognitoUser.forgotPassword({
-//       onSuccess: () => {
-//         resolve();
-//       },
-//       onFailure: (err: Error) => {
-//         reject(err);
-//       },
-//     });
-//   });
-// }
+    cognitoUser.forgotPassword({
+      onSuccess: () => {
+        resolve();
+      },
+      onFailure: (err: Error) => {
+        reject(err);
+      },
+    });
+  });
+}
 
-// export function confirmPassword(
-//   username: string,
-//   confirmationCode: string,
-//   newPassword: string
-// ): Promise<void> {
-//   return new Promise((resolve, reject) => {
-//     const cognitoUser = new CognitoUser({
-//       Username: username,
-//       Pool: userPool,
-//     });
+export function confirmPassword(email: string, confirmationCode: string, newPassword: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cognitoUser = new CognitoUser({
+      Username: email,
+      Pool: userPool,
+    });
 
-//     cognitoUser.confirmPassword(confirmationCode, newPassword, {
-//       onSuccess: () => {
-//         resolve();
-//       },
-//       onFailure: (err: Error) => {
-//         reject(err);
-//       },
-//     });
-//   });
-// }
+    cognitoUser.confirmPassword(confirmationCode, newPassword, {
+      onSuccess: () => {
+        resolve();
+      },
+      onFailure: (err: Error) => {
+        reject(err);
+      },
+    });
+  });
+}
 
 export function signOut(): void {
   const cognitoUser = userPool.getCurrentUser();
@@ -148,6 +144,30 @@ export function getSession() {
         return;
       }
       resolve(session);
+    });
+  });
+}
+
+export function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cognitoUser = userPool.getCurrentUser();
+    if (!cognitoUser) {
+      reject(new Error('No user found'));
+      return;
+    }
+    cognitoUser.getSession((getSessionErr: Error, session: CognitoUserSession | null) => {
+      if (getSessionErr) {
+        reject(getSessionErr);
+        return;
+      }
+
+      cognitoUser.changePassword(oldPassword, newPassword, (changePasswordErr: Error | undefined) => {
+        if (changePasswordErr) {
+          reject(changePasswordErr);
+          return;
+        }
+        resolve();
+      });
     });
   });
 }

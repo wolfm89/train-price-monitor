@@ -1,19 +1,30 @@
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
 import { Typography, Grid, TextField, Button, Avatar, Box } from '@mui/material';
+import { AuthContext } from '../providers/AuthProvider';
+import { AlertSeverity } from '../providers/AlertProvider';
+import useAlert from '../hooks/useAlert';
+import { changePassword } from '../utils/auth';
 
 const ProfilePage: React.FC = () => {
-  const [firstName, setFirstName] = useState('John');
-  const [lastName, setLastName] = useState('Doe');
-  const [email, setEmail] = useState('johndoe@example.com');
+  const { user } = useContext(AuthContext);
+  const [firstName, setFirstName] = useState(user?.given_name);
+  const [lastName, setLastName] = useState(user?.family_name);
+  const [email, setEmail] = useState(user?.email);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const { addAlert } = useAlert();
 
   const handleProfilePictureChange = () => {
     // Logic to handle picture change
   };
 
-  const handleSaveChanges = () => {
-    // Handle save changes logic
+  const handleSaveChanges = async () => {
+    try {
+      await changePassword(oldPassword, newPassword);
+      addAlert('Password changed successfully!', AlertSeverity.Success);
+    } catch (error) {
+      addAlert('Password change failed. Please try again.', AlertSeverity.Error);
+    }
   };
 
   return (
@@ -69,7 +80,7 @@ const ProfilePage: React.FC = () => {
           />
         </Grid>
         <Grid item xs={12} sm={6}>
-          <Box></Box>
+          <Box />
         </Grid>
         <Grid item xs={12} sm={6}>
           <TextField
