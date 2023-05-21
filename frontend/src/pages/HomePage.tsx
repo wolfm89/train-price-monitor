@@ -1,15 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
 import { Button, Typography, Box } from '@mui/material';
-import { getCurrentUser, UserData } from '../utils/auth';
+import { AuthContext } from '../providers/AuthProvider';
 
 interface Props {}
 
 const HomePage: React.FC<Props> = () => {
   const [signupModalOpen, setSignupModalOpen] = useState<boolean>(false);
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
-  const [user, setUser] = useState<UserData>();
+  const { user } = useContext(AuthContext);
 
   const handleModalOpen = () => {
     setSignupModalOpen(true);
@@ -26,19 +26,6 @@ const HomePage: React.FC<Props> = () => {
   const handleLoginClose = () => {
     setLoginModalOpen(false);
   };
-
-  useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const user = await getCurrentUser();
-        setUser(user);
-      } catch (err) {
-        console.error(err);
-      }
-    };
-
-    fetchUser();
-  }, [loginModalOpen]);
 
   return (
     <>

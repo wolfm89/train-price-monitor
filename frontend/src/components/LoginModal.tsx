@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField } from '@mui/material';
+import React, { useState, useContext } from 'react';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Link } from '@mui/material';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
-import { signIn } from '../utils/auth';
+import { AuthContext } from '../providers/AuthProvider';
+import { Link as RouterLink } from 'react-router-dom';
 
 interface Props {
   open: boolean;
@@ -13,6 +14,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const { addAlert } = useAlert();
+  const { signIn } = useContext(AuthContext);
 
   const handleLogin = async () => {
     try {
@@ -23,6 +25,12 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     }
     addAlert('Sign in successful!', AlertSeverity.Success);
     onClose();
+  };
+
+  const handleKeyPress = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      handleLogin();
+    }
   };
 
   return (
@@ -37,6 +45,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           type="text"
           fullWidth
           onChange={(e) => setEmail(e.target.value)}
+          onKeyPress={handleKeyPress}
         />
         <TextField
           margin="dense"
@@ -45,7 +54,11 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           type="password"
           fullWidth
           onChange={(e) => setPassword(e.target.value)}
+          onKeyPress={handleKeyPress}
         />
+        <Link component={RouterLink} to="/forgot-password" color="inherit">
+          Forgot password?
+        </Link>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>

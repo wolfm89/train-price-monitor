@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppBar, Toolbar, Typography, IconButton, Badge, Container, useMediaQuery, useTheme } from '@mui/material';
 import {
@@ -9,10 +9,12 @@ import {
 } from '@mui/icons-material';
 import NotificationPopover from './NotificationPopover';
 import AccountMenu from './AccountMenu';
+import { AuthContext } from '../providers/AuthProvider';
 
 const Header = () => {
   const theme = useTheme();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
+  const { user } = useContext(AuthContext);
 
   const [notificationAnchorEl, setNotificationAnchorEl] = useState<HTMLButtonElement | null>(null);
 
@@ -60,70 +62,72 @@ const Header = () => {
               Train Price Monitor
             </Typography>
           </Link>
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <Link
-              to="/search"
-              style={{
-                textDecoration: 'none',
-                color: 'inherit',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <IconButton color="inherit" sx={{ borderRadius: 4 }}>
-                <SearchIcon />
-                {!isScreenSmall && (
-                  <Typography
-                    variant="subtitle1"
-                    component="div"
-                    sx={{
-                      marginLeft: 1,
-                      xs: 'none',
-                      md: 'block',
-                      color: 'inherit',
-                    }}
-                  >
-                    Search
-                  </Typography>
-                )}
+          {user && (
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <Link
+                to="/search"
+                style={{
+                  textDecoration: 'none',
+                  color: 'inherit',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <IconButton color="inherit" sx={{ borderRadius: 4 }}>
+                  <SearchIcon />
+                  {!isScreenSmall && (
+                    <Typography
+                      variant="subtitle1"
+                      component="div"
+                      sx={{
+                        marginLeft: 1,
+                        xs: 'none',
+                        md: 'block',
+                        color: 'inherit',
+                      }}
+                    >
+                      Search
+                    </Typography>
+                  )}
+                </IconButton>
+              </Link>
+              <Link
+                to="/journeys"
+                style={{
+                  textDecoration: 'none',
+                  color: 'inherit',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <IconButton color="inherit" sx={{ borderRadius: 4 }}>
+                  <TrainIcon />
+                  {!isScreenSmall && (
+                    <Typography
+                      variant="subtitle1"
+                      component="div"
+                      sx={{
+                        marginLeft: 1,
+                        xs: 'none',
+                        md: 'block',
+                        color: 'inherit',
+                      }}
+                    >
+                      My Journeys
+                    </Typography>
+                  )}
+                </IconButton>
+              </Link>
+              <IconButton color="inherit" onClick={handleNotificationClick}>
+                <Badge badgeContent={4} color="error">
+                  <NotificationsIcon />
+                </Badge>
               </IconButton>
-            </Link>
-            <Link
-              to="/journeys"
-              style={{
-                textDecoration: 'none',
-                color: 'inherit',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <IconButton color="inherit" sx={{ borderRadius: 4 }}>
-                <TrainIcon />
-                {!isScreenSmall && (
-                  <Typography
-                    variant="subtitle1"
-                    component="div"
-                    sx={{
-                      marginLeft: 1,
-                      xs: 'none',
-                      md: 'block',
-                      color: 'inherit',
-                    }}
-                  >
-                    My Journeys
-                  </Typography>
-                )}
+              <IconButton aria-label="user profile" color="inherit" onClick={handleAccountClick}>
+                <AccountCircleIcon />
               </IconButton>
-            </Link>
-            <IconButton color="inherit" onClick={handleNotificationClick}>
-              <Badge badgeContent={4} color="error">
-                <NotificationsIcon />
-              </Badge>
-            </IconButton>
-            <IconButton aria-label="user profile" color="inherit" onClick={handleAccountClick}>
-              <AccountCircleIcon />
-            </IconButton>
-          </div>
+            </div>
+          )}
         </Toolbar>
       </Container>
       <NotificationPopover anchorEl={notificationAnchorEl} id={id} open={open} onClose={handleNotificationClose} />
