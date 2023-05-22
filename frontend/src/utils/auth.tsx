@@ -45,7 +45,7 @@ export function signIn(email: string, password: string): Promise<CognitoUserSess
     });
 
     cognitoUser.authenticateUser(authenticationDetails, {
-      onSuccess: (session: CognitoUserSession, userConfirmationNecessary?: boolean) => {
+      onSuccess: (session: CognitoUserSession) => {
         resolve(session);
       },
       onFailure: (err: Error) => {
