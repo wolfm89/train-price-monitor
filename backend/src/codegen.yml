@@ -1,0 +1,18 @@
+schema: 'src/schema/*.graphql'
+generates:
+  src/schema/generated/typeDefs.generated.ts:
+    plugins:
+      - 'typescript'
+    config:
+      scalars:
+        File: File
+  src/schema/generated/resolvers.generated.ts:
+    plugins:
+      - 'typescript-resolvers'
+    config:
+      scalars:
+        File: File
+hooks:
+  afterOneFileWrite:
+    - 'prettier --write'
+    - 'eslint --fix'

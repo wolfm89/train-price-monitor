@@ -12,12 +12,14 @@ repos:
         args: ['--fix=lf']
         description: Forces to replace line ending by the UNIX 'lf' character.
       - id: detect-aws-credentials
+
   - repo: https://github.com/pre-commit/mirrors-eslint
     rev: 'v8.40.0'
     hooks:
       - id: eslint
         files: \.[jt]sx?$ # *.js, *.jsx, *.ts and *.tsx
         types: [file]
+        exclude: '\.generated\.tsx?$'
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: 'v2.7.1'

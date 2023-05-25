@@ -1,0 +1,26 @@
+type Query
+type Mutation
+
+scalar File
+
+# User
+
+extend type Query {
+  user(id: ID!): User
+}
+
+type User {
+  id: ID!
+  givenName: String!
+  familyName: String!
+  email: String!
+  profilePicture: String
+}
+
+extend type Mutation {
+  updateProfilePicture(userId: ID!, image: File!): User
+}
+
+extend type Mutation {
+  createUser(givenName: String!, familyName: String!, email: String!): User
+}
