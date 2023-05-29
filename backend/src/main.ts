@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as serverlessExpress from '@vendia/serverless-express';
 import express from 'express';
+import cors from 'cors';
 import { createYoga, createSchema } from 'graphql-yoga';
 import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
@@ -13,6 +14,10 @@ const port = process.env.PORT || 4000; // Use the specified port from environmen
 const typeDefs = readFileSync('src/schema/schema.graphql', 'utf8');
 const schema = createSchema({ typeDefs, resolvers });
 const yoga = createYoga({ schema });
+
+// Enable all CORS requests
+app.use(cors());
+app.options('*', cors());
 
 // Bind GraphQL Yoga to the graphql endpoint to avoid rendering the playground on any path
 app.use(yoga.graphqlEndpoint, yoga);

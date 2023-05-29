@@ -132,7 +132,7 @@ export async function getCurrentUser() {
 }
 
 export function getSession() {
-  return new Promise((resolve, reject) => {
+  return new Promise<CognitoUserSession | null>((resolve, reject) => {
     const cognitoUser = userPool.getCurrentUser();
     if (!cognitoUser) {
       reject(new Error('No user found'));

@@ -7,7 +7,7 @@ export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    new CognitoAuth(this, 'CognitoAuth');
-    new Backend(this, 'Backend');
+    const cognitoAuth = new CognitoAuth(this, 'CognitoAuth');
+    new Backend(this, 'Backend', cognitoAuth.userPool);
   }
 }

@@ -7,9 +7,11 @@ import {
   aws_s3 as s3,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
+import { UserPool } from 'aws-cdk-lib/aws-cognito';
+import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
 export class Backend extends Construct {
-  constructor(scope: Construct, id: string) {
+  constructor(scope: Construct, id: string, userPool: UserPool) {
     super(scope, id);
 
     // Create DynamoDB tables
@@ -44,6 +46,25 @@ export class Backend extends Construct {
     const api = new apigateway.LambdaRestApi(this, 'GraphqlApi', {
       handler: lambdaFunction,
       proxy: true,
+      defaultMethodOptions: {
+        authorizer: new apigateway.CognitoUserPoolsAuthorizer(this, 'Authorizer', {
+          cognitoUserPools: [userPool],
+        }),
+      },
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: apigateway.Cors.DEFAULT_HEADERS,
+        allowCredentials: true,
+      },
+    });
+
+    api.addGatewayResponse('invalid-endpoint-error-response', {
+      type: ResponseType.UNAUTHORIZED,
+      statusCode: '401',
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+      },
     });
 
     new cdk.CfnOutput(this, 'ApiEndpoint', {
