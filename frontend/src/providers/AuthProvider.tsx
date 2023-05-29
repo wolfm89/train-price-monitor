@@ -13,12 +13,11 @@ const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const getCurrentUser = async () => {
     try {
       const user = await auth.getCurrentUser();
-      console.log('current user', user);
       setUser(user);
     } catch (err) {
       // not logged in

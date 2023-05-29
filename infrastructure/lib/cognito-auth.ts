@@ -3,6 +3,8 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 
 export class CognitoAuth extends Construct {
+  userPool: cognito.UserPool;
+
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
@@ -12,7 +14,7 @@ export class CognitoAuth extends Construct {
     }
 
     // Create a user pool
-    const userPool = new cognito.UserPool(this, 'UserPool', {
+    this.userPool = new cognito.UserPool(this, 'UserPool', {
       selfSignUpEnabled: true,
       signInAliases: {
         email: true,
@@ -50,16 +52,37 @@ export class CognitoAuth extends Construct {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Create a user pool app client
-    userPool.addClient('UserPoolClient', {
-      generateSecret: false,
-    });
-
     // Create a Cognito domain
-    userPool.addDomain('CognitoDomain', {
+    this.userPool.addDomain('CognitoDomain', {
       cognitoDomain: {
         domainPrefix: appName.toLowerCase().replace(/ /g, '-'),
       },
+    });
+
+    // Create a user pool app client
+    const userPoolClient = this.userPool.addClient('UserPoolClient', {
+      generateSecret: false,
+    });
+
+    // Create an identity pool
+    const identityPool = new cognito.CfnIdentityPool(this, 'IdentityPool', {
+      allowUnauthenticatedIdentities: false,
+      cognitoIdentityProviders: [
+        {
+          clientId: userPoolClient.userPoolClientId,
+          providerName: this.userPool.userPoolProviderName,
+        },
+      ],
+    });
+
+    // Output the identity pool ID
+    new cdk.CfnOutput(this, 'IdentityPoolId', {
+      value: identityPool.ref,
+    });
+
+    // Output the user pool ID
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: this.userPool.userPoolId,
     });
   }
 }
