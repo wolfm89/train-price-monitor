@@ -4,17 +4,8 @@ import { AuthContext } from '../providers/AuthProvider';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
 import { changePassword } from '../utils/auth';
-import { gql, useMutation } from 'urql';
-
-const UpdateProfilePicture = gql`
-  mutation ($id: ID!, $image: File!) {
-    updateProfilePicture(userId: $id, image: $image) {
-      id
-      givenName
-      familyName
-    }
-  }
-`;
+import { useMutation } from 'urql';
+import { UpdateProfilePicture } from '../api/user';
 
 const ProfilePage: React.FC = () => {
   const { user } = useContext(AuthContext);
@@ -24,7 +15,7 @@ const ProfilePage: React.FC = () => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const { addAlert } = useAlert();
-  const [updateProfilePictureResult, updateProfilePicture] = useMutation(UpdateProfilePicture);
+  const [_, updateProfilePicture] = useMutation(UpdateProfilePicture);
 
   const handleProfilePictureChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file: File = event.target.files![0]; // Get the first selected file
@@ -32,7 +23,7 @@ const ProfilePage: React.FC = () => {
     // Perform any desired actions with the file
     if (file) {
       updateProfilePicture({ id: '1', image: file }).then((result) => {
-        console.log(JSON.stringify(result));
+        console.log(result);
       });
     }
   };

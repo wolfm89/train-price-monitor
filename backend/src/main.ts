@@ -5,6 +5,8 @@ import cors from 'cors';
 import { createYoga, createSchema } from 'graphql-yoga';
 import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
+import { GraphQLContext, createContext } from './context';
+import { YogaSchemaDefinition } from 'graphql-yoga/typings/plugins/useSchema';
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -12,8 +14,11 @@ const app = express();
 const port = process.env.PORT || 4000; // Use the specified port from environment variable or default to 4000
 
 const typeDefs = readFileSync('src/schema/schema.graphql', 'utf8');
-const schema = createSchema({ typeDefs, resolvers });
-const yoga = createYoga({ schema });
+const schema: YogaSchemaDefinition<GraphQLContext> = createSchema({
+  typeDefs,
+  resolvers,
+}) as YogaSchemaDefinition<GraphQLContext>;
+const yoga = createYoga({ schema, context: createContext });
 
 // Enable all CORS requests
 app.use(cors());

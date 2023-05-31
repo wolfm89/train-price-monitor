@@ -41,6 +41,7 @@ export type QueryUserArgs = {
 
 export type User = {
   __typename?: 'User';
+  activated: Scalars['Boolean'];
   email: Scalars['String'];
   familyName: Scalars['String'];
   givenName: Scalars['String'];

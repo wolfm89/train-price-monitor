@@ -15,6 +15,7 @@ type User {
   familyName: String!
   email: String!
   profilePicture: String
+  activated: Boolean!
 }
 
 extend type Mutation {
