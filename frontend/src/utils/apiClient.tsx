@@ -2,10 +2,13 @@ import { authExchange } from '@urql/exchange-auth';
 import * as auth from '../utils/auth';
 import { Client, cacheExchange, fetchExchange } from 'urql';
 
-const apiGatewayEndpoint = process.env.REACT_APP_API_GATEWAY_ENDPOINT!;
+const apiGatewayEndpoint = `${process.env.REACT_APP_API_GATEWAY_ENDPOINT!}graphql`;
 
 const cognitoAuthExchange = authExchange(async (utils) => {
-  const session = await auth.getSession();
+  let session;
+  try {
+    session = await auth.getSession();
+  } catch (error) {}
   const token = session?.getIdToken().getJwtToken();
 
   return {
@@ -28,6 +31,6 @@ const cognitoAuthExchange = authExchange(async (utils) => {
 });
 
 export const client = new Client({
-  url: `${apiGatewayEndpoint}graphql`,
+  url: apiGatewayEndpoint,
   exchanges: [cacheExchange, cognitoAuthExchange, fetchExchange],
 });
