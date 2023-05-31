@@ -126,6 +126,7 @@ export type UserResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User']
 > = {
+  activated?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
