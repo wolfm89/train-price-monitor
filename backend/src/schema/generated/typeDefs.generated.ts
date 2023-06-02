@@ -15,19 +15,25 @@ export type Scalars = {
 
 export type Mutation = {
   __typename?: 'Mutation';
+  activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
-  updateProfilePicture?: Maybe<User>;
+  updateUserProfilePicture?: Maybe<User>;
+};
+
+export type MutationActivateUserArgs = {
+  id: Scalars['ID'];
 };
 
 export type MutationCreateUserArgs = {
   email: Scalars['String'];
   familyName: Scalars['String'];
   givenName: Scalars['String'];
+  id: Scalars['ID'];
 };
 
-export type MutationUpdateProfilePictureArgs = {
+export type MutationUpdateUserProfilePictureArgs = {
+  id: Scalars['ID'];
   image: Scalars['File'];
-  userId: Scalars['ID'];
 };
 
 export type Query = {

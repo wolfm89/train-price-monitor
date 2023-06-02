@@ -101,17 +101,23 @@ export type MutationResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation']
 > = {
+  activateUser?: Resolver<
+    Maybe<ResolversTypes['User']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationActivateUserArgs, 'id'>
+  >;
   createUser?: Resolver<
     Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationCreateUserArgs, 'email' | 'familyName' | 'givenName'>
+    RequireFields<MutationCreateUserArgs, 'email' | 'familyName' | 'givenName' | 'id'>
   >;
-  updateProfilePicture?: Resolver<
+  updateUserProfilePicture?: Resolver<
     Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationUpdateProfilePictureArgs, 'image' | 'userId'>
+    RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
 };
 

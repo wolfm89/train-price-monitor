@@ -19,9 +19,13 @@ type User {
 }
 
 extend type Mutation {
-  updateProfilePicture(userId: ID!, image: File!): User
+  updateUserProfilePicture(id: ID!, image: File!): User
 }
 
 extend type Mutation {
-  createUser(givenName: String!, familyName: String!, email: String!): User
+  createUser(id: ID!, givenName: String!, familyName: String!, email: String!): User
+}
+
+extend type Mutation {
+  activateUser(id: ID!): User
 }

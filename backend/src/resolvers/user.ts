@@ -1,8 +1,7 @@
-import { DynamoDB } from 'aws-sdk';
+import { AttributeValue } from '@aws-sdk/client-dynamodb';
 import { GraphQLContext } from '../context';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import { User } from '../schema/generated/typeDefs.generated';
-import { v4 as uuidv4 } from 'uuid';
 
 export const userResolvers: UserResolvers = {
   id: (parent) => parent.id,
@@ -16,7 +15,7 @@ export const userResolvers: UserResolvers = {
 const USERS_TABLE = 'users';
 
 export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context: GraphQLContext) => {
-  const dbUser = await context.dynamodb.get(USERS_TABLE, args.id);
+  const dbUser = await context.dynamodb.get(USERS_TABLE, { id: { S: args.id } });
   if (!dbUser) {
     return null;
   }
@@ -25,18 +24,18 @@ export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, arg
     givenName: dbUser.givenName.S || '',
     familyName: dbUser.familyName.S || '',
     email: dbUser.email.S || '',
-    profilePicture: dbUser.profilePicture.S,
+    profilePicture: dbUser.profilePicture?.S,
     activated: dbUser.activated.BOOL || false,
   };
   return user;
 };
 
-export const updateProfilePicture: NonNullable<MutationResolvers['updateProfilePicture']> = async (
+export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUserProfilePicture']> = async (
   _,
-  { userId, image }: { userId: string; image: File }
+  { id, image }: { id: string; image: File }
 ) => {
   const user: User = {
-    id: userId,
+    id: id,
     givenName: 'Bart',
     familyName: 'Simpsons',
     email: 'bart@simpsons.com',
@@ -48,16 +47,15 @@ export const updateProfilePicture: NonNullable<MutationResolvers['updateProfileP
 
 export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   _,
-  { givenName, familyName, email }: { givenName: string; familyName: string; email: string },
+  { id, givenName, familyName, email }: { id: string; givenName: string; familyName: string; email: string },
   context: GraphQLContext
 ) => {
-  const id = uuidv4();
   await context.dynamodb.put(USERS_TABLE, {
-    id: id,
-    givenName: givenName,
-    familyName: familyName,
-    email: email,
-    activated: false,
+    id: { S: id },
+    givenName: { S: givenName },
+    familyName: { S: familyName },
+    email: { S: email },
+    activated: { BOOL: false },
   });
   const user: User = {
     id: id,
@@ -65,6 +63,23 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
     familyName: familyName,
     email: email,
     activated: false,
+  };
+  return user;
+};
+
+export const activateUser: NonNullable<MutationResolvers['activateUser']> = async (
+  _,
+  { id }: { id: string },
+  context: GraphQLContext
+) => {
+  const dbUser = await context.dynamodb.update(USERS_TABLE, { id: { S: id } }, { activated: { BOOL: true } });
+  const user: User = {
+    id: dbUser.id.S || id,
+    givenName: dbUser.givenName.S || '',
+    familyName: dbUser.familyName.S || '',
+    email: dbUser.email.S || '',
+    profilePicture: dbUser.profilePicture?.S,
+    activated: dbUser.activated.BOOL || false,
   };
   return user;
 };

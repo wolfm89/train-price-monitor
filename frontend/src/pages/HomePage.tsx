@@ -1,15 +1,38 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
 import { Button, Typography, Box } from '@mui/material';
 import { AuthContext } from '../providers/AuthProvider';
+import { AlertSeverity } from '../providers/AlertProvider';
+import useAlert from '../hooks/useAlert';
+import { UserActivationStatusQuery, ActivateUser } from '../api/user';
+import { useMutation, useQuery } from 'urql';
 
 interface Props {}
 
 const HomePage: React.FC<Props> = () => {
   const [signupModalOpen, setSignupModalOpen] = useState<boolean>(false);
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
+  const { addAlert } = useAlert();
   const { user } = useContext(AuthContext);
+  const [userActivatedResult, reexecuteUserActivationStatusQuery] = useQuery({
+    query: UserActivationStatusQuery,
+    variables: { id: user?.['custom:id'] },
+    pause: !user,
+  });
+  const [_, activateUser] = useMutation(ActivateUser);
+
+  useEffect(() => {
+    const activated = userActivatedResult.data?.user?.activated;
+    if (user && activated === false) {
+      activateUser({ id: user?.['custom:id'] }).then((result) => {
+        console.log(result);
+        if (result.error) {
+          addAlert(result.error.message, AlertSeverity.Error);
+        }
+      });
+    }
+  }, [user, userActivatedResult]);
 
   const handleModalOpen = () => {
     setSignupModalOpen(true);

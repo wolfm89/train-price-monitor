@@ -14,9 +14,16 @@ const cognitoUserPoolConfig = {
 
 const userPool = new CognitoUserPool(cognitoUserPoolConfig);
 
-export function signUp(givenName: string, familyName: string, email: string, password: string): Promise<CognitoUser> {
+export function signUp(
+  id: string,
+  givenName: string,
+  familyName: string,
+  email: string,
+  password: string
+): Promise<CognitoUser> {
   return new Promise((resolve, reject) => {
     const userAttributes: CognitoUserAttribute[] = [
+      new CognitoUserAttribute({ Name: 'custom:id', Value: id }),
       new CognitoUserAttribute({ Name: 'email', Value: email }),
       new CognitoUserAttribute({ Name: 'given_name', Value: givenName }),
       new CognitoUserAttribute({ Name: 'family_name', Value: familyName }),

@@ -1,42 +1,66 @@
-import AWS from 'aws-sdk';
-import { DynamoDB } from 'aws-sdk';
+import {
+  DynamoDBClient,
+  PutItemCommand,
+  GetItemCommand,
+  AttributeValue,
+  UpdateItemCommand,
+} from '@aws-sdk/client-dynamodb';
+import { Attribute } from 'aws-sdk/clients/rekognition';
 
 // Define a class for managing the DynamoDB connection and operations
 export class DynamoDBManager {
-  private dynamodb: DynamoDB.DocumentClient;
+  private dynamodb: DynamoDBClient;
 
   constructor() {
-    // Set the AWS_PROFILE environment variable
-    process.env.AWS_PROFILE = 'wolfgang_local_dev';
-
-    // Configure the DynamoDB client with AWS SDK
-    AWS.config.update({ region: 'eu-central-1' });
     // Initialize the DynamoDB client
-    this.dynamodb = new AWS.DynamoDB.DocumentClient();
+    this.dynamodb = new DynamoDBClient({ region: process.env.AWS_REGION });
   }
 
   async put(tableName: string, params: { [key: string]: any }): Promise<void> {
-    await this.dynamodb
-      .put({
-        TableName: tableName,
-        Item: params,
-      })
-      .promise();
+    const cmd = new PutItemCommand({
+      TableName: tableName,
+      Item: params,
+    });
+    await this.dynamodb.send(cmd);
+  }
+
+  async update(
+    tableName: string,
+    key: Record<string, AttributeValue>,
+    valueMap: Record<string, AttributeValue>
+  ): Promise<Record<string, AttributeValue>> {
+    const placeholders = Object.entries(valueMap)
+      .map(([key]) => `${key} = :${key}`)
+      .join(', ');
+    const expressionAttributeValues = Object.entries(valueMap).reduce(
+      (result, [key, value]) => ({
+        ...result,
+        [`:${key}`]: value,
+      }),
+      {}
+    );
+    const cmd = new UpdateItemCommand({
+      TableName: tableName,
+      Key: key,
+      ReturnValues: 'ALL_NEW',
+      ExpressionAttributeValues: expressionAttributeValues,
+      UpdateExpression: `SET ${placeholders}`,
+    });
+    const result = await this.dynamodb.send(cmd);
+    return result.Attributes!;
   }
 
   async get(
     tableName: string,
-    key: DynamoDB.GetItemInput['Key'],
+    key: Record<string, AttributeValue>,
     ...attributes: string[]
-  ): Promise<DynamoDB.AttributeMap | undefined> {
-    const result = await this.dynamodb
-      .get({
-        TableName: tableName,
-        Key: key,
-        ProjectionExpression: attributes.join(','),
-      })
-      .promise();
-
-    return result.Item;
+  ): Promise<Record<string, AttributeValue>> {
+    const cmd = new GetItemCommand({
+      TableName: tableName,
+      Key: key,
+      ...(attributes.length != 0 && { ProjectionExpression: attributes.join(',') }),
+    });
+    const result = await this.dynamodb.send(cmd);
+    return result.Item!;
   }
 }

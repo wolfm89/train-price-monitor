@@ -4,8 +4,6 @@ import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 import { AuthContext } from '../providers/AuthProvider';
 import { Link as RouterLink } from 'react-router-dom';
-import { UserData } from '../utils/auth';
-import { useMutation } from 'urql';
 
 interface Props {
   open: boolean;
@@ -16,9 +14,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const { addAlert } = useAlert();
-  const { signIn, user } = useContext(AuthContext);
-
-  function activateUser(user: UserData | null) {}
+  const { signIn } = useContext(AuthContext);
 
   const handleLogin = async () => {
     try {
@@ -27,7 +23,6 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
       addAlert(err.message, AlertSeverity.Error);
       return;
     }
-    activateUser(user);
     addAlert('Sign in successful!', AlertSeverity.Success);
     onClose();
   };
