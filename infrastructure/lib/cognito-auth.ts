@@ -22,6 +22,9 @@ export class CognitoAuth extends Construct {
       autoVerify: {
         email: true,
       },
+      customAttributes: {
+        id: new cognito.StringAttribute({ minLen: 36, maxLen: 36, mutable: false }),
+      },
       standardAttributes: {
         email: {
           mutable: true,

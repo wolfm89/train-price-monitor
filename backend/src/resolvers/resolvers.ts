@@ -1,5 +1,5 @@
 import { Resolvers } from '../schema/generated/resolvers.generated';
-import { userQuery, userResolvers, updateProfilePicture, createUser } from './user';
+import { userQuery, userResolvers, updateUserProfilePicture, createUser, activateUser } from './user';
 
 const resolvers: Resolvers = {
   User: userResolvers,
@@ -7,8 +7,9 @@ const resolvers: Resolvers = {
     user: userQuery,
   },
   Mutation: {
-    updateProfilePicture: updateProfilePicture,
+    updateUserProfilePicture: updateUserProfilePicture,
     createUser: createUser,
+    activateUser: activateUser,
   },
 };
 

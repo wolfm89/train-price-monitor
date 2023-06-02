@@ -5,6 +5,8 @@ import { AlertSeverity } from '../providers/AlertProvider';
 import { signUp } from '../utils/auth';
 import { CreateUser } from '../api/user';
 import { useMutation } from 'urql';
+import { CognitoUser } from 'amazon-cognito-identity-js';
+import { v4 as uuidv4 } from 'uuid';
 
 interface Props {
   open: boolean;
@@ -20,13 +22,14 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
   const [_, createUser] = useMutation(CreateUser);
 
   const handleSignUp = async () => {
+    const userId = uuidv4();
     try {
-      await signUp(givenName, familyName, email, password);
+      await signUp(userId, givenName, familyName, email, password);
     } catch (err: any) {
       addAlert(err.message, AlertSeverity.Error);
       return;
     }
-    createUser({ email, familyName, givenName })
+    createUser({ id: userId, email, familyName, givenName })
       .then((result) => {
         console.log(result);
         if (result.error) {
