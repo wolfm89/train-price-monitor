@@ -26,7 +26,6 @@ const HomePage: React.FC<Props> = () => {
     const activated = userActivatedResult.data?.user?.activated;
     if (user && activated === false) {
       activateUser({ id: user?.['custom:id'] }).then((result) => {
-        console.log(result);
         if (result.error) {
           addAlert(result.error.message, AlertSeverity.Error);
         }
