@@ -1,11 +1,10 @@
 import { gql } from 'urql';
 
-export const UpdateProfilePicture = gql`
+export const UpdateUserProfilePicture = gql`
   mutation ($id: ID!, $image: File!) {
-    updateProfilePicture(userId: $id, image: $image) {
+    updateUserProfilePicture(id: $id, image: $image) {
       id
-      givenName
-      familyName
+      profilePicture
     }
   }
 `;

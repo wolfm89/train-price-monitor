@@ -5,7 +5,6 @@ import {
   AttributeValue,
   UpdateItemCommand,
 } from '@aws-sdk/client-dynamodb';
-import { Attribute } from 'aws-sdk/clients/rekognition';
 
 // Define a class for managing the DynamoDB connection and operations
 export class DynamoDBManager {
