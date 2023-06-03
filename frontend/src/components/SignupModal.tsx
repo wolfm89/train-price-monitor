@@ -5,7 +5,6 @@ import { AlertSeverity } from '../providers/AlertProvider';
 import { signUp } from '../utils/auth';
 import { CreateUser } from '../api/user';
 import { useMutation } from 'urql';
-import { CognitoUser } from 'amazon-cognito-identity-js';
 import { v4 as uuidv4 } from 'uuid';
 
 interface Props {
@@ -31,7 +30,6 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     }
     createUser({ id: userId, email, familyName, givenName })
       .then((result) => {
-        console.log(result);
         if (result.error) {
           addAlert(result.error.message, AlertSeverity.Error);
         }
