@@ -1,14 +1,31 @@
-import { DynamoDBManager } from './managers/DynamoDbManager';
+import User from './model/user';
 import { S3Manager } from './managers/S3Manager';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
-const dynamodb = new DynamoDBManager();
 const s3 = new S3Manager();
 
+const marshallOptions = {
+  // Whether to automatically convert empty strings, blobs, and sets to `null`.
+  convertEmptyValues: true,
+  // Whether to remove undefined values while marshalling.
+  removeUndefinedValues: true,
+};
+const translateConfig = { marshallOptions };
+User.table!.DocumentClient = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: process.env.AWS_REGION }),
+  translateConfig
+);
+
+type Entities = {
+  User: typeof User;
+};
+
 export type GraphQLContext = {
-  dynamodb: DynamoDBManager;
+  entities: Entities;
   s3: S3Manager;
 };
 
 export async function createContext(): Promise<GraphQLContext> {
-  return { dynamodb, s3 };
+  return { entities: { User }, s3 };
 }
