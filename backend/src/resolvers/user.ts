@@ -11,20 +11,18 @@ export const userResolvers: UserResolvers = {
   activated: (parent) => parent.activated,
 };
 
-const USERS_TABLE = 'users';
-
 export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context: GraphQLContext) => {
-  const dbUser = await context.dynamodb.get(USERS_TABLE, { id: { S: args.id } });
+  const { Item: dbUser } = await context.entities.User.get({ id: args.id });
   if (!dbUser) {
     return null;
   }
   const user: User = {
-    id: dbUser.id.S || args.id,
-    givenName: dbUser.givenName.S || '',
-    familyName: dbUser.familyName.S || '',
-    email: dbUser.email.S || '',
-    profilePicture: dbUser.profilePicture?.S,
-    activated: dbUser.activated.BOOL || false,
+    id: dbUser.id,
+    givenName: dbUser.givenName,
+    familyName: dbUser.familyName,
+    email: dbUser.email,
+    profilePicture: dbUser.profilePicture,
+    activated: dbUser.activated,
   };
   return user;
 };
@@ -40,18 +38,21 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   // Upload file to S3 bucket
   await context.s3.upload(profileImageBucketName, filename, image);
 
-  const dbUser = await context.dynamodb.update(USERS_TABLE, { id: { S: id } }, { profilePicture: { S: filename } });
+  const { Attributes: dbUser } = await context.entities.User.update(
+    { id: id, profilePicture: filename },
+    { returnValues: 'ALL_NEW' }
+  );
   if (!dbUser) {
     return null;
   }
 
   const user: User = {
-    id: dbUser.id.S || id,
-    givenName: dbUser.givenName.S || '',
-    familyName: dbUser.familyName.S || '',
-    email: dbUser.email.S || '',
-    profilePicture: dbUser.profilePicture?.S,
-    activated: dbUser.activated.BOOL || false,
+    id: dbUser.id,
+    givenName: dbUser.givenName,
+    familyName: dbUser.familyName,
+    email: dbUser.email,
+    profilePicture: dbUser.profilePicture,
+    activated: dbUser.activated,
   };
   return user;
 };
@@ -61,12 +62,12 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   { id, givenName, familyName, email }: { id: string; givenName: string; familyName: string; email: string },
   context: GraphQLContext
 ) => {
-  await context.dynamodb.put(USERS_TABLE, {
-    id: { S: id },
-    givenName: { S: givenName },
-    familyName: { S: familyName },
-    email: { S: email },
-    activated: { BOOL: false },
+  await context.entities.User.put({
+    id: id,
+    givenName: givenName,
+    familyName: familyName,
+    email: email,
+    activated: false,
   });
   const user: User = {
     id: id,
@@ -83,14 +84,22 @@ export const activateUser: NonNullable<MutationResolvers['activateUser']> = asyn
   { id }: { id: string },
   context: GraphQLContext
 ) => {
-  const dbUser = await context.dynamodb.update(USERS_TABLE, { id: { S: id } }, { activated: { BOOL: true } });
+  const { Attributes: dbUser } = await context.entities.User.update(
+    { id: id, activated: true },
+    { returnValues: 'ALL_NEW' }
+  );
+
+  if (!dbUser) {
+    return null;
+  }
+
   const user: User = {
-    id: dbUser.id.S || id,
-    givenName: dbUser.givenName.S || '',
-    familyName: dbUser.familyName.S || '',
-    email: dbUser.email.S || '',
-    profilePicture: dbUser.profilePicture?.S,
-    activated: dbUser.activated.BOOL || false,
+    id: dbUser.id,
+    givenName: dbUser.givenName,
+    familyName: dbUser.familyName,
+    email: dbUser.email,
+    profilePicture: dbUser.profilePicture,
+    activated: dbUser.activated,
   };
   return user;
 };
