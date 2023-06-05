@@ -8,7 +8,7 @@ import { useMutation } from 'urql';
 import { UpdateUserProfilePicture } from '../api/user';
 
 const ProfilePage: React.FC = () => {
-  const { user } = useContext(AuthContext);
+  const { user, userProfilePictureUrl, reexecuteUserProfilePictureUrlQuery } = useContext(AuthContext);
   const [firstName, setFirstName] = useState(user?.given_name);
   const [lastName, setLastName] = useState(user?.family_name);
   const [email, setEmail] = useState(user?.email);
@@ -22,9 +22,14 @@ const ProfilePage: React.FC = () => {
 
     // Perform any desired actions with the file
     if (file) {
-      updateUserProfilePicture({ id: user?.['custom:id'], image: file }).then((result) => {
-        console.log(result);
-      });
+      updateUserProfilePicture({ id: user?.['custom:id'], image: file })
+        .then((result) => {
+          addAlert('Profile picture changed successfully!', AlertSeverity.Success);
+          reexecuteUserProfilePictureUrlQuery({ requestPolicy: 'network-only' });
+        })
+        .catch((error) => {
+          addAlert('Profile picture change failed. Please try again.', AlertSeverity.Error);
+        });
     }
   };
 
@@ -50,7 +55,7 @@ const ProfilePage: React.FC = () => {
           marginBottom: 4,
         }}
       >
-        <Avatar alt="Profile Picture" src="/path/to/profile-picture.jpg" sx={{ width: 120, height: 120 }} />
+        <Avatar alt="Profile Picture" src={userProfilePictureUrl} sx={{ width: 120, height: 120 }} />
         <Box sx={{ flexGrow: 0, marginLeft: 2 }}>
           <Button variant="outlined" component="label">
             Change Picture

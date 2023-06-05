@@ -1,6 +1,8 @@
 import { GraphQLContext } from '../context';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
-import { User } from '../schema/generated/typeDefs.generated';
+import { User, PresignedUrl } from '../schema/generated/typeDefs.generated';
+
+const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME!;
 
 export const userResolvers: UserResolvers = {
   id: (parent) => parent.id,
@@ -27,16 +29,37 @@ export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, arg
   return user;
 };
 
+export const userProfilePicturePresignedUrlQuery: NonNullable<
+  QueryResolvers['userProfilePicturePresignedUrl']
+> = async (_, { id }: { id: string }, context: GraphQLContext) => {
+  const { Item: dbUser } = await context.entities.User.get({ id: id });
+  let url: string | undefined = undefined;
+  if (dbUser?.profilePicture) {
+    // get presigned url for file dbUser?.profilePicture in bucket profileImageBucketName
+    url = await context.s3.getPresignedUrl(profileImageBucketName, dbUser?.profilePicture);
+  }
+  const presignedUrl: PresignedUrl = {
+    id: id,
+    url: url,
+  };
+  return presignedUrl;
+};
+
 export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUserProfilePicture']> = async (
   _,
   { id, image }: { id: string; image: File },
   context: GraphQLContext
 ) => {
-  const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME!;
+  const { Item: dbUserCur } = await context.entities.User.get({ id: id });
   const filename = `${id}.${image.name.split('.').pop()}`;
 
   // Upload file to S3 bucket
   await context.s3.upload(profileImageBucketName, filename, image);
+
+  // Delete previous image
+  if (dbUserCur && dbUserCur.profilePicture) {
+    await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
+  }
 
   const { Attributes: dbUser } = await context.entities.User.update(
     { id: id, profilePicture: filename },
