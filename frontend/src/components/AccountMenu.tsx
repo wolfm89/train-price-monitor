@@ -1,5 +1,5 @@
 import React, { useContext } from 'react';
-import { Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
+import { Menu, MenuItem, ListItemIcon, ListItemText, Avatar } from '@mui/material';
 import { AccountCircle as AccountCircleIcon, ExitToApp as ExitToAppIcon } from '@mui/icons-material';
 import { Link } from 'react-router-dom';
 import { AuthContext } from '../providers/AuthProvider';
@@ -11,7 +11,7 @@ interface Props {
 
 const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
   const isMenuOpen = Boolean(anchorEl);
-  const { signOut } = useContext(AuthContext);
+  const { signOut, userProfilePictureUrl } = useContext(AuthContext);
 
   const handleMenuClose = () => {
     onClose();
@@ -40,7 +40,10 @@ const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
     >
       <MenuItem component={Link} to="/profile" onClick={handleMenuClose}>
         <ListItemIcon>
-          <AccountCircleIcon />
+          {userProfilePictureUrl && (
+            <Avatar alt="Profile Picture" src={userProfilePictureUrl} sx={{ width: 24, height: 24 }} />
+          )}
+          {!userProfilePictureUrl && <AccountCircleIcon />}
         </ListItemIcon>
         <ListItemText primary="Profile" />
       </MenuItem>

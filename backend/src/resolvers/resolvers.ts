@@ -1,10 +1,18 @@
 import { Resolvers } from '../schema/generated/resolvers.generated';
-import { userQuery, userResolvers, updateUserProfilePicture, createUser, activateUser } from './user';
+import {
+  userQuery,
+  userProfilePicturePresignedUrlQuery,
+  userResolvers,
+  updateUserProfilePicture,
+  createUser,
+  activateUser,
+} from './user';
 
 const resolvers: Resolvers = {
   User: userResolvers,
   Query: {
     user: userQuery,
+    userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
   },
   Mutation: {
     updateUserProfilePicture: updateUserProfilePicture,
