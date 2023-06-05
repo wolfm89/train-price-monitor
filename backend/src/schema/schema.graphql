@@ -5,10 +5,6 @@ scalar File
 
 # User
 
-extend type Query {
-  user(id: ID!): User
-}
-
 type User {
   id: ID!
   givenName: String!
@@ -17,6 +13,23 @@ type User {
   profilePicture: String
   activated: Boolean!
 }
+
+type PresignedUrl {
+  id: ID!
+  url: String
+}
+
+## Queries
+
+extend type Query {
+  user(id: ID!): User
+}
+
+extend type Query {
+  userProfilePicturePresignedUrl(id: ID!): PresignedUrl
+}
+
+## Mutations
 
 extend type Mutation {
   updateUserProfilePicture(id: ID!, image: File!): User

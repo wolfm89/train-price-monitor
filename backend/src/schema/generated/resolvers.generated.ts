@@ -77,6 +77,7 @@ export type ResolversTypes = {
   File: ResolverTypeWrapper<Scalars['File']>;
   ID: ResolverTypeWrapper<Scalars['ID']>;
   Mutation: ResolverTypeWrapper<{}>;
+  PresignedUrl: ResolverTypeWrapper<PresignedUrl>;
   Query: ResolverTypeWrapper<{}>;
   String: ResolverTypeWrapper<Scalars['String']>;
   User: ResolverTypeWrapper<User>;
@@ -88,6 +89,7 @@ export type ResolversParentTypes = {
   File: Scalars['File'];
   ID: Scalars['ID'];
   Mutation: {};
+  PresignedUrl: PresignedUrl;
   Query: {};
   String: Scalars['String'];
   User: User;
@@ -121,11 +123,26 @@ export type MutationResolvers<
   >;
 };
 
+export type PresignedUrlResolvers<
+  ContextType = any,
+  ParentType extends ResolversParentTypes['PresignedUrl'] = ResolversParentTypes['PresignedUrl']
+> = {
+  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  url?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
 export type QueryResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']
 > = {
   user?: Resolver<Maybe<ResolversTypes['User']>, ParentType, ContextType, RequireFields<QueryUserArgs, 'id'>>;
+  userProfilePicturePresignedUrl?: Resolver<
+    Maybe<ResolversTypes['PresignedUrl']>,
+    ParentType,
+    ContextType,
+    RequireFields<QueryUserProfilePicturePresignedUrlArgs, 'id'>
+  >;
 };
 
 export type UserResolvers<
@@ -144,6 +161,7 @@ export type UserResolvers<
 export type Resolvers<ContextType = any> = {
   File?: GraphQLScalarType;
   Mutation?: MutationResolvers<ContextType>;
+  PresignedUrl?: PresignedUrlResolvers<ContextType>;
   Query?: QueryResolvers<ContextType>;
   User?: UserResolvers<ContextType>;
 };

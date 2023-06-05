@@ -1,6 +1,16 @@
 import React, { useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AppBar, Toolbar, Typography, IconButton, Badge, Container, useMediaQuery, useTheme } from '@mui/material';
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  IconButton,
+  Badge,
+  Container,
+  useMediaQuery,
+  useTheme,
+  Avatar,
+} from '@mui/material';
 import {
   Search as SearchIcon,
   AccountCircle as AccountCircleIcon,
@@ -14,7 +24,7 @@ import { AuthContext } from '../providers/AuthProvider';
 const Header = () => {
   const theme = useTheme();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
-  const { user } = useContext(AuthContext);
+  const { user, userProfilePictureUrl } = useContext(AuthContext);
 
   const [notificationAnchorEl, setNotificationAnchorEl] = useState<HTMLButtonElement | null>(null);
 
@@ -124,7 +134,10 @@ const Header = () => {
                 </Badge>
               </IconButton>
               <IconButton aria-label="user profile" color="inherit" onClick={handleAccountClick}>
-                <AccountCircleIcon />
+                {userProfilePictureUrl && (
+                  <Avatar alt="Profile Picture" src={userProfilePictureUrl} sx={{ width: 24, height: 24 }} />
+                )}
+                {!userProfilePictureUrl && <AccountCircleIcon />}
               </IconButton>
             </div>
           )}

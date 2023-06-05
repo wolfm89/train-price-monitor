@@ -33,3 +33,11 @@ export const UserActivationStatusQuery = gql`
     }
   }
 `;
+
+export const UserProfilePictureUrlQuery = gql`
+  query ($id: ID!) {
+    userProfilePicturePresignedUrl(id: $id) {
+      url
+    }
+  }
+`;

@@ -36,12 +36,23 @@ export type MutationUpdateUserProfilePictureArgs = {
   image: Scalars['File'];
 };
 
+export type PresignedUrl = {
+  __typename?: 'PresignedUrl';
+  id: Scalars['ID'];
+  url?: Maybe<Scalars['String']>;
+};
+
 export type Query = {
   __typename?: 'Query';
   user?: Maybe<User>;
+  userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
 };
 
 export type QueryUserArgs = {
+  id: Scalars['ID'];
+};
+
+export type QueryUserProfilePicturePresignedUrlArgs = {
   id: Scalars['ID'];
 };
 
