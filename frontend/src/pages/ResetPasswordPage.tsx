@@ -69,7 +69,12 @@ export default function ResetPasswordPage() {
           </Grid>
           <Grid item xs={12} sm={6}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Button type="submit" variant="contained" color="primary" disabled={success}>
+              <Button
+                type="submit"
+                variant="contained"
+                color="primary"
+                disabled={success || !email || !confirmationCode || !newPassword}
+              >
                 Submit
               </Button>
               {success && (
