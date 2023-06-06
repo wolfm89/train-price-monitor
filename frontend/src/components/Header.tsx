@@ -68,9 +68,11 @@ const Header = () => {
               alt="Train Price Monitor Logo"
               style={{ width: 50, height: 50, marginRight: 2 }}
             />
-            <Typography variant="h6" component="div" sx={{ marginLeft: 1, color: 'inherit', whiteSpace: 'nowrap' }}>
-              Train Price Monitor
-            </Typography>
+            {!isScreenSmall && (
+              <Typography variant="h6" component="div" sx={{ marginLeft: 1, color: 'inherit', whiteSpace: 'nowrap' }}>
+                Train Price Monitor
+              </Typography>
+            )}
           </Link>
           {user && (
             <div style={{ display: 'flex', alignItems: 'center' }}>
