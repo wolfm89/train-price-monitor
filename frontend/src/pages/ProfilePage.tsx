@@ -17,11 +17,24 @@ const ProfilePage: React.FC = () => {
   const { addAlert } = useAlert();
   const [_, updateUserProfilePicture] = useMutation(UpdateUserProfilePicture);
 
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+  const allowedMaxSize = 0.5 * 1024 * 1024; // 0.5 MB
+
   const handleProfilePictureChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file: File = event.target.files![0]; // Get the first selected file
 
     // Perform any desired actions with the file
     if (file) {
+      if (!allowedTypes.includes(file.type)) {
+        addAlert('Invalid file type. Only JPEG, PNG, and GIF images are allowed.', AlertSeverity.Error);
+        return;
+      }
+
+      if (file.size > allowedMaxSize) {
+        addAlert('File size exceeds the allowed limit (500 KB).', AlertSeverity.Error);
+        return;
+      }
+
       updateUserProfilePicture({ id: user?.['custom:id'], image: file })
         .then((result) => {
           addAlert('Profile picture changed successfully!', AlertSeverity.Success);
