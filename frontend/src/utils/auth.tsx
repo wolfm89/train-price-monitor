@@ -24,30 +24,36 @@ export function signUp(
   return new Promise((resolve, reject) => {
     const userAttributes: CognitoUserAttribute[] = [
       new CognitoUserAttribute({ Name: 'custom:id', Value: id }),
-      new CognitoUserAttribute({ Name: 'email', Value: email }),
+      new CognitoUserAttribute({ Name: 'email', Value: email.toLowerCase() }),
       new CognitoUserAttribute({ Name: 'given_name', Value: givenName }),
       new CognitoUserAttribute({ Name: 'family_name', Value: familyName }),
     ];
 
-    userPool.signUp(email, password, userAttributes, [], (err: Error | undefined, result?: ISignUpResult) => {
-      if (err) {
-        reject(err);
-        return;
+    userPool.signUp(
+      email.toLowerCase(),
+      password,
+      userAttributes,
+      [],
+      (err: Error | undefined, result?: ISignUpResult) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(result!.user);
       }
-      resolve(result!.user);
-    });
+    );
   });
 }
 
 export function signIn(email: string, password: string): Promise<CognitoUserSession> {
   return new Promise((resolve, reject) => {
     const authenticationDetails = new AuthenticationDetails({
-      Username: email,
+      Username: email.toLowerCase(),
       Password: password,
     });
 
     const cognitoUser = new CognitoUser({
-      Username: email,
+      Username: email.toLowerCase(),
       Pool: userPool,
     });
 
@@ -65,7 +71,7 @@ export function signIn(email: string, password: string): Promise<CognitoUserSess
 export function forgotPassword(email: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const cognitoUser = new CognitoUser({
-      Username: email,
+      Username: email.toLowerCase(),
       Pool: userPool,
     });
 
@@ -83,7 +89,7 @@ export function forgotPassword(email: string): Promise<void> {
 export function confirmPassword(email: string, confirmationCode: string, newPassword: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const cognitoUser = new CognitoUser({
-      Username: email,
+      Username: email.toLowerCase(),
       Pool: userPool,
     });
 
