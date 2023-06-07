@@ -7,10 +7,15 @@ import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
 import { YogaSchemaDefinition } from 'graphql-yoga/typings/plugins/useSchema';
+import morgan from './config/morgan';
+import bodyParser from 'body-parser';
 
 dotenv.config(); // Load environment variables from .env file
 
 const app = express();
+app.use(bodyParser.json());
+app.use(morgan);
+
 const port = process.env.PORT || 4000; // Use the specified port from environment variable or default to 4000
 
 const typeDefs = readFileSync('src/schema/schema.graphql', 'utf8');

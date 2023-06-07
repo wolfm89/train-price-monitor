@@ -1,4 +1,5 @@
 import { GraphQLContext } from '../context';
+import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import { User, PresignedUrl } from '../schema/generated/typeDefs.generated';
 
@@ -57,7 +58,8 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   await context.s3.upload(profileImageBucketName, filename, image);
 
   // Delete previous image
-  if (dbUserCur && dbUserCur.profilePicture) {
+  if (dbUserCur && dbUserCur.profilePicture && dbUserCur.profilePicture != filename) {
+    Logger.info(`'Deleting previous profile image for user '${id}'`);
     await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
   }
 
