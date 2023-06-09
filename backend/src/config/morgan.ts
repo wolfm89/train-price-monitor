@@ -2,7 +2,7 @@ import morgan, { StreamOptions } from 'morgan';
 
 import { IncomingMessage } from 'http';
 
-import Logger from '../lib/logger';
+import logger from '../lib/logger';
 
 interface Request extends IncomingMessage {
   body: {
@@ -12,7 +12,21 @@ interface Request extends IncomingMessage {
 }
 
 const stream: StreamOptions = {
-  write: (message) => Logger.http(message.substring(0, message.lastIndexOf('\n'))),
+  write: (message) => {
+    const msg = message.substring(0, message.lastIndexOf('\n'));
+    const msgParts = msg.split('|');
+    const [logMessage, rawQuery, variables] = msgParts;
+    if (rawQuery != 'undefined') {
+      const query = rawQuery.replace(/\n/g, '').replace(/\s+/g, ' ');
+      try {
+        logger.info(logMessage, { cleanedQuery: query }, { variables: JSON.parse(variables) });
+      } catch (e) {
+        logger.info(logMessage, { cleanedQuery: query });
+      }
+    } else {
+      logger.info(logMessage);
+    }
+  },
 };
 
 const skip = () => {
@@ -28,7 +42,7 @@ const registerTokens = () => {
 registerTokens();
 
 const morganMiddleware = morgan(
-  ':method :url :status :res[content-length] - :response-time ms\n:graphql-query\n:graphql-vars',
+  ':method :url :status :res[content-length] - :response-time ms|:graphql-query|:graphql-vars',
   {
     stream,
     skip,
