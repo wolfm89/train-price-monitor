@@ -29,6 +29,7 @@
     "typescript": "^5.0.4"
   },
   "dependencies": {
+    "@aws-lambda-powertools/logger": "^1.8.0",
     "@aws-sdk/client-dynamodb": "^3.345.0",
     "@aws-sdk/client-s3": "^3.345.0",
     "@aws-sdk/lib-dynamodb": "^3.345.0",
@@ -44,7 +45,6 @@
     "graphql": "^16.6.0",
     "graphql-yoga": "^3.9.1",
     "morgan": "^1.10.0",
-    "uuid": "^9.0.0",
-    "winston": "^3.9.0"
+    "uuid": "^9.0.0"
   }
 }

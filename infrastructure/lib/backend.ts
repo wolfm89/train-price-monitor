@@ -5,6 +5,7 @@ import {
   aws_lambda as lambda,
   aws_dynamodb as dynamodb,
   aws_s3 as s3,
+  aws_logs as logs,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
@@ -32,6 +33,7 @@ export class Backend extends Construct {
 
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
+      logRetention: logs.RetentionDays.TWO_WEEKS,
       environment: {
         PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
       },
@@ -43,9 +45,15 @@ export class Backend extends Construct {
       table.grantReadWriteData(lambdaFunction);
     });
 
+    const logGroup = new logs.LogGroup(this, 'ApiLogs', {
+      retention: logs.RetentionDays.TWO_WEEKS,
+    });
+
     const api = new apigateway.LambdaRestApi(this, 'GraphqlApi', {
       handler: lambdaFunction,
       proxy: true,
+      cloudWatchRole: true,
+      binaryMediaTypes: ['multipart/form-data'],
       defaultMethodOptions: {
         authorizer: new apigateway.CognitoUserPoolsAuthorizer(this, 'Authorizer', {
           cognitoUserPools: [userPool],
@@ -56,6 +64,11 @@ export class Backend extends Construct {
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: apigateway.Cors.DEFAULT_HEADERS,
         allowCredentials: true,
+      },
+      deployOptions: {
+        accessLogDestination: new apigateway.LogGroupLogDestination(logGroup),
+        loggingLevel: apigateway.MethodLoggingLevel.OFF,
+        dataTraceEnabled: false,
       },
     });
 

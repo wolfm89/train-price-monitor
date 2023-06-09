@@ -7,12 +7,22 @@ import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
 import { YogaSchemaDefinition } from 'graphql-yoga/typings/plugins/useSchema';
+import logger from './lib/logger';
 import morgan from './config/morgan';
 import bodyParser from 'body-parser';
 
 dotenv.config(); // Load environment variables from .env file
 
 const app = express();
+
+if (process.env.AWS_EXECUTION_ENV) {
+  app.use((req, res, next) => {
+    const { context } = serverlessExpress.getCurrentInvoke();
+    logger.addContext(context);
+    next();
+  });
+}
+
 app.use(bodyParser.json());
 app.use(morgan);
 
