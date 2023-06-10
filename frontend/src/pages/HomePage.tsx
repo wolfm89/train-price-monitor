@@ -15,12 +15,12 @@ const HomePage: React.FC<Props> = () => {
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const { addAlert } = useAlert();
   const { user } = useContext(AuthContext);
-  const [userActivatedResult, reexecuteUserActivationStatusQuery] = useQuery({
+  const [userActivatedResult] = useQuery({
     query: UserActivationStatusQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user,
   });
-  const [_, activateUser] = useMutation(ActivateUser);
+  const [, activateUser] = useMutation(ActivateUser);
 
   useEffect(() => {
     const activated = userActivatedResult.data?.user?.activated;
@@ -31,7 +31,7 @@ const HomePage: React.FC<Props> = () => {
         }
       });
     }
-  }, [user, userActivatedResult]);
+  }, [activateUser, addAlert, user, userActivatedResult]);
 
   const handleModalOpen = () => {
     setSignupModalOpen(true);
