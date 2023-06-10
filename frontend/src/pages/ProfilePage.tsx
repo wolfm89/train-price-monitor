@@ -8,7 +8,7 @@ import { useMutation } from 'urql';
 import { UpdateUserProfilePicture } from '../api/user';
 
 const ProfilePage: React.FC = () => {
-  const { user, userProfilePictureUrl, reexecuteUserProfilePictureUrlQuery } = useContext(AuthContext);
+  const { user, userProfilePictureUrl, refetchUserProfilePictureUrl } = useContext(AuthContext);
   const [firstName, setFirstName] = useState(user?.given_name);
   const [lastName, setLastName] = useState(user?.family_name);
   const [email, setEmail] = useState(user?.email);
@@ -38,7 +38,7 @@ const ProfilePage: React.FC = () => {
       updateUserProfilePicture({ id: user?.['custom:id'], image: file })
         .then((result) => {
           addAlert('Profile picture changed successfully!', AlertSeverity.Success);
-          reexecuteUserProfilePictureUrlQuery({ requestPolicy: 'network-only' });
+          refetchUserProfilePictureUrl();
         })
         .catch((error) => {
           addAlert('Profile picture change failed. Please try again.', AlertSeverity.Error);
