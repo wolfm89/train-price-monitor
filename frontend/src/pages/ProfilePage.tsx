@@ -15,7 +15,7 @@ const ProfilePage: React.FC = () => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const { addAlert } = useAlert();
-  const [_, updateUserProfilePicture] = useMutation(UpdateUserProfilePicture);
+  const [, updateUserProfilePicture] = useMutation(UpdateUserProfilePicture);
 
   const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
   const allowedMaxSize = 0.5 * 1024 * 1024; // 0.5 MB
