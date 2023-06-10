@@ -19,9 +19,9 @@ const stream: StreamOptions = {
     if (rawQuery != 'undefined') {
       const query = rawQuery.replace(/\n/g, '').replace(/\s+/g, ' ');
       try {
-        logger.info(logMessage, { cleanedQuery: query }, { variables: JSON.parse(variables) });
+        logger.info(logMessage, { query }, { variables: JSON.parse(variables) });
       } catch (e) {
-        logger.info(logMessage, { cleanedQuery: query });
+        logger.info(logMessage, { query });
       }
     } else {
       logger.info(logMessage);

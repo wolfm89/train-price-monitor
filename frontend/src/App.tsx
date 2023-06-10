@@ -18,8 +18,8 @@ import { Provider } from 'urql';
 export default function App() {
   return (
     <Provider value={client}>
-      <AuthProvider>
-        <AlertProvider>
+      <AlertProvider>
+        <AuthProvider>
           <Router>
             <Header />
             <Container maxWidth="md" sx={{ my: 4 }}>
@@ -49,8 +49,8 @@ export default function App() {
             <Footer />
             <AlertBar />
           </Router>
-        </AlertProvider>
-      </AuthProvider>
+        </AuthProvider>
+      </AlertProvider>
     </Provider>
   );
 }

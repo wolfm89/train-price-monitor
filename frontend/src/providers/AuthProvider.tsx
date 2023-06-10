@@ -1,8 +1,10 @@
-import { createContext, useState, useEffect } from 'react';
+import { createContext, useState, useEffect, useCallback } from 'react';
 import * as auth from '../utils/auth';
 import { UserData } from '../utils/auth';
-import { UseQueryExecute, useQuery } from 'urql';
+import { useQuery } from 'urql';
 import { UserProfilePictureUrlQuery } from '../api/user';
+import useAlert from '../hooks/useAlert';
+import { AlertSeverity } from './AlertProvider';
 
 interface AuthContextType {
   user: UserData | null;
@@ -10,14 +12,16 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   userProfilePictureUrl: string | undefined;
-  reexecuteUserProfilePictureUrlQuery: UseQueryExecute;
+  refetchUserProfilePictureUrl: () => void;
 }
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
+  const { addAlert } = useAlert();
   const [user, setUser] = useState<UserData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [userProfilePictureUrl, setUserProfilePictureUrl] = useState<string | undefined>(undefined);
   const [userProfilePictureUrlResult, reexecuteUserProfilePictureUrlQuery] = useQuery({
     query: UserProfilePictureUrlQuery,
     variables: { id: user?.['custom:id'] },
@@ -49,15 +53,59 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     await auth.signOut();
     setUser(null);
+    const imageUrlKey = `image_url_${user?.['custom:id']}`;
+    const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
+    localStorage.removeItem(imageUrlKey);
+    localStorage.removeItem(imageUrlTimestampKey);
   };
+
+  const fetchAndCacheUserProfilePictureUrl = useCallback(async () => {
+    reexecuteUserProfilePictureUrlQuery({ requestPolicy: 'network-only' });
+  }, [reexecuteUserProfilePictureUrlQuery]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    const imageUrlKey = `image_url_${user?.['custom:id']}`;
+    const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
+
+    const imageUrl = localStorage.getItem(imageUrlKey);
+    const imageUrlTimestamp = localStorage.getItem(imageUrlTimestampKey);
+
+    // 24 hours in milliseconds
+    const oneDay = 24 * 60 * 60 * 1000;
+    const now = new Date().getTime();
+
+    if (imageUrl && imageUrlTimestamp && now - Number(imageUrlTimestamp) < oneDay) {
+      setUserProfilePictureUrl(imageUrl);
+    } else {
+      fetchAndCacheUserProfilePictureUrl();
+    }
+  }, [user, fetchAndCacheUserProfilePictureUrl]);
+
+  useEffect(() => {
+    if (userProfilePictureUrlResult.data) {
+      const newUrl = userProfilePictureUrlResult.data.userProfilePicturePresignedUrl.url;
+      setUserProfilePictureUrl(newUrl);
+      const imageUrlKey = `image_url_${user?.['custom:id']}`;
+      const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
+      const now = new Date().getTime();
+      localStorage.setItem(imageUrlKey, newUrl);
+      localStorage.setItem(imageUrlTimestampKey, now.toString());
+    } else if (userProfilePictureUrlResult.error) {
+      console.error('Error fetching user profile picture URL:', userProfilePictureUrlResult.error);
+      addAlert('Error fetching user profile picture URL.', AlertSeverity.Error);
+    }
+  }, [userProfilePictureUrlResult, user, addAlert]);
 
   const authValue: AuthContextType = {
     user,
     isLoading,
     signIn,
     signOut,
-    userProfilePictureUrl: userProfilePictureUrlResult?.data?.userProfilePicturePresignedUrl.url,
-    reexecuteUserProfilePictureUrlQuery,
+    userProfilePictureUrl,
+    refetchUserProfilePictureUrl: fetchAndCacheUserProfilePictureUrl,
   };
 
   return <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>;
