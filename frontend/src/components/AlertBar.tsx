@@ -1,6 +1,6 @@
 import React from 'react';
 import useAlert from '../hooks/useAlert';
-import { Snackbar } from '@mui/material';
+import { Slide, Snackbar } from '@mui/material';
 import MuiAlert, { AlertProps } from '@mui/material/Alert';
 
 const Alert = React.forwardRef<HTMLDivElement, AlertProps>(function Alert(props, ref) {
@@ -14,6 +14,10 @@ const AlertBar: React.FC = () => {
     removeAlert();
   };
 
+  const SlideTransition = (props: any) => {
+    return <Slide {...props} direction="down" />;
+  };
+
   return (
     <Snackbar
       open={!!alert}
@@ -23,7 +27,7 @@ const AlertBar: React.FC = () => {
       }}
       autoHideDuration={5000}
       onClose={onClose}
-      message="Sign up successful!"
+      TransitionComponent={SlideTransition}
     >
       <Alert onClose={onClose} severity={alert?.severity} sx={{ width: '100%' }}>
         {alert?.message}
