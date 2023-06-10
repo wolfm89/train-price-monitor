@@ -7,7 +7,7 @@ import logger from '../lib/logger';
 interface Request extends IncomingMessage {
   body: {
     query: string;
-    variables: any;
+    variables: unknown;
   };
 }
 

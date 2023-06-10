@@ -3,7 +3,11 @@ import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import { User, PresignedUrl } from '../schema/generated/typeDefs.generated';
 
-const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME!;
+const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME;
+
+if (!profileImageBucketName) {
+  throw new Error('PROFILE_IMAGE_BUCKET_NAME is not defined in process.env');
+}
 
 export const userResolvers: UserResolvers = {
   id: (parent) => parent.id,
