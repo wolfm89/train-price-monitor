@@ -18,7 +18,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
   const [familyName, setFamilyName] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const { addAlert } = useAlert();
-  const [_, createUser] = useMutation(CreateUser);
+  const [, createUser] = useMutation(CreateUser);
 
   const handleSignUp = async () => {
     const userId = uuidv4();
