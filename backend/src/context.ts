@@ -11,8 +11,12 @@ const marshallOptions = {
   // Whether to remove undefined values while marshalling.
   removeUndefinedValues: true,
 };
+
+if (!User.table) {
+  throw new Error('User table is not initialized');
+}
 const translateConfig = { marshallOptions };
-User.table!.DocumentClient = DynamoDBDocumentClient.from(
+User.table.DocumentClient = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: process.env.AWS_REGION }),
   translateConfig
 );
