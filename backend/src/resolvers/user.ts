@@ -58,8 +58,13 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   const { Item: dbUserCur } = await context.entities.User.get({ id: id });
   const filename = `${id}.${image.name.split('.').pop()}`;
 
-  // Upload file to S3 bucket
-  await context.s3.upload(profileImageBucketName, filename, image);
+  try {
+    // Upload file to S3 bucket
+    await context.s3.upload(profileImageBucketName, filename, image);
+  } catch (error) {
+    Logger.error(`Failed to upload file to S3: ${error}`);
+    throw error;
+  }
 
   // Delete previous image
   if (dbUserCur && dbUserCur.profilePicture && dbUserCur.profilePicture != filename) {
@@ -113,22 +118,27 @@ export const activateUser: NonNullable<MutationResolvers['activateUser']> = asyn
   { id }: { id: string },
   context: GraphQLContext
 ) => {
-  const { Attributes: dbUser } = await context.entities.User.update(
-    { id: id, activated: true },
-    { returnValues: 'ALL_NEW' }
-  );
+  try {
+    const { Attributes: dbUser } = await context.entities.User.update(
+      { id: id, activated: true },
+      { returnValues: 'ALL_NEW' }
+    );
 
-  if (!dbUser) {
-    return null;
+    if (!dbUser) {
+      throw new Error('Failed to update user property');
+    }
+
+    const user: User = {
+      id: dbUser.id,
+      givenName: dbUser.givenName,
+      familyName: dbUser.familyName,
+      email: dbUser.email,
+      profilePicture: dbUser.profilePicture,
+      activated: dbUser.activated,
+    };
+    return user;
+  } catch (error) {
+    Logger.error(`Failed to activate user with id ${id}: ${error}`);
+    throw error;
   }
-
-  const user: User = {
-    id: dbUser.id,
-    givenName: dbUser.givenName,
-    familyName: dbUser.familyName,
-    email: dbUser.email,
-    profilePicture: dbUser.profilePicture,
-    activated: dbUser.activated,
-  };
-  return user;
 };
