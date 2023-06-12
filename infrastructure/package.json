@@ -33,8 +33,6 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.350.0",
     "aws-cdk-lib": "^2.78.0",
     "constructs": "^10.0.0",
-    "eslint-config-prettier": "^8.8.0",
-    "eslint-plugin-prettier": "^4.2.1",
     "source-map-support": "^0.5.21"
   }
 }
