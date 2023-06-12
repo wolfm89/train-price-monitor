@@ -1,0 +1,8 @@
+# Always ignore node_modules.
+**/node_modules/**/*.*
+
+# Always ignore CDK output.
+**/cdk.out
+
+# Always ignore generated files.
+**/*.generated.ts
