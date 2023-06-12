@@ -101,7 +101,7 @@ export interface FileScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes
 
 export type MutationResolvers<
   ContextType = any,
-  ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation']
+  ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation'],
 > = {
   activateUser?: Resolver<
     Maybe<ResolversTypes['User']>,
@@ -125,7 +125,7 @@ export type MutationResolvers<
 
 export type PresignedUrlResolvers<
   ContextType = any,
-  ParentType extends ResolversParentTypes['PresignedUrl'] = ResolversParentTypes['PresignedUrl']
+  ParentType extends ResolversParentTypes['PresignedUrl'] = ResolversParentTypes['PresignedUrl'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   url?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
@@ -134,7 +134,7 @@ export type PresignedUrlResolvers<
 
 export type QueryResolvers<
   ContextType = any,
-  ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']
+  ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query'],
 > = {
   user?: Resolver<Maybe<ResolversTypes['User']>, ParentType, ContextType, RequireFields<QueryUserArgs, 'id'>>;
   userProfilePicturePresignedUrl?: Resolver<
@@ -147,7 +147,7 @@ export type QueryResolvers<
 
 export type UserResolvers<
   ContextType = any,
-  ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User']
+  ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User'],
 > = {
   activated?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
