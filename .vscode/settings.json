@@ -1,5 +1,8 @@
 {
   "yaml.schemas": {
     "https://json.schemastore.org/github-workflow.json": "file:///home/wolfgang/projects/train-price-monitor/.github/deploy.yaml"
+  },
+  "files.watcherExclude": {
+    "**/target": true
   }
 }

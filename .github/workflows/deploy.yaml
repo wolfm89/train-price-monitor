@@ -32,6 +32,12 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+        env:
+          REACT_APP_COGNITO_USER_POOL_ID: ${{ secrets.REACT_APP_COGNITO_USER_POOL_ID }}
+          REACT_APP_COGNITO_CLIENT_ID: ${{ secrets.REACT_APP_COGNITO_CLIENT_ID }}
+          REACT_APP_COGNITO_IDENTITY_POOL_ID: ${{ secrets.REACT_APP_COGNITO_IDENTITY_POOL_ID }}
+          REACT_APP_AWS_REGION: ${{ vars.AWS_REGION }}
+          REACT_APP_API_GATEWAY_ENDPOINT: ${{ secrets.REACT_APP_API_GATEWAY_ENDPOINT }}
 
       - name: Install dependencies for infrastructure
         working-directory: infrastructure
