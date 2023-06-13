@@ -11,6 +11,4 @@ FROM public.ecr.aws/lambda/nodejs:18
 WORKDIR ${LAMBDA_TASK_ROOT}
 COPY --from=builder /build/dist/* ./
 COPY --from=builder /build/src/schema ./src/schema
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD [ "main.handler" ]
