@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-if [[ "${AWS_EXECUTION_ENV:0:13}" == "AWS_Lambda_nodejs" ]]; then
+if [[ -z "${AWS_EXECUTION_ENV}" ]]; then
     echo "Running on AWS Lambda"
     exec /lambda-entrypoint.sh "$@"
 else
