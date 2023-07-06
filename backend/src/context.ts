@@ -1,4 +1,4 @@
-import User from './model/user';
+import User from './model/trainPriceMonitor';
 import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
