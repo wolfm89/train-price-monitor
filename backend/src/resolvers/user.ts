@@ -18,18 +18,28 @@ export const userResolvers: UserResolvers = {
   activated: (parent) => parent.activated,
 };
 
-export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context: GraphQLContext) => {
+export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context) => {
   const { Item: dbUser } = await context.entities.User.get({ id: args.id });
   if (!dbUser) {
     return null;
   }
+  let notifications;
+  if (context.params.query.includes('notifications')) {
+    // const { Items: dbNotifications } = await context.entities.Notification.query(args.id);
+    const { Items: dbNotifications } = await context.entities.Notification.query(`USER#${args.id}`, {
+      beginsWith: 'NOTIFICATION#',
+    });
+    notifications = dbNotifications.map((dbNotification: any) => {
+      return {
+        id: dbNotification.sk.split('#')[1],
+        userId: dbNotification.pk.split('#')[1],
+        ...dbNotification,
+      };
+    });
+  }
   const user: User = {
-    id: dbUser.id,
-    givenName: dbUser.givenName,
-    familyName: dbUser.familyName,
-    email: dbUser.email,
-    profilePicture: dbUser.profilePicture,
-    activated: dbUser.activated,
+    ...dbUser,
+    notifications,
   };
   return user;
 };
@@ -80,14 +90,7 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
     return null;
   }
 
-  const user: User = {
-    id: dbUser.id,
-    givenName: dbUser.givenName,
-    familyName: dbUser.familyName,
-    email: dbUser.email,
-    profilePicture: dbUser.profilePicture,
-    activated: dbUser.activated,
-  };
+  const user: User = { ...dbUser };
   return user;
 };
 
@@ -128,14 +131,7 @@ export const activateUser: NonNullable<MutationResolvers['activateUser']> = asyn
       throw new Error('Failed to update user property');
     }
 
-    const user: User = {
-      id: dbUser.id,
-      givenName: dbUser.givenName,
-      familyName: dbUser.familyName,
-      email: dbUser.email,
-      profilePicture: dbUser.profilePicture,
-      activated: dbUser.activated,
-    };
+    const user: User = { ...dbUser };
     return user;
   } catch (error) {
     Logger.error(`Failed to activate user with id ${id}: ${error}`);

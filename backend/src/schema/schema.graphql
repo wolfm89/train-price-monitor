@@ -2,6 +2,7 @@ type Query
 type Mutation
 
 scalar File
+scalar DateTime
 
 # User
 
@@ -12,6 +13,7 @@ type User {
   email: String!
   profilePicture: String
   activated: Boolean!
+  notifications: [Notification]
 }
 
 type PresignedUrl {
@@ -41,4 +43,15 @@ extend type Mutation {
 
 extend type Mutation {
   activateUser(id: ID!): User
+}
+
+# Notification
+
+type Notification {
+  id: ID!
+  userId: ID!
+  journeyId: ID
+  message: String!
+  timestamp: DateTime!
+  read: Boolean!
 }

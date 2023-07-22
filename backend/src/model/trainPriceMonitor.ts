@@ -26,4 +26,21 @@ const User = new Entity({
   },
 } as const);
 
-export default User;
+const Notification = new Entity({
+  name: 'Notification',
+  table: TrainPriceMonitorTable,
+  attributes: {
+    userId: { partitionKey: true, type: 'string', prefix: 'USER#' },
+    id: {
+      sortKey: true,
+      type: 'string',
+      prefix: 'NOTIFICATION#',
+    },
+    journeyId: { type: 'string' },
+    message: { type: 'string', required: true },
+    timestamp: { type: 'string', required: true },
+    read: { type: 'boolean', required: true, default: false },
+  },
+} as const);
+
+export { User, Notification };

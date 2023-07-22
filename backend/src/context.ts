@@ -1,4 +1,4 @@
-import User from './model/trainPriceMonitor';
+import { User, Notification } from './model/trainPriceMonitor';
 import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
@@ -13,7 +13,7 @@ const marshallOptions = {
 };
 
 if (!User.table) {
-  throw new Error('User table is not initialized');
+  throw new Error('Table is not initialized');
 }
 const translateConfig = { marshallOptions };
 User.table.DocumentClient = DynamoDBDocumentClient.from(
@@ -23,6 +23,7 @@ User.table.DocumentClient = DynamoDBDocumentClient.from(
 
 type Entities = {
   User: typeof User;
+  Notification: typeof Notification;
 };
 
 export type GraphQLContext = {
@@ -31,5 +32,5 @@ export type GraphQLContext = {
 };
 
 export async function createContext(): Promise<GraphQLContext> {
-  return { entities: { User }, s3 };
+  return { entities: { User, Notification }, s3 };
 }
