@@ -77,3 +77,7 @@ export type User = {
   notifications?: Maybe<Array<Maybe<Notification>>>;
   profilePicture?: Maybe<Scalars['String']>;
 };
+
+export type UserNotificationsArgs = {
+  limit?: InputMaybe<Scalars['Int']>;
+};

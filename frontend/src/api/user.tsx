@@ -43,10 +43,10 @@ export const UserProfilePictureUrlQuery = gql`
 `;
 
 export const UserNotificationsQuery = gql`
-  query ($id: ID!) {
+  query ($id: ID!, $notificationsLimit: Int) {
     user(id: $id) {
       id
-      notifications {
+      notifications(limit: $notificationsLimit) {
         id
         journeyId
         message

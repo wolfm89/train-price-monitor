@@ -29,7 +29,7 @@ const Header = () => {
   const { user, userProfilePictureUrl } = useContext(AuthContext);
   const [userNotificationsResult] = useQuery({
     query: UserNotificationsQuery,
-    variables: { id: user?.['custom:id'] },
+    variables: { id: user?.['custom:id'], notificationsLimit: 8 },
     pause: !user,
   });
 

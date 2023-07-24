@@ -13,7 +13,7 @@ type User {
   email: String!
   profilePicture: String
   activated: Boolean!
-  notifications: [Notification]
+  notifications(limit: Int): [Notification]
 }
 
 type PresignedUrl {

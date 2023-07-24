@@ -7,11 +7,9 @@ import {
   createUser,
   activateUser,
 } from './user';
-import { notificationResolvers } from './notification';
 
 const resolvers: Resolvers = {
   User: userResolvers,
-  Notification: notificationResolvers,
   Query: {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,

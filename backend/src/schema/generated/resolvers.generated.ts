@@ -1,5 +1,4 @@
 import { GraphQLResolveInfo, GraphQLScalarType, GraphQLScalarTypeConfig } from 'graphql';
-import { Notification } from './typeDefs.generated';
 export type RequireFields<T, K extends keyof T> = Omit<T, K> & { [P in K]-?: NonNullable<T[P]> };
 
 export type ResolverTypeWrapper<T> = Promise<T> | T;
@@ -78,6 +77,7 @@ export type ResolversTypes = {
   DateTime: ResolverTypeWrapper<Scalars['DateTime']>;
   File: ResolverTypeWrapper<Scalars['File']>;
   ID: ResolverTypeWrapper<Scalars['ID']>;
+  Int: ResolverTypeWrapper<Scalars['Int']>;
   Mutation: ResolverTypeWrapper<{}>;
   Notification: ResolverTypeWrapper<Notification>;
   PresignedUrl: ResolverTypeWrapper<PresignedUrl>;
@@ -92,6 +92,7 @@ export type ResolversParentTypes = {
   DateTime: Scalars['DateTime'];
   File: Scalars['File'];
   ID: Scalars['ID'];
+  Int: Scalars['Int'];
   Mutation: {};
   Notification: Notification;
   PresignedUrl: PresignedUrl;
@@ -176,7 +177,12 @@ export type UserResolvers<
   familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  notifications?: Resolver<Maybe<Array<Maybe<ResolversTypes['Notification']>>>, ParentType, ContextType>;
+  notifications?: Resolver<
+    Maybe<Array<Maybe<ResolversTypes['Notification']>>>,
+    ParentType,
+    ContextType,
+    Partial<UserNotificationsArgs>
+  >;
   profilePicture?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 };
