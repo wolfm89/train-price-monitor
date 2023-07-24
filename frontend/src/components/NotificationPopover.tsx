@@ -27,14 +27,20 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id,
       }}
     >
       <List>
-        {notifications?.map((value: any, index: number) => (
-          <ListItemButton key={index}>
-            <ListItemIcon>
-              <NotificationImportantIcon />
-            </ListItemIcon>
-            <ListItemText primary={value.message} />
+        {notifications && notifications.length > 0 ? (
+          notifications.map((value: any, index: number) => (
+            <ListItemButton key={index}>
+              <ListItemIcon>
+                <NotificationImportantIcon />
+              </ListItemIcon>
+              <ListItemText primary={value.message} />
+            </ListItemButton>
+          ))
+        ) : (
+          <ListItemButton disabled>
+            <ListItemText primary="No notifications" />
           </ListItemButton>
-        ))}
+        )}
       </List>
     </Popover>
   );
