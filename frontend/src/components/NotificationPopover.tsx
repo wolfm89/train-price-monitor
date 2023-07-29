@@ -7,11 +7,10 @@ interface NotificationPopoverProps {
   id: string | undefined;
   open: boolean;
   onClose: () => void;
+  notifications: any;
 }
 
-const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id, open, onClose }) => {
-  // dummy notifications
-  const notifications = ['Notification 1', 'Notification 2', 'Notification 3', 'Notification 4'];
+const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id, open, onClose, notifications }) => {
   return (
     <Popover
       id={id}
@@ -28,14 +27,20 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id,
       }}
     >
       <List>
-        {notifications.map((result: any, index: number) => (
-          <ListItemButton key={index}>
-            <ListItemIcon>
-              <NotificationImportantIcon />
-            </ListItemIcon>
-            <ListItemText primary={result} />
+        {notifications && notifications.length > 0 ? (
+          notifications.map((value: any, index: number) => (
+            <ListItemButton key={index}>
+              <ListItemIcon>
+                <NotificationImportantIcon />
+              </ListItemIcon>
+              <ListItemText primary={value.message} />
+            </ListItemButton>
+          ))
+        ) : (
+          <ListItemButton disabled>
+            <ListItemText primary="No notifications" />
           </ListItemButton>
-        ))}
+        )}
       </List>
     </Popover>
   );

@@ -20,11 +20,18 @@ import {
 import NotificationPopover from './NotificationPopover';
 import AccountMenu from './AccountMenu';
 import { AuthContext } from '../providers/AuthProvider';
+import { UserNotificationsQuery } from '../api/user';
+import { useQuery } from 'urql';
 
 const Header = () => {
   const theme = useTheme();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl } = useContext(AuthContext);
+  const [userNotificationsResult] = useQuery({
+    query: UserNotificationsQuery,
+    variables: { id: user?.['custom:id'], notificationsLimit: 8 },
+    pause: !user,
+  });
 
   const [notificationAnchorEl, setNotificationAnchorEl] = useState<HTMLButtonElement | null>(null);
 
@@ -131,7 +138,7 @@ const Header = () => {
                 </IconButton>
               </Link>
               <IconButton color="inherit" onClick={handleNotificationClick}>
-                <Badge badgeContent={4} color="error">
+                <Badge badgeContent={userNotificationsResult.data?.user?.notifications?.length} color="error">
                   <NotificationsIcon />
                 </Badge>
               </IconButton>
@@ -145,7 +152,13 @@ const Header = () => {
           )}
         </Toolbar>
       </Container>
-      <NotificationPopover anchorEl={notificationAnchorEl} id={id} open={open} onClose={handleNotificationClose} />
+      <NotificationPopover
+        anchorEl={notificationAnchorEl}
+        id={id}
+        open={open}
+        onClose={handleNotificationClose}
+        notifications={userNotificationsResult.data?.user?.notifications}
+      />
       <AccountMenu anchorEl={accountAnchorEl} onClose={handleAccountClose} />
     </AppBar>
   );

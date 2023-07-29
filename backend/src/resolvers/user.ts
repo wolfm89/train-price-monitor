@@ -1,7 +1,8 @@
 import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
+import { sort } from '../lib/sort';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
-import { User, PresignedUrl } from '../schema/generated/typeDefs.generated';
+import { User, PresignedUrl, Notification } from '../schema/generated/typeDefs.generated';
 
 const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME;
 
@@ -10,26 +11,36 @@ if (!profileImageBucketName) {
 }
 
 export const userResolvers: UserResolvers = {
-  id: (parent) => parent.id,
-  givenName: (parent) => parent.givenName,
-  familyName: (parent) => parent.familyName,
-  email: (parent) => parent.email,
-  profilePicture: (parent) => parent.profilePicture,
-  activated: (parent) => parent.activated,
+  notifications: async (parent, args, context) => {
+    let notifications: Notification[] | undefined = undefined;
+    const { Items: dbNotifications } = await context.entities.Notification.query(`USER#${parent.id}`, {
+      beginsWith: 'NOTIFICATION#',
+    });
+    notifications = dbNotifications.map((dbNotification: { sk: string; pk: string }) => {
+      return {
+        id: dbNotification.sk.split('#')[1],
+        userId: dbNotification.pk.split('#')[1],
+        ...dbNotification,
+      };
+    });
+    if (notifications) {
+      sort(notifications, '-timestamp');
+      if (args.limit !== undefined) {
+        notifications = notifications.slice(0, args.limit);
+      }
+      return notifications;
+    }
+    return [];
+  },
 };
 
-export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context: GraphQLContext) => {
+export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context) => {
   const { Item: dbUser } = await context.entities.User.get({ id: args.id });
   if (!dbUser) {
     return null;
   }
   const user: User = {
-    id: dbUser.id,
-    givenName: dbUser.givenName,
-    familyName: dbUser.familyName,
-    email: dbUser.email,
-    profilePicture: dbUser.profilePicture,
-    activated: dbUser.activated,
+    ...dbUser,
   };
   return user;
 };
@@ -80,14 +91,7 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
     return null;
   }
 
-  const user: User = {
-    id: dbUser.id,
-    givenName: dbUser.givenName,
-    familyName: dbUser.familyName,
-    email: dbUser.email,
-    profilePicture: dbUser.profilePicture,
-    activated: dbUser.activated,
-  };
+  const user: User = { ...dbUser };
   return user;
 };
 
@@ -128,14 +132,7 @@ export const activateUser: NonNullable<MutationResolvers['activateUser']> = asyn
       throw new Error('Failed to update user property');
     }
 
-    const user: User = {
-      id: dbUser.id,
-      givenName: dbUser.givenName,
-      familyName: dbUser.familyName,
-      email: dbUser.email,
-      profilePicture: dbUser.profilePicture,
-      activated: dbUser.activated,
-    };
+    const user: User = { ...dbUser };
     return user;
   } catch (error) {
     Logger.error(`Failed to activate user with id ${id}: ${error}`);

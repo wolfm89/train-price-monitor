@@ -41,3 +41,18 @@ export const UserProfilePictureUrlQuery = gql`
     }
   }
 `;
+
+export const UserNotificationsQuery = gql`
+  query ($id: ID!, $notificationsLimit: Int) {
+    user(id: $id) {
+      id
+      notifications(limit: $notificationsLimit) {
+        id
+        journeyId
+        message
+        timestamp
+        read
+      }
+    }
+  }
+`;
