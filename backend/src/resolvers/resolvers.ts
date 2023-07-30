@@ -7,12 +7,14 @@ import {
   createUser,
   activateUser,
 } from './user';
+import { journeysQuery } from './journey';
 
 const resolvers: Resolvers = {
   User: userResolvers,
   Query: {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
+    journeys: journeysQuery,
   },
   Mutation: {
     updateUserProfilePicture: updateUserProfilePicture,

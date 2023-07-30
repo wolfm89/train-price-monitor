@@ -55,3 +55,21 @@ type Notification {
   timestamp: DateTime!
   read: Boolean!
 }
+
+# Journeys
+
+type Journey {
+  refreshToken: String!
+  from: String!
+  to: String!
+  departure: DateTime!
+  arrival: DateTime!
+  means: [String]!
+  price: Float
+}
+
+## Queries
+
+extend type Query {
+  journeys(from: String!, to: String!, departure: DateTime!): [Journey]
+}

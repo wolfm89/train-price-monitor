@@ -2,8 +2,10 @@ import { User, Notification } from './model/trainPriceMonitor';
 import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { DbHafasManager } from './managers/DbHafasManager';
 
 const s3 = new S3Manager();
+const dbHafas = new DbHafasManager();
 
 const marshallOptions = {
   // Whether to automatically convert empty strings, blobs, and sets to `null`.
@@ -29,8 +31,9 @@ type Entities = {
 export type GraphQLContext = {
   entities: Entities;
   s3: S3Manager;
+  dbHafas: DbHafasManager;
 };
 
 export async function createContext(): Promise<GraphQLContext> {
-  return { entities: { User, Notification }, s3 };
+  return { entities: { User, Notification }, s3, dbHafas };
 }
