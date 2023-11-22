@@ -11,12 +11,12 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
 
   const formatDateTime = (dateTime: string) => {
     const date = new Date(dateTime);
-    const formattedDate = date.toLocaleDateString(undefined, {
+    const formattedDate = date.toLocaleDateString('de-DE', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
     });
-    const formattedTime = date.toLocaleTimeString(undefined, {
+    const formattedTime = date.toLocaleTimeString('de-DE', {
       hour: '2-digit',
       minute: '2-digit',
     });
@@ -35,23 +35,23 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
           <TableHead>
             <TableRow>
               <TableCell>Departure Time</TableCell>
-              <TableCell>Means of Transport</TableCell>
               <TableCell>Arrival Time</TableCell>
+              <TableCell>Means of Transport</TableCell>
               <TableCell>Price</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {searchResult.map((result: any, index: number) => (
+            {searchResult.data?.journeys.map((result: any, index: number) => (
               <TableRow
                 key={index}
                 sx={{
                   backgroundColor: index % 2 === 0 ? theme.palette.background.default : theme.palette.background.paper,
                 }}
               >
-                <TableCell>{result.departureTime}</TableCell>
-                <TableCell>{result.meansOfTransport.join(' ')}</TableCell>
-                <TableCell>{result.arrivalTime}</TableCell>
-                <TableCell>{`€${result.currentPrice.toFixed(2)}`}</TableCell>
+                <TableCell>{formatDateTime(result.departure)}</TableCell>
+                <TableCell>{formatDateTime(result.arrival)}</TableCell>
+                <TableCell>{result.means.join(' ')}</TableCell>
+                <TableCell>{`€${result.price.toFixed(2)}`}</TableCell>
               </TableRow>
             ))}
           </TableBody>
