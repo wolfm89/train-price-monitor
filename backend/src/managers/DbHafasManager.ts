@@ -1,6 +1,5 @@
-import { HafasClient, Journeys } from 'hafas-client';
-import createClient from 'hafas-client';
-import dbProfile from 'hafas-client/p/db';
+import { createClient, HafasClient, Journeys } from 'hafas-client';
+import { profile as dbProfile } from 'hafas-client/p/db/index.js';
 
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
 

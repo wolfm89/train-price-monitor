@@ -1,5 +1,5 @@
 import { GraphQLContext } from '../context';
-import Logger from '../lib/logger';
+import Logger from '../lib/logger.js';
 import { QueryResolvers } from '../schema/generated/resolvers.generated';
 
 export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (

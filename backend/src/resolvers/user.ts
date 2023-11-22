@@ -1,6 +1,6 @@
 import { GraphQLContext } from '../context';
-import Logger from '../lib/logger';
-import { sort } from '../lib/sort';
+import Logger from '../lib/logger.js';
+import { sort } from '../lib/sort.js';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import { User, PresignedUrl, Notification } from '../schema/generated/typeDefs.generated';
 

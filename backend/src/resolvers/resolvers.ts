@@ -6,8 +6,8 @@ import {
   updateUserProfilePicture,
   createUser,
   activateUser,
-} from './user';
-import { journeysQuery } from './journey';
+} from './user.js';
+import { journeysQuery } from './journey.js';
 
 const resolvers: Resolvers = {
   User: userResolvers,
