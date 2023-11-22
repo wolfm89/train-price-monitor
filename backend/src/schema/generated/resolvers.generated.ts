@@ -76,8 +76,10 @@ export type ResolversTypes = {
   Boolean: ResolverTypeWrapper<Scalars['Boolean']>;
   DateTime: ResolverTypeWrapper<Scalars['DateTime']>;
   File: ResolverTypeWrapper<Scalars['File']>;
+  Float: ResolverTypeWrapper<Scalars['Float']>;
   ID: ResolverTypeWrapper<Scalars['ID']>;
   Int: ResolverTypeWrapper<Scalars['Int']>;
+  Journey: ResolverTypeWrapper<Journey>;
   Mutation: ResolverTypeWrapper<{}>;
   Notification: ResolverTypeWrapper<Notification>;
   PresignedUrl: ResolverTypeWrapper<PresignedUrl>;
@@ -91,8 +93,10 @@ export type ResolversParentTypes = {
   Boolean: Scalars['Boolean'];
   DateTime: Scalars['DateTime'];
   File: Scalars['File'];
+  Float: Scalars['Float'];
   ID: Scalars['ID'];
   Int: Scalars['Int'];
+  Journey: Journey;
   Mutation: {};
   Notification: Notification;
   PresignedUrl: PresignedUrl;
@@ -108,6 +112,20 @@ export interface DateTimeScalarConfig extends GraphQLScalarTypeConfig<ResolversT
 export interface FileScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes['File'], any> {
   name: 'File';
 }
+
+export type JourneyResolvers<
+  ContextType = any,
+  ParentType extends ResolversParentTypes['Journey'] = ResolversParentTypes['Journey']
+> = {
+  arrival?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  departure?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  from?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  means?: Resolver<Array<Maybe<ResolversTypes['String']>>, ParentType, ContextType>;
+  price?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
+  refreshToken?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  to?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
 
 export type MutationResolvers<
   ContextType = any,
@@ -159,6 +177,12 @@ export type QueryResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']
 > = {
+  journeys?: Resolver<
+    Maybe<Array<Maybe<ResolversTypes['Journey']>>>,
+    ParentType,
+    ContextType,
+    RequireFields<QueryJourneysArgs, 'departure' | 'from' | 'to'>
+  >;
   user?: Resolver<Maybe<ResolversTypes['User']>, ParentType, ContextType, RequireFields<QueryUserArgs, 'id'>>;
   userProfilePicturePresignedUrl?: Resolver<
     Maybe<ResolversTypes['PresignedUrl']>,
@@ -190,6 +214,7 @@ export type UserResolvers<
 export type Resolvers<ContextType = any> = {
   DateTime?: GraphQLScalarType;
   File?: GraphQLScalarType;
+  Journey?: JourneyResolvers<ContextType>;
   Mutation?: MutationResolvers<ContextType>;
   Notification?: NotificationResolvers<ContextType>;
   PresignedUrl?: PresignedUrlResolvers<ContextType>;

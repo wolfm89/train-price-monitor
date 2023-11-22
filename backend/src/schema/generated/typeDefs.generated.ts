@@ -14,6 +14,17 @@ export type Scalars = {
   File: File;
 };
 
+export type Journey = {
+  __typename?: 'Journey';
+  arrival: Scalars['DateTime'];
+  departure: Scalars['DateTime'];
+  from: Scalars['String'];
+  means: Array<Maybe<Scalars['String']>>;
+  price?: Maybe<Scalars['Float']>;
+  refreshToken: Scalars['String'];
+  to: Scalars['String'];
+};
+
 export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
@@ -55,8 +66,15 @@ export type PresignedUrl = {
 
 export type Query = {
   __typename?: 'Query';
+  journeys?: Maybe<Array<Maybe<Journey>>>;
   user?: Maybe<User>;
   userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
+};
+
+export type QueryJourneysArgs = {
+  departure: Scalars['DateTime'];
+  from: Scalars['String'];
+  to: Scalars['String'];
 };
 
 export type QueryUserArgs = {

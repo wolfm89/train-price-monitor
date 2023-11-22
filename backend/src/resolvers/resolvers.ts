@@ -6,13 +6,15 @@ import {
   updateUserProfilePicture,
   createUser,
   activateUser,
-} from './user';
+} from './user.js';
+import { journeysQuery } from './journey.js';
 
 const resolvers: Resolvers = {
   User: userResolvers,
   Query: {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
+    journeys: journeysQuery,
   },
   Mutation: {
     updateUserProfilePicture: updateUserProfilePicture,
