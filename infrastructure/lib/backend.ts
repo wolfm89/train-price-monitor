@@ -36,6 +36,7 @@ export class Backend extends Construct {
       logRetention: logs.RetentionDays.TWO_WEEKS,
       environment: {
         PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
+        NODE_OPTIONS: '--enable-source-maps',
       },
     });
 

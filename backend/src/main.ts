@@ -3,12 +3,12 @@ import * as serverlessExpress from '@vendia/serverless-express';
 import express from 'express';
 import cors from 'cors';
 import { createYoga, createSchema } from 'graphql-yoga';
-import resolvers from './resolvers/resolvers.js';
+import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
-import { GraphQLContext, createContext } from './context.js';
+import { GraphQLContext, createContext } from './context';
 import { YogaSchemaDefinition } from 'graphql-yoga/typings/plugins/useSchema';
-import logger from './lib/logger.js';
-import morgan from './config/morgan.js';
+import logger from './lib/logger';
+import morgan from './config/morgan';
 import bodyParser from 'body-parser';
 
 dotenv.config(); // Load environment variables from .env file
