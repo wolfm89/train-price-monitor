@@ -1,8 +1,8 @@
-import { User, Notification } from './model/trainPriceMonitor.js';
-import { S3Manager } from './managers/S3Manager.js';
+import { User, Notification } from './model/trainPriceMonitor';
+import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { DbHafasManager } from './managers/DbHafasManager.js';
+import { DbHafasManager } from './managers/DbHafasManager';
 
 const s3 = new S3Manager();
 const dbHafas = new DbHafasManager();

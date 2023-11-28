@@ -34,8 +34,11 @@ export class Backend extends Construct {
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       logRetention: logs.RetentionDays.TWO_WEEKS,
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 512,
       environment: {
         PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
+        NODE_OPTIONS: '--enable-source-maps',
       },
     });
 
