@@ -5,9 +5,10 @@ import { JourneySearchQuery } from '../api/journey';
 
 interface Props {
   onSearch: (searchData: any, searchResult: any) => void;
+  setLoading: (loading: boolean) => void;
 }
 
-const SearchMask: React.FC<Props> = ({ onSearch }) => {
+const SearchMask: React.FC<Props> = ({ onSearch, setLoading }) => {
   const [from, setFrom] = useState<string>('');
   const [to, setTo] = useState<string>('');
   const [departureDay, setDepartureDay] = useState<string>('');
@@ -34,8 +35,9 @@ const SearchMask: React.FC<Props> = ({ onSearch }) => {
         },
         journeySearchResult
       );
+      setLoading(false);
     }
-  }, [departureDay, departureTime, from, journeySearchResult, journeySearchResult.data, onSearch, to]);
+  }, [departureDay, departureTime, from, journeySearchResult, journeySearchResult.data, onSearch, setLoading, to]);
 
   function createISODateString(day: string, time: string): string {
     const [year, month, date] = day.split('-').map(Number);
@@ -47,6 +49,7 @@ const SearchMask: React.FC<Props> = ({ onSearch }) => {
   }
 
   const handleSearchClick = () => {
+    setLoading(true);
     reexecuteJourneySearchQuery({ requestPolicy: 'network-only' });
   };
 

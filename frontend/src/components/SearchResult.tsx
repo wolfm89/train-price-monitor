@@ -1,12 +1,23 @@
 import React from 'react';
-import { Typography, TableContainer, Table, TableHead, TableBody, TableRow, TableCell, useTheme } from '@mui/material';
+import {
+  Typography,
+  TableContainer,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  useTheme,
+  CircularProgress,
+} from '@mui/material';
 
 interface Props {
   searchData: any;
   searchResult: any;
+  loading: boolean;
 }
 
-const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
+const SearchResult: React.FC<Props> = ({ searchData, searchResult, loading }) => {
   const theme = useTheme();
 
   const formatDateTime = (dateTime: string) => {
@@ -23,42 +34,53 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
     return `${formattedDate} ${formattedTime}`;
   };
 
-  return (
-    <>
-      <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-        {`${searchData.departure} to ${searchData.destination}, ${formatDateTime(
-          searchData.date + 'T' + searchData.time
-        )}`}
-      </Typography>
-      <TableContainer>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Departure Time</TableCell>
-              <TableCell>Arrival Time</TableCell>
-              <TableCell>Means of Transport</TableCell>
-              <TableCell>Price</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {searchResult.data?.journeys.map((result: any, index: number) => (
-              <TableRow
-                key={index}
-                sx={{
-                  backgroundColor: index % 2 === 0 ? theme.palette.background.default : theme.palette.background.paper,
-                }}
-              >
-                <TableCell>{formatDateTime(result.departure)}</TableCell>
-                <TableCell>{formatDateTime(result.arrival)}</TableCell>
-                <TableCell>{result.means.join(' ')}</TableCell>
-                <TableCell>{`€${result.price.toFixed(2)}`}</TableCell>
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
+        <CircularProgress />
+      </div>
+    );
+  }
+  if (searchData !== null) {
+    return (
+      <>
+        <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+          {`${searchData.departure} to ${searchData.destination}, ${formatDateTime(
+            searchData.date + 'T' + searchData.time
+          )}`}
+        </Typography>
+        <TableContainer>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>Departure Time</TableCell>
+                <TableCell>Arrival Time</TableCell>
+                <TableCell>Means of Transport</TableCell>
+                <TableCell>Price</TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </>
-  );
+            </TableHead>
+            <TableBody>
+              {searchResult.data?.journeys.map((result: any, index: number) => (
+                <TableRow
+                  key={index}
+                  sx={{
+                    backgroundColor:
+                      index % 2 === 0 ? theme.palette.background.default : theme.palette.background.paper,
+                  }}
+                >
+                  <TableCell>{formatDateTime(result.departure)}</TableCell>
+                  <TableCell>{formatDateTime(result.arrival)}</TableCell>
+                  <TableCell>{result.means.join(' ')}</TableCell>
+                  <TableCell>{`€${result.price.toFixed(2)}`}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </>
+    );
+  }
+  return <></>;
 };
 
 export default SearchResult;
