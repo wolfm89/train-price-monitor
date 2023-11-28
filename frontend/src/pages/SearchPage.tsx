@@ -6,9 +6,9 @@ import SearchResult from '../components/SearchResult';
 interface Props {}
 
 const SearchPage: React.FC<Props> = () => {
-  const [searchClicked, setSearchClicked] = useState<boolean>(false);
   const [searchData, setSearchData] = useState<any>(null);
   const [searchResult, setSearchResult] = useState<any>(null);
+  const [loading, setLoading] = useState<boolean>(false);
 
   const handleSearchClick = (searchData: any, searchResult: any) => {
     // Perform search logic here
@@ -16,7 +16,6 @@ const SearchPage: React.FC<Props> = () => {
     // Update the state or perform any desired actions
     setSearchData(searchData);
     setSearchResult(searchResult);
-    setSearchClicked(true);
   };
 
   return (
@@ -25,13 +24,11 @@ const SearchPage: React.FC<Props> = () => {
         <Typography variant="h6">Search for Train Rides</Typography>
       </Grid>
       <Grid item xs={12}>
-        <SearchMask onSearch={handleSearchClick} />
+        <SearchMask onSearch={handleSearchClick} setLoading={setLoading} />
       </Grid>
-      {searchClicked && (
-        <Grid item xs={12}>
-          <SearchResult searchData={searchData} searchResult={searchResult} />
-        </Grid>
-      )}
+      <Grid item xs={12}>
+        <SearchResult searchData={searchData} searchResult={searchResult} loading={loading} />
+      </Grid>
     </Grid>
   );
 };
