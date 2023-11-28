@@ -4,12 +4,16 @@ import { Client, cacheExchange, fetchExchange } from 'urql';
 
 const apiGatewayEndpoint = `${process.env.REACT_APP_API_GATEWAY_ENDPOINT!}graphql`;
 
-const cognitoAuthExchange = authExchange(async (utils) => {
+const getJwtToken = async () => {
   let session;
   try {
     session = await auth.getSession();
   } catch (error) {}
-  const token = session?.getIdToken().getJwtToken();
+  return session?.getIdToken().getJwtToken();
+};
+
+const cognitoAuthExchange = authExchange(async (utils) => {
+  let token = await getJwtToken();
 
   return {
     addAuthToOperation(operation) {
@@ -22,10 +26,11 @@ const cognitoAuthExchange = authExchange(async (utils) => {
       return error.graphQLErrors.some((e) => e.extensions?.code === 'FORBIDDEN');
     },
     async refreshAuth() {
-      auth.signOut();
+      token = await getJwtToken();
+      if (!token) auth.signOut();
     },
     willAuthError(_operation) {
-      return false;
+      return !token;
     },
   };
 });
