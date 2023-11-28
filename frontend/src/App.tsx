@@ -25,7 +25,14 @@ export default function App() {
             <Container maxWidth="md" sx={{ my: 4 }}>
               <Routes>
                 <Route path="/" element={<HomePage />} />
-                <Route path="/search" element={<SearchPage />} />
+                <Route
+                  path="/search"
+                  element={
+                    <RouteGuard>
+                      <SearchPage />
+                    </RouteGuard>
+                  }
+                />
                 <Route
                   path="/journeys"
                   element={
