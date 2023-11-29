@@ -4,18 +4,19 @@ import { useQuery } from 'urql';
 import { JourneySearchQuery } from '../api/journey';
 
 interface Props {
-  onSearch: (searchData: any, searchResult: any) => void;
+  setSearchData: (searchData: any) => void;
+  setSearchResult: (searchResult: any) => void;
   setLoading: (loading: boolean) => void;
   setSearchClicked: (searchClicked: boolean) => void;
 }
 
-const SearchMask: React.FC<Props> = ({ onSearch, setLoading, setSearchClicked }) => {
+const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoading, setSearchClicked }) => {
   const [from, setFrom] = useState<string>('');
   const [to, setTo] = useState<string>('');
   const [departureDay, setDepartureDay] = useState<string>('');
   const [departureTime, setDepartureTime] = useState<string>('');
   const [formValid, setFormValid] = useState<boolean>(false);
-  const [journeySearchResult, reexecuteJourneySearchQuery] = useQuery({
+  const [{ data, fetching }, reexecuteJourneySearchQuery] = useQuery({
     query: JourneySearchQuery,
     variables: {
       from: from.trim(),
@@ -26,17 +27,9 @@ const SearchMask: React.FC<Props> = ({ onSearch, setLoading, setSearchClicked })
   });
 
   useEffect(() => {
-    onSearch(
-      {
-        departure: from.trim(),
-        destination: to.trim(),
-        date: departureDay,
-        time: departureTime,
-      },
-      journeySearchResult.data?.journeys
-    );
-    setLoading(false);
-  }, [journeySearchResult.data]);
+    setSearchResult(data?.journeys);
+    setLoading(fetching);
+  }, [data, fetching, setLoading, setSearchResult]);
 
   function createISODateString(day: string, time: string): string {
     const [year, month, date] = day.split('-').map(Number);
@@ -50,6 +43,12 @@ const SearchMask: React.FC<Props> = ({ onSearch, setLoading, setSearchClicked })
   const handleSearchClick = () => {
     setSearchClicked(true);
     setLoading(true);
+    setSearchData({
+      departure: from.trim(),
+      destination: to.trim(),
+      date: departureDay,
+      time: departureTime,
+    });
     reexecuteJourneySearchQuery({ requestPolicy: 'network-only' });
   };
 

@@ -11,21 +11,18 @@ const SearchPage: React.FC<Props> = () => {
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
 
-  const handleSearchClick = (searchData: any, searchResult: any) => {
-    // Perform search logic here
-    // You can make API calls or perform any necessary operations based on the input values
-    // Update the state or perform any desired actions
-    setSearchData(searchData);
-    setSearchResult(searchResult);
-  };
-
   return (
     <Grid container spacing={2}>
       <Grid item xs={12}>
         <Typography variant="h6">Search for Train Rides</Typography>
       </Grid>
       <Grid item xs={12}>
-        <SearchMask onSearch={handleSearchClick} setLoading={setLoading} setSearchClicked={setSearchClicked} />
+        <SearchMask
+          setSearchData={setSearchData}
+          setSearchResult={setSearchResult}
+          setLoading={setLoading}
+          setSearchClicked={setSearchClicked}
+        />
       </Grid>
       <Grid item xs={12}>
         {loading ? (

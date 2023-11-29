@@ -51,7 +51,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
                 <TableCell>{formatDateTime(result.departure)}</TableCell>
                 <TableCell>{formatDateTime(result.arrival)}</TableCell>
                 <TableCell>{result.means.join(' ')}</TableCell>
-                <TableCell>{`€${result.price?.toFixed(2)}`}</TableCell>
+                <TableCell>{result.price ?? false ? `€${result.price.toFixed(2)}` : 'n/a'}</TableCell>
               </TableRow>
             ))}
           </TableBody>
