@@ -8,7 +8,7 @@ tasks:
 
   - name: Setup Environment Variables
     command: |
-      gp idp login aws --role-arn arn:aws:iam::691455452037:role/GitpodAdminRole --duration-seconds=14400
+      gp idp login aws --role-arn arn:aws:iam::691455452037:role/GitpodAdminRole --duration-seconds=3600
 
       export PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name InfrastructureStack | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
 
@@ -25,17 +25,24 @@ tasks:
       EOL
 
       echo "REACT_APP_API_GATEWAY_ENDPOINT=http://localhost:4000/" >> .env.development
+      gp sync-done env-setup
     env:
       AWS_REGION: eu-central-1
       STACK_NAME: InfrastructureStack
 
   - name: Setup, Install & Run Frontend
-    init: npm --prefix frontend/ install
+    init: |
+      npm --prefix frontend/ install
+      gp sync-wait env-setup
     command: npm --prefix frontend/ run start
 
   - name: Setup, Install & Run Backend
-    init: npm --prefix backend/ install
-    command: npm --prefix backend/ run dev
+    init: |
+      npm --prefix backend/ install
+      gp sync-wait env-setup
+    command: |
+      export PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name InfrastructureStack | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
+      npm --prefix backend/ run dev
 
   - name: Setup Infrastructure
     init: npm --prefix infrastructure/ install
