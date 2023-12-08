@@ -9,7 +9,9 @@ tasks:
   - name: Setup Environment Variables
     command: |
       gp idp login aws --role-arn arn:aws:iam::691455452037:role/GitpodAdminRole --duration-seconds=3600
-      export PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
+
+      # Write bucket name to backend .env file
+      echo "PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')" >> backend/.env
 
       COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthUserPoolId")) | .OutputValue')
       COGNITO_CLIENT_ID=$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query "UserPoolClients[0].ClientId" --output "text")
@@ -34,16 +36,14 @@ tasks:
   - name: Setup, Install & Run Frontend
     init: |
       npm --prefix frontend/ install
-      gp sync-wait env-setup
+      gp sync-await env-setup
     command: npm --prefix frontend/ run start
 
   - name: Setup, Install & Run Backend
     init: |
       npm --prefix backend/ install
-      gp sync-wait env-setup
-    command: |
-      export PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name InfrastructureStack | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
-      npm --prefix backend/ run dev
+      gp sync-await env-setup
+    command: npm --prefix backend/ run dev
 
   - name: Setup Infrastructure
     init: npm --prefix infrastructure/ install
