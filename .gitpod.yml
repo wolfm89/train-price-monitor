@@ -1,0 +1,65 @@
+image:
+  file: .gitpod.Dockerfile
+
+# Commands that will run on workspace start
+tasks:
+  - name: Install pre-commit hooks
+    command: pre-commit install
+
+  - name: Setup Environment Variables
+    command: |
+      gp idp login aws --role-arn arn:aws:iam::691455452037:role/GitpodAdminRole --duration-seconds=14400
+
+      export PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name InfrastructureStack | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
+
+      COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthUserPoolId")) | .OutputValue')
+      COGNITO_CLIENT_ID=$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query "UserPoolClients[0].ClientId" --output text")
+      COGNITO_IDENTITY_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthIdentityPoolId")) | .OutputValue')
+
+      # Write environment variables to .env file
+      cat <<EOL >frontend/.env
+      REACT_APP_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+      REACT_APP_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
+      REACT_APP_COGNITO_IDENTITY_POOL_ID=$COGNITO_IDENTITY_POOL_ID
+      REACT_APP_AWS_REGION=$AWS_REGION
+      EOL
+
+      echo "REACT_APP_API_GATEWAY_ENDPOINT=http://localhost:4000/" >> .env.development
+    env:
+      AWS_REGION: eu-central-1
+      STACK_NAME: InfrastructureStack
+
+  - name: Setup, Install & Run Frontend
+    init: npm --prefix frontend/ install
+    command: npm --prefix frontend/ run start
+
+  - name: Setup, Install & Run Backend
+    init: npm --prefix backend/ install
+    command: npm --prefix backend/ run dev
+
+  - name: Setup Infrastructure
+    init: npm --prefix infrastructure/ install
+
+# Ports to expose on workspace startup
+ports:
+  - port: 3000
+    onOpen: open-browser
+    name: Frontend
+    description: Web Frontend
+    visibility: private
+    protocol: http
+  - port: 4000
+    onOpen: notify
+    name: Backend
+    description: GraphQL Backend
+    visibility: private
+    protocol: http
+
+vscode:
+  extensions:
+    - ms-azuretools.vscode-docker
+    - esbenp.prettier-vscode
+    - streetsidesoftware.code-spell-checker
+    - graphql.vscode-graphql-syntax
+    - pkief.material-icon-theme
+    - vscodevim.vim
