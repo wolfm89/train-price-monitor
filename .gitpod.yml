@@ -38,16 +38,16 @@ tasks:
       STACK_NAME: InfrastructureStack
 
   - name: Setup, Install & Run Frontend
-    init: |
-      npm --prefix frontend/ install
+    init: npm --prefix frontend/ install
+    command: |
       gp sync-await env-setup
-    command: npm --prefix frontend/ run start
+      npm --prefix frontend/ run start
 
   - name: Setup, Install & Run Backend
-    init: |
-      npm --prefix backend/ install
+    init: npm --prefix backend/ install
+    command: |
       gp sync-await env-setup
-    command: npm --prefix backend/ run dev
+      npm --prefix backend/ run dev
 
   - name: Setup Infrastructure
     init: npm --prefix infrastructure/ install
