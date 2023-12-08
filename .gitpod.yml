@@ -8,7 +8,7 @@ tasks:
 
   - name: Setup Environment Variables
     command: |
-      gp idp login aws --role-arn arn:aws:iam::691455452037:role/GitpodAdminRole --duration-seconds=3600
+      gp idp login aws --role-arn $OIDC_ROLE_ARN
 
       # Write environment variables to backend/.env file
       cat <<EOL >backend/.env
