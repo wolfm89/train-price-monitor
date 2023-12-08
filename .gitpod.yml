@@ -10,14 +10,18 @@ tasks:
     command: |
       gp idp login aws --role-arn arn:aws:iam::691455452037:role/GitpodAdminRole --duration-seconds=3600
 
-      # Write bucket name to backend .env file
-      echo "PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')" >> backend/.env
+      # Write environment variables to backend/.env file
+      cat <<EOL >backend/.env
+      PORT=4000
+      AWS_REGION=eu-central-1
+      PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
+      EOL
 
       COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthUserPoolId")) | .OutputValue')
       COGNITO_CLIENT_ID=$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query "UserPoolClients[0].ClientId" --output "text")
       COGNITO_IDENTITY_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthIdentityPoolId")) | .OutputValue')
 
-      # Write environment variables to .env file
+      # Write environment variables to frontend/.env file
       cat <<EOL >frontend/.env
       REACT_APP_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
       REACT_APP_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
@@ -25,7 +29,7 @@ tasks:
       REACT_APP_AWS_REGION=$AWS_REGION
       EOL
 
-      # Append local GraphQL endpoint to .env.development
+      # Append local GraphQL endpoint to frontend/.env.development
       echo "REACT_APP_API_GATEWAY_ENDPOINT=http://localhost:4000/" >> frontend/.env.development
 
       gp sync-done env-setup
