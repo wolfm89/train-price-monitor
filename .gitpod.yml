@@ -3,11 +3,10 @@ image:
 
 # Commands that will run on workspace start
 tasks:
-  - name: Install pre-commit hooks
-    command: pre-commit install
-
-  - name: Setup Environment Variables
+  - name: Setup
     command: |
+      pre-commit install
+
       gp idp login aws --role-arn $OIDC_ROLE_ARN
 
       # Write environment variables to backend/.env file
@@ -33,24 +32,22 @@ tasks:
       echo "REACT_APP_API_GATEWAY_ENDPOINT=http://localhost:4000/" >> frontend/.env.development
 
       gp sync-done env-setup
+      npm --prefix infrastructure/ install
     env:
       AWS_REGION: eu-central-1
       STACK_NAME: InfrastructureStack
 
-  - name: Setup, Install & Run Frontend
+  - name: Frontend
     init: npm --prefix frontend/ install
     command: |
       gp sync-await env-setup
       npm --prefix frontend/ run start
 
-  - name: Setup, Install & Run Backend
+  - name: Backend
     init: npm --prefix backend/ install
     command: |
       gp sync-await env-setup
       npm --prefix backend/ run dev
-
-  - name: Setup Infrastructure
-    init: npm --prefix infrastructure/ install
 
 # Ports to expose on workspace startup
 ports:
