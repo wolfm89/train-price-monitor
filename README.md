@@ -25,7 +25,11 @@ Train price monitoring WebApp that sends notifications to users when prices incr
 
 ## Getting Started
 
-To get a local copy of the project up and running, follow these steps:
+The easiest way to get in touch with this project is by opening it in [Gitpod](https://gitpod.io/):
+
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/wolfm89/train-price-monitor)
+
+If you prefer to get a local copy of the project up and running, follow these steps:
 
 1. Clone the repository: `git clone https://github.com/wolfm89/train-price-monitor.git`
 2. `cd frontend`
