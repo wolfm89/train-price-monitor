@@ -2,17 +2,18 @@ image:
   file: .gitpod.Dockerfile
 
 # Commands that will run on workspace start
+# The following user environment variables need to be set:
+# - AWS_REGION
+# - AWS_ACCESS_KEY_ID
+# - AWS_SECRET_ACCESS_KEY
 tasks:
   - name: Setup
     command: |
       pre-commit install
 
-      gp idp login aws --role-arn $OIDC_ROLE_ARN
-
       # Write environment variables to backend/.env file
       cat <<EOL >backend/.env
       PORT=4000
-      AWS_REGION=eu-central-1
       PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
       EOL
 
@@ -34,7 +35,6 @@ tasks:
       gp sync-done env-setup
       npm --prefix infrastructure/ install
     env:
-      AWS_REGION: eu-central-1
       STACK_NAME: InfrastructureStack
 
   - name: Frontend
