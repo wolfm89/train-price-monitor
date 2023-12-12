@@ -1,0 +1,74 @@
+image:
+  file: .gitpod.Dockerfile
+
+# Commands that will run on workspace start
+# The following user environment variables need to be set:
+# - AWS_REGION
+# - AWS_ACCESS_KEY_ID
+# - AWS_SECRET_ACCESS_KEY
+tasks:
+  - name: Setup
+    command: |
+      pre-commit install
+
+      # Write environment variables to backend/.env file
+      cat <<EOL >backend/.env
+      PORT=4000
+      PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
+      EOL
+
+      COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthUserPoolId")) | .OutputValue')
+      COGNITO_CLIENT_ID=$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query "UserPoolClients[0].ClientId" --output "text")
+      COGNITO_IDENTITY_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthIdentityPoolId")) | .OutputValue')
+
+      # Write environment variables to frontend/.env file
+      cat <<EOL >frontend/.env
+      REACT_APP_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+      REACT_APP_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
+      REACT_APP_COGNITO_IDENTITY_POOL_ID=$COGNITO_IDENTITY_POOL_ID
+      REACT_APP_AWS_REGION=$AWS_REGION
+      EOL
+
+      # Append local GraphQL endpoint to frontend/.env.development
+      echo "REACT_APP_API_GATEWAY_ENDPOINT=http://localhost:4000/" >> frontend/.env.development
+
+      gp sync-done env-setup
+      npm --prefix infrastructure/ install
+    env:
+      STACK_NAME: InfrastructureStack
+
+  - name: Frontend
+    init: npm --prefix frontend/ install
+    command: |
+      gp sync-await env-setup
+      npm --prefix frontend/ run start
+
+  - name: Backend
+    init: npm --prefix backend/ install
+    command: |
+      gp sync-await env-setup
+      npm --prefix backend/ run dev
+
+# Ports to expose on workspace startup
+ports:
+  - port: 3000
+    onOpen: open-browser
+    name: Frontend
+    description: Web Frontend
+    visibility: private
+    protocol: http
+  - port: 4000
+    onOpen: notify
+    name: Backend
+    description: GraphQL Backend
+    visibility: private
+    protocol: http
+
+vscode:
+  extensions:
+    - ms-azuretools.vscode-docker
+    - esbenp.prettier-vscode
+    - streetsidesoftware.code-spell-checker
+    - graphql.vscode-graphql-syntax
+    - pkief.material-icon-theme
+    - vscodevim.vim

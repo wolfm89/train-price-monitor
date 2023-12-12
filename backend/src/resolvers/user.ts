@@ -1,8 +1,11 @@
+import dotenv from 'dotenv';
 import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import { User, PresignedUrl, Notification } from '../schema/generated/typeDefs.generated';
+
+dotenv.config(); // Load environment variables from .env file
 
 const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME;
 
