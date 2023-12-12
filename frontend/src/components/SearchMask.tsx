@@ -90,6 +90,9 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           value={departureTime}
           onChange={(e) => setDepartureTime(e.target.value)}
           fullWidth
+          inputProps={{
+            style: { textAlign: 'right' },
+          }}
         />
       </Grid>
       <Grid item sm={6} container justifyContent="right" alignItems="center">
