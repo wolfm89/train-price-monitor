@@ -80,6 +80,7 @@ export type ResolversTypes = {
   ID: ResolverTypeWrapper<Scalars['ID']>;
   Int: ResolverTypeWrapper<Scalars['Int']>;
   Journey: ResolverTypeWrapper<Journey>;
+  Location: ResolverTypeWrapper<Location>;
   Mutation: ResolverTypeWrapper<{}>;
   Notification: ResolverTypeWrapper<Notification>;
   PresignedUrl: ResolverTypeWrapper<PresignedUrl>;
@@ -97,6 +98,7 @@ export type ResolversParentTypes = {
   ID: Scalars['ID'];
   Int: Scalars['Int'];
   Journey: Journey;
+  Location: Location;
   Mutation: {};
   Notification: Notification;
   PresignedUrl: PresignedUrl;
@@ -124,6 +126,16 @@ export type JourneyResolvers<
   price?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
   refreshToken?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   to?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type LocationResolvers<
+  ContextType = any,
+  ParentType extends ResolversParentTypes['Location'] = ResolversParentTypes['Location']
+> = {
+  id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  name?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  type?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 };
 
@@ -183,6 +195,12 @@ export type QueryResolvers<
     ContextType,
     RequireFields<QueryJourneysArgs, 'departure' | 'from' | 'to'>
   >;
+  locations?: Resolver<
+    Maybe<Array<Maybe<ResolversTypes['Location']>>>,
+    ParentType,
+    ContextType,
+    RequireFields<QueryLocationsArgs, 'query'>
+  >;
   user?: Resolver<Maybe<ResolversTypes['User']>, ParentType, ContextType, RequireFields<QueryUserArgs, 'id'>>;
   userProfilePicturePresignedUrl?: Resolver<
     Maybe<ResolversTypes['PresignedUrl']>,
@@ -215,6 +233,7 @@ export type Resolvers<ContextType = any> = {
   DateTime?: GraphQLScalarType;
   File?: GraphQLScalarType;
   Journey?: JourneyResolvers<ContextType>;
+  Location?: LocationResolvers<ContextType>;
   Mutation?: MutationResolvers<ContextType>;
   Notification?: NotificationResolvers<ContextType>;
   PresignedUrl?: PresignedUrlResolvers<ContextType>;

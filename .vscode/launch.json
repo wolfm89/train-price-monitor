@@ -2,11 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "type": "chrome",
+      "command": "npm run dev",
+      "name": "Backend",
       "request": "launch",
-      "name": "Launch Chrome against localhost",
-      "url": "http://localhost:3000",
-      "webRoot": "${workspaceFolder}"
+      "type": "node-terminal",
+      "cwd": "${workspaceFolder}/backend"
+    },
+    {
+      "command": "npm run start",
+      "name": "Frontend",
+      "request": "launch",
+      "type": "node-terminal",
+      "cwd": "${workspaceFolder}/frontend"
     }
   ]
 }

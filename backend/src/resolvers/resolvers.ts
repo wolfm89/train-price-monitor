@@ -8,6 +8,7 @@ import {
   activateUser,
 } from './user';
 import { journeysQuery } from './journey';
+import { locationsQuery } from './location';
 
 const resolvers: Resolvers = {
   User: userResolvers,
@@ -15,6 +16,7 @@ const resolvers: Resolvers = {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
     journeys: journeysQuery,
+    locations: locationsQuery,
   },
   Mutation: {
     updateUserProfilePicture: updateUserProfilePicture,

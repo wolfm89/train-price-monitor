@@ -25,6 +25,13 @@ export type Journey = {
   to: Scalars['String'];
 };
 
+export type Location = {
+  __typename?: 'Location';
+  id: Scalars['String'];
+  name: Scalars['String'];
+  type: Scalars['String'];
+};
+
 export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
@@ -67,6 +74,7 @@ export type PresignedUrl = {
 export type Query = {
   __typename?: 'Query';
   journeys?: Maybe<Array<Maybe<Journey>>>;
+  locations?: Maybe<Array<Maybe<Location>>>;
   user?: Maybe<User>;
   userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
 };
@@ -75,6 +83,10 @@ export type QueryJourneysArgs = {
   departure: Scalars['DateTime'];
   from: Scalars['String'];
   to: Scalars['String'];
+};
+
+export type QueryLocationsArgs = {
+  query: Scalars['String'];
 };
 
 export type QueryUserArgs = {
