@@ -6,7 +6,8 @@
       "name": "Backend",
       "request": "launch",
       "type": "node-terminal",
-      "cwd": "${workspaceFolder}/backend"
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/backend/.env"
     },
     {
       "command": "npm run start",
