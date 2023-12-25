@@ -73,3 +73,15 @@ type Journey {
 extend type Query {
   journeys(from: String!, to: String!, departure: DateTime!): [Journey]
 }
+
+# Locations
+
+type Location {
+  type: String!
+  id: String!
+  name: String!
+}
+
+extend type Query {
+  locations(query: String!): [Location]
+}

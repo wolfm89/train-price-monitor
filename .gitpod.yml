@@ -9,7 +9,7 @@ image:
 tasks:
   - name: Setup
     command: |
-      pre-commit install
+      pre-commit install --install-hooks
 
       # Write environment variables to backend/.env file
       cat <<EOL >backend/.env
