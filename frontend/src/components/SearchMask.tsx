@@ -114,8 +114,8 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     setSearchClicked(true);
     setLoading(true);
     setSearchData({
-      departure: from?.id,
-      destination: to?.id,
+      departure: from?.name,
+      destination: to?.name,
       date: departureDay,
       time: departureTime,
     });
