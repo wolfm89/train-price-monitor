@@ -68,10 +68,27 @@ type Journey {
   price: Float
 }
 
+input JourneyWatchInput {
+  refreshToken: String!
+  from: String!
+  to: String!
+  departure: DateTime!
+  arrival: DateTime!
+  means: [String]!
+  price: Float
+  limitPrice: Float!
+}
+
 ## Queries
 
 extend type Query {
   journeys(from: String!, to: String!, departure: DateTime!): [Journey]
+}
+
+## Mutations
+
+extend type Mutation {
+  watchJourney(userId: ID!, journey: JourneyWatchInput!): Journey
 }
 
 # Locations
