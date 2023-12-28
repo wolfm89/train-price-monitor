@@ -15,7 +15,9 @@ import {
   DialogActions,
   TextField,
   CircularProgress,
+  useMediaQuery,
 } from '@mui/material';
+import AlarmAddIcon from '@mui/icons-material/AlarmAdd';
 import { WatchJourney } from '../api/journey';
 import { useMutation } from 'urql';
 import { AuthContext } from '../providers/AuthProvider';
@@ -40,6 +42,7 @@ interface Props {
 
 const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
   const theme = useTheme();
+  const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { addAlert } = useAlert();
   const [openModal, setOpenModal] = useState(false);
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
@@ -128,13 +131,13 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
         )}`}
       </Typography>
       <TableContainer>
-        <Table>
+        <Table size={isScreenSmall ? 'small' : 'medium'}>
           <TableHead>
             <TableRow>
               <TableCell>Departure Time</TableCell>
               <TableCell>Arrival Time</TableCell>
               <TableCell>Duration</TableCell>
-              <TableCell>Means of Transport</TableCell>
+              <TableCell>Means{!isScreenSmall && ' of Transport'}</TableCell>
               <TableCell>Price</TableCell>
               <TableCell></TableCell>
             </TableRow>
@@ -165,7 +168,10 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
                       {loading && selectedJourney?.refreshToken === result.refreshToken ? (
                         <CircularProgress size={24} />
                       ) : (
-                        'Watch'
+                        <>
+                          <AlarmAddIcon />
+                          {!isScreenSmall && <span style={{ marginLeft: '8px' }}>Watch</span>}
+                        </>
                       )}
                     </Button>
                   )}
