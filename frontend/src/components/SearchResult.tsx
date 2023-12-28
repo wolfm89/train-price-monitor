@@ -110,6 +110,16 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
     return `${formattedDate} ${formattedTime}`;
   };
 
+  function formatTimeDifference(startDate: Date, endDate: Date): string {
+    const differenceMilliseconds = endDate.getTime() - startDate.getTime();
+    const differenceHours = differenceMilliseconds / (1000 * 60 * 60);
+
+    const hours = Math.floor(differenceHours);
+    const minutes = Math.round((differenceHours - hours) * 60);
+
+    return `${hours} h ${minutes} min`;
+  }
+
   return (
     <>
       <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
@@ -123,6 +133,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
             <TableRow>
               <TableCell>Departure Time</TableCell>
               <TableCell>Arrival Time</TableCell>
+              <TableCell>Duration</TableCell>
               <TableCell>Means of Transport</TableCell>
               <TableCell>Price</TableCell>
               <TableCell></TableCell>
@@ -138,6 +149,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
               >
                 <TableCell>{formatDateTime(result.departure)}</TableCell>
                 <TableCell>{formatDateTime(result.arrival)}</TableCell>
+                <TableCell>{formatTimeDifference(new Date(result.departure), new Date(result.arrival))}</TableCell>
                 <TableCell>
                   {result.means.map((mean: string) => (mean === 'walk' ? '\u{1F6B6}' : mean)).join(' \u{2192} ')}
                 </TableCell>
