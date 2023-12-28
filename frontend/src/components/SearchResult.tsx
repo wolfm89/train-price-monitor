@@ -143,18 +143,20 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
                 </TableCell>
                 <TableCell>{result.price ? `€${result.price.toFixed(2)}` : 'n/a'}</TableCell>
                 <TableCell>
-                  <Button
-                    variant="outlined"
-                    color="primary"
-                    disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
-                    onClick={() => handleWatchClick(result)}
-                  >
-                    {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                      <CircularProgress size={24} />
-                    ) : (
-                      'Watch'
-                    )}
-                  </Button>
+                  {result.price && (
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
+                      onClick={() => handleWatchClick(result)}
+                    >
+                      {loading && selectedJourney?.refreshToken === result.refreshToken ? (
+                        <CircularProgress size={24} />
+                      ) : (
+                        'Watch'
+                      )}
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
