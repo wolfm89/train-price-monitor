@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AppBar,
@@ -27,7 +27,7 @@ const Header = () => {
   const theme = useTheme();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl } = useContext(AuthContext);
-  const [userNotificationsResult] = useQuery({
+  const [userNotificationsResult, reexecuteUserNotificationsQuery] = useQuery({
     query: UserNotificationsQuery,
     variables: { id: user?.['custom:id'], notificationsLimit: 8 },
     pause: !user,
@@ -55,6 +55,16 @@ const Header = () => {
   const handleAccountClose = () => {
     setAccountAnchorEl(null);
   };
+
+  // Schedule the notification query to run every 30 seconds
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
+    }, 30000);
+
+    // Clean up the interval when the component is unmounted
+    return () => clearInterval(intervalId);
+  }, [reexecuteUserNotificationsQuery]);
 
   return (
     <AppBar position="static" sx={{ maxWidth: 'lg', mx: 'auto' }}>
