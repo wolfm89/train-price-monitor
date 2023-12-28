@@ -14,6 +14,7 @@ import {
   DialogContent,
   DialogActions,
   TextField,
+  CircularProgress,
 } from '@mui/material';
 import { WatchJourney } from '../api/journey';
 import { useMutation } from 'urql';
@@ -45,6 +46,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
   const [limitPrice, setLimitPrice] = useState('');
   const { user } = useContext(AuthContext);
   const [, watchJourney] = useMutation(WatchJourney);
+  const [loading, setLoading] = useState(false);
 
   const handleWatchClick = (journey: Journey) => {
     setSelectedJourney(journey);
@@ -58,12 +60,16 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
   };
 
   const handleConfirmWatch = () => {
-    const { from, to, departure, arrival, means, price, refreshToken } = selectedJourney!;
+    setLoading(true);
+    const { refreshToken } = selectedJourney!;
     watchJourney({
       userId: user?.['custom:id'],
-      journey: { from, to, departure, arrival, means, price, refreshToken, limitPrice: parseFloat(limitPrice) },
+      refreshToken: refreshToken,
+      limitPrice: parseFloat(limitPrice),
     })
       .then((result) => {
+        setLoading(false);
+        setSelectedJourney(null);
         if (result.error) {
           addAlert(result.error.message, AlertSeverity.Error);
         } else {
@@ -72,10 +78,10 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
       })
       .catch((reason) => {
         console.log(reason);
+        setLoading(false);
       });
 
     setOpenModal(false);
-    setSelectedJourney(null); // Clear selected journey after confirmation
     setLimitPrice(''); // Clear limit price when the modal is closed
   };
 
@@ -137,8 +143,17 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
                 </TableCell>
                 <TableCell>{result.price ? `€${result.price.toFixed(2)}` : 'n/a'}</TableCell>
                 <TableCell>
-                  <Button variant="outlined" color="primary" onClick={() => handleWatchClick(result)}>
-                    Watch
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
+                    onClick={() => handleWatchClick(result)}
+                  >
+                    {loading && selectedJourney?.refreshToken === result.refreshToken ? (
+                      <CircularProgress size={24} />
+                    ) : (
+                      'Watch'
+                    )}
                   </Button>
                 </TableCell>
               </TableRow>

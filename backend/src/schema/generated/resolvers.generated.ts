@@ -80,7 +80,6 @@ export type ResolversTypes = {
   ID: ResolverTypeWrapper<Scalars['ID']>;
   Int: ResolverTypeWrapper<Scalars['Int']>;
   Journey: ResolverTypeWrapper<Journey>;
-  JourneyWatchInput: JourneyWatchInput;
   Location: ResolverTypeWrapper<Location>;
   Mutation: ResolverTypeWrapper<{}>;
   Notification: ResolverTypeWrapper<Notification>;
@@ -99,7 +98,6 @@ export type ResolversParentTypes = {
   ID: Scalars['ID'];
   Int: Scalars['Int'];
   Journey: Journey;
-  JourneyWatchInput: JourneyWatchInput;
   Location: Location;
   Mutation: {};
   Notification: Notification;
@@ -164,10 +162,10 @@ export type MutationResolvers<
     RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
   watchJourney?: Resolver<
-    Maybe<ResolversTypes['Journey']>,
+    Maybe<ResolversTypes['ID']>,
     ParentType,
     ContextType,
-    RequireFields<MutationWatchJourneyArgs, 'journey' | 'userId'>
+    RequireFields<MutationWatchJourneyArgs, 'limitPrice' | 'refreshToken' | 'userId'>
   >;
 };
 

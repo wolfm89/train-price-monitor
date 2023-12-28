@@ -101,11 +101,15 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     }
   }, [toData]);
 
-  function createISODateString(day: string, time: string): string {
+  function createDateFromDayAndTime(day: string, time: string) {
     const [year, month, date] = day.split('-').map(Number);
     const [hours, minutes] = time.split(':').map(Number);
 
-    const dateObject = new Date(year, month - 1, date, hours, minutes);
+    return new Date(year, month - 1, date, hours, minutes);
+  }
+
+  function createISODateString(day: string, time: string): string {
+    const dateObject = createDateFromDayAndTime(day, time);
 
     return dateObject.toISOString();
   }
@@ -124,7 +128,15 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
 
   // Update form validity based on input fields
   React.useEffect(() => {
-    setFormValid(from?.id !== '' && to?.id !== '' && departureDay.trim() !== '' && departureTime.trim() !== '');
+    const day = departureDay.trim();
+    const time = departureTime.trim();
+    setFormValid(
+      from?.id !== '' &&
+        to?.id !== '' &&
+        day !== '' &&
+        time !== '' &&
+        createDateFromDayAndTime(departureDay, departureTime) > new Date()
+    );
   }, [from, to, departureDay, departureTime]);
 
   return (

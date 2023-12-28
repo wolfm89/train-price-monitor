@@ -25,17 +25,6 @@ export type Journey = {
   to: Scalars['String'];
 };
 
-export type JourneyWatchInput = {
-  arrival: Scalars['DateTime'];
-  departure: Scalars['DateTime'];
-  from: Scalars['String'];
-  limitPrice: Scalars['Float'];
-  means: Array<InputMaybe<Scalars['String']>>;
-  price?: InputMaybe<Scalars['Float']>;
-  refreshToken: Scalars['String'];
-  to: Scalars['String'];
-};
-
 export type Location = {
   __typename?: 'Location';
   id: Scalars['String'];
@@ -48,7 +37,7 @@ export type Mutation = {
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
   updateUserProfilePicture?: Maybe<User>;
-  watchJourney?: Maybe<Journey>;
+  watchJourney?: Maybe<Scalars['ID']>;
 };
 
 export type MutationActivateUserArgs = {
@@ -68,7 +57,8 @@ export type MutationUpdateUserProfilePictureArgs = {
 };
 
 export type MutationWatchJourneyArgs = {
-  journey: JourneyWatchInput;
+  limitPrice: Scalars['Float'];
+  refreshToken: Scalars['String'];
   userId: Scalars['ID'];
 };
 

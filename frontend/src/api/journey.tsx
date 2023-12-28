@@ -3,8 +3,6 @@ import { gql } from 'urql';
 export const JourneySearchQuery = gql`
   query ($departure: DateTime!, $from: String!, $to: String!) {
     journeys(departure: $departure, from: $from, to: $to) {
-      from
-      to
       departure
       arrival
       refreshToken
@@ -15,9 +13,7 @@ export const JourneySearchQuery = gql`
 `;
 
 export const WatchJourney = gql`
-  mutation ($userId: ID!, $journey: JourneyWatchInput!) {
-    watchJourney(userId: $userId, journey: $journey) {
-      refreshToken
-    }
+  mutation ($userId: ID!, $refreshToken: String!, $limitPrice: Float!) {
+    watchJourney(userId: $userId, refreshToken: $refreshToken, limitPrice: $limitPrice)
   }
 `;

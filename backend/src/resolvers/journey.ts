@@ -1,6 +1,7 @@
 import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers } from '../schema/generated/resolvers.generated';
+import { v4 as uuidv4 } from 'uuid';
 
 export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   _parent,
@@ -34,8 +35,12 @@ export const watchJourney: NonNullable<MutationResolvers['watchJourney']> = asyn
   if (!dbUser) {
     throw new Error(`User with id ${args.userId} not found`);
   }
-  // store journey from args in DB for user and return journey
-  const journey = args.journey;
-
-  return journey;
+  const journeyWatchId = uuidv4();
+  await context.entities.Journey.put({
+    id: journeyWatchId,
+    userId: args.userId,
+    limitPrice: args.limitPrice,
+    refreshToken: args.refreshToken,
+  });
+  return journeyWatchId;
 };
