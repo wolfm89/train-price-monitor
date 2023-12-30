@@ -24,7 +24,6 @@ import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 
-// Define the Journey type
 interface Journey {
   refreshToken: string;
   from: string;

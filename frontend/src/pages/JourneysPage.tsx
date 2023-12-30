@@ -48,7 +48,7 @@ const JourneysPage: React.FC = () => {
   return (
     <Grid container spacing={2}>
       <Grid item xs={12}>
-        <Typography variant="h6">My Journeys</Typography>
+        <Typography variant="h6">Journey Watchlist</Typography>
       </Grid>
       <Grid item xs={12}>
         {journeys.length > 0 ? (

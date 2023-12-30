@@ -142,7 +142,7 @@ const Header = () => {
                         color: 'inherit',
                       }}
                     >
-                      My Journeys
+                      Journey Watchlist
                     </Typography>
                   )}
                 </IconButton>
