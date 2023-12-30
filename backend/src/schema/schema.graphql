@@ -74,6 +74,12 @@ extend type Query {
   journeys(from: String!, to: String!, departure: DateTime!): [Journey]
 }
 
+## Mutations
+
+extend type Mutation {
+  watchJourney(userId: ID!, refreshToken: String!, limitPrice: Float!): ID
+}
+
 # Locations
 
 type Location {

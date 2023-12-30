@@ -1,6 +1,7 @@
 import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
-import { QueryResolvers } from '../schema/generated/resolvers.generated';
+import { MutationResolvers, QueryResolvers } from '../schema/generated/resolvers.generated';
+import { v4 as uuidv4 } from 'uuid';
 
 export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   _parent,
@@ -23,4 +24,23 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
       means: journey.legs.map((leg) => (leg.line ? leg.line.productName : leg.walking ? 'walk' : undefined)),
     };
   });
+};
+
+export const watchJourney: NonNullable<MutationResolvers['watchJourney']> = async (
+  _parent,
+  args,
+  context: GraphQLContext
+) => {
+  const { Item: dbUser } = await context.entities.User.get({ id: args.userId });
+  if (!dbUser) {
+    throw new Error(`User with id ${args.userId} not found`);
+  }
+  const journeyWatchId = uuidv4();
+  await context.entities.Journey.put({
+    id: journeyWatchId,
+    userId: args.userId,
+    limitPrice: args.limitPrice,
+    refreshToken: args.refreshToken,
+  });
+  return journeyWatchId;
 };

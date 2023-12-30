@@ -37,6 +37,7 @@ export type Mutation = {
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
   updateUserProfilePicture?: Maybe<User>;
+  watchJourney?: Maybe<Scalars['ID']>;
 };
 
 export type MutationActivateUserArgs = {
@@ -53,6 +54,12 @@ export type MutationCreateUserArgs = {
 export type MutationUpdateUserProfilePictureArgs = {
   id: Scalars['ID'];
   image: Scalars['File'];
+};
+
+export type MutationWatchJourneyArgs = {
+  limitPrice: Scalars['Float'];
+  refreshToken: Scalars['String'];
+  userId: Scalars['ID'];
 };
 
 export type Notification = {

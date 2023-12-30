@@ -1,4 +1,4 @@
-import { User, Notification } from './model/trainPriceMonitor';
+import { User, Notification, Journey } from './model/trainPriceMonitor';
 import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
@@ -26,6 +26,7 @@ User.table.DocumentClient = DynamoDBDocumentClient.from(
 type Entities = {
   User: typeof User;
   Notification: typeof Notification;
+  Journey: typeof Journey;
 };
 
 export type GraphQLContext = {
@@ -35,5 +36,5 @@ export type GraphQLContext = {
 };
 
 export async function createContext(): Promise<GraphQLContext> {
-  return { entities: { User, Notification }, s3, dbHafas };
+  return { entities: { User, Notification, Journey }, s3, dbHafas };
 }

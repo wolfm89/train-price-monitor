@@ -161,6 +161,12 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
+  watchJourney?: Resolver<
+    Maybe<ResolversTypes['ID']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationWatchJourneyArgs, 'limitPrice' | 'refreshToken' | 'userId'>
+  >;
 };
 
 export type NotificationResolvers<
