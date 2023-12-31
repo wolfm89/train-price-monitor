@@ -3,8 +3,18 @@ import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { DbHafasManager } from './managers/DbHafasManager';
+import dotenv from 'dotenv';
+import { SQSManager } from './managers/SQSManager';
+
+dotenv.config();
+const TPM_SQS_QUEUE_URL = process.env.TPM_SQS_QUEUE_URL;
+
+if (!TPM_SQS_QUEUE_URL) {
+  throw new Error('TPM_SQS_QUEUE_URL is not defined in process.env');
+}
 
 const s3 = new S3Manager();
+const sqs = new SQSManager(TPM_SQS_QUEUE_URL);
 const dbHafas = new DbHafasManager();
 
 const marshallOptions = {
@@ -32,9 +42,10 @@ type Entities = {
 export type GraphQLContext = {
   entities: Entities;
   s3: S3Manager;
+  sqs: SQSManager;
   dbHafas: DbHafasManager;
 };
 
 export async function createContext(): Promise<GraphQLContext> {
-  return { entities: { User, Notification, Journey }, s3, dbHafas };
+  return { entities: { User, Notification, Journey }, s3, sqs, dbHafas };
 }

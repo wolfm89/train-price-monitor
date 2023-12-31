@@ -44,3 +44,46 @@ export const watchJourney: NonNullable<MutationResolvers['watchJourney']> = asyn
   });
   return journeyWatchId;
 };
+
+export const updateJourneys: NonNullable<MutationResolvers['updateJourneys']> = async (
+  _parent,
+  _args,
+  context: GraphQLContext
+) => {
+  const allJourneys = await context.entities.Journey.scan({
+    filters: { attr: 'id', beginsWith: 'JOURNEY#' },
+    attributes: ['userId', 'id'],
+  });
+  const numberOfJourneys = allJourneys.Items ? allJourneys.Items.length : 0;
+
+  Logger.info(`Found ${numberOfJourneys} journeys to update`);
+
+  // Schedule message for each journey
+  if (allJourneys.Items) {
+    for (const journey of allJourneys.Items) {
+      await context.sqs.sendUpdateJourneyMessage(journey.userId, journey.id);
+    }
+  }
+
+  return numberOfJourneys;
+};
+
+export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = async (
+  _parent,
+  args,
+  context: GraphQLContext
+) => {
+  const journey = await context.entities.Journey.get({ userId: args.userId, id: args.journeyId });
+
+  if (!journey.Item) {
+    throw new Error(`Journey with id ${args.journeyId} for user ${args.userId} not found`);
+  }
+
+  Logger.info(`Updating journey ${args.journeyId} for user ${args.userId}`);
+
+  // Get new price for journey and compare to limit price
+  // If new price is higher than limit price, send notification
+  // TODO: Add queue URL to gitpod setup
+
+  return journey.Item.id;
+};

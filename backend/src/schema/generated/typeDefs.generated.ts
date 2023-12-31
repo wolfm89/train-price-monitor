@@ -36,6 +36,8 @@ export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
+  updateJourney?: Maybe<Scalars['ID']>;
+  updateJourneys?: Maybe<Scalars['Int']>;
   updateUserProfilePicture?: Maybe<User>;
   watchJourney?: Maybe<Scalars['ID']>;
 };
@@ -49,6 +51,11 @@ export type MutationCreateUserArgs = {
   familyName: Scalars['String'];
   givenName: Scalars['String'];
   id: Scalars['ID'];
+};
+
+export type MutationUpdateJourneyArgs = {
+  journeyId: Scalars['ID'];
+  userId: Scalars['ID'];
 };
 
 export type MutationUpdateUserProfilePictureArgs = {

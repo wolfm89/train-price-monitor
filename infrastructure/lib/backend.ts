@@ -6,6 +6,10 @@ import {
   aws_dynamodb as dynamodb,
   aws_s3 as s3,
   aws_logs as logs,
+  aws_events as events,
+  aws_events_targets as targets,
+  aws_sqs as sqs,
+  aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
@@ -31,6 +35,12 @@ export class Backend extends Construct {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Create SQS queue
+    const queue = new sqs.Queue(this, 'TrainPriceMonitorQueue', {
+      visibilityTimeout: cdk.Duration.seconds(60), // Set visibility timeout as needed
+    });
+
+    // Create Lambda function
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       logRetention: logs.RetentionDays.TWO_WEEKS,
@@ -38,6 +48,7 @@ export class Backend extends Construct {
       memorySize: 512,
       environment: {
         PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
+        TPM_SQS_QUEUE_URL: queue.queueUrl,
         NODE_OPTIONS: '--enable-source-maps',
       },
     });
@@ -51,6 +62,22 @@ export class Backend extends Construct {
     const logGroup = new logs.LogGroup(this, 'ApiLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,
     });
+
+    lambdaFunction.addEventSource(new sources.SqsEventSource(queue, { batchSize: 1 }));
+
+    // Create EventBridge rule
+    const rule = new events.Rule(this, 'UpdateJourneysRule', {
+      schedule: events.Schedule.expression('rate(1 minute)'),
+    });
+
+    // Add SQS queue as a target for the EventBridge rule
+    rule.addTarget(
+      new targets.SqsQueue(queue, {
+        message: events.RuleTargetInput.fromObject({
+          query: 'mutation { updateJourneys }',
+        }),
+      })
+    );
 
     const api = new apigateway.LambdaRestApi(this, 'GraphqlApi', {
       handler: lambdaFunction,

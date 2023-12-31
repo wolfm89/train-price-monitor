@@ -7,7 +7,7 @@ import {
   createUser,
   activateUser,
 } from './user';
-import { journeysQuery, watchJourney } from './journey';
+import { journeysQuery, watchJourney, updateJourneys, updateJourney } from './journey';
 import { locationsQuery } from './location';
 
 const resolvers: Resolvers = {
@@ -23,6 +23,8 @@ const resolvers: Resolvers = {
     createUser: createUser,
     activateUser: activateUser,
     watchJourney: watchJourney,
+    updateJourneys: updateJourneys,
+    updateJourney: updateJourney,
   },
 };
 
