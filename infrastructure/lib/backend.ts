@@ -68,7 +68,7 @@ export class Backend extends Construct {
 
     // Create EventBridge rule
     const rule = new events.Rule(this, 'UpdateJourneysRule', {
-      schedule: events.Schedule.expression('rate(1 minute)'),
+      schedule: events.Schedule.expression('rate(1 hour)'),
     });
 
     // Add SQS queue as a target for the EventBridge rule
