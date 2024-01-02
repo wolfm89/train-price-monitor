@@ -3,7 +3,8 @@ import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
-import { User, PresignedUrl, Notification } from '../schema/generated/typeDefs.generated';
+import { User, PresignedUrl, Notification, Journey } from '../schema/generated/typeDefs.generated';
+import { getMeans } from './journey';
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -41,6 +42,39 @@ export const userResolvers: UserResolvers = {
         notifications = notifications.slice(0, args.limit);
       }
       return notifications;
+    }
+    return [];
+  },
+  journeys: async (parent, args, context: GraphQLContext) => {
+    let journeys: Journey[];
+    const { Items: dbJourneys } = await context.entities.Journey.query(`USER#${parent.id}`, {
+      beginsWith: 'JOURNEY#',
+    });
+    if (!dbJourneys) {
+      return [];
+    }
+    journeys = await Promise.all(
+      dbJourneys.map(async (dbJourney) => {
+        const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
+        return {
+          id: dbJourney.id,
+          refreshToken: journey.refreshToken!,
+          from: journey.legs[0].origin!.name!,
+          to: journey.legs[journey.legs.length - 1].destination!.name!,
+          departure: new Date(journey.legs[0].plannedDeparture!),
+          arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
+          means: getMeans(journey),
+          price: journey.price?.amount,
+          limitPrice: dbJourney.limitPrice,
+        };
+      })
+    );
+    if (journeys) {
+      sort(journeys, 'departure');
+      if (args.limit !== undefined) {
+        journeys = journeys.slice(0, args.limit);
+      }
+      return journeys;
     }
     return [];
   },

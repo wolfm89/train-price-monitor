@@ -56,3 +56,22 @@ export const UserNotificationsQuery = gql`
     }
   }
 `;
+
+export const UserJourneysQuery = gql`
+  query ($id: ID!, $journeysLimit: Int) {
+    user(id: $id) {
+      id
+      journeys(limit: $journeysLimit) {
+        id
+        from
+        to
+        departure
+        arrival
+        means
+        price
+        limitPrice
+        refreshToken
+      }
+    }
+  }
+`;

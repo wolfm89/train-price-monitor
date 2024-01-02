@@ -1,7 +1,9 @@
+import { Journey } from 'hafas-client';
 import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers } from '../schema/generated/resolvers.generated';
 import { v4 as uuidv4 } from 'uuid';
+import { Journey as GqlJourney } from '../schema/generated/typeDefs.generated';
 
 /**
  * Resolves the 'journeys' query to retrieve a list of journeys based on provided arguments.
@@ -14,7 +16,7 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   _parent,
   args,
   context: GraphQLContext
-) => {
+): Promise<GqlJourney[]> => {
   // Query journeys using Hafas API
   const journeys = await context.dbHafas.queryJourneys(args.from, args.to, args.departure);
 
@@ -31,9 +33,9 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
       to: args.to,
       departure: new Date(journey.legs[0].departure!),
       arrival: new Date(journey.legs[journey.legs.length - 1].arrival!),
-      refreshToken: journey.refreshToken,
+      refreshToken: journey.refreshToken!,
       price: journey.price?.amount,
-      means: journey.legs.map((leg) => (leg.line ? leg.line.productName : leg.walking ? 'walk' : undefined)),
+      means: getMeans(journey),
     };
   });
 };
@@ -155,7 +157,7 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
       id: uuidv4(),
       userId: args.userId,
       journeyId: args.journeyId,
-      message: `Price for journey from ${from} to ${to} is now higher than ${newPrice}€`,
+      message: `Price for journey from ${from} to ${to} is now higher than ${newPrice.toFixed(2)}€`,
       read: false,
       timestamp: new Date().toISOString(),
     });
@@ -167,3 +169,7 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
 
   return dbJourney.Item.id;
 };
+
+export function getMeans(journey: Journey): string[] {
+  return journey.legs.map((leg) => (leg.line ? leg.line.productName! : leg.walking ? 'walk' : ''));
+}

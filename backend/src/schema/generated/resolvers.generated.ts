@@ -122,6 +122,8 @@ export type JourneyResolvers<
   arrival?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   departure?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   from?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  id?: Resolver<Maybe<ResolversTypes['ID']>, ParentType, ContextType>;
+  limitPrice?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
   means?: Resolver<Array<Maybe<ResolversTypes['String']>>, ParentType, ContextType>;
   price?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
   refreshToken?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
@@ -232,6 +234,12 @@ export type UserResolvers<
   familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  journeys?: Resolver<
+    Maybe<Array<Maybe<ResolversTypes['Journey']>>>,
+    ParentType,
+    ContextType,
+    Partial<UserJourneysArgs>
+  >;
   notifications?: Resolver<
     Maybe<Array<Maybe<ResolversTypes['Notification']>>>,
     ParentType,

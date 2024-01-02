@@ -19,6 +19,8 @@ export type Journey = {
   arrival: Scalars['DateTime'];
   departure: Scalars['DateTime'];
   from: Scalars['String'];
+  id?: Maybe<Scalars['ID']>;
+  limitPrice?: Maybe<Scalars['Float']>;
   means: Array<Maybe<Scalars['String']>>;
   price?: Maybe<Scalars['Float']>;
   refreshToken: Scalars['String'];
@@ -118,8 +120,13 @@ export type User = {
   familyName: Scalars['String'];
   givenName: Scalars['String'];
   id: Scalars['ID'];
+  journeys?: Maybe<Array<Maybe<Journey>>>;
   notifications?: Maybe<Array<Maybe<Notification>>>;
   profilePicture?: Maybe<Scalars['String']>;
+};
+
+export type UserJourneysArgs = {
+  limit?: InputMaybe<Scalars['Int']>;
 };
 
 export type UserNotificationsArgs = {
