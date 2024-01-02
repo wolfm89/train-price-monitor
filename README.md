@@ -49,7 +49,7 @@ The backend can be started by executing the following steps:
 
 1. `cd backend`
 2. Install dependencies: `npm install`
-3. `PROFILE_IMAGE_BUCKET_NAME=<Bucket name from CDK output> npm run dev`
+3. `PROFILE_IMAGE_BUCKET_NAME=<Bucket name from CDK output> TPM_SQS_QUEUE_URL=<SQS queue URL from CDK output> npm run dev`
 
 ## Usage
 

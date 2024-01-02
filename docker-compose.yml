@@ -9,6 +9,7 @@ services:
     environment:
       PORT: 4000
       PROFILE_IMAGE_BUCKET_NAME: ${PROFILE_IMAGE_BUCKET_NAME}
+      TPM_SQS_QUEUE_URL: ${TPM_SQS_QUEUE_URL}
       AWS_PROFILE: ${AWS_PROFILE}
     volumes:
       - ~/.aws:/root/.aws

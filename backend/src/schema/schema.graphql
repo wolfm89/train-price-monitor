@@ -80,6 +80,14 @@ extend type Mutation {
   watchJourney(userId: ID!, refreshToken: String!, limitPrice: Float!): ID
 }
 
+extend type Mutation {
+  updateJourneys: Int
+}
+
+extend type Mutation {
+  updateJourney(userId: ID!, journeyId: ID!): ID
+}
+
 # Locations
 
 type Location {

@@ -155,6 +155,13 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationCreateUserArgs, 'email' | 'familyName' | 'givenName' | 'id'>
   >;
+  updateJourney?: Resolver<
+    Maybe<ResolversTypes['ID']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationUpdateJourneyArgs, 'journeyId' | 'userId'>
+  >;
+  updateJourneys?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   updateUserProfilePicture?: Resolver<
     Maybe<ResolversTypes['User']>,
     ParentType,

@@ -15,6 +15,7 @@ tasks:
       cat <<EOL >backend/.env
       PORT=4000
       PROFILE_IMAGE_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendProfileImageBucketName")) | .OutputValue')
+      TPM_SQS_QUEUE_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("BackendQueueUrl")) | .OutputValue')
       EOL
 
       COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey | startswith("CognitoAuthUserPoolId")) | .OutputValue')
