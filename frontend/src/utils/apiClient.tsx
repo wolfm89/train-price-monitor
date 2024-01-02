@@ -23,7 +23,7 @@ const cognitoAuthExchange = authExchange(async (utils) => {
       });
     },
     didAuthError(error, _operation) {
-      return error.graphQLErrors.some((e) => e.extensions?.code === 'FORBIDDEN');
+      return error.response.status === 401;
     },
     async refreshAuth() {
       token = await getJwtToken();
