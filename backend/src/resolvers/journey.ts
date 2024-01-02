@@ -118,6 +118,17 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
   // Add user and journey ID to persistent log attributes
   Logger.addPersistentLogAttributes({ userId: args.userId, journeyId: args.journeyId });
 
+  // Check if notification already exists
+  const existingNotifications = await context.entities.Notification.query(`USER#${args.userId}`, {
+    beginsWith: 'NOTIFICATION#',
+    filters: [{ attr: 'journeyId', eq: args.journeyId }],
+    select: 'COUNT',
+  });
+  if (existingNotifications && (existingNotifications.Count ?? 0 > 0)) {
+    Logger.info(`Notification already exists for journey`);
+    return args.journeyId;
+  }
+
   // Retrieve the journey from the database
   const dbJourney = await context.entities.Journey.get({ userId: args.userId, id: args.journeyId });
 

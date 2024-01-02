@@ -14,16 +14,25 @@ if (!profileImageBucketName) {
 }
 
 export const userResolvers: UserResolvers = {
-  notifications: async (parent, args, context) => {
+  notifications: async (parent, args, context: GraphQLContext) => {
     let notifications: Notification[] | undefined = undefined;
-    const { Items: dbNotifications } = await context.entities.Notification.query(`USER#${parent.id}`, {
-      beginsWith: 'NOTIFICATION#',
+    const { Items: dbNotifications } = await context.entities.Notification.scan({
+      filters: [
+        { attr: 'userId', eq: `USER#${parent.id}` },
+        { attr: 'id', beginsWith: 'NOTIFICATION#' },
+      ],
     });
-    notifications = dbNotifications.map((dbNotification: { sk: string; pk: string }) => {
+    if (!dbNotifications) {
+      return [];
+    }
+    notifications = dbNotifications.map((dbNotification) => {
       return {
-        id: dbNotification.sk.split('#')[1],
-        userId: dbNotification.pk.split('#')[1],
-        ...dbNotification,
+        id: dbNotification.id,
+        userId: dbNotification.userId,
+        journeyId: dbNotification.journeyId,
+        message: dbNotification.message,
+        timestamp: new Date(dbNotification.timestamp),
+        read: dbNotification.read,
       };
     });
     if (notifications) {
