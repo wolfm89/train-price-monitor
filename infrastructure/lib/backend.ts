@@ -64,6 +64,7 @@ export class Backend extends Construct {
     });
 
     lambdaFunction.addEventSource(new sources.SqsEventSource(queue, { batchSize: 1 }));
+    queue.grantSendMessages(lambdaFunction);
 
     // Create EventBridge rule
     const rule = new events.Rule(this, 'UpdateJourneysRule', {
@@ -124,6 +125,10 @@ export class Backend extends Construct {
 
     new cdk.CfnOutput(this, 'ProfileImageBucketName', {
       value: profileImageBucket.bucketName,
+    });
+
+    new cdk.CfnOutput(this, 'QueueUrl', {
+      value: queue.queueUrl,
     });
   }
 }

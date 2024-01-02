@@ -73,17 +73,33 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
   args,
   context: GraphQLContext
 ) => {
-  const journey = await context.entities.Journey.get({ userId: args.userId, id: args.journeyId });
+  Logger.info(`Updating journey ${args.journeyId} for user ${args.userId}`);
+  const dbJourney = await context.entities.Journey.get({ userId: args.userId, id: args.journeyId });
 
-  if (!journey.Item) {
+  if (!dbJourney.Item) {
     throw new Error(`Journey with id ${args.journeyId} for user ${args.userId} not found`);
   }
 
-  Logger.info(`Updating journey ${args.journeyId} for user ${args.userId}`);
-
   // Get new price for journey and compare to limit price
   // If new price is higher than limit price, send notification
-  // TODO: Add queue URL to gitpod setup
+  const journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken);
+  Logger.info(JSON.stringify(journey));
+  const newPrice = journey.price?.amount;
+  if (newPrice && newPrice >= dbJourney.Item.limitPrice) {
+    Logger.info(
+      `New price ${newPrice} for journey ${args.journeyId} is higher than limit price ${dbJourney.Item.limitPrice}`
+    );
+    const from = journey.legs[0].origin?.name;
+    const to = journey.legs[journey.legs.length - 1].destination?.name;
+    await context.entities.Notification.put({
+      id: uuidv4(),
+      userId: args.userId,
+      journeyId: args.journeyId,
+      message: `Price for journey from ${from} to ${to} is now higher than ${newPrice}€`,
+      read: false,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
-  return journey.Item.id;
+  return dbJourney.Item.id;
 };
