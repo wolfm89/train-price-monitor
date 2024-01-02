@@ -33,7 +33,7 @@
     "@aws-sdk/client-cognito-identity": "^3.379.1",
     "@aws-sdk/client-cognito-identity-provider": "^3.379.1",
     "aws-cdk-lib": "^2.80.0",
-    "cloudstructs": "^0.6.43",
+    "cloudstructs": "^0.6.47",
     "constructs": "^10.0.0",
     "source-map-support": "^0.5.21"
   }
