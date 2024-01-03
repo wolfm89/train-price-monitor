@@ -7,21 +7,23 @@ import { AuthContext } from '../providers/AuthProvider';
 
 interface Journey {
   id: number;
-  from: string;
-  to: string;
-  departure: string;
-  arrival: string;
-  means: string[];
-  price: number;
   limitPrice: number;
-  refreshToken: string;
+  journey: {
+    from: string;
+    to: string;
+    refreshToken: string;
+    departure: string;
+    arrival: string;
+    means: string[];
+    price: number;
+  };
 }
 
 const JourneysPage: React.FC = () => {
   const { user } = useContext(AuthContext);
   const [{ data: userJourneysResult, fetching }, reexecuteUserJourneysQuery] = useQuery({
     query: UserJourneysQuery,
-    variables: { id: user?.['custom:id'], journeysLimit: 5 },
+    variables: { id: user?.['custom:id'] },
     pause: !user,
   });
 
@@ -67,22 +69,28 @@ const JourneysPage: React.FC = () => {
           <Typography variant="body1">Loading journeys...</Typography>
         ) : userJourneysResult && userJourneysResult.user.journeys.length > 0 ? (
           <List>
-            {userJourneysResult.user.journeys.map((journey: Journey) => (
-              <ListItem key={journey.id}>
+            {userJourneysResult.user.journeys.map(({ id, limitPrice, journey }: Journey) => (
+              <ListItem key={id}>
                 <Accordion
                   sx={{ width: '100%' }}
-                  expanded={expandedJourneyIds.includes(journey.id)}
-                  onChange={() => toggleJourneyDetails(journey.id)}
+                  expanded={expandedJourneyIds.includes(id)}
+                  onChange={() => toggleJourneyDetails(id)}
                 >
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                     <Grid container justifyContent="space-between" alignItems="center">
                       <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                         {`${journey.from} to ${journey.to}`}
                       </Typography>
-                      <Typography variant="body2" sx={{ color: journey.price > journey.limitPrice ? 'red' : 'green' }}>
-                        {`Current Price: €${journey.price.toFixed(2)}`}
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: journey.price !== null ? (journey.price > limitPrice ? 'red' : 'green') : 'inherit',
+                        }}
+                      >
+                        Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
                       </Typography>
-                      <Typography variant="body2">{`Limit Price: €${journey.limitPrice.toFixed(2)}`}</Typography>
+
+                      <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
                     </Grid>
                   </AccordionSummary>
 

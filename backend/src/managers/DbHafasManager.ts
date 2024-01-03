@@ -36,16 +36,22 @@ export class DbHafasManager {
    * @param refreshToken - The refresh token associated with the journey.
    * @returns A promise that resolves to the refreshed journey.
    */
-  async requeryJourney(refreshToken: string): Promise<Journey> {
+  async requeryJourney(refreshToken: string): Promise<Journey | undefined> {
     if (refreshToken === undefined) {
       throw new Error('refreshToken is undefined');
     }
 
+    let refreshedJourney;
     // Refresh the journey using the refresh token
-    const refreshedJourney = await this.client.refreshJourney!(refreshToken, {
-      subStops: false,
-      entrances: false,
-    });
+    try {
+      refreshedJourney = await this.client.refreshJourney!(refreshToken, {
+        subStops: false,
+        entrances: false,
+      });
+    } catch (error) {
+      Logger.error('Error refreshing journey');
+      return undefined;
+    }
 
     // Check if legs are undefined or empty
     if (refreshedJourney.legs === undefined || refreshedJourney.legs.length === 0) {
@@ -55,6 +61,11 @@ export class DbHafasManager {
     // Check if a price was found in the refreshed journey
     if (refreshedJourney.price) {
       Logger.info('Price was found in refreshed journey');
+      Logger.info(
+        `Price: ${refreshedJourney.price.amount}, Arrival: ${
+          refreshedJourney.legs[refreshedJourney.legs.length - 1].destination!.name
+        }`
+      );
       return refreshedJourney;
     }
 
@@ -76,10 +87,18 @@ export class DbHafasManager {
         const price = filteredJourneys[0].price;
         if (price) {
           Logger.info('Price was found through new journeys query');
+          Logger.info(
+            `Price: ${price.amount}, Arrival: ${
+              filteredJourneys[0].legs[filteredJourneys[0].legs.length - 1].destination!.name
+            }`
+          );
           refreshedJourney.price = price;
           break;
         }
       }
+    }
+    if (!refreshedJourney.price) {
+      Logger.warn('Price was not found for journey');
     }
 
     return refreshedJourney;

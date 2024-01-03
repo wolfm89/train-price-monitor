@@ -3,7 +3,7 @@ import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
-import { User, PresignedUrl, Notification, Journey } from '../schema/generated/typeDefs.generated';
+import { User, PresignedUrl, Notification, JourneyWatch } from '../schema/generated/typeDefs.generated';
 import { getMeans } from './journey';
 
 dotenv.config(); // Load environment variables from .env file
@@ -15,7 +15,7 @@ if (!profileImageBucketName) {
 }
 
 export const userResolvers: UserResolvers = {
-  notifications: async (parent, args, context: GraphQLContext) => {
+  notifications: async (parent, args, context: GraphQLContext): Promise<Notification[]> => {
     let notifications: Notification[] | undefined = undefined;
     const { Items: dbNotifications } = await context.entities.Notification.scan({
       filters: [
@@ -45,8 +45,9 @@ export const userResolvers: UserResolvers = {
     }
     return [];
   },
-  journeys: async (parent, args, context: GraphQLContext) => {
-    let journeys: Journey[];
+  journeys: async (parent, args, context: GraphQLContext): Promise<JourneyWatch[]> => {
+    Logger.addPersistentLogAttributes({ userId: parent.id });
+    let journeys: JourneyWatch[];
     const { Items: dbJourneys } = await context.entities.Journey.query(`USER#${parent.id}`, {
       beginsWith: 'JOURNEY#',
     });
@@ -58,19 +59,29 @@ export const userResolvers: UserResolvers = {
         const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
         return {
           id: dbJourney.id,
-          refreshToken: journey.refreshToken!,
-          from: journey.legs[0].origin!.name!,
-          to: journey.legs[journey.legs.length - 1].destination!.name!,
-          departure: new Date(journey.legs[0].plannedDeparture!),
-          arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
-          means: getMeans(journey),
-          price: journey.price?.amount,
+          userId: dbJourney.userId,
           limitPrice: dbJourney.limitPrice,
+          journey: !journey
+            ? undefined
+            : {
+                refreshToken: journey.refreshToken!,
+                from: journey.legs[0].origin!.name!,
+                to: journey.legs[journey.legs.length - 1].destination!.name!,
+                departure: new Date(journey.legs[0].plannedDeparture!),
+                arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
+                means: getMeans(journey),
+                price: journey.price?.amount,
+              },
         };
       })
     );
     if (journeys) {
-      sort(journeys, 'departure');
+      journeys.sort(
+        (a: JourneyWatch, b: JourneyWatch) =>
+          (a.journey ? a.journey.departure.getTime() : Infinity) -
+          (b.journey ? b.journey.departure.getTime() : Infinity)
+      );
+
       if (args.limit !== undefined) {
         journeys = journeys.slice(0, args.limit);
       }

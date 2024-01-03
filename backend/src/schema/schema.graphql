@@ -14,7 +14,7 @@ type User {
   profilePicture: String
   activated: Boolean!
   notifications(limit: Int): [Notification]
-  journeys(limit: Int): [Journey]
+  journeys(limit: Int): [JourneyWatch]
 }
 
 type PresignedUrl {
@@ -60,15 +60,20 @@ type Notification {
 # Journeys
 
 type Journey {
-  id: ID
   refreshToken: String!
-  from: String!
-  to: String!
-  departure: DateTime!
-  arrival: DateTime!
-  means: [String]!
+  from: String
+  to: String
+  departure: DateTime
+  arrival: DateTime
+  means: [String]
   price: Float
-  limitPrice: Float
+}
+
+type JourneyWatch {
+  id: ID!
+  userId: ID!
+  limitPrice: Float!
+  journey: Journey
 }
 
 ## Queries
@@ -80,7 +85,7 @@ extend type Query {
 ## Mutations
 
 extend type Mutation {
-  watchJourney(userId: ID!, refreshToken: String!, limitPrice: Float!): ID
+  watchJourney(userId: ID!, refreshToken: String!, limitPrice: Float!): JourneyWatch
 }
 
 extend type Mutation {
@@ -88,7 +93,7 @@ extend type Mutation {
 }
 
 extend type Mutation {
-  updateJourney(userId: ID!, journeyId: ID!): ID
+  updateJourney(userId: ID!, journeyId: ID!): JourneyWatch
 }
 
 # Locations

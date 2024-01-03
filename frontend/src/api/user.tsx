@@ -58,19 +58,21 @@ export const UserNotificationsQuery = gql`
 `;
 
 export const UserJourneysQuery = gql`
-  query ($id: ID!, $journeysLimit: Int) {
+  query ($id: ID!) {
     user(id: $id) {
       id
-      journeys(limit: $journeysLimit) {
+      journeys {
         id
-        from
-        to
-        departure
-        arrival
-        means
-        price
         limitPrice
-        refreshToken
+        journey {
+          refreshToken
+          from
+          to
+          departure
+          arrival
+          means
+          price
+        }
       }
     }
   }

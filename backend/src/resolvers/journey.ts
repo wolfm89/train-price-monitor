@@ -3,7 +3,7 @@ import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers } from '../schema/generated/resolvers.generated';
 import { v4 as uuidv4 } from 'uuid';
-import { Journey as GqlJourney } from '../schema/generated/typeDefs.generated';
+import { Journey as GqlJourney, JourneyWatch } from '../schema/generated/typeDefs.generated';
 
 /**
  * Resolves the 'journeys' query to retrieve a list of journeys based on provided arguments.
@@ -51,7 +51,7 @@ export const watchJourney: NonNullable<MutationResolvers['watchJourney']> = asyn
   _parent,
   args,
   context: GraphQLContext
-) => {
+): Promise<JourneyWatch> => {
   // Retrieve user from the database
   const { Item: dbUser } = await context.entities.User.get({ id: args.userId });
   if (!dbUser) {
@@ -69,7 +69,12 @@ export const watchJourney: NonNullable<MutationResolvers['watchJourney']> = asyn
     refreshToken: args.refreshToken,
   });
 
-  return journeyWatchId;
+  return {
+    id: journeyWatchId,
+    userId: args.userId,
+    limitPrice: args.limitPrice,
+    journey: { refreshToken: args.refreshToken },
+  };
 };
 
 /**
@@ -83,7 +88,7 @@ export const updateJourneys: NonNullable<MutationResolvers['updateJourneys']> = 
   _parent,
   _args,
   context: GraphQLContext
-) => {
+): Promise<number> => {
   // Query all journeys from the database
   const allJourneys = await context.entities.Journey.scan({
     filters: { attr: 'id', beginsWith: 'JOURNEY#' },
@@ -116,9 +121,24 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
   _parent,
   args,
   context: GraphQLContext
-) => {
+): Promise<JourneyWatch> => {
   // Add user and journey ID to persistent log attributes
   Logger.addPersistentLogAttributes({ userId: args.userId, journeyId: args.journeyId });
+
+  // Retrieve the journey from the database
+  const dbJourney = await context.entities.Journey.get({ userId: args.userId, id: args.journeyId });
+
+  // Check if the journey exists
+  if (!dbJourney.Item) {
+    throw new Error('Journey not found in database');
+  }
+
+  const journeyWatch: JourneyWatch = {
+    id: dbJourney.Item.id,
+    userId: dbJourney.Item.userId,
+    limitPrice: dbJourney.Item.limitPrice,
+    journey: { refreshToken: dbJourney.Item.refreshToken },
+  };
 
   // Check if notification already exists
   const existingNotifications = await context.entities.Notification.query(`USER#${args.userId}`, {
@@ -128,20 +148,15 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
   });
   if (existingNotifications && (existingNotifications.Count ?? 0 > 0)) {
     Logger.info(`Notification already exists for journey`);
-    return args.journeyId;
-  }
-
-  // Retrieve the journey from the database
-  const dbJourney = await context.entities.Journey.get({ userId: args.userId, id: args.journeyId });
-
-  // Check if the journey exists
-  if (!dbJourney.Item) {
-    throw new Error(`Journey not found`);
+    return journeyWatch;
   }
 
   // Get new price for journey and compare to limit price
   // If new price is higher than limit price, send notification
   const journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken);
+  if (!journey) {
+    throw new Error('Could not requery journey');
+  }
   const newPrice = journey.price?.amount;
 
   // Log information about the updated journey
@@ -167,7 +182,7 @@ export const updateJourney: NonNullable<MutationResolvers['updateJourney']> = as
     Logger.info(`New price ${newPrice} for journey is still lower than limit price ${dbJourney.Item.limitPrice}`);
   }
 
-  return dbJourney.Item.id;
+  return journeyWatch;
 };
 
 export function getMeans(journey: Journey): string[] {

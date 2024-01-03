@@ -3,88 +3,96 @@ export type InputMaybe<T> = Maybe<T>;
 export type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 export type MakeOptional<T, K extends keyof T> = Omit<T, K> & { [SubKey in K]?: Maybe<T[SubKey]> };
 export type MakeMaybe<T, K extends keyof T> = Omit<T, K> & { [SubKey in K]: Maybe<T[SubKey]> };
+export type MakeEmpty<T extends { [key: string]: unknown }, K extends keyof T> = { [_ in K]?: never };
+export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 /** All built-in and custom scalars, mapped to their actual values */
 export type Scalars = {
-  ID: string;
-  String: string;
-  Boolean: boolean;
-  Int: number;
-  Float: number;
-  DateTime: any;
-  File: File;
+  ID: { input: string; output: string };
+  String: { input: string; output: string };
+  Boolean: { input: boolean; output: boolean };
+  Int: { input: number; output: number };
+  Float: { input: number; output: number };
+  DateTime: { input: any; output: any };
+  File: { input: File; output: File };
 };
 
 export type Journey = {
   __typename?: 'Journey';
-  arrival: Scalars['DateTime'];
-  departure: Scalars['DateTime'];
-  from: Scalars['String'];
-  id?: Maybe<Scalars['ID']>;
-  limitPrice?: Maybe<Scalars['Float']>;
-  means: Array<Maybe<Scalars['String']>>;
-  price?: Maybe<Scalars['Float']>;
-  refreshToken: Scalars['String'];
-  to: Scalars['String'];
+  arrival?: Maybe<Scalars['DateTime']['output']>;
+  departure?: Maybe<Scalars['DateTime']['output']>;
+  from?: Maybe<Scalars['String']['output']>;
+  means?: Maybe<Array<Maybe<Scalars['String']['output']>>>;
+  price?: Maybe<Scalars['Float']['output']>;
+  refreshToken: Scalars['String']['output'];
+  to?: Maybe<Scalars['String']['output']>;
+};
+
+export type JourneyWatch = {
+  __typename?: 'JourneyWatch';
+  id: Scalars['ID']['output'];
+  journey?: Maybe<Journey>;
+  limitPrice: Scalars['Float']['output'];
+  userId: Scalars['ID']['output'];
 };
 
 export type Location = {
   __typename?: 'Location';
-  id: Scalars['String'];
-  name: Scalars['String'];
-  type: Scalars['String'];
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  type: Scalars['String']['output'];
 };
 
 export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
-  updateJourney?: Maybe<Scalars['ID']>;
-  updateJourneys?: Maybe<Scalars['Int']>;
+  updateJourney?: Maybe<JourneyWatch>;
+  updateJourneys?: Maybe<Scalars['Int']['output']>;
   updateUserProfilePicture?: Maybe<User>;
-  watchJourney?: Maybe<Scalars['ID']>;
+  watchJourney?: Maybe<JourneyWatch>;
 };
 
 export type MutationActivateUserArgs = {
-  id: Scalars['ID'];
+  id: Scalars['ID']['input'];
 };
 
 export type MutationCreateUserArgs = {
-  email: Scalars['String'];
-  familyName: Scalars['String'];
-  givenName: Scalars['String'];
-  id: Scalars['ID'];
+  email: Scalars['String']['input'];
+  familyName: Scalars['String']['input'];
+  givenName: Scalars['String']['input'];
+  id: Scalars['ID']['input'];
 };
 
 export type MutationUpdateJourneyArgs = {
-  journeyId: Scalars['ID'];
-  userId: Scalars['ID'];
+  journeyId: Scalars['ID']['input'];
+  userId: Scalars['ID']['input'];
 };
 
 export type MutationUpdateUserProfilePictureArgs = {
-  id: Scalars['ID'];
-  image: Scalars['File'];
+  id: Scalars['ID']['input'];
+  image: Scalars['File']['input'];
 };
 
 export type MutationWatchJourneyArgs = {
-  limitPrice: Scalars['Float'];
-  refreshToken: Scalars['String'];
-  userId: Scalars['ID'];
+  limitPrice: Scalars['Float']['input'];
+  refreshToken: Scalars['String']['input'];
+  userId: Scalars['ID']['input'];
 };
 
 export type Notification = {
   __typename?: 'Notification';
-  id: Scalars['ID'];
-  journeyId?: Maybe<Scalars['ID']>;
-  message: Scalars['String'];
-  read: Scalars['Boolean'];
-  timestamp: Scalars['DateTime'];
-  userId: Scalars['ID'];
+  id: Scalars['ID']['output'];
+  journeyId?: Maybe<Scalars['ID']['output']>;
+  message: Scalars['String']['output'];
+  read: Scalars['Boolean']['output'];
+  timestamp: Scalars['DateTime']['output'];
+  userId: Scalars['ID']['output'];
 };
 
 export type PresignedUrl = {
   __typename?: 'PresignedUrl';
-  id: Scalars['ID'];
-  url?: Maybe<Scalars['String']>;
+  id: Scalars['ID']['output'];
+  url?: Maybe<Scalars['String']['output']>;
 };
 
 export type Query = {
@@ -96,39 +104,39 @@ export type Query = {
 };
 
 export type QueryJourneysArgs = {
-  departure: Scalars['DateTime'];
-  from: Scalars['String'];
-  to: Scalars['String'];
+  departure: Scalars['DateTime']['input'];
+  from: Scalars['String']['input'];
+  to: Scalars['String']['input'];
 };
 
 export type QueryLocationsArgs = {
-  query: Scalars['String'];
+  query: Scalars['String']['input'];
 };
 
 export type QueryUserArgs = {
-  id: Scalars['ID'];
+  id: Scalars['ID']['input'];
 };
 
 export type QueryUserProfilePicturePresignedUrlArgs = {
-  id: Scalars['ID'];
+  id: Scalars['ID']['input'];
 };
 
 export type User = {
   __typename?: 'User';
-  activated: Scalars['Boolean'];
-  email: Scalars['String'];
-  familyName: Scalars['String'];
-  givenName: Scalars['String'];
-  id: Scalars['ID'];
-  journeys?: Maybe<Array<Maybe<Journey>>>;
+  activated: Scalars['Boolean']['output'];
+  email: Scalars['String']['output'];
+  familyName: Scalars['String']['output'];
+  givenName: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  journeys?: Maybe<Array<Maybe<JourneyWatch>>>;
   notifications?: Maybe<Array<Maybe<Notification>>>;
-  profilePicture?: Maybe<Scalars['String']>;
+  profilePicture?: Maybe<Scalars['String']['output']>;
 };
 
 export type UserJourneysArgs = {
-  limit?: InputMaybe<Scalars['Int']>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type UserNotificationsArgs = {
-  limit?: InputMaybe<Scalars['Int']>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
 };

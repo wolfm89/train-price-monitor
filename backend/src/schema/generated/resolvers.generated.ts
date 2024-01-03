@@ -73,37 +73,39 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = {
-  Boolean: ResolverTypeWrapper<Scalars['Boolean']>;
-  DateTime: ResolverTypeWrapper<Scalars['DateTime']>;
-  File: ResolverTypeWrapper<Scalars['File']>;
-  Float: ResolverTypeWrapper<Scalars['Float']>;
-  ID: ResolverTypeWrapper<Scalars['ID']>;
-  Int: ResolverTypeWrapper<Scalars['Int']>;
+  Boolean: ResolverTypeWrapper<Scalars['Boolean']['output']>;
+  DateTime: ResolverTypeWrapper<Scalars['DateTime']['output']>;
+  File: ResolverTypeWrapper<Scalars['File']['output']>;
+  Float: ResolverTypeWrapper<Scalars['Float']['output']>;
+  ID: ResolverTypeWrapper<Scalars['ID']['output']>;
+  Int: ResolverTypeWrapper<Scalars['Int']['output']>;
   Journey: ResolverTypeWrapper<Journey>;
+  JourneyWatch: ResolverTypeWrapper<JourneyWatch>;
   Location: ResolverTypeWrapper<Location>;
   Mutation: ResolverTypeWrapper<{}>;
   Notification: ResolverTypeWrapper<Notification>;
   PresignedUrl: ResolverTypeWrapper<PresignedUrl>;
   Query: ResolverTypeWrapper<{}>;
-  String: ResolverTypeWrapper<Scalars['String']>;
+  String: ResolverTypeWrapper<Scalars['String']['output']>;
   User: ResolverTypeWrapper<User>;
 };
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = {
-  Boolean: Scalars['Boolean'];
-  DateTime: Scalars['DateTime'];
-  File: Scalars['File'];
-  Float: Scalars['Float'];
-  ID: Scalars['ID'];
-  Int: Scalars['Int'];
+  Boolean: Scalars['Boolean']['output'];
+  DateTime: Scalars['DateTime']['output'];
+  File: Scalars['File']['output'];
+  Float: Scalars['Float']['output'];
+  ID: Scalars['ID']['output'];
+  Int: Scalars['Int']['output'];
   Journey: Journey;
+  JourneyWatch: JourneyWatch;
   Location: Location;
   Mutation: {};
   Notification: Notification;
   PresignedUrl: PresignedUrl;
   Query: {};
-  String: Scalars['String'];
+  String: Scalars['String']['output'];
   User: User;
 };
 
@@ -119,15 +121,24 @@ export type JourneyResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['Journey'] = ResolversParentTypes['Journey']
 > = {
-  arrival?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
-  departure?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
-  from?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  id?: Resolver<Maybe<ResolversTypes['ID']>, ParentType, ContextType>;
-  limitPrice?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
-  means?: Resolver<Array<Maybe<ResolversTypes['String']>>, ParentType, ContextType>;
+  arrival?: Resolver<Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
+  departure?: Resolver<Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
+  from?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  means?: Resolver<Maybe<Array<Maybe<ResolversTypes['String']>>>, ParentType, ContextType>;
   price?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
   refreshToken?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  to?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  to?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type JourneyWatchResolvers<
+  ContextType = any,
+  ParentType extends ResolversParentTypes['JourneyWatch'] = ResolversParentTypes['JourneyWatch']
+> = {
+  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  journey?: Resolver<Maybe<ResolversTypes['Journey']>, ParentType, ContextType>;
+  limitPrice?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
+  userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 };
 
@@ -158,7 +169,7 @@ export type MutationResolvers<
     RequireFields<MutationCreateUserArgs, 'email' | 'familyName' | 'givenName' | 'id'>
   >;
   updateJourney?: Resolver<
-    Maybe<ResolversTypes['ID']>,
+    Maybe<ResolversTypes['JourneyWatch']>,
     ParentType,
     ContextType,
     RequireFields<MutationUpdateJourneyArgs, 'journeyId' | 'userId'>
@@ -171,7 +182,7 @@ export type MutationResolvers<
     RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
   watchJourney?: Resolver<
-    Maybe<ResolversTypes['ID']>,
+    Maybe<ResolversTypes['JourneyWatch']>,
     ParentType,
     ContextType,
     RequireFields<MutationWatchJourneyArgs, 'limitPrice' | 'refreshToken' | 'userId'>
@@ -235,7 +246,7 @@ export type UserResolvers<
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journeys?: Resolver<
-    Maybe<Array<Maybe<ResolversTypes['Journey']>>>,
+    Maybe<Array<Maybe<ResolversTypes['JourneyWatch']>>>,
     ParentType,
     ContextType,
     Partial<UserJourneysArgs>
@@ -254,6 +265,7 @@ export type Resolvers<ContextType = any> = {
   DateTime?: GraphQLScalarType;
   File?: GraphQLScalarType;
   Journey?: JourneyResolvers<ContextType>;
+  JourneyWatch?: JourneyWatchResolvers<ContextType>;
   Location?: LocationResolvers<ContextType>;
   Mutation?: MutationResolvers<ContextType>;
   Notification?: NotificationResolvers<ContextType>;
