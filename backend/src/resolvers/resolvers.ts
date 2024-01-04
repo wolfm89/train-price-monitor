@@ -7,11 +7,13 @@ import {
   createUser,
   activateUser,
 } from './user';
-import { journeysQuery, watchJourney, updateJourneys, updateJourney } from './journey';
+import { journeysQuery, monitorJourney, updateJourneyMonitors, updateJourneyMonitor } from './journey';
 import { locationsQuery } from './location';
+import { notificationResolvers } from './notification';
 
 const resolvers: Resolvers = {
   User: userResolvers,
+  Notification: notificationResolvers,
   Query: {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
@@ -22,9 +24,9 @@ const resolvers: Resolvers = {
     updateUserProfilePicture: updateUserProfilePicture,
     createUser: createUser,
     activateUser: activateUser,
-    watchJourney: watchJourney,
-    updateJourneys: updateJourneys,
-    updateJourney: updateJourney,
+    monitorJourney: monitorJourney,
+    updateJourneyMonitors: updateJourneyMonitors,
+    updateJourneyMonitor: updateJourneyMonitor,
   },
 };
 

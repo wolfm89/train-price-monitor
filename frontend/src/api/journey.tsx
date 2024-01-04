@@ -12,8 +12,10 @@ export const JourneySearchQuery = gql`
   }
 `;
 
-export const WatchJourney = gql`
-  mutation ($userId: ID!, $refreshToken: String!, $limitPrice: Float!) {
-    watchJourney(userId: $userId, refreshToken: $refreshToken, limitPrice: $limitPrice)
+export const MonitorJourney = gql`
+  mutation ($userId: ID!, $refreshToken: String!, $limitPrice: Float!, $expires: DateTime!) {
+    monitorJourney(userId: $userId, refreshToken: $refreshToken, limitPrice: $limitPrice, expires: $expires) {
+      id
+    }
   }
 `;

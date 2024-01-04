@@ -3,8 +3,9 @@ import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
-import { User, PresignedUrl, Notification, JourneyWatch } from '../schema/generated/typeDefs.generated';
+import { User, PresignedUrl, Notification, JourneyMonitor } from '../schema/generated/typeDefs.generated';
 import { getMeans } from './journey';
+import { NOTIFICATION_TYPES } from './notificationTypes';
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -26,14 +27,19 @@ export const userResolvers: UserResolvers = {
     if (!dbNotifications) {
       return [];
     }
+
     notifications = dbNotifications.map((dbNotification) => {
       return {
         id: dbNotification.id,
         userId: dbNotification.userId,
-        journeyId: dbNotification.journeyId,
-        message: dbNotification.message,
+        type: dbNotification.type,
         timestamp: new Date(dbNotification.timestamp),
         read: dbNotification.read,
+        ...NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
+          context,
+          dbNotification.userId,
+          dbNotification.data
+        ),
       };
     });
     if (notifications) {
@@ -45,9 +51,9 @@ export const userResolvers: UserResolvers = {
     }
     return [];
   },
-  journeys: async (parent, args, context: GraphQLContext): Promise<JourneyWatch[]> => {
+  journeyMonitors: async (parent, args, context: GraphQLContext): Promise<JourneyMonitor[]> => {
     Logger.addPersistentLogAttributes({ userId: parent.id });
-    let journeys: JourneyWatch[];
+    let journeys: JourneyMonitor[];
     const { Items: dbJourneys } = await context.entities.Journey.query(`USER#${parent.id}`, {
       beginsWith: 'JOURNEY#',
     });
@@ -56,28 +62,12 @@ export const userResolvers: UserResolvers = {
     }
     journeys = await Promise.all(
       dbJourneys.map(async (dbJourney) => {
-        const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
-        return {
-          id: dbJourney.id,
-          userId: dbJourney.userId,
-          limitPrice: dbJourney.limitPrice,
-          journey: !journey
-            ? undefined
-            : {
-                refreshToken: journey.refreshToken!,
-                from: journey.legs[0].origin!.name!,
-                to: journey.legs[journey.legs.length - 1].destination!.name!,
-                departure: new Date(journey.legs[0].plannedDeparture!),
-                arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
-                means: getMeans(journey),
-                price: journey.price?.amount,
-              },
-        };
+        return await getJourneyMonitor(context, dbJourney);
       })
     );
     if (journeys) {
       journeys.sort(
-        (a: JourneyWatch, b: JourneyWatch) =>
+        (a: JourneyMonitor, b: JourneyMonitor) =>
           (a.journey ? a.journey.departure.getTime() : Infinity) -
           (b.journey ? b.journey.departure.getTime() : Infinity)
       );
@@ -196,3 +186,33 @@ export const activateUser: NonNullable<MutationResolvers['activateUser']> = asyn
     throw error;
   }
 };
+
+export async function getJourneyMonitor(
+  context: GraphQLContext,
+  dbJourney: {
+    expires: string;
+    limitPrice: number;
+    refreshToken: string;
+    userId: string;
+    id: string;
+  }
+): Promise<JourneyMonitor> {
+  const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
+  return {
+    id: dbJourney.id,
+    userId: dbJourney.userId,
+    limitPrice: dbJourney.limitPrice,
+    expires: dbJourney.expires,
+    journey: !journey
+      ? undefined
+      : {
+          refreshToken: journey.refreshToken!,
+          from: journey.legs[0].origin!.name!,
+          to: journey.legs[journey.legs.length - 1].destination!.name!,
+          departure: new Date(journey.legs[0].plannedDeparture!),
+          arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
+          means: getMeans(journey),
+          price: journey.price?.amount,
+        },
+  };
+}

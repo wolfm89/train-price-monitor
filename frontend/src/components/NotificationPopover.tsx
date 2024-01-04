@@ -10,6 +10,17 @@ interface NotificationPopoverProps {
   notifications: any;
 }
 
+const formatNotification = (notification: any) => {
+  switch (notification.type) {
+    case 'PRICE_ALERT':
+      return `Price limit reached for journey from ${notification.journeyMonitor.journey.from} to ${notification.journeyMonitor.journey.to}`;
+    case 'JOURNEY_EXPIRED':
+      return `Watched journey from ${notification.journeyMonitor.journey.from} to ${notification.journeyMonitor.journey.to} expired`;
+    default:
+      return '';
+  }
+};
+
 const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id, open, onClose, notifications }) => {
   return (
     <Popover
@@ -28,12 +39,12 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id,
     >
       <List>
         {notifications && notifications.length > 0 ? (
-          notifications.map((value: any, index: number) => (
+          notifications.map((notification: any, index: number) => (
             <ListItemButton key={index}>
               <ListItemIcon>
                 <NotificationImportantIcon />
               </ListItemIcon>
-              <ListItemText primary={value.message} />
+              <ListItemText primary={formatNotification(notification)} />
             </ListItemButton>
           ))
         ) : (

@@ -61,11 +61,6 @@ export class DbHafasManager {
     // Check if a price was found in the refreshed journey
     if (refreshedJourney.price) {
       Logger.info('Price was found in refreshed journey');
-      Logger.info(
-        `Price: ${refreshedJourney.price.amount}, Arrival: ${
-          refreshedJourney.legs[refreshedJourney.legs.length - 1].destination!.name
-        }`
-      );
       return refreshedJourney;
     }
 
@@ -87,11 +82,6 @@ export class DbHafasManager {
         const price = filteredJourneys[0].price;
         if (price) {
           Logger.info('Price was found through new journeys query');
-          Logger.info(
-            `Price: ${price.amount}, Arrival: ${
-              filteredJourneys[0].legs[filteredJourneys[0].legs.length - 1].destination!.name
-            }`
-          );
           refreshedJourney.price = price;
           break;
         }

@@ -36,10 +36,10 @@ const Notification = new Entity({
       type: 'string',
       prefix: 'NOTIFICATION#',
     },
-    journeyId: { type: 'string' },
-    message: { type: 'string', required: true },
+    type: { type: 'string', required: true },
     timestamp: { type: 'string', required: true },
     read: { type: 'boolean', required: true, default: false },
+    data: { type: 'map' },
   },
 } as const);
 
@@ -55,6 +55,7 @@ const Journey = new Entity({
     },
     limitPrice: { type: 'number', required: true },
     refreshToken: { type: 'string', required: true },
+    expires: { type: 'string', required: true },
   },
 } as const);
 

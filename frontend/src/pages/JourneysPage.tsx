@@ -67,9 +67,9 @@ const JourneysPage: React.FC = () => {
       <Grid item xs={12}>
         {fetching ? (
           <Typography variant="body1">Loading journeys...</Typography>
-        ) : userJourneysResult && userJourneysResult.user.journeys.length > 0 ? (
+        ) : userJourneysResult && userJourneysResult.user.journeyMonitors.length > 0 ? (
           <List>
-            {userJourneysResult.user.journeys.map(({ id, limitPrice, journey }: Journey) => (
+            {userJourneysResult.user.journeyMonitors.map(({ id, limitPrice, journey }: Journey) => (
               <ListItem key={id}>
                 <Accordion
                   sx={{ width: '100%' }}
@@ -78,19 +78,24 @@ const JourneysPage: React.FC = () => {
                 >
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                     <Grid container justifyContent="space-between" alignItems="center">
-                      <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                        {`${journey.from} to ${journey.to}`}
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          color: journey.price !== null ? (journey.price > limitPrice ? 'red' : 'green') : 'inherit',
-                        }}
-                      >
-                        Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
-                      </Typography>
-
-                      <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
+                      <Grid item xs={4}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                          {`${journey.from} to ${journey.to}`}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={3}>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: journey.price !== null ? (journey.price > limitPrice ? 'red' : 'green') : 'inherit',
+                          }}
+                        >
+                          Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={3}>
+                        <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
+                      </Grid>
                     </Grid>
                   </AccordionSummary>
 

@@ -48,10 +48,25 @@ export const UserNotificationsQuery = gql`
       id
       notifications(limit: $notificationsLimit) {
         id
-        journeyId
-        message
+        type
         timestamp
         read
+        ... on PriceAlertNotification {
+          journeyMonitor {
+            journey {
+              from
+              to
+            }
+          }
+        }
+        ... on JourneyExpiryNotification {
+          journeyMonitor {
+            journey {
+              from
+              to
+            }
+          }
+        }
       }
     }
   }
@@ -61,7 +76,7 @@ export const UserJourneysQuery = gql`
   query ($id: ID!) {
     user(id: $id) {
       id
-      journeys {
+      journeyMonitors {
         id
         limitPrice
         journey {

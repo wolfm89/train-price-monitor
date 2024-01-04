@@ -27,8 +27,19 @@ export type Journey = {
   to?: Maybe<Scalars['String']['output']>;
 };
 
-export type JourneyWatch = {
-  __typename?: 'JourneyWatch';
+export type JourneyExpiryNotification = Notification & {
+  __typename?: 'JourneyExpiryNotification';
+  id: Scalars['ID']['output'];
+  journeyMonitor: JourneyMonitor;
+  read: Scalars['Boolean']['output'];
+  timestamp: Scalars['DateTime']['output'];
+  type: Scalars['ID']['output'];
+  userId: Scalars['ID']['output'];
+};
+
+export type JourneyMonitor = {
+  __typename?: 'JourneyMonitor';
+  expires: Scalars['DateTime']['output'];
   id: Scalars['ID']['output'];
   journey?: Maybe<Journey>;
   limitPrice: Scalars['Float']['output'];
@@ -46,10 +57,10 @@ export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
-  updateJourney?: Maybe<JourneyWatch>;
-  updateJourneys?: Maybe<Scalars['Int']['output']>;
+  monitorJourney?: Maybe<JourneyMonitor>;
+  updateJourneyMonitor?: Maybe<JourneyMonitor>;
+  updateJourneyMonitors?: Maybe<Scalars['Int']['output']>;
   updateUserProfilePicture?: Maybe<User>;
-  watchJourney?: Maybe<JourneyWatch>;
 };
 
 export type MutationActivateUserArgs = {
@@ -63,7 +74,14 @@ export type MutationCreateUserArgs = {
   id: Scalars['ID']['input'];
 };
 
-export type MutationUpdateJourneyArgs = {
+export type MutationMonitorJourneyArgs = {
+  expires: Scalars['DateTime']['input'];
+  limitPrice: Scalars['Float']['input'];
+  refreshToken: Scalars['String']['input'];
+  userId: Scalars['ID']['input'];
+};
+
+export type MutationUpdateJourneyMonitorArgs = {
   journeyId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
 };
@@ -73,19 +91,11 @@ export type MutationUpdateUserProfilePictureArgs = {
   image: Scalars['File']['input'];
 };
 
-export type MutationWatchJourneyArgs = {
-  limitPrice: Scalars['Float']['input'];
-  refreshToken: Scalars['String']['input'];
-  userId: Scalars['ID']['input'];
-};
-
 export type Notification = {
-  __typename?: 'Notification';
   id: Scalars['ID']['output'];
-  journeyId?: Maybe<Scalars['ID']['output']>;
-  message: Scalars['String']['output'];
   read: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
+  type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];
 };
 
@@ -93,6 +103,16 @@ export type PresignedUrl = {
   __typename?: 'PresignedUrl';
   id: Scalars['ID']['output'];
   url?: Maybe<Scalars['String']['output']>;
+};
+
+export type PriceAlertNotification = Notification & {
+  __typename?: 'PriceAlertNotification';
+  id: Scalars['ID']['output'];
+  journeyMonitor: JourneyMonitor;
+  read: Scalars['Boolean']['output'];
+  timestamp: Scalars['DateTime']['output'];
+  type: Scalars['ID']['output'];
+  userId: Scalars['ID']['output'];
 };
 
 export type Query = {
@@ -128,12 +148,12 @@ export type User = {
   familyName: Scalars['String']['output'];
   givenName: Scalars['String']['output'];
   id: Scalars['ID']['output'];
-  journeys?: Maybe<Array<Maybe<JourneyWatch>>>;
+  journeyMonitors?: Maybe<Array<Maybe<JourneyMonitor>>>;
   notifications?: Maybe<Array<Maybe<Notification>>>;
   profilePicture?: Maybe<Scalars['String']['output']>;
 };
 
-export type UserJourneysArgs = {
+export type UserJourneyMonitorsArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;
 };
 

@@ -18,7 +18,7 @@ import {
   useMediaQuery,
 } from '@mui/material';
 import AlarmAddIcon from '@mui/icons-material/AlarmAdd';
-import { WatchJourney } from '../api/journey';
+import { MonitorJourney } from '../api/journey';
 import { useMutation } from 'urql';
 import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
@@ -47,7 +47,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
   const [limitPrice, setLimitPrice] = useState('');
   const { user } = useContext(AuthContext);
-  const [, watchJourney] = useMutation(WatchJourney);
+  const [, monitorJourney] = useMutation(MonitorJourney);
   const [loading, setLoading] = useState(false);
 
   const handleWatchClick = (journey: Journey) => {
@@ -63,11 +63,15 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
 
   const handleConfirmWatch = () => {
     setLoading(true);
-    const { refreshToken } = selectedJourney!;
-    watchJourney({
+    const { refreshToken, departure } = selectedJourney!;
+    const expires = new Date(departure);
+    expires.setHours(expires.getHours() - 1);
+
+    monitorJourney({
       userId: user?.['custom:id'],
       refreshToken: refreshToken,
       limitPrice: parseFloat(limitPrice),
+      expires: expires,
     })
       .then((result) => {
         setLoading(false);
