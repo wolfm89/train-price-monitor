@@ -145,7 +145,7 @@ export type JourneyExpiryNotificationResolvers<
   ParentType extends ResolversParentTypes['JourneyExpiryNotification'] = ResolversParentTypes['JourneyExpiryNotification']
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  journeyMonitor?: Resolver<ResolversTypes['JourneyMonitor'], ParentType, ContextType>;
+  journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;

@@ -60,11 +60,9 @@ export const UserNotificationsQuery = gql`
           }
         }
         ... on JourneyExpiryNotification {
-          journeyMonitor {
-            journey {
-              from
-              to
-            }
+          journey {
+            from
+            to
           }
         }
       }

@@ -151,6 +151,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
     // Delete the journey from the database
     await context.entities.Journey.delete({ userId: args.userId, id: args.journeyId });
+    context.cache.invalidate([{ typename: 'JourneyMonitor' }]);
     Logger.info(`Deleted journey from database`);
 
     // Send a notification to the user that the journey has expired
@@ -160,7 +161,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       type: NOTIFICATION_TYPES.JOURNEY_EXPIRED.name,
       read: false,
       timestamp: new Date().toISOString(),
-      data: { journeyId: args.journeyId },
+      data: { refreshToken: dbJourney.Item.refreshToken },
     });
     context.cache.invalidate([{ typename: 'Notification' }]);
 

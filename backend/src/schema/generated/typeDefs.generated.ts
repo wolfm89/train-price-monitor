@@ -30,7 +30,7 @@ export type Journey = {
 export type JourneyExpiryNotification = Notification & {
   __typename?: 'JourneyExpiryNotification';
   id: Scalars['ID']['output'];
-  journeyMonitor: JourneyMonitor;
+  journey: Journey;
   read: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];

@@ -28,20 +28,22 @@ export const userResolvers: UserResolvers = {
       return [];
     }
 
-    notifications = dbNotifications.map((dbNotification) => {
-      return {
-        id: dbNotification.id,
-        userId: dbNotification.userId,
-        type: dbNotification.type,
-        timestamp: new Date(dbNotification.timestamp),
-        read: dbNotification.read,
-        ...NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
-          context,
-          dbNotification.userId,
-          dbNotification.data
-        ),
-      };
-    });
+    notifications = await Promise.all(
+      dbNotifications.map(async (dbNotification) => {
+        return {
+          id: dbNotification.id,
+          userId: dbNotification.userId,
+          type: dbNotification.type,
+          timestamp: new Date(dbNotification.timestamp),
+          read: dbNotification.read,
+          ...(await NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
+            context,
+            dbNotification.userId,
+            dbNotification.data
+          )),
+        };
+      })
+    );
     if (notifications) {
       sort(notifications, '-timestamp');
       if (args.limit !== undefined) {

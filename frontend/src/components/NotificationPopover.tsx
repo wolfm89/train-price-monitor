@@ -15,7 +15,7 @@ const formatNotification = (notification: any) => {
     case 'PRICE_ALERT':
       return `Price limit reached for journey from ${notification.journeyMonitor.journey.from} to ${notification.journeyMonitor.journey.to}`;
     case 'JOURNEY_EXPIRED':
-      return `Watched journey from ${notification.journeyMonitor.journey.from} to ${notification.journeyMonitor.journey.to} expired`;
+      return `Watched journey from ${notification.journey.from} to ${notification.journey.to} expired`;
     default:
       return '';
   }

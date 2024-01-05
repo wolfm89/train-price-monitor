@@ -71,7 +71,7 @@ type JourneyExpiryNotification implements Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
-  journeyMonitor: JourneyMonitor!
+  journey: Journey!
 }
 
 # Journeys
