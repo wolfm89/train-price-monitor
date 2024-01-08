@@ -5,6 +5,20 @@ import {
   CheckCircle as CheckCircleIcon,
 } from '@mui/icons-material';
 
+export interface Notification {
+  id: string;
+  type: string;
+  read: boolean;
+  timestamp: Date;
+  journeyMonitor: {
+    id: string;
+    journey: {
+      from: string;
+      to: string;
+    };
+  };
+}
+
 interface NotificationPopoverProps {
   anchorEl: any;
   id: string | undefined;
@@ -12,6 +26,7 @@ interface NotificationPopoverProps {
   onClose: () => void;
   notifications: any;
   onMarkAsRead: (notificationId: string) => void;
+  handleNotificationClicked: (notification: Notification) => void;
 }
 
 const formatNotification = (notification: any) => {
@@ -32,12 +47,8 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
   onClose,
   notifications,
   onMarkAsRead,
+  handleNotificationClicked,
 }) => {
-  const handleMarkAsRead = (notificationId: string) => {
-    // Trigger GraphQL mutation to mark the notification as read
-    onMarkAsRead(notificationId);
-  };
-
   return (
     <Popover
       id={id}
@@ -55,15 +66,15 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
     >
       <List>
         {notifications && notifications.length > 0 ? (
-          notifications.map((notification: any, index: number) => (
+          notifications.map((notification: Notification, index: number) => (
             <Box display="flex" alignItems="center" key={index}>
-              <ListItemButton>
+              <ListItemButton onClick={() => handleNotificationClicked(notification)}>
                 <ListItemIcon>
                   <NotificationImportantIcon />
                 </ListItemIcon>
                 <ListItemText primary={formatNotification(notification)} />
               </ListItemButton>
-              <IconButton aria-label="mark as read" onClick={() => handleMarkAsRead(notification.id)}>
+              <IconButton aria-label="mark as read" onClick={() => onMarkAsRead(notification.id)}>
                 <CheckCircleIcon />
               </IconButton>
             </Box>

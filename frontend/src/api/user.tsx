@@ -53,6 +53,7 @@ export const UserNotificationsQuery = gql`
         read
         ... on PriceAlertNotification {
           journeyMonitor {
+            id
             journey {
               from
               to

@@ -4,9 +4,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useQuery } from 'urql';
 import { UserJourneysQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
+import { useLocation } from 'react-router-dom';
 
 interface Journey {
-  id: number;
+  id: string;
   limitPrice: number;
   journey: {
     from: string;
@@ -21,15 +22,16 @@ interface Journey {
 
 const JourneysPage: React.FC = () => {
   const { user } = useContext(AuthContext);
+  const { hash } = useLocation();
   const [{ data: userJourneysResult, fetching }, reexecuteUserJourneysQuery] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user,
   });
 
-  const [expandedJourneyIds, setExpandedJourneyIds] = useState<number[]>([]);
+  const [expandedJourneyIds, setExpandedJourneyIds] = useState<string[]>([]);
 
-  const toggleJourneyDetails = (journeyId: number) => {
+  const toggleJourneyDetails = (journeyId: string) => {
     setExpandedJourneyIds((prevIds) => {
       if (prevIds.includes(journeyId)) {
         // If the ID is already in the array, remove it
@@ -40,6 +42,15 @@ const JourneysPage: React.FC = () => {
       }
     });
   };
+
+  useEffect(() => {
+    if (hash) {
+      // Get the journeyId parameter from the URL
+      const journeyId = hash.split('#').pop()!;
+      // Update the state to open the accordion
+      setExpandedJourneyIds([journeyId]);
+    }
+  }, [hash]);
 
   useEffect(() => {
     reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
@@ -84,6 +95,9 @@ const JourneysPage: React.FC = () => {
                         </Typography>
                       </Grid>
                       <Grid item xs={3}>
+                        <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
+                      </Grid>
+                      <Grid item xs={3}>
                         <Typography
                           variant="body2"
                           sx={{
@@ -92,9 +106,6 @@ const JourneysPage: React.FC = () => {
                         >
                           Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
                         </Typography>
-                      </Grid>
-                      <Grid item xs={3}>
-                        <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
                       </Grid>
                     </Grid>
                   </AccordionSummary>

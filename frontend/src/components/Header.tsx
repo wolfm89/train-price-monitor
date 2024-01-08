@@ -17,15 +17,17 @@ import {
   Notifications as NotificationsIcon,
   Train as TrainIcon,
 } from '@mui/icons-material';
-import NotificationPopover from './NotificationPopover';
+import NotificationPopover, { Notification } from './NotificationPopover';
 import AccountMenu from './AccountMenu';
 import { AuthContext } from '../providers/AuthProvider';
 import { UserNotificationsQuery } from '../api/user';
 import { useMutation, useQuery } from 'urql';
 import { MarkNotificationAsRead } from '../api/notification';
+import { useNavigate } from 'react-router-dom';
 
 const Header = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl } = useContext(AuthContext);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -181,6 +183,13 @@ const Header = () => {
         onMarkAsRead={(notificationId: string) => {
           markNotificationAsRead({ userId: user?.['custom:id'], notificationId });
           setNotifications(notifications.filter((notification) => notification.id !== notificationId));
+        }}
+        handleNotificationClicked={(notification: Notification) => {
+          if (notification?.type === 'PRICE_ALERT') {
+            // Navigate to JourneysPage with the correct accordion open
+            navigate(`/journeys#${notification.journeyMonitor.id}`);
+            handleNotificationClose();
+          }
         }}
       />
       <AccountMenu anchorEl={accountAnchorEl} onClose={handleAccountClose} />
