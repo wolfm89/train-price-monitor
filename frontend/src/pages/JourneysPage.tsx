@@ -88,16 +88,16 @@ const JourneysPage: React.FC = () => {
                   onChange={() => toggleJourneyDetails(id)}
                 >
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Grid container justifyContent="space-between" alignItems="center">
-                      <Grid item xs={4}>
+                    <Grid container justifyContent="space-between" alignItems="center" spacing={2}>
+                      <Grid item sm={6} xs={12}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                           {`${journey.from} to ${journey.to}`}
                         </Typography>
                       </Grid>
-                      <Grid item xs={3}>
+                      <Grid item sm={3} xs={6} sx={{ textAlign: 'right' }}>
                         <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
                       </Grid>
-                      <Grid item xs={3}>
+                      <Grid item sm={3} xs={6} sx={{ textAlign: 'right' }}>
                         <Typography
                           variant="body2"
                           sx={{
