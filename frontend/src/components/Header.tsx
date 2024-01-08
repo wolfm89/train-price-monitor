@@ -188,8 +188,11 @@ const Header = () => {
           if (notification?.type === 'PRICE_ALERT') {
             // Navigate to JourneysPage with the correct accordion open
             navigate(`/journeys#${notification.journeyMonitor.id}`);
-            handleNotificationClose();
+          } else if (notification?.type === 'JOURNEY_EXPIRED') {
+            // Navigate to JourneysPage
+            navigate(`/journeys`);
           }
+          handleNotificationClose();
         }}
       />
       <AccountMenu anchorEl={accountAnchorEl} onClose={handleAccountClose} />
