@@ -28,17 +28,19 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   }
 
   // Map and format the journeys for response
-  return journeys.journeys.map((journey) => {
-    return {
-      from: args.from,
-      to: args.to,
-      departure: new Date(journey.legs[0].departure!),
-      arrival: new Date(journey.legs[journey.legs.length - 1].arrival!),
-      refreshToken: journey.refreshToken!,
-      price: journey.price?.amount,
-      means: getMeans(journey),
-    };
-  });
+  return journeys.journeys
+    .filter((journey) => !journey.legs.some((leg) => leg.cancelled))
+    .map((journey) => {
+      return {
+        from: args.from,
+        to: args.to,
+        departure: new Date(journey.legs[0].plannedDeparture!),
+        arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
+        refreshToken: journey.refreshToken!,
+        price: journey.price?.amount,
+        means: getMeans(journey),
+      };
+    });
 };
 
 /**
