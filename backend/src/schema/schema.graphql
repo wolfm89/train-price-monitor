@@ -13,7 +13,7 @@ type User {
   email: String!
   profilePicture: String
   activated: Boolean!
-  notifications(limit: Int): [Notification]
+  notifications(limit: Int, read: Boolean): [Notification]
   journeyMonitors(limit: Int): [JourneyMonitor]
 }
 
@@ -72,6 +72,10 @@ type JourneyExpiryNotification implements Notification {
   timestamp: DateTime!
   read: Boolean!
   journey: Journey!
+}
+
+extend type Mutation {
+  markNotificationAsRead(userId: ID!, notificationId: ID!): Notification
 }
 
 # Journeys

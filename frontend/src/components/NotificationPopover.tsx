@@ -1,6 +1,9 @@
 import React from 'react';
-import { Popover, List, ListItemIcon, ListItemText, ListItemButton } from '@mui/material';
-import { NotificationImportant as NotificationImportantIcon } from '@mui/icons-material';
+import { Popover, List, ListItemIcon, ListItemText, ListItemButton, IconButton, Box } from '@mui/material';
+import {
+  NotificationImportant as NotificationImportantIcon,
+  CheckCircle as CheckCircleIcon,
+} from '@mui/icons-material';
 
 interface NotificationPopoverProps {
   anchorEl: any;
@@ -8,6 +11,7 @@ interface NotificationPopoverProps {
   open: boolean;
   onClose: () => void;
   notifications: any;
+  onMarkAsRead: (notificationId: string) => void;
 }
 
 const formatNotification = (notification: any) => {
@@ -21,7 +25,19 @@ const formatNotification = (notification: any) => {
   }
 };
 
-const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id, open, onClose, notifications }) => {
+const NotificationPopover: React.FC<NotificationPopoverProps> = ({
+  anchorEl,
+  id,
+  open,
+  onClose,
+  notifications,
+  onMarkAsRead,
+}) => {
+  const handleMarkAsRead = (notificationId: string) => {
+    // Trigger GraphQL mutation to mark the notification as read
+    onMarkAsRead(notificationId);
+  };
+
   return (
     <Popover
       id={id}
@@ -40,12 +56,17 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id,
       <List>
         {notifications && notifications.length > 0 ? (
           notifications.map((notification: any, index: number) => (
-            <ListItemButton key={index}>
-              <ListItemIcon>
-                <NotificationImportantIcon />
-              </ListItemIcon>
-              <ListItemText primary={formatNotification(notification)} />
-            </ListItemButton>
+            <Box display="flex" alignItems="center" key={index}>
+              <ListItemButton>
+                <ListItemIcon>
+                  <NotificationImportantIcon />
+                </ListItemIcon>
+                <ListItemText primary={formatNotification(notification)} />
+              </ListItemButton>
+              <IconButton aria-label="mark as read" onClick={() => handleMarkAsRead(notification.id)}>
+                <CheckCircleIcon />
+              </IconButton>
+            </Box>
           ))
         ) : (
           <ListItemButton disabled>

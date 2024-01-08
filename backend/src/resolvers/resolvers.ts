@@ -9,7 +9,7 @@ import {
 } from './user';
 import { journeysQuery, monitorJourney, updateJourneyMonitors, updateJourneyMonitor } from './journey';
 import { locationsQuery } from './location';
-import { notificationResolvers } from './notification';
+import { markNotificationAsRead, notificationResolvers } from './notification';
 
 const resolvers: Resolvers = {
   User: userResolvers,
@@ -27,6 +27,7 @@ const resolvers: Resolvers = {
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,
     updateJourneyMonitor: updateJourneyMonitor,
+    markNotificationAsRead: markNotificationAsRead,
   },
 };
 

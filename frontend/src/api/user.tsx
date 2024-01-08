@@ -43,10 +43,10 @@ export const UserProfilePictureUrlQuery = gql`
 `;
 
 export const UserNotificationsQuery = gql`
-  query ($id: ID!, $notificationsLimit: Int) {
+  query ($id: ID!, $notificationsLimit: Int, $read: Boolean) {
     user(id: $id) {
       id
-      notifications(limit: $notificationsLimit) {
+      notifications(limit: $notificationsLimit, read: $read) {
         id
         type
         timestamp

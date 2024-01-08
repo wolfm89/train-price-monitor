@@ -18,11 +18,15 @@ if (!profileImageBucketName) {
 export const userResolvers: UserResolvers = {
   notifications: async (parent, args, context: GraphQLContext): Promise<Notification[]> => {
     let notifications: Notification[] | undefined = undefined;
+    const filters = [
+      { attr: 'userId', eq: `USER#${parent.id}` },
+      { attr: 'id', beginsWith: 'NOTIFICATION#' },
+    ];
+    if (args.read !== undefined) {
+      filters.push({ attr: 'read', eq: args.read });
+    }
     const { Items: dbNotifications } = await context.entities.Notification.scan({
-      filters: [
-        { attr: 'userId', eq: `USER#${parent.id}` },
-        { attr: 'id', beginsWith: 'NOTIFICATION#' },
-      ],
+      filters,
     });
     if (!dbNotifications) {
       return [];
