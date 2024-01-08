@@ -1,3 +1,4 @@
+import { Cache } from '@graphql-yoga/plugin-response-cache';
 import { User, Notification, Journey } from './model/trainPriceMonitor';
 import { S3Manager } from './managers/S3Manager';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -40,12 +41,13 @@ type Entities = {
 };
 
 export type GraphQLContext = {
+  cache: Cache;
   entities: Entities;
   s3: S3Manager;
   sqs: SQSManager;
   dbHafas: DbHafasManager;
 };
 
-export async function createContext(): Promise<GraphQLContext> {
-  return { entities: { User, Notification, Journey }, s3, sqs, dbHafas };
+export async function createContext(cache: Cache): Promise<GraphQLContext> {
+  return { cache, entities: { User, Notification, Journey }, s3, sqs, dbHafas };
 }

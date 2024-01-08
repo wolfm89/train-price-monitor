@@ -1,6 +1,23 @@
 import React from 'react';
-import { Popover, List, ListItemIcon, ListItemText, ListItemButton } from '@mui/material';
-import { NotificationImportant as NotificationImportantIcon } from '@mui/icons-material';
+import { Popover, List, ListItemIcon, ListItemText, ListItemButton, IconButton, Box } from '@mui/material';
+import {
+  NotificationImportant as NotificationImportantIcon,
+  CheckCircle as CheckCircleIcon,
+} from '@mui/icons-material';
+
+export interface Notification {
+  id: string;
+  type: string;
+  read: boolean;
+  timestamp: Date;
+  journeyMonitor: {
+    id: string;
+    journey: {
+      from: string;
+      to: string;
+    };
+  };
+}
 
 interface NotificationPopoverProps {
   anchorEl: any;
@@ -8,9 +25,30 @@ interface NotificationPopoverProps {
   open: boolean;
   onClose: () => void;
   notifications: any;
+  onMarkAsRead: (notificationId: string) => void;
+  handleNotificationClicked: (notification: Notification) => void;
 }
 
-const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id, open, onClose, notifications }) => {
+const formatNotification = (notification: any) => {
+  switch (notification.type) {
+    case 'PRICE_ALERT':
+      return `Price limit reached for journey from ${notification.journeyMonitor.journey.from} to ${notification.journeyMonitor.journey.to}`;
+    case 'JOURNEY_EXPIRED':
+      return `Watched journey from ${notification.journey.from} to ${notification.journey.to} expired`;
+    default:
+      return '';
+  }
+};
+
+const NotificationPopover: React.FC<NotificationPopoverProps> = ({
+  anchorEl,
+  id,
+  open,
+  onClose,
+  notifications,
+  onMarkAsRead,
+  handleNotificationClicked,
+}) => {
   return (
     <Popover
       id={id}
@@ -28,13 +66,18 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({ anchorEl, id,
     >
       <List>
         {notifications && notifications.length > 0 ? (
-          notifications.map((value: any, index: number) => (
-            <ListItemButton key={index}>
-              <ListItemIcon>
-                <NotificationImportantIcon />
-              </ListItemIcon>
-              <ListItemText primary={value.message} />
-            </ListItemButton>
+          notifications.map((notification: Notification, index: number) => (
+            <Box display="flex" alignItems="center" key={index}>
+              <ListItemButton onClick={() => handleNotificationClicked(notification)}>
+                <ListItemIcon>
+                  <NotificationImportantIcon />
+                </ListItemIcon>
+                <ListItemText primary={formatNotification(notification)} />
+              </ListItemButton>
+              <IconButton aria-label="mark as read" onClick={() => onMarkAsRead(notification.id)}>
+                <CheckCircleIcon />
+              </IconButton>
+            </Box>
           ))
         ) : (
           <ListItemButton disabled>

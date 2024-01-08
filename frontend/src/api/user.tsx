@@ -43,15 +43,50 @@ export const UserProfilePictureUrlQuery = gql`
 `;
 
 export const UserNotificationsQuery = gql`
-  query ($id: ID!, $notificationsLimit: Int) {
+  query ($id: ID!, $notificationsLimit: Int, $read: Boolean) {
     user(id: $id) {
       id
-      notifications(limit: $notificationsLimit) {
+      notifications(limit: $notificationsLimit, read: $read) {
         id
-        journeyId
-        message
+        type
         timestamp
         read
+        ... on PriceAlertNotification {
+          journeyMonitor {
+            id
+            journey {
+              from
+              to
+            }
+          }
+        }
+        ... on JourneyExpiryNotification {
+          journey {
+            from
+            to
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const UserJourneysQuery = gql`
+  query ($id: ID!) {
+    user(id: $id) {
+      id
+      journeyMonitors {
+        id
+        limitPrice
+        journey {
+          refreshToken
+          from
+          to
+          departure
+          arrival
+          means
+          price
+        }
       }
     }
   }

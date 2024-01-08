@@ -36,16 +36,22 @@ export class DbHafasManager {
    * @param refreshToken - The refresh token associated with the journey.
    * @returns A promise that resolves to the refreshed journey.
    */
-  async requeryJourney(refreshToken: string): Promise<Journey> {
+  async requeryJourney(refreshToken: string): Promise<Journey | undefined> {
     if (refreshToken === undefined) {
       throw new Error('refreshToken is undefined');
     }
 
+    let refreshedJourney;
     // Refresh the journey using the refresh token
-    const refreshedJourney = await this.client.refreshJourney!(refreshToken, {
-      subStops: false,
-      entrances: false,
-    });
+    try {
+      refreshedJourney = await this.client.refreshJourney!(refreshToken, {
+        subStops: false,
+        entrances: false,
+      });
+    } catch (error) {
+      Logger.error('Error refreshing journey');
+      return undefined;
+    }
 
     // Check if legs are undefined or empty
     if (refreshedJourney.legs === undefined || refreshedJourney.legs.length === 0) {
@@ -80,6 +86,9 @@ export class DbHafasManager {
           break;
         }
       }
+    }
+    if (!refreshedJourney.price) {
+      Logger.warn('Price was not found for journey');
     }
 
     return refreshedJourney;

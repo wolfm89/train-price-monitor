@@ -13,7 +13,8 @@ type User {
   email: String!
   profilePicture: String
   activated: Boolean!
-  notifications(limit: Int): [Notification]
+  notifications(limit: Int, read: Boolean): [Notification]
+  journeyMonitors(limit: Int): [JourneyMonitor]
 }
 
 type PresignedUrl {
@@ -47,25 +48,54 @@ extend type Mutation {
 
 # Notification
 
-type Notification {
+interface Notification {
   id: ID!
+  type: ID!
   userId: ID!
-  journeyId: ID
-  message: String!
   timestamp: DateTime!
   read: Boolean!
+}
+
+type PriceAlertNotification implements Notification {
+  id: ID!
+  type: ID!
+  userId: ID!
+  timestamp: DateTime!
+  read: Boolean!
+  journeyMonitor: JourneyMonitor!
+}
+
+type JourneyExpiryNotification implements Notification {
+  id: ID!
+  type: ID!
+  userId: ID!
+  timestamp: DateTime!
+  read: Boolean!
+  journey: Journey!
+}
+
+extend type Mutation {
+  markNotificationAsRead(userId: ID!, notificationId: ID!): Notification
 }
 
 # Journeys
 
 type Journey {
   refreshToken: String!
-  from: String!
-  to: String!
-  departure: DateTime!
-  arrival: DateTime!
-  means: [String]!
+  from: String
+  to: String
+  departure: DateTime
+  arrival: DateTime
+  means: [String]
   price: Float
+}
+
+type JourneyMonitor {
+  id: ID!
+  userId: ID!
+  limitPrice: Float!
+  expires: DateTime!
+  journey: Journey
 }
 
 ## Queries
@@ -77,15 +107,15 @@ extend type Query {
 ## Mutations
 
 extend type Mutation {
-  watchJourney(userId: ID!, refreshToken: String!, limitPrice: Float!): ID
+  monitorJourney(userId: ID!, refreshToken: String!, limitPrice: Float!, expires: DateTime!): JourneyMonitor
 }
 
 extend type Mutation {
-  updateJourneys: Int
+  updateJourneyMonitors: Int
 }
 
 extend type Mutation {
-  updateJourney(userId: ID!, journeyId: ID!): ID
+  updateJourneyMonitor(userId: ID!, journeyId: ID!): JourneyMonitor
 }
 
 # Locations

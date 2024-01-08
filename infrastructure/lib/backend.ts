@@ -75,7 +75,7 @@ export class Backend extends Construct {
     rule.addTarget(
       new targets.SqsQueue(queue, {
         message: events.RuleTargetInput.fromObject({
-          query: 'mutation { updateJourneys }',
+          query: 'mutation { updateJourneyMonitors }',
         }),
       })
     );

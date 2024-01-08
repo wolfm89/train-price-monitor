@@ -10,7 +10,7 @@ export class SQSManager {
   }
 
   async sendUpdateJourneyMessage(userId: string, journeyId: string): Promise<void> {
-    const graphqlMutation = `mutation ($userId: ID!, $journeyId: ID!) { updateJourney(userId: $userId, journeyId: $journeyId) }`;
+    const graphqlMutation = `mutation ($userId: ID!, $journeyId: ID!) { updateJourneyMonitor(userId: $userId, journeyId: $journeyId) }`;
 
     const messageBody = JSON.stringify({
       query: graphqlMutation,

@@ -6,11 +6,11 @@ import { PromiseResolver } from '@h4ad/serverless-adapter/lib/resolvers/promise'
 import { ApiGatewayV1Adapter } from '@h4ad/serverless-adapter/lib/adapters/aws';
 import express from 'express';
 import cors from 'cors';
-import { createYoga, createSchema } from 'graphql-yoga';
+import { createYoga, createSchema, YogaSchemaDefinition } from 'graphql-yoga';
+import { createInMemoryCache, useResponseCache } from '@graphql-yoga/plugin-response-cache';
 import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
-import { YogaSchemaDefinition } from 'graphql-yoga/typings/plugins/useSchema';
 import logger from './lib/logger';
 import morgan from './config/morgan';
 import bodyParser from 'body-parser';
@@ -34,12 +34,18 @@ app.use(morgan);
 
 const port = process.env.PORT || 4000; // Use the specified port from environment variable or default to 4000
 
+const cache = createInMemoryCache();
+
 const typeDefs = readFileSync('src/schema/schema.graphql', 'utf8');
-const schema: YogaSchemaDefinition<GraphQLContext> = createSchema({
+const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
   typeDefs,
   resolvers,
-}) as YogaSchemaDefinition<GraphQLContext>;
-const yoga = createYoga({ schema, context: createContext });
+}) as YogaSchemaDefinition<unknown, GraphQLContext>;
+const yoga = createYoga({
+  schema,
+  context: createContext(cache),
+  plugins: [useResponseCache({ session: () => null, cache })],
+});
 
 // Enable all CORS requests
 app.use(cors());

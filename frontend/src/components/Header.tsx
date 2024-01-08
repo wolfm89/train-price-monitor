@@ -17,21 +17,26 @@ import {
   Notifications as NotificationsIcon,
   Train as TrainIcon,
 } from '@mui/icons-material';
-import NotificationPopover from './NotificationPopover';
+import NotificationPopover, { Notification } from './NotificationPopover';
 import AccountMenu from './AccountMenu';
 import { AuthContext } from '../providers/AuthProvider';
 import { UserNotificationsQuery } from '../api/user';
-import { useQuery } from 'urql';
+import { useMutation, useQuery } from 'urql';
+import { MarkNotificationAsRead } from '../api/notification';
+import { useNavigate } from 'react-router-dom';
 
 const Header = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl } = useContext(AuthContext);
-  const [userNotificationsResult, reexecuteUserNotificationsQuery] = useQuery({
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [{ stale, data: userNotificationsResult }, reexecuteUserNotificationsQuery] = useQuery({
     query: UserNotificationsQuery,
-    variables: { id: user?.['custom:id'], notificationsLimit: 8 },
+    variables: { id: user?.['custom:id'], notificationsLimit: 8, read: false },
     pause: !user,
   });
+  const [, markNotificationAsRead] = useMutation(MarkNotificationAsRead);
 
   const [notificationAnchorEl, setNotificationAnchorEl] = useState<HTMLButtonElement | null>(null);
 
@@ -65,6 +70,13 @@ const Header = () => {
     // Clean up the interval when the component is unmounted
     return () => clearInterval(intervalId);
   }, [reexecuteUserNotificationsQuery]);
+
+  // useEffect to store notifications in local variable
+  useEffect(() => {
+    if (!stale) {
+      setNotifications(userNotificationsResult?.user?.notifications);
+    }
+  }, [stale, userNotificationsResult?.user?.notifications]);
 
   return (
     <AppBar position="static" sx={{ maxWidth: 'lg', mx: 'auto' }}>
@@ -148,7 +160,7 @@ const Header = () => {
                 </IconButton>
               </Link>
               <IconButton color="inherit" onClick={handleNotificationClick}>
-                <Badge badgeContent={userNotificationsResult.data?.user?.notifications?.length} color="error">
+                <Badge badgeContent={notifications?.length} color="error">
                   <NotificationsIcon />
                 </Badge>
               </IconButton>
@@ -167,7 +179,21 @@ const Header = () => {
         id={id}
         open={open}
         onClose={handleNotificationClose}
-        notifications={userNotificationsResult.data?.user?.notifications}
+        notifications={notifications}
+        onMarkAsRead={(notificationId: string) => {
+          markNotificationAsRead({ userId: user?.['custom:id'], notificationId });
+          setNotifications(notifications.filter((notification) => notification.id !== notificationId));
+        }}
+        handleNotificationClicked={(notification: Notification) => {
+          if (notification?.type === 'PRICE_ALERT') {
+            // Navigate to JourneysPage with the correct accordion open
+            navigate(`/journeys#${notification.journeyMonitor.id}`);
+          } else if (notification?.type === 'JOURNEY_EXPIRED') {
+            // Navigate to JourneysPage
+            navigate(`/journeys`);
+          }
+          handleNotificationClose();
+        }}
       />
       <AccountMenu anchorEl={accountAnchorEl} onClose={handleAccountClose} />
     </AppBar>
