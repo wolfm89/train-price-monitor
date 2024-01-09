@@ -7,7 +7,13 @@ import {
   createUser,
   activateUser,
 } from './user';
-import { journeysQuery, monitorJourney, updateJourneyMonitors, updateJourneyMonitor } from './journey';
+import {
+  journeysQuery,
+  monitorJourney,
+  updateJourneyMonitors,
+  updateJourneyMonitor,
+  deleteJourneyMonitor,
+} from './journey';
 import { locationsQuery } from './location';
 import { markNotificationAsRead, notificationResolvers } from './notification';
 
@@ -27,6 +33,7 @@ const resolvers: Resolvers = {
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,
     updateJourneyMonitor: updateJourneyMonitor,
+    deleteJourneyMonitor: deleteJourneyMonitor,
     markNotificationAsRead: markNotificationAsRead,
   },
 };

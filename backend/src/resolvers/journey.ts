@@ -217,3 +217,59 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 export function getMeans(journey: Journey): string[] {
   return journey.legs.map((leg) => (leg.line ? leg.line.productName! : leg.walking ? 'walk' : ''));
 }
+
+/**
+ * Resolves the 'deleteJourneyMonitor' mutation to delete a specific journey.
+ * @param _parent - The parent object.
+ * @param userId - The user's ID.
+ * @param journeyId - The journey's ID.
+ * @param context - The GraphQL context.
+ * @returns The deleted journey monitor.
+ */
+export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyMonitor']> = async (
+  _parent,
+  { userId, journeyId },
+  context: GraphQLContext
+): Promise<JourneyMonitor> => {
+  // Add user and journey ID to persistent log attributes
+  Logger.addPersistentLogAttributes({ userId: userId, journeyId: journeyId });
+
+  // Retrieve the journey from the database
+  const dbJourney = await context.entities.Journey.get({ userId: userId, id: journeyId });
+
+  // Check if the journey exists
+  if (!dbJourney.Item) {
+    throw new Error('Journey not found in database');
+  }
+
+  const journeyMonitor: JourneyMonitor = {
+    id: dbJourney.Item.id,
+    userId: dbJourney.Item.userId,
+    limitPrice: dbJourney.Item.limitPrice,
+    expires: dbJourney.Item.expires,
+    journey: { refreshToken: dbJourney.Item.refreshToken },
+  };
+
+  // Delete all notifications for the journey (with data containing the journey ID)
+  const notifications = (
+    await context.entities.Notification.query(`USER#${userId}`, {
+      beginsWith: 'NOTIFICATION#',
+      attributes: ['id', 'data'],
+    })
+  ).Items?.filter((item) => item.data?.journeyId === journeyId);
+
+  if (notifications) {
+    for (const notification of notifications) {
+      await context.entities.Notification.delete({ userId: userId, id: notification.id });
+    }
+    context.cache.invalidate([{ typename: 'Notification' }]);
+    Logger.info(`Deleted ${notifications.length} notifications for journey`);
+  }
+
+  // Delete the journey from the database
+  await context.entities.Journey.delete({ userId: userId, id: journeyId });
+  context.cache.invalidate([{ typename: 'JourneyMonitor' }]);
+  Logger.info(`Deleted journey from database`);
+
+  return journeyMonitor;
+};

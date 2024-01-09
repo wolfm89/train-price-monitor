@@ -57,6 +57,7 @@ export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
+  deleteJourneyMonitor?: Maybe<JourneyMonitor>;
   markNotificationAsRead?: Maybe<Notification>;
   monitorJourney?: Maybe<JourneyMonitor>;
   updateJourneyMonitor?: Maybe<JourneyMonitor>;
@@ -73,6 +74,11 @@ export type MutationCreateUserArgs = {
   familyName: Scalars['String']['input'];
   givenName: Scalars['String']['input'];
   id: Scalars['ID']['input'];
+};
+
+export type MutationDeleteJourneyMonitorArgs = {
+  journeyId: Scalars['ID']['input'];
+  userId: Scalars['ID']['input'];
 };
 
 export type MutationMarkNotificationAsReadArgs = {
@@ -165,4 +171,5 @@ export type UserJourneyMonitorsArgs = {
 
 export type UserNotificationsArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;
+  read?: InputMaybe<Scalars['Boolean']['input']>;
 };

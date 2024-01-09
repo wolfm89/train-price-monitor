@@ -118,6 +118,10 @@ extend type Mutation {
   updateJourneyMonitor(userId: ID!, journeyId: ID!): JourneyMonitor
 }
 
+extend type Mutation {
+  deleteJourneyMonitor(userId: ID!, journeyId: ID!): JourneyMonitor
+}
+
 # Locations
 
 type Location {
