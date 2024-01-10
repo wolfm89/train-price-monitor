@@ -22,6 +22,7 @@ const User = new Entity({
     givenName: { type: 'string', required: true },
     familyName: { type: 'string', required: true },
     profilePicture: { type: 'string' },
+    emailNotificationsEnabled: { type: 'boolean', required: true, default: true },
     activated: { type: 'boolean', required: true, default: false },
   },
 } as const);

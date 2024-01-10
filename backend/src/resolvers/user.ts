@@ -87,15 +87,12 @@ export const userResolvers: UserResolvers = {
   },
 };
 
-export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context) => {
+export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context): Promise<User> => {
   const { Item: dbUser } = await context.entities.User.get({ id: args.id });
   if (!dbUser) {
-    return null;
+    throw new Error('User not found in database');
   }
-  const user: User = {
-    ...dbUser,
-  };
-  return user;
+  return dbUser as User;
 };
 
 export const userProfilePicturePresignedUrlQuery: NonNullable<
@@ -166,7 +163,9 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
     familyName: familyName,
     email: email,
     activated: false,
+    emailNotificationsEnabled: true,
   };
+  context.cache.invalidate([{ typename: 'User' }]);
   return user;
 };
 
@@ -189,6 +188,29 @@ export const activateUser: NonNullable<MutationResolvers['activateUser']> = asyn
     return user;
   } catch (error) {
     Logger.error(`Failed to activate user with id ${id}: ${error}`);
+    throw error;
+  }
+};
+
+export const updateUserSettings: NonNullable<MutationResolvers['updateUserSettings']> = async (
+  _,
+  { id, emailNotificationsEnabled }: { id: string; emailNotificationsEnabled: boolean },
+  context: GraphQLContext
+) => {
+  try {
+    const { Attributes: dbUser } = await context.entities.User.update(
+      { id: id, emailNotificationsEnabled: emailNotificationsEnabled },
+      { returnValues: 'ALL_NEW' }
+    );
+
+    if (!dbUser) {
+      throw new Error('Failed to update user property');
+    }
+    context.cache.invalidate([{ typename: 'User' }]);
+
+    return dbUser as User;
+  } catch (error) {
+    Logger.error(`Failed to update user with id ${id}: ${error}`);
     throw error;
   }
 };

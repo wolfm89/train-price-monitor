@@ -12,6 +12,7 @@ type User {
   familyName: String!
   email: String!
   profilePicture: String
+  emailNotificationsEnabled: Boolean!
   activated: Boolean!
   notifications(limit: Int, read: Boolean): [Notification]
   journeyMonitors(limit: Int): [JourneyMonitor]
@@ -44,6 +45,10 @@ extend type Mutation {
 
 extend type Mutation {
   activateUser(id: ID!): User
+}
+
+extend type Mutation {
+  updateUserSettings(id: ID!, emailNotificationsEnabled: Boolean!): User
 }
 
 # Notification

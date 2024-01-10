@@ -63,6 +63,7 @@ export type Mutation = {
   updateJourneyMonitor?: Maybe<JourneyMonitor>;
   updateJourneyMonitors?: Maybe<Scalars['Int']['output']>;
   updateUserProfilePicture?: Maybe<User>;
+  updateUserSettings?: Maybe<User>;
 };
 
 export type MutationActivateUserArgs = {
@@ -101,6 +102,11 @@ export type MutationUpdateJourneyMonitorArgs = {
 export type MutationUpdateUserProfilePictureArgs = {
   id: Scalars['ID']['input'];
   image: Scalars['File']['input'];
+};
+
+export type MutationUpdateUserSettingsArgs = {
+  emailNotificationsEnabled: Scalars['Boolean']['input'];
+  id: Scalars['ID']['input'];
 };
 
 export type Notification = {
@@ -157,6 +163,7 @@ export type User = {
   __typename?: 'User';
   activated: Scalars['Boolean']['output'];
   email: Scalars['String']['output'];
+  emailNotificationsEnabled: Scalars['Boolean']['output'];
   familyName: Scalars['String']['output'];
   givenName: Scalars['String']['output'];
   id: Scalars['ID']['output'];

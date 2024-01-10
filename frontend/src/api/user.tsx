@@ -26,6 +26,15 @@ export const ActivateUser = gql`
   }
 `;
 
+export const UpdateUserSettings = gql`
+  mutation ($id: ID!, $emailNotificationsEnabled: Boolean!) {
+    updateUserSettings(id: $id, emailNotificationsEnabled: $emailNotificationsEnabled) {
+      id
+      emailNotificationsEnabled
+    }
+  }
+`;
+
 export const UserActivationStatusQuery = gql`
   query ($id: ID!) {
     user(id: $id) {
@@ -88,6 +97,18 @@ export const UserJourneysQuery = gql`
           price
         }
       }
+    }
+  }
+`;
+
+export const UserSettingsQuery = gql`
+  query ($id: ID!) {
+    user(id: $id) {
+      id
+      email
+      givenName
+      familyName
+      emailNotificationsEnabled
     }
   }
 `;

@@ -222,6 +222,12 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
+  updateUserSettings?: Resolver<
+    Maybe<ResolversTypes['User']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationUpdateUserSettingsArgs, 'emailNotificationsEnabled' | 'id'>
+  >;
 };
 
 export type NotificationResolvers<
@@ -289,6 +295,7 @@ export type UserResolvers<
 > = {
   activated?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
