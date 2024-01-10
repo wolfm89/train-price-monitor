@@ -54,10 +54,10 @@ jobs:
           role-duration-seconds: 1200
           role-session-name: GithubWorkflow
 
-      - name: Synthesize with AWS CDK
+      - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
-        run: npm run cdk synth
+        run: npm run cdk diff
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
-        run: npm run cdk deploy -- --require-approval never --all
+        run: npm run cdk -- --app cdk.out deploy --require-approval never --all
