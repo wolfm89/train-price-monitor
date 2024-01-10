@@ -5,6 +5,7 @@ import { Distribution, OriginAccessIdentity, ViewerProtocolPolicy } from 'aws-cd
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
+import { Certificate, CertificateValidation } from 'aws-cdk-lib/aws-certificatemanager';
 
 export class Frontend extends Construct {
   constructor(scope: Construct, id: string) {
@@ -23,15 +24,26 @@ export class Frontend extends Construct {
       destinationBucket: bucket,
     });
 
+    const customDomain = 'tpm.wolfgangmoser.eu';
+
+    // Request an SSL certificate from ACM
+    const certificate = new Certificate(this, 'Certificate', {
+      domainName: customDomain,
+      validation: CertificateValidation.fromDns(), // Perform DNS validation
+    });
+
     // Create CloudFront distribution
     const originAccessIdentity = new OriginAccessIdentity(this, 'OriginAccessIdentity');
     bucket.grantRead(originAccessIdentity);
 
     const distribution = new Distribution(this, 'Distribution', {
       defaultRootObject: 'index.html',
+      domainNames: [customDomain],
+      certificate: certificate,
       defaultBehavior: {
         origin: new S3Origin(bucket, { originAccessIdentity }),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true,
       },
       errorResponses: [
         {
