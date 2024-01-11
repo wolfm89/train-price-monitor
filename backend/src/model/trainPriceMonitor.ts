@@ -40,6 +40,7 @@ const Notification = new Entity({
     type: { type: 'string', required: true },
     timestamp: { type: 'string', required: true },
     read: { type: 'boolean', required: true, default: false },
+    sent: { type: 'boolean', required: true, default: false },
     data: { type: 'map' },
   },
 } as const);

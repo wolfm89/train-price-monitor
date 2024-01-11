@@ -16,7 +16,7 @@ import {
   deleteJourneyMonitor,
 } from './journey';
 import { locationsQuery } from './location';
-import { markNotificationAsRead, notificationResolvers } from './notification';
+import { markNotificationAsRead, sendEmailNotification, notificationResolvers } from './notification';
 
 const resolvers: Resolvers = {
   User: userResolvers,
@@ -37,6 +37,7 @@ const resolvers: Resolvers = {
     updateJourneyMonitor: updateJourneyMonitor,
     deleteJourneyMonitor: deleteJourneyMonitor,
     markNotificationAsRead: markNotificationAsRead,
+    sendEmailNotification: sendEmailNotification,
   },
 };
 

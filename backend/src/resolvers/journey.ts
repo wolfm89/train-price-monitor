@@ -157,8 +157,9 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     Logger.info(`Deleted journey from database`);
 
     // Send a notification to the user that the journey has expired
+    const notificationId = uuidv4();
     await context.entities.Notification.put({
-      id: uuidv4(),
+      id: notificationId,
       userId: args.userId,
       type: NOTIFICATION_TYPES.JOURNEY_EXPIRED.name,
       read: false,
@@ -166,6 +167,8 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       data: { refreshToken: dbJourney.Item.refreshToken },
     });
     context.cache.invalidate([{ typename: 'Notification' }]);
+
+    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
 
     return journeyMonitor;
   }
@@ -196,8 +199,9 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     Logger.info(`New price ${newPrice} for journey is higher than limit price ${dbJourney.Item.limitPrice}`);
 
     // Save a notification in the database
+    const notificationId = uuidv4();
     await context.entities.Notification.put({
-      id: uuidv4(),
+      id: notificationId,
       userId: args.userId,
       type: NOTIFICATION_TYPES.PRICE_ALERT.name,
       read: false,
@@ -206,6 +210,8 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     });
     context.cache.invalidate([{ typename: 'Notification' }]);
 
+    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
+
     Logger.info(`Sent notification for journey`);
   } else {
     Logger.info(`New price ${newPrice} for journey is still lower than limit price ${dbJourney.Item.limitPrice}`);
@@ -213,6 +219,21 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
   return journeyMonitor;
 };
+
+async function sendNotificationEmailIfEnabled(context: GraphQLContext, userId: string, notificationId: string) {
+  // Get setting for email notifications for user from database
+  const { Item: dbUser } = await context.entities.User.get(
+    { id: userId },
+    { attributes: ['emailNotificationsEnabled'] }
+  );
+  if (!dbUser) {
+    throw new Error(`User with id ${userId} not found`);
+  }
+  if (dbUser.emailNotificationsEnabled) {
+    // Send email notification to user
+    await context.sqs.sendEmailNotificationMessage(userId, notificationId);
+  }
+}
 
 export function getMeans(journey: Journey): string[] {
   return journey.legs.map((leg) => (leg.line ? leg.line.productName! : leg.walking ? 'walk' : ''));

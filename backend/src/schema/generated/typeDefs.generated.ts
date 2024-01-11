@@ -32,6 +32,7 @@ export type JourneyExpiryNotification = Notification & {
   id: Scalars['ID']['output'];
   journey: Journey;
   read: Scalars['Boolean']['output'];
+  sent: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];
@@ -60,6 +61,7 @@ export type Mutation = {
   deleteJourneyMonitor?: Maybe<JourneyMonitor>;
   markNotificationAsRead?: Maybe<Notification>;
   monitorJourney?: Maybe<JourneyMonitor>;
+  sendEmailNotification?: Maybe<Notification>;
   updateJourneyMonitor?: Maybe<JourneyMonitor>;
   updateJourneyMonitors?: Maybe<Scalars['Int']['output']>;
   updateUserProfilePicture?: Maybe<User>;
@@ -94,6 +96,11 @@ export type MutationMonitorJourneyArgs = {
   userId: Scalars['ID']['input'];
 };
 
+export type MutationSendEmailNotificationArgs = {
+  notificationId: Scalars['ID']['input'];
+  userId: Scalars['ID']['input'];
+};
+
 export type MutationUpdateJourneyMonitorArgs = {
   journeyId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
@@ -112,6 +119,7 @@ export type MutationUpdateUserSettingsArgs = {
 export type Notification = {
   id: Scalars['ID']['output'];
   read: Scalars['Boolean']['output'];
+  sent: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];
@@ -128,6 +136,7 @@ export type PriceAlertNotification = Notification & {
   id: Scalars['ID']['output'];
   journeyMonitor: JourneyMonitor;
   read: Scalars['Boolean']['output'];
+  sent: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];

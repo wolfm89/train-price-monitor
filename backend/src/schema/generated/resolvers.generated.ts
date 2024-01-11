@@ -147,6 +147,7 @@ export type JourneyExpiryNotificationResolvers<
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -209,6 +210,12 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationMonitorJourneyArgs, 'expires' | 'limitPrice' | 'refreshToken' | 'userId'>
   >;
+  sendEmailNotification?: Resolver<
+    Maybe<ResolversTypes['Notification']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationSendEmailNotificationArgs, 'notificationId' | 'userId'>
+  >;
   updateJourneyMonitor?: Resolver<
     Maybe<ResolversTypes['JourneyMonitor']>,
     ParentType,
@@ -237,6 +244,7 @@ export type NotificationResolvers<
   __resolveType: TypeResolveFn<'JourneyExpiryNotification' | 'PriceAlertNotification', ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -258,6 +266,7 @@ export type PriceAlertNotificationResolvers<
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journeyMonitor?: Resolver<ResolversTypes['JourneyMonitor'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;

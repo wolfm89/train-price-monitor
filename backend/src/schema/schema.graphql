@@ -59,6 +59,7 @@ interface Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
+  sent: Boolean!
 }
 
 type PriceAlertNotification implements Notification {
@@ -67,6 +68,7 @@ type PriceAlertNotification implements Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
+  sent: Boolean!
   journeyMonitor: JourneyMonitor!
 }
 
@@ -76,11 +78,18 @@ type JourneyExpiryNotification implements Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
+  sent: Boolean!
   journey: Journey!
 }
 
+## Mutations
+
 extend type Mutation {
   markNotificationAsRead(userId: ID!, notificationId: ID!): Notification
+}
+
+extend type Mutation {
+  sendEmailNotification(userId: ID!, notificationId: ID!): Notification
 }
 
 # Journeys

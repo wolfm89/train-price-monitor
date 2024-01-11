@@ -40,6 +40,7 @@ export const userResolvers: UserResolvers = {
           type: dbNotification.type,
           timestamp: new Date(dbNotification.timestamp),
           read: dbNotification.read,
+          sent: dbNotification.sent,
           ...(await NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
             context,
             dbNotification.userId,
@@ -157,6 +158,10 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
     email: email,
     activated: false,
   });
+
+  // Only necessary when using SES in sandbox mode
+  context.ses.createEmailIdentity(email);
+
   const user: User = {
     id: id,
     givenName: givenName,

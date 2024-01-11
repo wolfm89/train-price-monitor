@@ -10,6 +10,7 @@ import {
   aws_events_targets as targets,
   aws_sqs as sqs,
   aws_lambda_event_sources as sources,
+  aws_ses as ses,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
@@ -110,6 +111,19 @@ export class Backend extends Construct {
         'Access-Control-Allow-Origin': "'*'",
       },
     });
+
+    // Create AWS SES email address identity
+    new ses.EmailIdentity(this, 'EmailIdentity', {
+      identity: ses.Identity.email('trainpricemonitor@wolfgangmoser.eu'),
+    });
+
+    // Allow Lambda function to send emails and create email identities
+    lambdaFunction.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        actions: ['ses:SendEmail', 'ses:CreateEmailIdentity'],
+        resources: ['*'],
+      })
+    );
 
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: api.url,
