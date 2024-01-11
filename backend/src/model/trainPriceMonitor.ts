@@ -22,6 +22,7 @@ const User = new Entity({
     givenName: { type: 'string', required: true },
     familyName: { type: 'string', required: true },
     profilePicture: { type: 'string' },
+    emailNotificationsEnabled: { type: 'boolean', required: true, default: true },
     activated: { type: 'boolean', required: true, default: false },
   },
 } as const);
@@ -39,6 +40,7 @@ const Notification = new Entity({
     type: { type: 'string', required: true },
     timestamp: { type: 'string', required: true },
     read: { type: 'boolean', required: true, default: false },
+    sent: { type: 'boolean', required: true, default: false },
     data: { type: 'map' },
   },
 } as const);

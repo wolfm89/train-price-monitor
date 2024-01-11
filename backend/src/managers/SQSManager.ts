@@ -9,12 +9,10 @@ export class SQSManager {
     this.queueUrl = queueUrl;
   }
 
-  async sendUpdateJourneyMessage(userId: string, journeyId: string): Promise<void> {
-    const graphqlMutation = `mutation ($userId: ID!, $journeyId: ID!) { updateJourneyMonitor(userId: $userId, journeyId: $journeyId) }`;
-
+  private async sendSQSMessage(graphqlMutation: string, variables: { [key: string]: unknown }) {
     const messageBody = JSON.stringify({
       query: graphqlMutation,
-      variables: { userId, journeyId },
+      variables: variables,
     });
 
     const params = {
@@ -23,5 +21,15 @@ export class SQSManager {
     };
 
     await this.sqs.send(new SendMessageCommand(params));
+  }
+
+  async sendUpdateJourneyMessage(userId: string, journeyId: string): Promise<void> {
+    const graphqlMutation = `mutation ($userId: ID!, $journeyId: ID!) { updateJourneyMonitor(userId: $userId, journeyId: $journeyId) { id } }`;
+    await this.sendSQSMessage(graphqlMutation, { userId, journeyId });
+  }
+
+  async sendEmailNotificationMessage(userId: string, notificationId: string) {
+    const graphqlMutation = `mutation ($userId: ID!, $notificationId: ID!) { sendEmailNotification(userId: $userId, notificationId: $notificationId) { id } }`;
+    await this.sendSQSMessage(graphqlMutation, { userId, notificationId });
   }
 }

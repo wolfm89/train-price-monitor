@@ -19,3 +19,11 @@ export const MonitorJourney = gql`
     }
   }
 `;
+
+export const DeleteJourneyMonitor = gql`
+  mutation ($userId: ID!, $journeyId: ID!) {
+    deleteJourneyMonitor(userId: $userId, journeyId: $journeyId) {
+      id
+    }
+  }
+`;

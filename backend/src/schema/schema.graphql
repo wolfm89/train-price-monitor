@@ -12,6 +12,7 @@ type User {
   familyName: String!
   email: String!
   profilePicture: String
+  emailNotificationsEnabled: Boolean!
   activated: Boolean!
   notifications(limit: Int, read: Boolean): [Notification]
   journeyMonitors(limit: Int): [JourneyMonitor]
@@ -46,6 +47,10 @@ extend type Mutation {
   activateUser(id: ID!): User
 }
 
+extend type Mutation {
+  updateUserSettings(id: ID!, emailNotificationsEnabled: Boolean!): User
+}
+
 # Notification
 
 interface Notification {
@@ -54,6 +59,7 @@ interface Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
+  sent: Boolean!
 }
 
 type PriceAlertNotification implements Notification {
@@ -62,6 +68,7 @@ type PriceAlertNotification implements Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
+  sent: Boolean!
   journeyMonitor: JourneyMonitor!
 }
 
@@ -71,11 +78,18 @@ type JourneyExpiryNotification implements Notification {
   userId: ID!
   timestamp: DateTime!
   read: Boolean!
+  sent: Boolean!
   journey: Journey!
 }
 
+## Mutations
+
 extend type Mutation {
   markNotificationAsRead(userId: ID!, notificationId: ID!): Notification
+}
+
+extend type Mutation {
+  sendEmailNotification(userId: ID!, notificationId: ID!): Notification
 }
 
 # Journeys
@@ -116,6 +130,10 @@ extend type Mutation {
 
 extend type Mutation {
   updateJourneyMonitor(userId: ID!, journeyId: ID!): JourneyMonitor
+}
+
+extend type Mutation {
+  deleteJourneyMonitor(userId: ID!, journeyId: ID!): JourneyMonitor
 }
 
 # Locations

@@ -6,7 +6,7 @@ import { PromiseResolver } from '@h4ad/serverless-adapter/lib/resolvers/promise'
 import { ApiGatewayV1Adapter } from '@h4ad/serverless-adapter/lib/adapters/aws';
 import express from 'express';
 import cors from 'cors';
-import { createYoga, createSchema, YogaSchemaDefinition } from 'graphql-yoga';
+import { createYoga, createSchema, YogaSchemaDefinition, useErrorHandler } from 'graphql-yoga';
 import { createInMemoryCache, useResponseCache } from '@graphql-yoga/plugin-response-cache';
 import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
@@ -44,7 +44,18 @@ const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
 const yoga = createYoga({
   schema,
   context: createContext(cache),
-  plugins: [useResponseCache({ session: () => null, cache })],
+  plugins: [
+    useResponseCache({ session: () => null, cache }),
+    useErrorHandler(({ errors, phase }) => {
+      for (const error of errors) {
+        if (error instanceof Error) {
+          logger.error(error.message, { phase });
+        } else {
+          logger.error(error);
+        }
+      }
+    }),
+  ],
 });
 
 // Enable all CORS requests

@@ -32,6 +32,7 @@ export type JourneyExpiryNotification = Notification & {
   id: Scalars['ID']['output'];
   journey: Journey;
   read: Scalars['Boolean']['output'];
+  sent: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];
@@ -57,11 +58,14 @@ export type Mutation = {
   __typename?: 'Mutation';
   activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
+  deleteJourneyMonitor?: Maybe<JourneyMonitor>;
   markNotificationAsRead?: Maybe<Notification>;
   monitorJourney?: Maybe<JourneyMonitor>;
+  sendEmailNotification?: Maybe<Notification>;
   updateJourneyMonitor?: Maybe<JourneyMonitor>;
   updateJourneyMonitors?: Maybe<Scalars['Int']['output']>;
   updateUserProfilePicture?: Maybe<User>;
+  updateUserSettings?: Maybe<User>;
 };
 
 export type MutationActivateUserArgs = {
@@ -73,6 +77,11 @@ export type MutationCreateUserArgs = {
   familyName: Scalars['String']['input'];
   givenName: Scalars['String']['input'];
   id: Scalars['ID']['input'];
+};
+
+export type MutationDeleteJourneyMonitorArgs = {
+  journeyId: Scalars['ID']['input'];
+  userId: Scalars['ID']['input'];
 };
 
 export type MutationMarkNotificationAsReadArgs = {
@@ -87,6 +96,11 @@ export type MutationMonitorJourneyArgs = {
   userId: Scalars['ID']['input'];
 };
 
+export type MutationSendEmailNotificationArgs = {
+  notificationId: Scalars['ID']['input'];
+  userId: Scalars['ID']['input'];
+};
+
 export type MutationUpdateJourneyMonitorArgs = {
   journeyId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
@@ -97,9 +111,15 @@ export type MutationUpdateUserProfilePictureArgs = {
   image: Scalars['File']['input'];
 };
 
+export type MutationUpdateUserSettingsArgs = {
+  emailNotificationsEnabled: Scalars['Boolean']['input'];
+  id: Scalars['ID']['input'];
+};
+
 export type Notification = {
   id: Scalars['ID']['output'];
   read: Scalars['Boolean']['output'];
+  sent: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];
@@ -116,6 +136,7 @@ export type PriceAlertNotification = Notification & {
   id: Scalars['ID']['output'];
   journeyMonitor: JourneyMonitor;
   read: Scalars['Boolean']['output'];
+  sent: Scalars['Boolean']['output'];
   timestamp: Scalars['DateTime']['output'];
   type: Scalars['ID']['output'];
   userId: Scalars['ID']['output'];
@@ -151,6 +172,7 @@ export type User = {
   __typename?: 'User';
   activated: Scalars['Boolean']['output'];
   email: Scalars['String']['output'];
+  emailNotificationsEnabled: Scalars['Boolean']['output'];
   familyName: Scalars['String']['output'];
   givenName: Scalars['String']['output'];
   id: Scalars['ID']['output'];
@@ -165,4 +187,5 @@ export type UserJourneyMonitorsArgs = {
 
 export type UserNotificationsArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;
+  read?: InputMaybe<Scalars['Boolean']['input']>;
 };

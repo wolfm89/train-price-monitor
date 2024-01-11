@@ -19,20 +19,22 @@ const AlertBar: React.FC = () => {
   };
 
   return (
-    <Snackbar
-      open={!!alert}
-      anchorOrigin={{
-        vertical: 'top',
-        horizontal: 'center',
-      }}
-      autoHideDuration={5000}
-      onClose={onClose}
-      TransitionComponent={SlideTransition}
-    >
-      <Alert onClose={onClose} severity={alert?.severity} sx={{ width: '100%' }}>
-        {alert?.message}
-      </Alert>
-    </Snackbar>
+    alert && (
+      <Snackbar
+        open={!!alert}
+        anchorOrigin={{
+          vertical: 'top',
+          horizontal: 'center',
+        }}
+        autoHideDuration={5000}
+        onClose={onClose}
+        TransitionComponent={SlideTransition}
+      >
+        <Alert onClose={onClose} severity={alert?.severity} sx={{ width: '100%' }}>
+          {alert?.message}
+        </Alert>
+      </Snackbar>
+    )
   );
 };
 

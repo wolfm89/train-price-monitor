@@ -1,10 +1,24 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Grid, Typography, Accordion, AccordionSummary, AccordionDetails, List, ListItem } from '@mui/material';
+import {
+  Grid,
+  Typography,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  List,
+  ListItem,
+  IconButton,
+  CircularProgress,
+} from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { useQuery } from 'urql';
+import { useMutation, useQuery } from 'urql';
 import { UserJourneysQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
 import { useLocation } from 'react-router-dom';
+import DeleteIcon from '@mui/icons-material/Delete';
+import { DeleteJourneyMonitor } from '../api/journey';
+import { AlertSeverity } from '../providers/AlertProvider';
+import useAlert from '../hooks/useAlert';
 
 interface Journey {
   id: string;
@@ -23,13 +37,16 @@ interface Journey {
 const JourneysPage: React.FC = () => {
   const { user } = useContext(AuthContext);
   const { hash } = useLocation();
-  const [{ data: userJourneysResult, fetching }, reexecuteUserJourneysQuery] = useQuery({
+  const { addAlert } = useAlert();
+  const [{ data: userJourneysResult, fetching: userJourneysFetching }, reexecuteUserJourneysQuery] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user,
   });
+  const [{ fetching: deleteJourneyMonitorFetching }, deleteJourneyMonitor] = useMutation(DeleteJourneyMonitor);
 
   const [expandedJourneyIds, setExpandedJourneyIds] = useState<string[]>([]);
+  const [loadingJourneyId, setLoadingJourneyId] = useState<string | null>(null);
 
   const toggleJourneyDetails = (journeyId: string) => {
     setExpandedJourneyIds((prevIds) => {
@@ -70,34 +87,44 @@ const JourneysPage: React.FC = () => {
     return `${formattedDate} ${formattedTime}`;
   };
 
+  function handleJourneyMonitorDelete(id: string): void {
+    setLoadingJourneyId(id);
+    deleteJourneyMonitor({ userId: user?.['custom:id'], journeyId: id }).then((result) => {
+      if (result.error) {
+        addAlert(result.error.message, AlertSeverity.Error);
+      }
+      setLoadingJourneyId(null);
+    });
+  }
+
   return (
     <Grid container spacing={2}>
       <Grid item xs={12}>
         <Typography variant="h6">Journey Watchlist</Typography>
       </Grid>
       <Grid item xs={12}>
-        {fetching ? (
+        {userJourneysFetching ? (
           <Typography variant="body1">Loading journeys...</Typography>
         ) : userJourneysResult && userJourneysResult.user.journeyMonitors.length > 0 ? (
           <List>
             {userJourneysResult.user.journeyMonitors.map(({ id, limitPrice, journey }: Journey) => (
-              <ListItem key={id}>
+              <ListItem key={id} alignItems="flex-start">
                 <Accordion
                   sx={{ width: '100%' }}
                   expanded={expandedJourneyIds.includes(id)}
                   onChange={() => toggleJourneyDetails(id)}
                 >
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Grid container justifyContent="space-between" alignItems="center">
-                      <Grid item xs={4}>
+                    <Grid container justifyContent="space-between" alignItems="center" spacing={2}>
+                      <Grid item sm={6} xs={12}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                           {`${journey.from} to ${journey.to}`}
                         </Typography>
                       </Grid>
-                      <Grid item xs={3}>
+                      <Grid item sm={3} xs={6} sx={{ textAlign: 'right' }}>
                         <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
                       </Grid>
-                      <Grid item xs={3}>
+                      <Grid item sm={3} xs={6} sx={{ textAlign: 'right' }}>
                         <Typography
                           variant="body2"
                           sx={{
@@ -109,7 +136,6 @@ const JourneysPage: React.FC = () => {
                       </Grid>
                     </Grid>
                   </AccordionSummary>
-
                   <AccordionDetails>
                     <Grid container spacing={2}>
                       <Grid item xs={12}>
@@ -126,6 +152,13 @@ const JourneysPage: React.FC = () => {
                     </Grid>
                   </AccordionDetails>
                 </Accordion>
+                <IconButton
+                  aria-label="delete"
+                  disabled={deleteJourneyMonitorFetching || loadingJourneyId === id}
+                  onClick={() => handleJourneyMonitorDelete(id)}
+                >
+                  {loadingJourneyId === id ? <CircularProgress size={20} /> : <DeleteIcon />}
+                </IconButton>
               </ListItem>
             ))}
           </List>

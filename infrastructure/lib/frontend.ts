@@ -5,9 +5,15 @@ import { Distribution, OriginAccessIdentity, ViewerProtocolPolicy } from 'aws-cd
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
+import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+
+export interface FrontendProps {
+  certificate: Certificate;
+  domainName: string;
+}
 
 export class Frontend extends Construct {
-  constructor(scope: Construct, id: string) {
+  constructor(scope: Construct, id: string, { certificate, domainName }: FrontendProps) {
     super(scope, id);
 
     // Create S3 bucket
@@ -29,9 +35,12 @@ export class Frontend extends Construct {
 
     const distribution = new Distribution(this, 'Distribution', {
       defaultRootObject: 'index.html',
+      domainNames: [domainName],
+      certificate: certificate,
       defaultBehavior: {
         origin: new S3Origin(bucket, { originAccessIdentity }),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true,
       },
       errorResponses: [
         {

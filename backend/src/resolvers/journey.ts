@@ -157,8 +157,9 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     Logger.info(`Deleted journey from database`);
 
     // Send a notification to the user that the journey has expired
+    const notificationId = uuidv4();
     await context.entities.Notification.put({
-      id: uuidv4(),
+      id: notificationId,
       userId: args.userId,
       type: NOTIFICATION_TYPES.JOURNEY_EXPIRED.name,
       read: false,
@@ -166,6 +167,8 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       data: { refreshToken: dbJourney.Item.refreshToken },
     });
     context.cache.invalidate([{ typename: 'Notification' }]);
+
+    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
 
     return journeyMonitor;
   }
@@ -196,8 +199,9 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     Logger.info(`New price ${newPrice} for journey is higher than limit price ${dbJourney.Item.limitPrice}`);
 
     // Save a notification in the database
+    const notificationId = uuidv4();
     await context.entities.Notification.put({
-      id: uuidv4(),
+      id: notificationId,
       userId: args.userId,
       type: NOTIFICATION_TYPES.PRICE_ALERT.name,
       read: false,
@@ -205,6 +209,8 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       data: { journeyId: args.journeyId },
     });
     context.cache.invalidate([{ typename: 'Notification' }]);
+
+    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
 
     Logger.info(`Sent notification for journey`);
   } else {
@@ -214,6 +220,77 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   return journeyMonitor;
 };
 
+async function sendNotificationEmailIfEnabled(context: GraphQLContext, userId: string, notificationId: string) {
+  // Get setting for email notifications for user from database
+  const { Item: dbUser } = await context.entities.User.get(
+    { id: userId },
+    { attributes: ['emailNotificationsEnabled'] }
+  );
+  if (!dbUser) {
+    throw new Error(`User with id ${userId} not found`);
+  }
+  if (dbUser.emailNotificationsEnabled) {
+    // Send email notification to user
+    await context.sqs.sendEmailNotificationMessage(userId, notificationId);
+  }
+}
+
 export function getMeans(journey: Journey): string[] {
   return journey.legs.map((leg) => (leg.line ? leg.line.productName! : leg.walking ? 'walk' : ''));
 }
+
+/**
+ * Resolves the 'deleteJourneyMonitor' mutation to delete a specific journey.
+ * @param _parent - The parent object.
+ * @param userId - The user's ID.
+ * @param journeyId - The journey's ID.
+ * @param context - The GraphQL context.
+ * @returns The deleted journey monitor.
+ */
+export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyMonitor']> = async (
+  _parent,
+  { userId, journeyId },
+  context: GraphQLContext
+): Promise<JourneyMonitor> => {
+  // Add user and journey ID to persistent log attributes
+  Logger.addPersistentLogAttributes({ userId: userId, journeyId: journeyId });
+
+  // Retrieve the journey from the database
+  const dbJourney = await context.entities.Journey.get({ userId: userId, id: journeyId });
+
+  // Check if the journey exists
+  if (!dbJourney.Item) {
+    throw new Error('Journey not found in database');
+  }
+
+  const journeyMonitor: JourneyMonitor = {
+    id: dbJourney.Item.id,
+    userId: dbJourney.Item.userId,
+    limitPrice: dbJourney.Item.limitPrice,
+    expires: dbJourney.Item.expires,
+    journey: { refreshToken: dbJourney.Item.refreshToken },
+  };
+
+  // Delete all notifications for the journey (with data containing the journey ID)
+  const notifications = (
+    await context.entities.Notification.query(`USER#${userId}`, {
+      beginsWith: 'NOTIFICATION#',
+      attributes: ['id', 'data'],
+    })
+  ).Items?.filter((item) => item.data?.journeyId === journeyId);
+
+  if (notifications) {
+    for (const notification of notifications) {
+      await context.entities.Notification.delete({ userId: userId, id: notification.id });
+    }
+    context.cache.invalidate([{ typename: 'Notification' }]);
+    Logger.info(`Deleted ${notifications.length} notifications for journey`);
+  }
+
+  // Delete the journey from the database
+  await context.entities.Journey.delete({ userId: userId, id: journeyId });
+  context.cache.invalidate([{ typename: 'JourneyMonitor' }]);
+  Logger.info(`Deleted journey from database`);
+
+  return journeyMonitor;
+};

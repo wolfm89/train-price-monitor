@@ -6,10 +6,17 @@ import {
   updateUserProfilePicture,
   createUser,
   activateUser,
+  updateUserSettings,
 } from './user';
-import { journeysQuery, monitorJourney, updateJourneyMonitors, updateJourneyMonitor } from './journey';
+import {
+  journeysQuery,
+  monitorJourney,
+  updateJourneyMonitors,
+  updateJourneyMonitor,
+  deleteJourneyMonitor,
+} from './journey';
 import { locationsQuery } from './location';
-import { markNotificationAsRead, notificationResolvers } from './notification';
+import { markNotificationAsRead, sendEmailNotification, notificationResolvers } from './notification';
 
 const resolvers: Resolvers = {
   User: userResolvers,
@@ -24,10 +31,13 @@ const resolvers: Resolvers = {
     updateUserProfilePicture: updateUserProfilePicture,
     createUser: createUser,
     activateUser: activateUser,
+    updateUserSettings: updateUserSettings,
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,
     updateJourneyMonitor: updateJourneyMonitor,
+    deleteJourneyMonitor: deleteJourneyMonitor,
     markNotificationAsRead: markNotificationAsRead,
+    sendEmailNotification: sendEmailNotification,
   },
 };
 

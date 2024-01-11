@@ -147,6 +147,7 @@ export type JourneyExpiryNotificationResolvers<
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -191,6 +192,12 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationCreateUserArgs, 'email' | 'familyName' | 'givenName' | 'id'>
   >;
+  deleteJourneyMonitor?: Resolver<
+    Maybe<ResolversTypes['JourneyMonitor']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationDeleteJourneyMonitorArgs, 'journeyId' | 'userId'>
+  >;
   markNotificationAsRead?: Resolver<
     Maybe<ResolversTypes['Notification']>,
     ParentType,
@@ -202,6 +209,12 @@ export type MutationResolvers<
     ParentType,
     ContextType,
     RequireFields<MutationMonitorJourneyArgs, 'expires' | 'limitPrice' | 'refreshToken' | 'userId'>
+  >;
+  sendEmailNotification?: Resolver<
+    Maybe<ResolversTypes['Notification']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationSendEmailNotificationArgs, 'notificationId' | 'userId'>
   >;
   updateJourneyMonitor?: Resolver<
     Maybe<ResolversTypes['JourneyMonitor']>,
@@ -216,6 +229,12 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
+  updateUserSettings?: Resolver<
+    Maybe<ResolversTypes['User']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationUpdateUserSettingsArgs, 'emailNotificationsEnabled' | 'id'>
+  >;
 };
 
 export type NotificationResolvers<
@@ -225,6 +244,7 @@ export type NotificationResolvers<
   __resolveType: TypeResolveFn<'JourneyExpiryNotification' | 'PriceAlertNotification', ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -246,6 +266,7 @@ export type PriceAlertNotificationResolvers<
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journeyMonitor?: Resolver<ResolversTypes['JourneyMonitor'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -283,6 +304,7 @@ export type UserResolvers<
 > = {
   activated?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
