@@ -25,7 +25,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userProfilePictureUrlResult, reexecuteUserProfilePictureUrlQuery] = useQuery({
     query: UserProfilePictureUrlQuery,
     variables: { id: user?.['custom:id'] },
-    pause: !user,
+    pause: !user?.['custom:id'],
   });
 
   const getCurrentUser = async () => {

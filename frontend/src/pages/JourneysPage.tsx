@@ -41,7 +41,7 @@ const JourneysPage: React.FC = () => {
   const [{ data: userJourneysResult, fetching: userJourneysFetching }, reexecuteUserJourneysQuery] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
-    pause: !user,
+    pause: !user?.['custom:id'],
   });
   const [{ fetching: deleteJourneyMonitorFetching }, deleteJourneyMonitor] = useMutation(DeleteJourneyMonitor);
 

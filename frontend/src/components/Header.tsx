@@ -34,7 +34,7 @@ const Header = () => {
   const [{ stale, data: userNotificationsResult }, reexecuteUserNotificationsQuery] = useQuery({
     query: UserNotificationsQuery,
     variables: { id: user?.['custom:id'], notificationsLimit: 8, read: false },
-    pause: !user,
+    pause: !user?.['custom:id'],
   });
   const [, markNotificationAsRead] = useMutation(MarkNotificationAsRead);
 

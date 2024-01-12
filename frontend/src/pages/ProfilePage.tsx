@@ -20,7 +20,7 @@ const ProfilePage: React.FC = () => {
   const [{ data: userSettingsData, fetching: userSettingsFetching }] = useQuery({
     query: UserSettingsQuery,
     variables: { id: user?.['custom:id'] },
-    pause: !user,
+    pause: !user?.['custom:id'],
   });
   const [, updateUserSettings] = useMutation(UpdateUserSettings);
 

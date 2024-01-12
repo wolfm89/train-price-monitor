@@ -18,7 +18,7 @@ const HomePage: React.FC<Props> = () => {
   const [userActivatedResult] = useQuery({
     query: UserActivationStatusQuery,
     variables: { id: user?.['custom:id'] },
-    pause: !user,
+    pause: !user?.['custom:id'],
   });
   const [, activateUser] = useMutation(ActivateUser);
 
