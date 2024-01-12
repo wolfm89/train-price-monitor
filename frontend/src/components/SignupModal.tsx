@@ -47,6 +47,8 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     }
   };
 
+  const isSignupDisabled = !givenName || !email || !password;
+
   return (
     <Dialog open={open} onClose={onClose}>
       <DialogTitle>Sign Up</DialogTitle>
@@ -61,6 +63,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           value={givenName}
           onChange={(e) => setGivenName(e.target.value)}
           onKeyPress={handleKeyPress}
+          required
         />
         <TextField
           margin="dense"
@@ -80,6 +83,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           onKeyPress={handleKeyPress}
+          required
         />
         <TextField
           margin="dense"
@@ -89,11 +93,12 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyPress={handleKeyPress}
+          required
         />
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSignUp} variant="contained" color="primary">
+        <Button onClick={handleSignUp} variant="contained" color="primary" disabled={isSignupDisabled}>
           Sign Up
         </Button>
       </DialogActions>
