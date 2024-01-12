@@ -57,8 +57,11 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
 
   const handleCloseModal = () => {
     setOpenModal(false);
-    setSelectedJourney(null); // Clear selected journey when the modal is closed
-    setLimitPrice(''); // Clear limit price when the modal is closed
+
+    setTimeout(() => {
+      setSelectedJourney(null); // Clear selected journey when the modal is closed
+      setLimitPrice(''); // Clear limit price when the modal is closed
+    }, 100);
   };
 
   const handleConfirmWatch = () => {
