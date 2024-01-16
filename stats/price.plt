@@ -4,7 +4,7 @@ if (!exists("fname")) {
 }
 
 # Output PNG file name
-output_name = sprintf('img/%s.png', strstrt(fname, ".csv") > 0 ? fname[1:strstrt(fname, ".csv")-1] : fname)
+output_name = sprintf('img/%s.png', strstrt(fname, ".csv") > 0 ? system('basename "'.fname.'" | cut -d. -f1') : fname)
 
 tfmt = "%Y-%m-%dT%H:%MZ"
 
