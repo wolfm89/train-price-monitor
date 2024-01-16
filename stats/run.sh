@@ -7,9 +7,11 @@ if [ $# -ne 4 ]; then
   exit 1
 fi
 
-from="$1"
-to="$2"
+BASE_URL="https://v6.db.transport.rest"
+from_id=$(http ${BASE_URL}/locations query=="$1" results==1 addresses==false poi==false | jq -r ".[].id")
+to_id=$(http ${BASE_URL}/locations query=="$2" results==1 addresses==false poi==false | jq -r ".[].id")
+
 datetime="$3"
 n_days="$4"
 
-./get_prices.sh "$from" "$to" "$datetime" "$n_days" && gnuplot -e "fname='data/$from-$to-$(date -u -d "$datetime" +"%Y-%m-%dT%H-%MZ").csv'" price.plt
+./get_prices.sh "$from_id" "$to_id" "$datetime" "$n_days" && gnuplot -e "fname='data/$from_id-$to_id-$(date -u -d "$datetime" +"%Y-%m-%dT%H-%MZ").csv'" price.plt
