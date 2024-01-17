@@ -6,8 +6,10 @@ import {
   CreateEmailIdentityCommand,
   CreateEmailIdentityRequest,
   CreateEmailIdentityCommandOutput,
+  AlreadyExistsException,
 } from '@aws-sdk/client-sesv2';
 import { EmailNotificationInfo } from '../resolvers/notificationTypes';
+import Logger from '../lib/logger';
 
 class SESManager {
   private ses: SESv2Client;
@@ -53,11 +55,18 @@ class SESManager {
   }
 
   // Create email identity in SES for new user
-  async createEmailIdentity(email: string): Promise<CreateEmailIdentityCommandOutput> {
+  async createEmailIdentity(email: string): Promise<CreateEmailIdentityCommandOutput | undefined> {
     const request: CreateEmailIdentityRequest = {
       EmailIdentity: email,
     };
-    return await this.ses.send(new CreateEmailIdentityCommand(request));
+    try {
+      return await this.ses.send(new CreateEmailIdentityCommand(request));
+    } catch (error) {
+      if (error && error instanceof AlreadyExistsException) {
+        Logger.info(`Email identity ${email} already exists`);
+      }
+      return undefined;
+    }
   }
 }
 

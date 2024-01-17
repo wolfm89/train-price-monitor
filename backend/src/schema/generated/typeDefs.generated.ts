@@ -56,7 +56,6 @@ export type Location = {
 
 export type Mutation = {
   __typename?: 'Mutation';
-  activateUser?: Maybe<User>;
   createUser?: Maybe<User>;
   deleteJourneyMonitor?: Maybe<JourneyMonitor>;
   markNotificationAsRead?: Maybe<Notification>;
@@ -66,10 +65,6 @@ export type Mutation = {
   updateJourneyMonitors?: Maybe<Scalars['Int']['output']>;
   updateUserProfilePicture?: Maybe<User>;
   updateUserSettings?: Maybe<User>;
-};
-
-export type MutationActivateUserArgs = {
-  id: Scalars['ID']['input'];
 };
 
 export type MutationCreateUserArgs = {
@@ -170,7 +165,6 @@ export type QueryUserProfilePicturePresignedUrlArgs = {
 
 export type User = {
   __typename?: 'User';
-  activated: Scalars['Boolean']['output'];
   email: Scalars['String']['output'];
   emailNotificationsEnabled: Scalars['Boolean']['output'];
   familyName: Scalars['String']['output'];

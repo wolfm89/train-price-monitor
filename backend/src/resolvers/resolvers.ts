@@ -5,7 +5,6 @@ import {
   userResolvers,
   updateUserProfilePicture,
   createUser,
-  activateUser,
   updateUserSettings,
 } from './user';
 import {
@@ -30,7 +29,6 @@ const resolvers: Resolvers = {
   Mutation: {
     updateUserProfilePicture: updateUserProfilePicture,
     createUser: createUser,
-    activateUser: activateUser,
     updateUserSettings: updateUserSettings,
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,

@@ -5,7 +5,7 @@ import { Button, Typography, Box } from '@mui/material';
 import { AuthContext } from '../providers/AuthProvider';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
-import { UserActivationStatusQuery, ActivateUser } from '../api/user';
+import { UserExistsQuery, CreateUser } from '../api/user';
 import { useMutation, useQuery } from 'urql';
 
 interface Props {}
@@ -15,23 +15,37 @@ const HomePage: React.FC<Props> = () => {
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const { addAlert } = useAlert();
   const { user } = useContext(AuthContext);
-  const [userActivatedResult] = useQuery({
-    query: UserActivationStatusQuery,
+  const [userExistsResult, reexecuteUserExistsQuery] = useQuery({
+    query: UserExistsQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user?.['custom:id'],
   });
-  const [, activateUser] = useMutation(ActivateUser);
+  const [, createUser] = useMutation(CreateUser);
 
   useEffect(() => {
-    const activated = userActivatedResult.data?.user?.activated;
-    if (user && activated === false) {
-      activateUser({ id: user?.['custom:id'] }).then((result) => {
-        if (result.error) {
-          addAlert(result.error.message, AlertSeverity.Error);
-        }
-      });
+    if (!user || userExistsResult.fetching) {
+      return;
     }
-  }, [activateUser, addAlert, user, userActivatedResult]);
+    const userExists = !!userExistsResult.data?.user?.id;
+    if (!userExists) {
+      createUser({
+        id: user['custom:id'],
+        email: user['email'],
+        familyName: user['family_name'],
+        givenName: user['given_name'],
+      })
+        .then((result) => {
+          if (result.error) {
+            addAlert(result.error.message, AlertSeverity.Error);
+          } else {
+            reexecuteUserExistsQuery({ requestPolicy: 'network-only' });
+          }
+        })
+        .catch((reason) => {
+          console.log(reason);
+        });
+    }
+  }, [addAlert, createUser, reexecuteUserExistsQuery, user, userExistsResult]);
 
   const handleModalOpen = () => {
     setSignupModalOpen(true);

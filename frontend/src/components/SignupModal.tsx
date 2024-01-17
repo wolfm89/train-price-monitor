@@ -3,8 +3,6 @@ import React, { useState } from 'react';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 import { signUp } from '../utils/auth';
-import { CreateUser } from '../api/user';
-import { useMutation } from 'urql';
 import { v4 as uuidv4 } from 'uuid';
 
 interface Props {
@@ -18,7 +16,6 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
   const [familyName, setFamilyName] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const { addAlert } = useAlert();
-  const [, createUser] = useMutation(CreateUser);
 
   const handleSignUp = async () => {
     const userId = uuidv4();
@@ -28,15 +25,6 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
       addAlert(err.message, AlertSeverity.Error);
       return;
     }
-    createUser({ id: userId, email, familyName, givenName })
-      .then((result) => {
-        if (result.error) {
-          addAlert(result.error.message, AlertSeverity.Error);
-        }
-      })
-      .catch((reason) => {
-        console.log(reason);
-      });
     addAlert('Sign up successful! Please check your emails and confirm your account.', AlertSeverity.Success);
     onClose();
   };
