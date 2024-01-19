@@ -15,6 +15,8 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
   const [givenName, setGivenName] = useState<string>('');
   const [familyName, setFamilyName] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [isEmailTouched, setIsEmailTouched] = useState<boolean>(false); // Add state for tracking if email input has been touched
   const { addAlert } = useAlert();
 
   const handleSignUp = async () => {
@@ -35,7 +37,9 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     }
   };
 
-  const isSignupDisabled = !givenName || !email || !password;
+  const isSignupDisabled = !givenName || !email || !password || password !== confirmPassword;
+
+  const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   return (
     <Dialog open={open} onClose={onClose}>
@@ -69,9 +73,14 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           type="email"
           fullWidth
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setIsEmailTouched(true); // Set isEmailTouched to true when email input is changed
+          }}
           onKeyPress={handleKeyPress}
           required
+          error={isEmailTouched && !isEmailValid} // Show error only if email input has been touched and email is not valid
+          helperText={isEmailTouched && !isEmailValid && 'Please enter a valid email address'} // Show helper text only if email input has been touched and email is not valid
         />
         <TextField
           margin="dense"
@@ -80,6 +89,16 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          onKeyPress={handleKeyPress}
+          required
+        />
+        <TextField
+          margin="dense"
+          label="Confirm Password"
+          type="password"
+          fullWidth
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
           onKeyPress={handleKeyPress}
           required
         />
