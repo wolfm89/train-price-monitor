@@ -61,3 +61,12 @@ jobs:
       - name: Deploy with AWS CDK
         working-directory: infrastructure
         run: npm run cdk -- --app cdk.out deploy --require-approval never --all
+
+      - name: Invalidate CloudFront cache
+        uses: badsyntax/github-action-aws-cloudfront@master
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          distribution-id: ${{ secrets.DISTRIBUTION_ID }}
+          invalidate-paths: '*'
+          default-root-object: 'index.html'
+          include-origin-prefix: false
