@@ -63,10 +63,10 @@ jobs:
         run: npm run cdk -- --app cdk.out deploy --require-approval never --all
 
       - name: Invalidate CloudFront cache
-        uses: chetan/invalidate-cloudfront-action@v2
-        env:
-          DISTRIBUTION: ${{ secrets.DISTRIBUTION_ID }}
-          PATHS: '*'
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        uses: badsyntax/github-action-aws-cloudfront@master
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          distribution-id: ${{ secrets.DISTRIBUTION_ID }}
+          invalidate-paths: '*'
+          default-root-object: 'index.html'
+          include-origin-prefix: false
