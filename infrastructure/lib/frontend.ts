@@ -59,5 +59,9 @@ export class Frontend extends Construct {
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
       value: distribution.distributionDomainName,
     });
+
+    new cdk.CfnOutput(this, 'DistributionId', {
+      value: distribution.distributionId,
+    });
   }
 }

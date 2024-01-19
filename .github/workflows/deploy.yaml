@@ -60,4 +60,15 @@ jobs:
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
-        run: npm run cdk -- --app cdk.out deploy --require-approval never --all
+        run:
+          distribution_id=$(npm run cdk -- --app cdk.out deploy --require-approval never --all | tee /dev/tty | grep -o 'InfrastructureStack.FrontendDistributionId[[:alnum:]]*' | awk -F'=' '{print $2}' | tr -d '[:space:]')
+          echo "DISTRIBUTION_ID=$distribution_id" >> $GITHUB_ENV
+
+      - name: Invalidate CloudFront cache
+        uses: chetan/invalidate-cloudfront-action@v2
+        env:
+          DISTRIBUTION: ${{ env.DISTRIBUTION_ID }}
+          PATHS: '*'
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
