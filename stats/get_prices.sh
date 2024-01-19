@@ -19,12 +19,23 @@ get_price() {
   shift
   local datetime="$1"
   shift
+  local selected_index="$1"
+  shift
   local lines=("$@")
   local response
 
-  response=$(http GET ${BASE_URL}/journeys results==5 from=="${from_id}" to=="${to_id}" departure=="${datetime}" | jq -r --argjson lines "$(printf '%s\n' "${lines[@]}" | jq -R . | jq -s .)" '.journeys[] | select(has("legs") and all(.legs[]; .line.name as $lname | $lines | index($lname))) | .price.amount')
+  response=$(http GET ${BASE_URL}/journeys results==5 from=="${from_id}" to=="${to_id}" departure=="${datetime}")
 
-  echo "$response"
+  local price
+  price=$(echo "$response" | jq -r --argjson lines "$(printf '%s\n' "${lines[@]}" | jq -R . | jq -s .)" '.journeys[] | select(has("legs") and all(.legs[]; .line.name as $lname | $lines | index($lname))) | .price.amount')
+
+  while [[ -z "$price" || "$price" == "null" ]]; do
+    echo "Fall back to get price by index $selected_index" >&2
+    price=$(echo "$response" | jq -r --argjson idx "$selected_index" '.journeys[$idx] | .price.amount')
+    selected_index=$((selected_index + 1))
+  done
+
+  echo "$price"
 }
 
 # Function to get journeys for a specific datetime
@@ -78,7 +89,7 @@ for ((i=0; i<num_days; i++)); do
   formatted_datetime=$(format_datetime "$current_datetime" "$date_format_iso")
 
   # Get the price for the current day
-  price=$(get_price "$from_id" "$to_id" "$formatted_datetime" "${lines[@]}")
+  price=$(get_price "$from_id" "$to_id" "$formatted_datetime" "$selected_index" "${lines[@]}")
 
   # Append data to CSV file
   echo "$formatted_datetime,$price" >> "$output_filename"

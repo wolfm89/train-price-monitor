@@ -29,7 +29,7 @@ d = 1e2
 start=0
 f(x) = a*((x-start)**3) + b*((x-start)**2) + c*(x-start) + d
 
-plot fname using 1:2 with linespoints lc rgb "black" pt 7 ps 2 title "Price", f(x) lc rgb "red" title sprintf("Fit (intercept=%.4f)", d)
+plot fname using 1:2 with linespoints lc rgb "black" pt 7 ps 2 title "Price", f(x) lc rgb "red" title "Polynomial Fit (a*x^3 + b*x^2 + c*x + d))"
 
 # Define a function for shaded weekends
 shaded_weekend(start, end) = sprintf('set object rect from "%s", graph 0 to "%s", graph 1 behind fc rgb "blue" fillstyle transparent solid 0.5 noborder', start, end)
