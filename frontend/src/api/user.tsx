@@ -17,15 +17,6 @@ export const CreateUser = gql`
   }
 `;
 
-export const ActivateUser = gql`
-  mutation ($id: ID!) {
-    activateUser(id: $id) {
-      id
-      activated
-    }
-  }
-`;
-
 export const UpdateUserSettings = gql`
   mutation ($id: ID!, $emailNotificationsEnabled: Boolean!) {
     updateUserSettings(id: $id, emailNotificationsEnabled: $emailNotificationsEnabled) {
@@ -35,10 +26,10 @@ export const UpdateUserSettings = gql`
   }
 `;
 
-export const UserActivationStatusQuery = gql`
+export const UserExistsQuery = gql`
   query ($id: ID!) {
     user(id: $id) {
-      activated
+      id
     }
   }
 `;

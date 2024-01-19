@@ -23,7 +23,6 @@ const User = new Entity({
     familyName: { type: 'string', required: true },
     profilePicture: { type: 'string' },
     emailNotificationsEnabled: { type: 'boolean', required: true, default: true },
-    activated: { type: 'boolean', required: true, default: false },
   },
 } as const);
 

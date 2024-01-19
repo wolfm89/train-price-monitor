@@ -34,7 +34,7 @@ const Header = () => {
   const [{ stale, data: userNotificationsResult }, reexecuteUserNotificationsQuery] = useQuery({
     query: UserNotificationsQuery,
     variables: { id: user?.['custom:id'], notificationsLimit: 8, read: false },
-    pause: !user,
+    pause: !user?.['custom:id'],
   });
   const [, markNotificationAsRead] = useMutation(MarkNotificationAsRead);
 
@@ -64,12 +64,14 @@ const Header = () => {
   // Schedule the notification query to run every 30 seconds
   useEffect(() => {
     const intervalId = setInterval(() => {
-      reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
+      if (user?.['custom:id']) {
+        reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
+      }
     }, 30000);
 
     // Clean up the interval when the component is unmounted
     return () => clearInterval(intervalId);
-  }, [reexecuteUserNotificationsQuery]);
+  }, [reexecuteUserNotificationsQuery, user]);
 
   // useEffect to store notifications in local variable
   useEffect(() => {

@@ -6,6 +6,7 @@ import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/gene
 import { User, PresignedUrl, Notification, JourneyMonitor } from '../schema/generated/typeDefs.generated';
 import { getMeans } from './journey';
 import { NOTIFICATION_TYPES } from './notificationTypes';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -141,6 +142,7 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   if (!dbUser) {
     return null;
   }
+  context.cache.invalidate([{ typename: 'User' }, { typename: 'PresignedUrl' }]);
 
   const user: User = { ...dbUser };
   return user;
@@ -151,13 +153,24 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   { id, givenName, familyName, email }: { id: string; givenName: string; familyName: string; email: string },
   context: GraphQLContext
 ) => {
-  await context.entities.User.put({
-    id: id,
-    givenName: givenName,
-    familyName: familyName,
-    email: email,
-    activated: false,
-  });
+  try {
+    await context.entities.User.put(
+      {
+        id: id,
+        givenName: givenName,
+        familyName: familyName,
+        email: email,
+      },
+      { conditions: { attr: 'id', exists: false } }
+    );
+  } catch (error) {
+    if (error && error instanceof ConditionalCheckFailedException) {
+      Logger.info(`User with id ${id} already exists`);
+      throw Error('User already exists');
+    }
+    Logger.error(`Failed to create user with id ${id}: ${error}`);
+    throw error;
+  }
 
   // Only necessary when using SES in sandbox mode
   context.ses.createEmailIdentity(email);
@@ -167,34 +180,10 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
     givenName: givenName,
     familyName: familyName,
     email: email,
-    activated: false,
     emailNotificationsEnabled: true,
   };
   context.cache.invalidate([{ typename: 'User' }]);
   return user;
-};
-
-export const activateUser: NonNullable<MutationResolvers['activateUser']> = async (
-  _,
-  { id }: { id: string },
-  context: GraphQLContext
-) => {
-  try {
-    const { Attributes: dbUser } = await context.entities.User.update(
-      { id: id, activated: true },
-      { returnValues: 'ALL_NEW' }
-    );
-
-    if (!dbUser) {
-      throw new Error('Failed to update user property');
-    }
-
-    const user: User = { ...dbUser };
-    return user;
-  } catch (error) {
-    Logger.error(`Failed to activate user with id ${id}: ${error}`);
-    throw error;
-  }
 };
 
 export const updateUserSettings: NonNullable<MutationResolvers['updateUserSettings']> = async (

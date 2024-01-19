@@ -23,7 +23,7 @@ const cognitoAuthExchange = authExchange(async (utils) => {
       });
     },
     didAuthError(error, _operation) {
-      return error.response.status === 401;
+      return error.response?.status && error.response?.status === 401;
     },
     async refreshAuth() {
       token = await getJwtToken();

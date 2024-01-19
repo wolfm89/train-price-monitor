@@ -180,12 +180,6 @@ export type MutationResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation']
 > = {
-  activateUser?: Resolver<
-    Maybe<ResolversTypes['User']>,
-    ParentType,
-    ContextType,
-    RequireFields<MutationActivateUserArgs, 'id'>
-  >;
   createUser?: Resolver<
     Maybe<ResolversTypes['User']>,
     ParentType,
@@ -302,7 +296,6 @@ export type UserResolvers<
   ContextType = any,
   ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User']
 > = {
-  activated?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
