@@ -64,7 +64,9 @@ const Header = () => {
   // Schedule the notification query to run every 30 seconds
   useEffect(() => {
     const intervalId = setInterval(() => {
-      reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
+      if (user?.['custom:id']) {
+        reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
+      }
     }, 30000);
 
     // Clean up the interval when the component is unmounted
