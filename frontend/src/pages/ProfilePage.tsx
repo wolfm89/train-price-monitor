@@ -19,9 +19,16 @@ import useAlert from '../hooks/useAlert';
 import { changePassword } from '../utils/auth';
 import { useMutation, useQuery } from 'urql';
 import { DeleteUser, UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
+import { useNavigate } from 'react-router-dom';
 
 const ProfilePage: React.FC = () => {
-  const { user, userProfilePictureUrl, refetchUserProfilePictureUrl } = useContext(AuthContext);
+  const {
+    user,
+    userProfilePictureUrl,
+    refetchUserProfilePictureUrl,
+    deleteUser: deleteCognitoUser,
+  } = useContext(AuthContext);
+  const navigate = useNavigate();
   const [firstName, setFirstName] = useState(user?.given_name);
   const [lastName, setLastName] = useState(user?.family_name);
   const [email, setEmail] = useState(user?.email);
@@ -111,7 +118,14 @@ const ProfilePage: React.FC = () => {
     // Delete the account
     deleteUser({ id: user?.['custom:id'] })
       .then(() => {
-        addAlert('Account deleted successfully!', AlertSeverity.Success);
+        deleteCognitoUser()
+          .then(() => {
+            navigate(`/`);
+            addAlert('Account deleted successfully!', AlertSeverity.Success);
+          })
+          .catch(() => {
+            addAlert('Account deletion failed.', AlertSeverity.Error);
+          });
       })
       .catch(() => {
         addAlert('Account deletion failed.', AlertSeverity.Error);
