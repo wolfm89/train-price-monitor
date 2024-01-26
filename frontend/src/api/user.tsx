@@ -26,6 +26,15 @@ export const UpdateUserSettings = gql`
   }
 `;
 
+export const DeleteUser = gql`
+  mutation ($id: ID!) {
+    deleteUser(id: $id) {
+      id
+      givenName
+    }
+  }
+`;
+
 export const UserExistsQuery = gql`
   query ($id: ID!) {
     user(id: $id) {
