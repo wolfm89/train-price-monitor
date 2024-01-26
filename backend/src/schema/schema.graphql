@@ -46,6 +46,10 @@ extend type Mutation {
   updateUserSettings(id: ID!, emailNotificationsEnabled: Boolean!): User
 }
 
+extend type Mutation {
+  deleteUser(id: ID!): User
+}
+
 # Notification
 
 interface Notification {

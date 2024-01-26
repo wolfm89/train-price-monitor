@@ -7,6 +7,9 @@ import {
   CreateEmailIdentityRequest,
   CreateEmailIdentityCommandOutput,
   AlreadyExistsException,
+  DeleteEmailIdentityCommand,
+  DeleteEmailIdentityRequest,
+  DeleteEmailIdentityCommandOutput,
 } from '@aws-sdk/client-sesv2';
 import { EmailNotificationInfo } from '../resolvers/notificationTypes';
 import Logger from '../lib/logger';
@@ -65,6 +68,19 @@ class SESManager {
       if (error && error instanceof AlreadyExistsException) {
         Logger.info(`Email identity ${email} already exists`);
       }
+      return undefined;
+    }
+  }
+
+  // Delete email identity in SES for deleted user
+  async deleteEmailIdentity(email: string): Promise<DeleteEmailIdentityCommandOutput | undefined> {
+    const request: DeleteEmailIdentityRequest = {
+      EmailIdentity: email,
+    };
+    try {
+      return await this.ses.send(new DeleteEmailIdentityCommand(request));
+    } catch (error) {
+      Logger.error(`Failed to delete email identity ${email}: ${error}`);
       return undefined;
     }
   }

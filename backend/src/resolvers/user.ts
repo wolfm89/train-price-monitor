@@ -209,6 +209,66 @@ export const updateUserSettings: NonNullable<MutationResolvers['updateUserSettin
   }
 };
 
+export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
+  _,
+  { id }: { id: string },
+  context: GraphQLContext
+): Promise<User> => {
+  try {
+    const { Item: dbUserCur } = await context.entities.User.get(
+      { id: id },
+      { attributes: ['profilePicture', 'email'] }
+    );
+
+    // Delete profile picture from S3 bucket
+    if (dbUserCur && dbUserCur.profilePicture) {
+      Logger.info(`Deleting profile image for user '${id}'`);
+      await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
+    }
+
+    // Delete database entries related to user
+    // Delete notifications
+    const { Items: dbNotifications } = await context.entities.Notification.query(`USER#${id}`, {
+      beginsWith: 'NOTIFICATION#',
+    });
+    if (dbNotifications) {
+      await Promise.all(
+        dbNotifications.map(async (dbNotification) => {
+          await context.entities.Notification.delete({ userId: id, id: dbNotification.id });
+        })
+      );
+    }
+    // Delete journeys
+    const { Items: dbJourneys } = await context.entities.Journey.query(`USER#${id}`, {
+      beginsWith: 'JOURNEY#',
+    });
+    if (dbJourneys) {
+      await Promise.all(
+        dbJourneys.map(async (dbJourney) => {
+          await context.entities.Journey.delete({ userId: id, id: dbJourney.id });
+        })
+      );
+    }
+
+    // Delete user's email identity from SES
+    if (dbUserCur && dbUserCur.email) {
+      context.ses.deleteEmailIdentity(dbUserCur.email);
+    }
+
+    // Delete user from database
+    const { Attributes: dbUser } = await context.entities.User.delete({ id: id }, { returnValues: 'ALL_OLD' });
+    if (!dbUser) {
+      throw new Error('Failed to delete user');
+    }
+
+    context.cache.invalidate([{ typename: 'User' }]);
+    return dbUser as User;
+  } catch (error) {
+    Logger.error(`Failed to delete user with id ${id}: ${error}`);
+    throw error;
+  }
+};
+
 export async function getJourneyMonitor(
   context: GraphQLContext,
   dbJourney: {

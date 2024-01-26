@@ -192,6 +192,12 @@ export type MutationResolvers<
     ContextType,
     RequireFields<MutationDeleteJourneyMonitorArgs, 'journeyId' | 'userId'>
   >;
+  deleteUser?: Resolver<
+    Maybe<ResolversTypes['User']>,
+    ParentType,
+    ContextType,
+    RequireFields<MutationDeleteUserArgs, 'id'>
+  >;
   markNotificationAsRead?: Resolver<
     Maybe<ResolversTypes['Notification']>,
     ParentType,
