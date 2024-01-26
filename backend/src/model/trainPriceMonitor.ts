@@ -20,7 +20,7 @@ const User = new Entity({
     },
     email: { type: 'string', required: true },
     givenName: { type: 'string', required: true },
-    familyName: { type: 'string', required: true },
+    familyName: { type: 'string' },
     profilePicture: { type: 'string' },
     emailNotificationsEnabled: { type: 'boolean', required: true, default: true },
   },

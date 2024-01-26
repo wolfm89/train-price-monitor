@@ -150,7 +150,7 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
 
 export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   _,
-  { id, givenName, familyName, email }: { id: string; givenName: string; familyName: string; email: string },
+  { id, givenName, familyName, email }: { id: string; givenName: string; familyName?: string; email: string },
   context: GraphQLContext
 ) => {
   try {
@@ -158,7 +158,7 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
       {
         id: id,
         givenName: givenName,
-        familyName: familyName,
+        familyName: familyName!,
         email: email,
       },
       { conditions: { attr: 'id', exists: false } }
@@ -215,6 +215,8 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   context: GraphQLContext
 ): Promise<User> => {
   try {
+    Logger.addPersistentLogAttributes({ userId: id });
+
     const { Item: dbUserCur } = await context.entities.User.get(
       { id: id },
       { attributes: ['profilePicture', 'email'] }

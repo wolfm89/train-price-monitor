@@ -70,7 +70,7 @@ export type Mutation = {
 
 export type MutationCreateUserArgs = {
   email: Scalars['String']['input'];
-  familyName: Scalars['String']['input'];
+  familyName?: InputMaybe<Scalars['String']['input']>;
   givenName: Scalars['String']['input'];
   id: Scalars['ID']['input'];
 };
@@ -172,7 +172,7 @@ export type User = {
   __typename?: 'User';
   email: Scalars['String']['output'];
   emailNotificationsEnabled: Scalars['Boolean']['output'];
-  familyName: Scalars['String']['output'];
+  familyName?: Maybe<Scalars['String']['output']>;
   givenName: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   journeyMonitors?: Maybe<Array<Maybe<JourneyMonitor>>>;

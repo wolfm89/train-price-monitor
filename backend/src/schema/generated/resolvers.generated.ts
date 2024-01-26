@@ -184,7 +184,7 @@ export type MutationResolvers<
     Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationCreateUserArgs, 'email' | 'familyName' | 'givenName' | 'id'>
+    RequireFields<MutationCreateUserArgs, 'email' | 'givenName' | 'id'>
   >;
   deleteJourneyMonitor?: Resolver<
     Maybe<ResolversTypes['JourneyMonitor']>,
@@ -304,7 +304,7 @@ export type UserResolvers<
 > = {
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
-  familyName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  familyName?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journeyMonitors?: Resolver<
