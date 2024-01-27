@@ -8,7 +8,6 @@ import { AlertSeverity } from './AlertProvider';
 
 interface AuthContextType {
   user: UserData | null;
-  isLoading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   userProfilePictureUrl: string | undefined;
@@ -21,7 +20,6 @@ const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const { addAlert } = useAlert();
   const [user, setUser] = useState<UserData | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [userProfilePictureUrl, setUserProfilePictureUrl] = useState<string | undefined>(undefined);
   const [userProfilePictureUrlResult, reexecuteUserProfilePictureUrlQuery] = useQuery({
     query: UserProfilePictureUrlQuery,
@@ -41,9 +39,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    getCurrentUser()
-      .then(() => setIsLoading(false))
-      .catch(() => setIsLoading(false));
+    getCurrentUser();
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -111,7 +107,6 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const authValue: AuthContextType = {
     user,
-    isLoading,
     signIn,
     signOut,
     userProfilePictureUrl,
