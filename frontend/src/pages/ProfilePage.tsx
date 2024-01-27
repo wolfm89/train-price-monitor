@@ -36,12 +36,13 @@ const ProfilePage: React.FC = () => {
   const [newPassword, setNewPassword] = useState('');
   const [enableEmailNotifications, setEnableEmailNotifications] = useState(false);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false); // State to control the visibility of the delete confirmation dialog
+  const [accountDeletionConfirmed, setAccountDeletionConfirmed] = useState(false);
   const { addAlert } = useAlert();
   const [, updateUserProfilePicture] = useMutation(UpdateUserProfilePicture);
   const [{ data: userSettingsData, fetching: userSettingsFetching }] = useQuery({
     query: UserSettingsQuery,
     variables: { id: user?.['custom:id'] },
-    pause: !user?.['custom:id'],
+    pause: !user?.['custom:id'] || accountDeletionConfirmed,
   });
   const [, updateUserSettings] = useMutation(UpdateUserSettings);
   const [, deleteUser] = useMutation(DeleteUser);
@@ -115,6 +116,7 @@ const ProfilePage: React.FC = () => {
   };
 
   const handleConfirmDeleteAccount = async () => {
+    setAccountDeletionConfirmed(true);
     // Delete the account
     deleteUser({ id: user?.['custom:id'] })
       .then(() => {

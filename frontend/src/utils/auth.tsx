@@ -192,13 +192,20 @@ export function deleteUser(): Promise<void> {
       return;
     }
 
-    cognitoUser.deleteUser((err: Error | undefined) => {
-      if (err) {
-        reject(err);
+    cognitoUser.getSession((getSessionErr: Error, session: CognitoUserSession | null) => {
+      if (getSessionErr) {
+        reject(getSessionErr);
         return;
       }
 
-      resolve();
+      cognitoUser.deleteUser((err: Error | undefined) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        resolve();
+      });
     });
   });
 }
