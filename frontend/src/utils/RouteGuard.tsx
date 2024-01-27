@@ -7,11 +7,7 @@ interface RouteGuardProps {
 }
 
 function RouteGuard({ children }: RouteGuardProps) {
-  const { user, isLoading } = useContext(AuthContext);
-
-  if (isLoading) {
-    return <></>;
-  }
+  const { user } = useContext(AuthContext);
 
   if (!user) {
     return <Navigate to="/" />;
