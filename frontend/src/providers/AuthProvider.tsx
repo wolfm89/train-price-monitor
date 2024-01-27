@@ -13,6 +13,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   userProfilePictureUrl: string | undefined;
   refetchUserProfilePictureUrl: () => void;
+  deleteUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
@@ -52,11 +53,20 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await auth.signOut();
-    setUser(null);
     const imageUrlKey = `image_url_${user?.['custom:id']}`;
     const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
     localStorage.removeItem(imageUrlKey);
     localStorage.removeItem(imageUrlTimestampKey);
+    setUser(null);
+  };
+
+  const deleteUser = async () => {
+    await auth.deleteUser();
+    const imageUrlKey = `image_url_${user?.['custom:id']}`;
+    const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
+    localStorage.removeItem(imageUrlKey);
+    localStorage.removeItem(imageUrlTimestampKey);
+    setUser(null);
   };
 
   const fetchAndCacheUserProfilePictureUrl = useCallback(async () => {
@@ -106,6 +116,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     signOut,
     userProfilePictureUrl,
     refetchUserProfilePictureUrl: fetchAndCacheUserProfilePictureUrl,
+    deleteUser,
   };
 
   return <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>;

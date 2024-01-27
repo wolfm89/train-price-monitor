@@ -10,7 +10,7 @@ export const UpdateUserProfilePicture = gql`
 `;
 
 export const CreateUser = gql`
-  mutation ($id: ID!, $email: String!, $familyName: String!, $givenName: String!) {
+  mutation ($id: ID!, $email: String!, $familyName: String, $givenName: String!) {
     createUser(id: $id, email: $email, familyName: $familyName, givenName: $givenName) {
       id
     }
@@ -22,6 +22,15 @@ export const UpdateUserSettings = gql`
     updateUserSettings(id: $id, emailNotificationsEnabled: $emailNotificationsEnabled) {
       id
       emailNotificationsEnabled
+    }
+  }
+`;
+
+export const DeleteUser = gql`
+  mutation ($id: ID!) {
+    deleteUser(id: $id) {
+      id
+      givenName
     }
   }
 `;

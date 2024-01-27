@@ -6,6 +6,7 @@ import {
   updateUserProfilePicture,
   createUser,
   updateUserSettings,
+  deleteUser,
 } from './user';
 import {
   journeysQuery,
@@ -30,6 +31,7 @@ const resolvers: Resolvers = {
     updateUserProfilePicture: updateUserProfilePicture,
     createUser: createUser,
     updateUserSettings: updateUserSettings,
+    deleteUser: deleteUser,
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,
     updateJourneyMonitor: updateJourneyMonitor,

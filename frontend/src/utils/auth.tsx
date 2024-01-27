@@ -183,3 +183,29 @@ export function changePassword(oldPassword: string, newPassword: string): Promis
     });
   });
 }
+
+export function deleteUser(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cognitoUser = userPool.getCurrentUser();
+    if (!cognitoUser) {
+      reject(new Error('No user found'));
+      return;
+    }
+
+    cognitoUser.getSession((getSessionErr: Error, session: CognitoUserSession | null) => {
+      if (getSessionErr) {
+        reject(getSessionErr);
+        return;
+      }
+
+      cognitoUser.deleteUser((err: Error | undefined) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        resolve();
+      });
+    });
+  });
+}

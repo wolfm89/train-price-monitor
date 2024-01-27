@@ -21,10 +21,10 @@ export interface EmailNotificationInfo {
 export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   PRICE_ALERT: {
     name: 'PRICE_ALERT',
-    mapAdditionalData: (context: GraphQLContext, userId: string, data: { [key: string]: unknown }) => {
+    mapAdditionalData: (context, userId, data) => {
       return { journeyMonitor: getJourneyMonitorByJourneyId(context, userId, data['journeyId'] as string) };
     },
-    formatEmail: async (context: GraphQLContext, user: User, data: { [key: string]: unknown }) => {
+    formatEmail: async (context, user, data) => {
       const { id, journey, limitPrice } = await getJourneyMonitorByJourneyId(
         context,
         user.id,
@@ -46,7 +46,7 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   },
   JOURNEY_EXPIRED: {
     name: 'JOURNEY_EXPIRED',
-    mapAdditionalData: async (context: GraphQLContext, userId: string, data: { [key: string]: unknown }) => {
+    mapAdditionalData: async (context, userId, data) => {
       const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
       if (!journey) {
         throw new Error('Could not requery journey');
@@ -62,7 +62,7 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
         },
       };
     },
-    formatEmail: async (context: GraphQLContext, user: User, data: { [key: string]: unknown }) => {
+    formatEmail: async (context, user, data) => {
       const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
       if (!journey) {
         throw new Error('Could not requery journey');

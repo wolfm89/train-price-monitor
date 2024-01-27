@@ -1,28 +1,51 @@
 import React, { ChangeEvent, useContext, useEffect, useState } from 'react';
-import { Typography, Grid, TextField, Button, Avatar, Box, Checkbox, FormControlLabel } from '@mui/material';
+import {
+  Typography,
+  Grid,
+  TextField,
+  Button,
+  Avatar,
+  Box,
+  Checkbox,
+  FormControlLabel,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+} from '@mui/material';
 import { AuthContext } from '../providers/AuthProvider';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
 import { changePassword } from '../utils/auth';
 import { useMutation, useQuery } from 'urql';
-import { UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
+import { DeleteUser, UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
+import { useNavigate } from 'react-router-dom';
 
 const ProfilePage: React.FC = () => {
-  const { user, userProfilePictureUrl, refetchUserProfilePictureUrl } = useContext(AuthContext);
+  const {
+    user,
+    userProfilePictureUrl,
+    refetchUserProfilePictureUrl,
+    deleteUser: deleteCognitoUser,
+  } = useContext(AuthContext);
+  const navigate = useNavigate();
   const [firstName, setFirstName] = useState(user?.given_name);
   const [lastName, setLastName] = useState(user?.family_name);
   const [email, setEmail] = useState(user?.email);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [enableEmailNotifications, setEnableEmailNotifications] = useState(false);
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false); // State to control the visibility of the delete confirmation dialog
+  const [accountDeletionConfirmed, setAccountDeletionConfirmed] = useState(false);
   const { addAlert } = useAlert();
   const [, updateUserProfilePicture] = useMutation(UpdateUserProfilePicture);
   const [{ data: userSettingsData, fetching: userSettingsFetching }] = useQuery({
     query: UserSettingsQuery,
     variables: { id: user?.['custom:id'] },
-    pause: !user?.['custom:id'],
+    pause: !user?.['custom:id'] || accountDeletionConfirmed,
   });
   const [, updateUserSettings] = useMutation(UpdateUserSettings);
+  const [, deleteUser] = useMutation(DeleteUser);
 
   useEffect(() => {
     if (userSettingsData) {
@@ -85,6 +108,38 @@ const ProfilePage: React.FC = () => {
 
   const handleEmailNoficationsEnabledChange = (_event: ChangeEvent<HTMLInputElement>, checked: boolean) => {
     setEnableEmailNotifications(checked);
+  };
+
+  const handleDeleteAccount = async () => {
+    // Show confirmation dialog
+    setShowDeleteConfirmation(true);
+  };
+
+  const handleConfirmDeleteAccount = async () => {
+    setAccountDeletionConfirmed(true);
+    // Delete the account
+    deleteUser({ id: user?.['custom:id'] })
+      .then(() => {
+        deleteCognitoUser()
+          .then(() => {
+            navigate(`/`);
+            addAlert('Account deleted successfully!', AlertSeverity.Success);
+          })
+          .catch(() => {
+            addAlert('Account deletion failed.', AlertSeverity.Error);
+          });
+      })
+      .catch(() => {
+        addAlert('Account deletion failed.', AlertSeverity.Error);
+      });
+
+    // Hide the confirmation dialog
+    setShowDeleteConfirmation(false);
+  };
+
+  const handleCancelDeleteAccount = () => {
+    // Hide the confirmation dialog
+    setShowDeleteConfirmation(false);
   };
 
   return (
@@ -166,18 +221,36 @@ const ProfilePage: React.FC = () => {
                 fullWidth
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid item xs={12}>
               <FormControlLabel
                 control={<Checkbox checked={enableEmailNotifications} onChange={handleEmailNoficationsEnabledChange} />}
                 label="Enable Email Notifications for Price Alerts"
               />
             </Grid>
-            <Grid item xs={12}>
+            <Grid item xs={6}>
               <Button variant="contained" color="primary" onClick={handleSaveChanges}>
                 Save Changes
               </Button>
             </Grid>
+            <Grid item xs={6} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button variant="contained" color="error" onClick={handleDeleteAccount}>
+                Delete Account
+              </Button>
+            </Grid>
           </Grid>
+          {/* Confirmation Dialog */}
+          <Dialog open={showDeleteConfirmation} onClose={handleCancelDeleteAccount}>
+            <DialogTitle>Delete Account</DialogTitle>
+            <DialogContent>
+              <Typography>Are you sure you want to delete your account?</Typography>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCancelDeleteAccount}>Cancel</Button>
+              <Button onClick={handleConfirmDeleteAccount} color="error">
+                Delete
+              </Button>
+            </DialogActions>
+          </Dialog>
         </>
       )}
     </>

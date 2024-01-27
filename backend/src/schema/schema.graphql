@@ -9,7 +9,7 @@ scalar DateTime
 type User {
   id: ID!
   givenName: String!
-  familyName: String!
+  familyName: String
   email: String!
   profilePicture: String
   emailNotificationsEnabled: Boolean!
@@ -39,11 +39,15 @@ extend type Mutation {
 }
 
 extend type Mutation {
-  createUser(id: ID!, givenName: String!, familyName: String!, email: String!): User
+  createUser(id: ID!, givenName: String!, familyName: String, email: String!): User
 }
 
 extend type Mutation {
   updateUserSettings(id: ID!, emailNotificationsEnabled: Boolean!): User
+}
+
+extend type Mutation {
+  deleteUser(id: ID!): User
 }
 
 # Notification
