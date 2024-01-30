@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
-import { Button, Typography, Box } from '@mui/material';
+import { Button, Typography, Box, CircularProgress } from '@mui/material';
 import { AuthContext } from '../providers/AuthProvider';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
@@ -70,7 +70,7 @@ const HomePage: React.FC<Props> = () => {
         With Train Price Monitor, you can track the prices of train tickets and get notified when they increase. Sign up
         today to start monitoring your train prices!
       </Typography>
-      {!user && (
+      {!user && !userExistsResult.fetching ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Button variant="contained" onClick={handleModalOpen}>
             Sign up now
@@ -82,6 +82,12 @@ const HomePage: React.FC<Props> = () => {
           </Button>
           <LoginModal open={loginModalOpen} onClose={handleLoginClose} />
         </Box>
+      ) : (
+        userExistsResult.fetching && (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
+            <CircularProgress />
+          </div>
+        )
       )}
     </>
   );
