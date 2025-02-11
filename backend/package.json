@@ -45,7 +45,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "dynamodb-toolbox": "^0.8.5",
-    "esbuild": "^0.17.19",
+    "esbuild": "^0.25.0",
     "express": "^4.21.1",
     "graphql": "^16.8.1",
     "graphql-scalars": "^1.22.4",
