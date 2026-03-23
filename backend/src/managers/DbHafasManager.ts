@@ -1,6 +1,6 @@
-import { HafasClient, Journey, Journeys, Station } from 'hafas-client';
-import createClient from 'hafas-client';
-import dbProfile from 'hafas-client/p/db';
+import type { HafasClient, Journey, JourneyWithRealtimeData, Journeys, Station } from 'hafas-client';
+import { createClient } from 'db-vendo-client';
+import { profile as dbnavProfile } from 'db-vendo-client/p/dbnav/index.js';
 import Logger from '../lib/logger';
 
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
@@ -15,8 +15,7 @@ export class DbHafasManager {
    * Constructs a new DbHafasManager instance.
    */
   constructor() {
-    // Create a HafasClient instance using the provided profile and user agent
-    this.client = createClient(dbProfile, userAgent);
+    this.client = createClient(dbnavProfile, userAgent);
   }
 
   /**
@@ -28,7 +27,7 @@ export class DbHafasManager {
    * @returns A promise that resolves to the retrieved journeys.
    */
   async queryJourneys(from: string, to: string, departure: Date, results: number = 3): Promise<Journeys> {
-    return await this.client.journeys(from, to, { departure, results });
+    return await this.client.journeys(from, to, { departure, results, tickets: true });
   }
 
   /**
@@ -41,43 +40,42 @@ export class DbHafasManager {
       throw new Error('refreshToken is undefined');
     }
 
-    let refreshedJourney;
-    // Refresh the journey using the refresh token
+    let result: JourneyWithRealtimeData | undefined;
     try {
-      refreshedJourney = await this.client.refreshJourney!(refreshToken, {
-        subStops: false,
-        entrances: false,
+      result = await this.client.refreshJourney!(refreshToken, {
+        tickets: true,
       });
-    } catch (error) {
+    } catch {
       Logger.error('Error refreshing journey');
       return undefined;
     }
 
-    // Check if legs are undefined or empty
+    if (!result) {
+      return undefined;
+    }
+
+    const refreshedJourney = result.journey;
+
     if (refreshedJourney.legs === undefined || refreshedJourney.legs.length === 0) {
       throw new Error('refreshedJourney.legs is undefined or empty');
     }
 
-    // Check if a price was found in the refreshed journey
     if (refreshedJourney.price) {
       Logger.info('Price was found in refreshed journey');
       return refreshedJourney;
     }
 
-    // Try to get the price through the journeys query
     const from = refreshedJourney.legs[0].origin!.id!;
     const to = refreshedJourney.legs[refreshedJourney.legs.length - 1].destination!.id!;
     const departure = new Date(refreshedJourney.legs[0].plannedDeparture!);
 
-    // Attempt to query journeys with different result counts to find the price
     for (const n of [1, 5]) {
       const journeys = await this.queryJourneys(from, to, departure, n);
       if (journeys.journeys === undefined || journeys.journeys.length === 0) {
         break;
       }
 
-      // Filter journeys based on the refresh token
-      const filteredJourneys = journeys.journeys.filter((journey) => journey.refreshToken === refreshToken);
+      const filteredJourneys = journeys.journeys.filter((journey: Journey) => journey.refreshToken === refreshToken);
       if (filteredJourneys.length > 0) {
         const price = filteredJourneys[0].price;
         if (price) {
@@ -99,14 +97,11 @@ export class DbHafasManager {
    * @param query - The query string specifying the location.
    * @returns A promise that resolves to the retrieved locations.
    */
-  async queryLocations(query: string): Promise<readonly (Station | createClient.Stop | createClient.Location)[]> {
-    return await this.client.locations(query, {
+  async queryLocations(query: string): Promise<readonly Station[]> {
+    return (await this.client.locations(query, {
       results: 5,
       addresses: false,
       poi: false,
-      subStops: false,
-      entrances: false,
-      linesOfStops: false,
-    });
+    })) as readonly Station[];
   }
 }
