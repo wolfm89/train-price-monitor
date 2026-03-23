@@ -13,10 +13,10 @@ const SearchPage: React.FC<Props> = () => {
 
   return (
     <Grid container spacing={2}>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="h6">Search for Train Rides</Typography>
       </Grid>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <SearchMask
           setSearchData={setSearchData}
           setSearchResult={setSearchResult}
@@ -24,7 +24,7 @@ const SearchPage: React.FC<Props> = () => {
           setSearchClicked={setSearchClicked}
         />
       </Grid>
-      <Grid item xs={12}>
+      <Grid size={12}>
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
             <CircularProgress />

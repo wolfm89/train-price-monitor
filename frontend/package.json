@@ -13,6 +13,7 @@
     "@types/uuid": "^9.0.0",
     "@urql/exchange-auth": "^3.0.0",
     "amazon-cognito-identity-js": "^6.2.0",
+    "lodash": "^4.17.23",
     "lodash.debounce": "^4.0.8",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

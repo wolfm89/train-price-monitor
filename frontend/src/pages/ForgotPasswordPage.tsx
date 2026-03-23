@@ -33,7 +33,7 @@ export default function ForgotPasswordPage() {
       </Typography>
       <form onSubmit={handleSubmit}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={5}>
+          <Grid size={5}>
             <TextField
               id="email"
               label="Email"
@@ -44,12 +44,12 @@ export default function ForgotPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={4}>
+          <Grid size={4}>
             <Button type="submit" variant="contained" color="primary" disabled={isLoading || success}>
               {isLoading ? <CircularProgress size={24} color="inherit" /> : 'Submit'}
             </Button>
           </Grid>
-          <Grid item xs={4}>
+          <Grid size={4}>
             {success && (
               <Button component={RouterLink} to="/reset-password" variant="contained" color="primary">
                 Choose new password

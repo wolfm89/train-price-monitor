@@ -51,10 +51,8 @@ const JourneysPage: React.FC = () => {
   const toggleJourneyDetails = (journeyId: string) => {
     setExpandedJourneyIds((prevIds) => {
       if (prevIds.includes(journeyId)) {
-        // If the ID is already in the array, remove it
         return prevIds.filter((id) => id !== journeyId);
       } else {
-        // If the ID is not in the array, add it
         return [...prevIds, journeyId];
       }
     });
@@ -62,9 +60,7 @@ const JourneysPage: React.FC = () => {
 
   useEffect(() => {
     if (hash) {
-      // Get the journeyId parameter from the URL
       const journeyId = hash.split('#').pop()!;
-      // Update the state to open the accordion
       setExpandedJourneyIds([journeyId]);
     }
   }, [hash]);
@@ -99,10 +95,10 @@ const JourneysPage: React.FC = () => {
 
   return (
     <Grid container spacing={2}>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="h6">Journey Watchlist</Typography>
       </Grid>
-      <Grid item xs={12}>
+      <Grid size={12}>
         {userJourneysFetching ? (
           <Typography variant="body1">Loading journeys...</Typography>
         ) : userJourneysResult && userJourneysResult.user.journeyMonitors.length > 0 ? (
@@ -116,15 +112,15 @@ const JourneysPage: React.FC = () => {
                 >
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                     <Grid container justifyContent="space-between" alignItems="center" spacing={2}>
-                      <Grid item sm={6} xs={12}>
+                      <Grid size={{ sm: 6, xs: 12 }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                           {`${journey.from} to ${journey.to}`}
                         </Typography>
                       </Grid>
-                      <Grid item sm={3} xs={6} sx={{ textAlign: 'right' }}>
+                      <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>
                         <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
                       </Grid>
-                      <Grid item sm={3} xs={6} sx={{ textAlign: 'right' }}>
+                      <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>
                         <Typography
                           variant="body2"
                           sx={{
@@ -138,13 +134,13 @@ const JourneysPage: React.FC = () => {
                   </AccordionSummary>
                   <AccordionDetails>
                     <Grid container spacing={2}>
-                      <Grid item xs={12}>
+                      <Grid size={12}>
                         <Typography variant="body2">{`Departure: ${formatDateTime(journey.departure)}`}</Typography>
                       </Grid>
-                      <Grid item xs={12}>
+                      <Grid size={12}>
                         <Typography variant="body2">{`Arrival: ${formatDateTime(journey.arrival)}`}</Typography>
                       </Grid>
-                      <Grid item xs={12}>
+                      <Grid size={12}>
                         <Typography variant="body2">{`Means of Transport: ${journey.means
                           .map((mean: string) => (mean === 'walk' ? '\u{1F6B6}' : mean))
                           .join(' \u{2192} ')}`}</Typography>

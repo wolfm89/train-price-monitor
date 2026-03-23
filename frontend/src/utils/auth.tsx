@@ -123,7 +123,7 @@ export async function getCurrentUser() {
       return;
     }
 
-    cognitoUser.getSession((err: Error, session: null) => {
+    cognitoUser.getSession((err: Error, _session: null) => {
       if (err) {
         reject(err);
         return;
@@ -150,12 +150,12 @@ export function getSession() {
       reject(new Error('No user found'));
       return;
     }
-    cognitoUser.getSession((err: Error, session: null) => {
+    cognitoUser.getSession((err: Error, _session: null) => {
       if (err) {
         reject(err);
         return;
       }
-      resolve(session);
+      resolve(_session);
     });
   });
 }
@@ -167,7 +167,7 @@ export function changePassword(oldPassword: string, newPassword: string): Promis
       reject(new Error('No user found'));
       return;
     }
-    cognitoUser.getSession((getSessionErr: Error, session: CognitoUserSession | null) => {
+    cognitoUser.getSession((getSessionErr: Error, _session: CognitoUserSession | null) => {
       if (getSessionErr) {
         reject(getSessionErr);
         return;
@@ -192,7 +192,7 @@ export function deleteUser(): Promise<void> {
       return;
     }
 
-    cognitoUser.getSession((getSessionErr: Error, session: CognitoUserSession | null) => {
+    cognitoUser.getSession((getSessionErr: Error, _session: CognitoUserSession | null) => {
       if (getSessionErr) {
         reject(getSessionErr);
         return;

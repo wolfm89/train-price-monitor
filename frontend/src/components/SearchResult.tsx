@@ -86,6 +86,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
         }
       })
       .catch((reason) => {
+        // eslint-disable-next-line no-console
         console.log(reason);
         setLoading(false);
       });

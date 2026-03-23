@@ -31,7 +31,7 @@ export default function ResetPasswordPage() {
       </Typography>
       <form onSubmit={handleSubmit}>
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               type="text"
               label="Email"
@@ -42,7 +42,7 @@ export default function ResetPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               type="text"
               label="Confirmation code"
@@ -53,7 +53,7 @@ export default function ResetPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               type="password"
               label="New password"
@@ -64,10 +64,10 @@ export default function ResetPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Box />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Button
                 type="submit"
