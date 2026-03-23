@@ -4,6 +4,7 @@ min_version = "2024.9.5"
 node = "20"
 
 [env]
+_.file = '.env'
 PROJECT_NAME = "train-price-monitor"
 NODE_ENV = "development"
 AWS_REGION = "eu-central-1"
