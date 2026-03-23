@@ -6,47 +6,59 @@ This document provides guidance for AI agents working in this codebase.
 
 Train price monitoring webapp built with React, TypeScript, GraphQL, Docker, and AWS serverless services. The codebase is split into three modules:
 
-- **frontend/** - React app with Material-UI and urql
+- **frontend/** - React app with Material-UI, urql, and Vite
 - **backend/** - Express/GraphQL Yoga API with AWS integrations
 - **infrastructure/** - AWS CDK infrastructure definitions
 
+## Tooling
+
+This project uses **mise** for Node.js version management. Run `mise install` to set up tools.
+
 ## Build/Lint/Test Commands
 
-### Frontend
+### Frontend (Vite + React 19)
 
 ```bash
 cd frontend
-npm install && npm start      # Install and start dev server (port 3000)
-npm run build                 # Production build to frontend/build
-npm test                      # Run tests (Jest with react-scripts)
-npm test -- --watchAll=false  # Run tests once (CI mode)
-npm test -- --testPathPattern="SearchMask"  # Run single test file
+npm install              # Install dependencies
+npm run dev            # Start Vite dev server (port 3000)
+npm run build          # Production build to frontend/build
+npm test               # Run Vitest tests
+npm run typecheck      # TypeScript check
+npm run lint           # ESLint check
 ```
 
 ### Backend
 
 ```bash
 cd backend
-npm install && npm run dev    # Install and start with hot reload
-npm run build                 # Bundle with esbuild to backend/dist
-npm run codegen               # Generate GraphQL types from schema
+npm install            # Install dependencies
+npm run dev           # Start with hot reload
+npm run build         # Bundle with esbuild to backend/dist
+npm run codegen       # Generate GraphQL types from schema
+npm run typecheck     # TypeScript check
+npm run lint          # ESLint check
 ```
 
-### Infrastructure
+### Infrastructure (CDK)
 
 ```bash
 cd infrastructure
-npm install && npm run build  # Install and compile TypeScript
-npm test                      # Run Jest tests
-npm test -- --testNamePattern="SQS"  # Run single test
-npm run cdk deploy             # Deploy to AWS
-npm run cdk diff               # Show diff against deployed stack
+npm install            # Install dependencies
+npm run build         # Compile TypeScript
+npm run test          # Run Jest tests
+npm run cdk deploy    # Deploy to AWS
+npm run cdk diff      # Show diff against deployed stack
+npm run typecheck     # TypeScript check
+npm run lint          # ESLint check
 ```
 
 ### Root Level
 
 ```bash
 npx pre-commit run --all-files  # Run all pre-commit hooks
+mise run build                  # Build all modules (via mise)
+mise run test                  # Run tests (via mise)
 ```
 
 ## Code Style Guidelines
@@ -56,7 +68,7 @@ npx pre-commit run --all-files  # Run all pre-commit hooks
 - **TypeScript strict mode** enabled in all modules
 - Use `const` by default; use `let` only when reassignment is necessary
 - **No `console.log`** in frontend code (ESLint: `no-console: error`)
-- **Backend** allows `console.log` (overrides to `no-console: off`)
+- **Backend** allows `console.log`
 
 ### Formatting (Prettier)
 
@@ -66,16 +78,22 @@ npx pre-commit run --all-files  # Run all pre-commit hooks
 
 ### ESLint Configuration
 
-Root `.eslintrc.yml` applies to all modules:
+ESLint v10 uses flat config (`eslint.config.js`):
 
-- Extends `eslint:recommended` and `@typescript-eslint/recommended`
-- Rules: `no-console: error`, `prefer-const: warn`
-
-Module-specific overrides:
-
-- **frontend/.eslintrc.yml** - Extends `react-app` and `react-app/jest`
-- **backend/.eslintrc.yml** - Overrides `no-console: off`
-- **infrastructure/.eslintrc.yml** - Extends `plugin:awscdk/all`
+```javascript
+export default [
+  js.configs.recommended,
+  {
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      parser: tsparser,
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+    },
+    plugins: { '@typescript-eslint': tseslint },
+    rules: { ...tseslint.configs.recommended.rules, 'prefer-const': 'warn', 'no-console': 'error' },
+  },
+];
+```
 
 ### Import Conventions
 
@@ -142,13 +160,13 @@ export default function SearchMask({ onSearch, isLoading }: SearchMaskProps) {
 
 ### Testing
 
-- Test files: `<name>.test.ts` pattern in `test/` directory
-- Infrastructure uses Jest with ts-jest; Frontend uses react-scripts testing
+- Frontend: Vitest (`*.test.{ts,tsx}`)
+- Infrastructure: Jest with ts-jest (`*.test.ts`)
 - Write descriptive test names: `test('SQS Queue Created')`
 
 ## Pre-commit Hooks
 
-Enforce: no trailing whitespace, LF line endings, valid YAML/JSON, Prettier formatting, ESLint linting.
+Enforce: trailing whitespace, LF line endings, valid YAML/JSON, Prettier formatting, ESLint linting.
 
 Install: `pip install pre-commit && pre-commit install`
 
@@ -159,26 +177,36 @@ Never commit `.env` files or secrets. Required:
 - **Backend**: `PROFILE_IMAGE_BUCKET_NAME`, `TPM_SQS_QUEUE_URL`
 - **Infrastructure**: AWS credentials via AWS CLI
 
+See `.env` for example values.
+
 ## Directory Structure
 
 ```
 train-price-monitor/
-├── frontend/src/
-│   ├── api/          # GraphQL API clients
-│   ├── components/   # Reusable UI components
-│   ├── hooks/        # Custom React hooks
-│   ├── pages/        # Page components
-│   ├── providers/    # React context providers
-│   ├── theme.ts      # Material-UI theme
-│   └── utils/        # Utility functions
-├── backend/src/
-│   ├── lib/          # Shared utilities (logger, sort)
-│   └── main.ts       # Entry point
+├── frontend/
+│   ├── src/
+│   │   ├── api/          # GraphQL API clients
+│   │   ├── components/   # Reusable UI components
+│   │   ├── hooks/        # Custom React hooks
+│   │   ├── pages/        # Page components
+│   │   ├── providers/    # React context providers
+│   │   ├── theme.ts      # Material-UI theme
+│   │   └── utils/        # Utility functions
+│   ├── vite.config.ts     # Vite configuration
+│   ├── vitest.config.ts   # Vitest configuration
+│   └── index.html         # Entry HTML
+├── backend/
+│   └── src/
+│       ├── lib/          # Shared utilities
+│       └── main.ts       # Entry point
 ├── infrastructure/
-│   ├── lib/          # Stack definitions
-│   ├── test/         # CDK tests
-│   └── bin/          # CDK app entry
-└── AGENTS.md
+│   ├── lib/              # Stack definitions
+│   ├── test/             # CDK tests
+│   └── bin/              # CDK app entry
+├── .mise.toml            # Mise configuration
+├── .env                  # Environment variables (not committed)
+├── eslint.config.js      # ESLint v10 flat config
+└── AGENTS.md             # This file
 ```
 
 ## Common Tasks
@@ -188,7 +216,7 @@ train-price-monitor/
 1. Create file in appropriate subdirectory under `frontend/src/`
 2. Export as named export if reusable, default if page-level
 3. Create accompanying prop interface
-4. Verify ESLint/TypeScript checks pass
+4. Verify TypeScript/ESLint checks pass
 
 ### Adding a new GraphQL resolver
 
