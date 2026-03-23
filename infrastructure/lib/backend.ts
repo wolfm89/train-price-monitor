@@ -25,7 +25,6 @@ export class Backend extends Construct {
       if (tableDefinition.tableName === undefined) {
         throw new Error('Table name is not set.');
       }
-      // eslint-disable-next-line awscdk/require-dynamodb-ptr, awscdk/require-dynamodb-autoscale
       return new dynamodb.Table(this, tableDefinition.tableName, tableDefinition);
     });
 
