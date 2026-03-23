@@ -1,14 +1,29 @@
-import dotenv from 'dotenv';
+import dotenv from 'dotenv'; // Load environment variables from .env file
 import { GraphQLContext } from '../context';
+import {
+  GetItemCommand,
+  PutItemCommand,
+  UpdateItemCommand,
+  DeleteItemCommand,
+  QueryCommand,
+  ScanCommand,
+} from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
-import { User, PresignedUrl, Notification, JourneyMonitor } from '../schema/generated/typeDefs.generated';
+import {
+  User,
+  PresignedUrl,
+  JourneyMonitor,
+  JourneyExpiryNotification,
+  PriceAlertNotification,
+  InputMaybe,
+} from '../schema/generated/typeDefs.generated';
 import { getMeans } from './journey';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 
-dotenv.config(); // Load environment variables from .env file
+dotenv.config();
 
 const profileImageBucketName = process.env.PROFILE_IMAGE_BUCKET_NAME;
 
@@ -17,94 +32,110 @@ if (!profileImageBucketName) {
 }
 
 export const userResolvers: UserResolvers = {
-  notifications: async (parent, args, context: GraphQLContext): Promise<Notification[]> => {
-    let notifications: Notification[] | undefined = undefined;
-    const filters = [
-      { attr: 'userId', eq: `USER#${parent.id}` },
-      { attr: 'id', beginsWith: 'NOTIFICATION#' },
-    ];
-    if (args.read !== undefined) {
-      filters.push({ attr: 'read', eq: args.read });
-    }
-    const { Items: dbNotifications } = await context.entities.Notification.scan({
-      filters,
-    });
-    if (!dbNotifications) {
-      return [];
-    }
+  notifications: async (
+    parent,
+    args,
+    context: GraphQLContext
+  ): Promise<(JourneyExpiryNotification | PriceAlertNotification)[]> => {
+    const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(ScanCommand)
+      .entities(context.entities.Notification)
+      .send();
 
-    notifications = await Promise.all(
-      dbNotifications.map(async (dbNotification) => {
-        return {
-          id: dbNotification.id,
-          userId: dbNotification.userId,
-          type: dbNotification.type,
-          timestamp: new Date(dbNotification.timestamp),
-          read: dbNotification.read,
-          sent: dbNotification.sent,
-          ...(await NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
+    const userNotifications = dbNotifications?.filter((n: { userId: string }) => n.userId === parent.id) ?? [];
+
+    const filteredNotifications = userNotifications.filter(
+      (n: { read?: boolean }) => args.read === undefined || n.read === args.read
+    );
+
+    const notifications = await Promise.all(
+      filteredNotifications.map(
+        async (dbNotification: {
+          id: string;
+          userId: string;
+          type: string;
+          timestamp: string;
+          read: boolean;
+          sent: boolean;
+          data?: string;
+        }) => {
+          const data = dbNotification.data ? JSON.parse(dbNotification.data) : {};
+          const additionalData = await NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
             context,
             dbNotification.userId,
-            dbNotification.data
-          )),
-        };
-      })
+            data
+          );
+          return {
+            id: dbNotification.id,
+            userId: dbNotification.userId,
+            type: dbNotification.type,
+            timestamp: new Date(dbNotification.timestamp),
+            read: dbNotification.read,
+            sent: dbNotification.sent,
+            ...additionalData,
+          } as JourneyExpiryNotification | PriceAlertNotification;
+        }
+      )
     );
-    if (notifications) {
-      sort(notifications, '-timestamp');
-      if (args.limit !== undefined) {
-        notifications = notifications.slice(0, args.limit);
-      }
-      return notifications;
+
+    sort(notifications, '-timestamp');
+    const limit = args.limit ?? undefined;
+    if (limit !== undefined) {
+      return notifications.slice(0, limit);
     }
-    return [];
+    return notifications;
   },
   journeyMonitors: async (parent, args, context: GraphQLContext): Promise<JourneyMonitor[]> => {
     Logger.addPersistentLogAttributes({ userId: parent.id });
-    let journeys: JourneyMonitor[];
-    const { Items: dbJourneys } = await context.entities.Journey.query(`USER#${parent.id}`, {
-      beginsWith: 'JOURNEY#',
-    });
+    const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Journey)
+      .query({ partition: `USER#${parent.id}`, range: { beginsWith: 'JOURNEY#' } })
+      .send();
+
     if (!dbJourneys) {
       return [];
     }
-    journeys = await Promise.all(
-      dbJourneys.map(async (dbJourney) => {
-        return await getJourneyMonitor(context, dbJourney);
-      })
+    const journeys: JourneyMonitor[] = await Promise.all(
+      dbJourneys.map(
+        async (dbJourney: {
+          expires: string;
+          limitPrice: number;
+          refreshToken: string;
+          userId: string;
+          id: string;
+        }) => {
+          return await getJourneyMonitor(context, dbJourney);
+        }
+      )
     );
-    if (journeys) {
-      journeys.sort(
-        (a: JourneyMonitor, b: JourneyMonitor) =>
-          (a.journey ? a.journey.departure.getTime() : Infinity) -
-          (b.journey ? b.journey.departure.getTime() : Infinity)
-      );
+    journeys.sort(
+      (a: JourneyMonitor, b: JourneyMonitor) =>
+        (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
+    );
 
-      if (args.limit !== undefined) {
-        journeys = journeys.slice(0, args.limit);
-      }
-      return journeys;
+    const limit = args.limit ?? undefined;
+    if (limit !== undefined) {
+      return journeys.slice(0, limit);
     }
-    return [];
+    return journeys;
   },
 };
 
 export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context): Promise<User> => {
-  const { Item: dbUser } = await context.entities.User.get({ id: args.id });
+  const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id: args.id }).send();
   if (!dbUser) {
     throw new Error('User not found in database');
   }
-  return dbUser as User;
+  return dbUser as unknown as User;
 };
 
 export const userProfilePicturePresignedUrlQuery: NonNullable<
   QueryResolvers['userProfilePicturePresignedUrl']
 > = async (_, { id }: { id: string }, context: GraphQLContext) => {
-  const { Item: dbUser } = await context.entities.User.get({ id: id });
+  const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id }).send();
   let url: string | undefined = undefined;
   if (dbUser?.profilePicture) {
     // get presigned url for file dbUser?.profilePicture in bucket profileImageBucketName
-    url = await context.s3.getPresignedUrl(profileImageBucketName, dbUser?.profilePicture);
+    url = await context.s3.getPresignedUrl(profileImageBucketName, dbUser.profilePicture);
   }
   const presignedUrl: PresignedUrl = {
     id: id,
@@ -118,7 +149,7 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   { id, image }: { id: string; image: File },
   context: GraphQLContext
 ) => {
-  const { Item: dbUserCur } = await context.entities.User.get({ id: id });
+  const { Item: dbUserCur } = await context.entities.User.build(GetItemCommand).key({ id }).send();
   const filename = `${id}.${image.name.split('.').pop()}`;
 
   try {
@@ -131,40 +162,45 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
 
   // Delete previous image
   if (dbUserCur && dbUserCur.profilePicture && dbUserCur.profilePicture != filename) {
-    Logger.info(`'Deleting previous profile image for user '${id}'`);
+    Logger.info(`Deleting previous profile image for user '${id}'`);
     await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
   }
 
-  const { Attributes: dbUser } = await context.entities.User.update(
-    { id: id, profilePicture: filename },
-    { returnValues: 'ALL_NEW' }
-  );
+  const { Attributes: dbUser } = await context.entities.User.build(UpdateItemCommand)
+    .item({ id, profilePicture: filename })
+    .options({ returnValues: 'ALL_NEW' })
+    .send();
+
   if (!dbUser) {
     return null;
   }
   context.cache.invalidate([{ typename: 'User' }, { typename: 'PresignedUrl' }]);
 
-  const user: User = { ...dbUser };
-  return user;
+  return dbUser as unknown as User;
 };
 
 export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   _,
-  { id, givenName, familyName, email }: { id: string; givenName: string; familyName?: string; email: string },
+  {
+    id,
+    givenName,
+    familyName,
+    email,
+  }: { id: string; givenName: string; familyName?: InputMaybe<string>; email: string },
   context: GraphQLContext
 ) => {
   try {
-    await context.entities.User.put(
-      {
+    await context.entities.User.build(PutItemCommand)
+      .item({
         id: id,
         givenName: givenName,
-        familyName: familyName!,
+        familyName: familyName ?? undefined,
         email: email,
-      },
-      { conditions: { attr: 'id', exists: false } }
-    );
+      })
+      .options({ condition: { attr: 'id', exists: false } })
+      .send();
   } catch (error) {
-    if (error && error instanceof ConditionalCheckFailedException) {
+    if (error instanceof ConditionalCheckFailedException) {
       Logger.info(`User with id ${id} already exists`);
       throw Error('User already exists');
     }
@@ -192,17 +228,17 @@ export const updateUserSettings: NonNullable<MutationResolvers['updateUserSettin
   context: GraphQLContext
 ) => {
   try {
-    const { Attributes: dbUser } = await context.entities.User.update(
-      { id: id, emailNotificationsEnabled: emailNotificationsEnabled },
-      { returnValues: 'ALL_NEW' }
-    );
+    const { Attributes: dbUser } = await context.entities.User.build(UpdateItemCommand)
+      .item({ id, emailNotificationsEnabled })
+      .options({ returnValues: 'ALL_NEW' })
+      .send();
 
     if (!dbUser) {
       throw new Error('Failed to update user property');
     }
     context.cache.invalidate([{ typename: 'User' }]);
 
-    return dbUser as User;
+    return dbUser as unknown as User;
   } catch (error) {
     Logger.error(`Failed to update user with id ${id}: ${error}`);
     throw error;
@@ -217,54 +253,62 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   try {
     Logger.addPersistentLogAttributes({ userId: id });
 
-    const { Item: dbUserCur } = await context.entities.User.get(
-      { id: id },
-      { attributes: ['profilePicture', 'email'] }
-    );
+    const { Item: dbUserCur } = await context.entities.User.build(GetItemCommand).key({ id }).send();
 
-    // Delete profile picture from S3 bucket
     if (dbUserCur && dbUserCur.profilePicture) {
+      // Delete profile picture from S3 bucket
       Logger.info(`Deleting profile image for user '${id}'`);
       await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
     }
 
     // Delete database entries related to user
-    // Delete notifications
-    const { Items: dbNotifications } = await context.entities.Notification.query(`USER#${id}`, {
-      beginsWith: 'NOTIFICATION#',
-    });
+    const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Notification)
+      .query({ partition: `USER#${id}` })
+      .send();
+
     if (dbNotifications) {
+      // Delete notifications
       await Promise.all(
-        dbNotifications.map(async (dbNotification) => {
-          await context.entities.Notification.delete({ userId: id, id: dbNotification.id });
-        })
-      );
-    }
-    // Delete journeys
-    const { Items: dbJourneys } = await context.entities.Journey.query(`USER#${id}`, {
-      beginsWith: 'JOURNEY#',
-    });
-    if (dbJourneys) {
-      await Promise.all(
-        dbJourneys.map(async (dbJourney) => {
-          await context.entities.Journey.delete({ userId: id, id: dbJourney.id });
+        dbNotifications.map(async (dbNotification: { id: string }) => {
+          await context.entities.Notification.build(DeleteItemCommand)
+            .key({ userId: id, id: dbNotification.id })
+            .send();
         })
       );
     }
 
-    // Delete user's email identity from SES
+    const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Journey)
+      .query({ partition: `USER#${id}` })
+      .send();
+
+    if (dbJourneys) {
+      // Delete journeys
+      await Promise.all(
+        dbJourneys.map(async (dbJourney: { id: string }) => {
+          await context.entities.Journey.build(DeleteItemCommand).key({ userId: id, id: dbJourney.id }).send();
+        })
+      );
+    }
+
     if (dbUserCur && dbUserCur.email) {
+      // Delete user's email identity from SES
       context.ses.deleteEmailIdentity(dbUserCur.email);
     }
 
     // Delete user from database
-    const { Attributes: dbUser } = await context.entities.User.delete({ id: id }, { returnValues: 'ALL_OLD' });
+    const { Attributes: dbUser } = await context.entities.User.build(DeleteItemCommand)
+      .key({ id })
+      .options({ returnValues: 'ALL_OLD' })
+      .send();
+
     if (!dbUser) {
       throw new Error('Failed to delete user');
     }
 
     context.cache.invalidate([{ typename: 'User' }]);
-    return dbUser as User;
+    return dbUser as unknown as User;
   } catch (error) {
     Logger.error(`Failed to delete user with id ${id}: ${error}`);
     throw error;

@@ -7,13 +7,13 @@ export type MakeEmpty<T extends { [key: string]: unknown }, K extends keyof T> =
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 /** All built-in and custom scalars, mapped to their actual values */
 export type Scalars = {
-  ID: { input: string; output: string };
-  String: { input: string; output: string };
-  Boolean: { input: boolean; output: boolean };
-  Int: { input: number; output: number };
-  Float: { input: number; output: number };
-  DateTime: { input: any; output: any };
-  File: { input: File; output: File };
+  ID: { input: string; output: string; }
+  String: { input: string; output: string; }
+  Boolean: { input: boolean; output: boolean; }
+  Int: { input: number; output: number; }
+  Float: { input: number; output: number; }
+  DateTime: { input: any; output: any; }
+  File: { input: File; output: File; }
 };
 
 export type Journey = {
@@ -68,6 +68,7 @@ export type Mutation = {
   updateUserSettings?: Maybe<User>;
 };
 
+
 export type MutationCreateUserArgs = {
   email: Scalars['String']['input'];
   familyName?: InputMaybe<Scalars['String']['input']>;
@@ -75,19 +76,23 @@ export type MutationCreateUserArgs = {
   id: Scalars['ID']['input'];
 };
 
+
 export type MutationDeleteJourneyMonitorArgs = {
   journeyId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
 };
 
+
 export type MutationDeleteUserArgs = {
   id: Scalars['ID']['input'];
 };
+
 
 export type MutationMarkNotificationAsReadArgs = {
   notificationId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
 };
+
 
 export type MutationMonitorJourneyArgs = {
   expires: Scalars['DateTime']['input'];
@@ -96,20 +101,24 @@ export type MutationMonitorJourneyArgs = {
   userId: Scalars['ID']['input'];
 };
 
+
 export type MutationSendEmailNotificationArgs = {
   notificationId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
 };
+
 
 export type MutationUpdateJourneyMonitorArgs = {
   journeyId: Scalars['ID']['input'];
   userId: Scalars['ID']['input'];
 };
 
+
 export type MutationUpdateUserProfilePictureArgs = {
   id: Scalars['ID']['input'];
   image: Scalars['File']['input'];
 };
+
 
 export type MutationUpdateUserSettingsArgs = {
   emailNotificationsEnabled: Scalars['Boolean']['input'];
@@ -150,19 +159,23 @@ export type Query = {
   userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
 };
 
+
 export type QueryJourneysArgs = {
   departure: Scalars['DateTime']['input'];
   from: Scalars['String']['input'];
   to: Scalars['String']['input'];
 };
 
+
 export type QueryLocationsArgs = {
   query: Scalars['String']['input'];
 };
 
+
 export type QueryUserArgs = {
   id: Scalars['ID']['input'];
 };
+
 
 export type QueryUserProfilePicturePresignedUrlArgs = {
   id: Scalars['ID']['input'];
@@ -180,9 +193,11 @@ export type User = {
   profilePicture?: Maybe<Scalars['String']['output']>;
 };
 
+
 export type UserJourneyMonitorsArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;
 };
+
 
 export type UserNotificationsArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;

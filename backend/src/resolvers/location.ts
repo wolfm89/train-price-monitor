@@ -1,6 +1,6 @@
 import { GraphQLContext } from '../context';
 import Logger from '../lib/logger';
-import { QueryResolvers } from '../schema/generated/resolvers.generated';
+import { QueryResolvers, ResolversTypes } from '../schema/generated/resolvers.generated';
 
 export const locationsQuery: NonNullable<QueryResolvers['locations']> = async (
   _parent,
@@ -12,11 +12,10 @@ export const locationsQuery: NonNullable<QueryResolvers['locations']> = async (
     Logger.info(`No locations found for ${args.query}`);
     return [];
   }
-  return locations.map((location) => {
-    return {
-      type: location.type,
-      name: location.name,
-      id: location.id,
-    };
-  });
+  return locations.map((location) => ({
+    __typename: 'Location',
+    type: location.type,
+    name: location.name!,
+    id: location.id!,
+  })) as unknown as ResolversTypes['Location'][];
 };
