@@ -89,6 +89,7 @@ if (process.env.AWS_EXECUTION_ENV) {
 } else {
   // Running locally
   app.listen(port, () => {
+    // eslint-disable-next-line no-console
     console.log(`Running a GraphQL API server at http://localhost:${port}/graphql`);
   });
 }
