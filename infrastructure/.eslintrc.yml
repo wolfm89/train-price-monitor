@@ -1,9 +1,0 @@
-env:
-  node: true
-  jest: true
-extends:
-  - plugin:awscdk/all
-plugins:
-  - 'awscdk'
-rules:
-  '@typescript-eslint/no-var-requires': 'off'
