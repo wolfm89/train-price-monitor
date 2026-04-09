@@ -170,6 +170,28 @@ Enforce: trailing whitespace, LF line endings, valid YAML/JSON, Prettier formatt
 
 Install: `pip install pre-commit && pre-commit install`
 
+## Backend esbuild Bundling Rules
+
+The backend bundles with `--format=cjs` for Lambda compatibility. Critical rules for `--external` flags:
+
+- **Do NOT externalize ESM-only packages** — they cannot be `require()`d at runtime and will crash Lambda with `UserCodeSyntaxError: Cannot use import statement outside a module`. Symptom: API Gateway returns 502 (browser misreports this as a CORS error).
+- **`db-vendo-client`** must be **bundled** (not external) — it is ESM-only.
+- **`db-hafas-stations`** must stay **external** — it uses `import.meta.url` for `.ndjson` data file resolution and is loaded via dynamic `import()`, which works from CJS context.
+
+## AWS Deployment
+
+```bash
+# Source root .env first (sets AWS_PROFILE etc.)
+source .env
+
+# Deploy all stacks (from infrastructure/)
+npx cdk deploy --all --require-approval never
+```
+
+- Lambda runs as a Docker image — expect **~15s cold start** on first invocation after deployment.
+- If the Lambda crashes silently, check CloudWatch: log group is `/aws/lambda/InfrastructureStack-BackendGraphql*`.
+- API Gateway uses a Cognito authorizer — all GraphQL requests require a valid JWT in the `Authorization` header (handled automatically by the frontend urql client).
+
 ## Environment Variables
 
 Never commit `.env` files or secrets. Required:
