@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { Schedule } from 'aws-cdk-lib/aws-events';
+import { ScheduleExpression } from 'aws-cdk-lib/aws-scheduler';
 import { ToolkitCleaner } from 'cloudstructs/lib/toolkit-cleaner';
 import { CognitoAuth } from './cognito-auth';
 import { Backend } from './backend';
@@ -14,7 +14,7 @@ export class InfrastructureStack extends cdk.Stack {
     new Backend(this, 'Backend', cognitoAuth.userPool);
     new Frontend(this, 'Frontend', frontendProps);
     new ToolkitCleaner(this, 'ToolkitCleaner', {
-      schedule: Schedule.rate(cdk.Duration.days(7)),
+      scheduleExpression: ScheduleExpression.rate(cdk.Duration.days(7)),
     });
   }
 }

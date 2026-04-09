@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'build',
       sourcemap: true,
+      chunkSizeWarningLimit: 1200,
     },
     optimizeDeps: {
       include: ['amazon-cognito-identity-js'],

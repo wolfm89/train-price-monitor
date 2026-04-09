@@ -1,9 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { Bucket, BucketAccessControl, BucketEncryption } from 'aws-cdk-lib/aws-s3';
-import { Distribution, OriginAccessIdentity, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
+import { Distribution, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
+import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 
@@ -23,22 +23,13 @@ export class Frontend extends Construct {
       accessControl: BucketAccessControl.PRIVATE,
     });
 
-    // Deploy frontend to S3 bucket using BucketDeployment
-    new BucketDeployment(this, 'FrontendDeployment', {
-      sources: [Source.asset(path.resolve(__dirname, '../../frontend/build'))],
-      destinationBucket: bucket,
-    });
-
-    // Create CloudFront distribution
-    const originAccessIdentity = new OriginAccessIdentity(this, 'OriginAccessIdentity');
-    bucket.grantRead(originAccessIdentity);
-
-    const distribution = new Distribution(this, 'Distribution', {
+    // CloudFront distribution with custom domain
+    const distribution = new Distribution(this, 'DistributionNew', {
       defaultRootObject: 'index.html',
-      domainNames: [domainName],
+      domainNames: [domainName], // Adding back the custom domain
       certificate: certificate,
       defaultBehavior: {
-        origin: new S3Origin(bucket, { originAccessIdentity }),
+        origin: S3BucketOrigin.withOriginAccessControl(bucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         compress: true,
       },
@@ -54,6 +45,14 @@ export class Frontend extends Construct {
           responsePagePath: '/index.html',
         },
       ],
+    });
+
+    // Deploy frontend to S3 bucket using BucketDeployment
+    new BucketDeployment(this, 'FrontendDeployment', {
+      sources: [Source.asset(path.resolve(__dirname, '../../frontend/build'))],
+      destinationBucket: bucket,
+      distribution,
+      distributionPaths: ['/*'],
     });
 
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
