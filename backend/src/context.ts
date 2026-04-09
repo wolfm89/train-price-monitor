@@ -34,6 +34,6 @@ export type GraphQLContext = {
   dbHafas: DbHafasManager;
 };
 
-export async function createContext(cache: Cache): Promise<GraphQLContext> {
+export async function createContext(cache: Cache, _options?: { request?: Request }): Promise<GraphQLContext> {
   return { cache, entities: { User, Notification, Journey, TrainPriceMonitorTable }, s3, sqs, ses, dbHafas };
 }
