@@ -1,14 +1,16 @@
-FROM public.ecr.aws/lambda/nodejs:18 as builder
+FROM public.ecr.aws/lambda/nodejs:24 as builder
 WORKDIR /build
-COPY . .
+COPY package*.json ./
+COPY package-lock.json* ./
 RUN npm ci
-# Generate code from GraphQL schema
+COPY . .
 RUN npm run codegen
-RUN npm ci --production
 RUN npm run build
+RUN npm ci --omit=dev || npm ci --production
 
-FROM public.ecr.aws/lambda/nodejs:18
+FROM public.ecr.aws/lambda/nodejs:24
 WORKDIR ${LAMBDA_TASK_ROOT}
 COPY --from=builder /build/dist/* ./
 COPY --from=builder /build/src/schema ./src/schema
+COPY --from=builder /build/node_modules ./node_modules
 CMD [ "main.handler" ]
