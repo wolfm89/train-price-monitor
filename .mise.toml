@@ -1,7 +1,7 @@
 min_version = "2024.9.5"
 
 [tools]
-node = "20"
+node = "24"
 
 [env]
 _.file = '.env'
