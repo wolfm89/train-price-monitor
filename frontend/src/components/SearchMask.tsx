@@ -146,18 +146,17 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
         <Autocomplete
           id="departure"
           value={from}
+          options={fromSuggestions ?? []}
           filterOptions={(x) => x}
-          options={fromSuggestions}
-          getOptionLabel={(option) => option.name}
-          autoComplete
+          getOptionLabel={(option) => option?.name ?? ''}
           includeInputInList
           filterSelectedOptions
           noOptionsText="No locations found"
           loading={fromFetching}
           renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
-          isOptionEqualToValue={(option: Location, value: Location) => option.id === value.id}
+          isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
           onChange={(_event: any, newValue: Location | null) => {
-            setFromSuggestions(newValue ? [newValue, ...fromSuggestions] : fromSuggestions);
+            setFromSuggestions(newValue ? [newValue, ...(fromSuggestions ?? [])] : fromSuggestions ?? []);
             setFrom(newValue);
           }}
           onInputChange={(_event, newInputValue) => {
@@ -170,20 +169,19 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
       </Grid>
       <Grid size={{ xs: 9, sm: 5 }}>
         <Autocomplete
-          id="departure"
+          id="arrival"
           value={to}
+          options={toSuggestions ?? []}
           filterOptions={(x) => x}
-          options={toSuggestions}
-          getOptionLabel={(option) => option.name}
-          autoComplete
+          getOptionLabel={(option) => option?.name ?? ''}
           includeInputInList
           filterSelectedOptions
           noOptionsText="No locations found"
           loading={toFetching}
           renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
-          isOptionEqualToValue={(option: Location, value: Location) => option.id === value.id}
+          isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
           onChange={(_event: any, newValue: Location | null) => {
-            setToSuggestions(newValue ? [newValue, ...toSuggestions] : toSuggestions);
+            setToSuggestions(newValue ? [newValue, ...(toSuggestions ?? [])] : toSuggestions ?? []);
             setTo(newValue);
           }}
           onInputChange={(_event, newInputValue) => {
