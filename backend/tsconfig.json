@@ -16,7 +16,8 @@
     "paths": {
       "db-vendo-client": ["./node_modules/hafas-client/index.d.ts"],
       "db-vendo-client/p/dbnav/index.js": ["./types/db-vendo-client/index.d.ts"],
-      "db-vendo-client/p/db/index.js": ["./types/db-vendo-client/index.d.ts"]
+      "db-vendo-client/p/db/index.js": ["./types/db-vendo-client/index.d.ts"],
+      "db-hafas-stations": ["./types/db-hafas-stations/index.d.ts"]
     }
   },
   "include": ["src/**/*", "types/**/*"],

@@ -1,7 +1,32 @@
 import type { HafasClient, Journey, JourneyWithRealtimeData, Journeys, Station } from 'hafas-client';
 import { createClient } from 'db-vendo-client';
-import { profile as dbnavProfile } from 'db-vendo-client/p/dbnav/index.js';
+import { profile as dbProfile } from 'db-vendo-client/p/db/index.js';
 import Logger from '../lib/logger';
+
+interface SimpleStation {
+  type: string;
+  id: string;
+  name: string;
+  weight: number;
+}
+
+let stationCachePromise: Promise<SimpleStation[]> | null = null;
+
+async function loadStationCache(): Promise<SimpleStation[]> {
+  const dbHafasStations = await import('db-hafas-stations');
+  const stations: SimpleStation[] = [];
+  for await (const station of dbHafasStations.readSimplifiedStations()) {
+    stations.push(station as SimpleStation);
+  }
+  return stations;
+}
+
+function getStationCache(): Promise<SimpleStation[]> {
+  if (!stationCachePromise) {
+    stationCachePromise = loadStationCache();
+  }
+  return stationCachePromise;
+}
 
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
 
@@ -15,7 +40,7 @@ export class DbHafasManager {
    * Constructs a new DbHafasManager instance.
    */
   constructor() {
-    this.client = createClient(dbnavProfile, userAgent);
+    this.client = createClient(dbProfile, userAgent, { enrichStations: false });
   }
 
   /**
@@ -97,11 +122,12 @@ export class DbHafasManager {
    * @param query - The query string specifying the location.
    * @returns A promise that resolves to the retrieved locations.
    */
-  async queryLocations(query: string): Promise<readonly Station[]> {
-    return (await this.client.locations(query, {
-      results: 5,
-      addresses: false,
-      poi: false,
-    })) as readonly Station[];
+  async queryLocations(query: string, results: number = 5): Promise<readonly Station[]> {
+    const stations = await getStationCache();
+    const lowerQuery = query.toLowerCase();
+    return stations
+      .filter((s) => s.name.toLowerCase().includes(lowerQuery))
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, results) as unknown as readonly Station[];
   }
 }

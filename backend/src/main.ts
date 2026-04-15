@@ -95,13 +95,30 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
   });
 
   if (isSQSEvent(event)) {
-    const graphqlContext = (await createContext(cache)) as GraphQLContext;
+    const body = event.Records[0]?.body || '{}';
+    let query = 'mutation { updateJourneyMonitors }';
+    let variables: Record<string, unknown> = {};
+
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.query) {
+        query = parsed.query;
+        variables = parsed.variables || {};
+      }
+    } catch {
+      logger.warn('Failed to parse SQS message body', { body });
+    }
+
+    logger.info('Processing SQS message', { query, hasVariables: Object.keys(variables).length > 0 });
+
+    const graphqlContext = (await createContext(cache, {})) as GraphQLContext;
     const result = await execute({
       schema: schema as any,
-      document: parse('mutation { updateJourneyMonitors }'),
+      document: parse(query),
+      variableValues: variables,
       contextValue: graphqlContext,
     });
-    logger.info('Scheduled task completed', { result: JSON.stringify(result) });
+    logger.info('SQS message processed', { hasErrors: !!result.errors });
     return { statusCode: 200, body: '' };
   }
 
