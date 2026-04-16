@@ -19,21 +19,11 @@ repos:
     hooks:
       - id: prettier
 
-  - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: 'v9.24.0'
+  - repo: local
     hooks:
       - id: eslint
-        files: \.[t]sx?$ # *.ts and *.tsx
-        types:
-          - 'file'
-        additional_dependencies:
-          - 'typescript@5.9.3'
-          - 'eslint@^10.1.0'
-          - '@eslint/js@10.0.1'
-          - '@typescript-eslint/eslint-plugin@8.57.1'
-          - '@typescript-eslint/parser@8.57.1'
-          - 'eslint-plugin-awscdk@0.0.65'
-          - 'eslint-plugin-react@7.37.0'
-          - 'eslint-plugin-react-hooks@5.0.0'
-          - 'globals@16.0.0'
-          - 'eslint-visitor-keys@3.4.3'
+        name: eslint
+        entry: npm run lint
+        language: node
+        pass_filenames: false
+        always_run: true

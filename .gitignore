@@ -28,3 +28,6 @@ request.json
 
 # mise
 .mise.local.toml
+
+# stats
+stats/
