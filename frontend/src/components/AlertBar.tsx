@@ -1,6 +1,6 @@
 import React from 'react';
 import useAlert from '../hooks/useAlert';
-import { Slide, Snackbar } from '@mui/material';
+import { Slide, SlideProps, Snackbar } from '@mui/material';
 import MuiAlert, { AlertProps } from '@mui/material/Alert';
 
 const Alert = React.forwardRef<HTMLDivElement, AlertProps>(function Alert(props, ref) {
@@ -14,7 +14,7 @@ const AlertBar: React.FC = () => {
     removeAlert();
   };
 
-  const SlideTransition = (props: any) => {
+  const SlideTransition = (props: SlideProps) => {
     return <Slide {...props} direction="down" />;
   };
 

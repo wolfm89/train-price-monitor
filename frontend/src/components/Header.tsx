@@ -30,7 +30,7 @@ const Header = () => {
   const navigate = useNavigate();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl } = useContext(AuthContext);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [{ stale, data: userNotificationsResult }, reexecuteUserNotificationsQuery] = useQuery({
     query: UserNotificationsQuery,
     variables: { id: user?.['custom:id'], notificationsLimit: 8, read: false },

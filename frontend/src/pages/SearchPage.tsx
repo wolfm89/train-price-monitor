@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { CircularProgress, Grid, Typography } from '@mui/material';
 import SearchMask from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
+import { Journey, SearchData } from '../components/SearchResult';
 
 interface Props {}
 
 const SearchPage: React.FC<Props> = () => {
-  const [searchData, setSearchData] = useState<any>(null);
-  const [searchResult, setSearchResult] = useState<any>(null);
+  const [searchData, setSearchData] = useState<SearchData | null>(null);
+  const [searchResult, setSearchResult] = useState<Journey[] | undefined>(undefined);
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
 
@@ -30,7 +31,7 @@ const SearchPage: React.FC<Props> = () => {
             <CircularProgress />
           </div>
         ) : searchResult ?? false ? (
-          <SearchResult searchData={searchData} searchResult={searchResult} />
+          <SearchResult searchData={searchData!} searchResult={searchResult!} />
         ) : (
           searchClicked && <Typography variant="subtitle1">No results found</Typography>
         )}

@@ -23,7 +23,7 @@ repos:
     rev: 'v9.39.0'
     hooks:
       - id: eslint
-        args: ['--max-warnings=0', '--config', 'eslint.config.js']
+        args: ['--max-warnings=0', '--config', 'eslint.config.cjs']
         additional_dependencies:
           - 'eslint@9.39.0'
           - '@typescript-eslint/eslint-plugin@8.58.2'

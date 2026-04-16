@@ -19,8 +19,9 @@ export default function ResetPasswordPage() {
       await confirmPassword(email, confirmationCode, newPassword);
       setSuccess(true);
       addAlert('Your password has been reset successfully!', AlertSeverity.Success);
-    } catch (err: any) {
-      addAlert(err.message, AlertSeverity.Error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addAlert(message, AlertSeverity.Error);
     }
   };
 

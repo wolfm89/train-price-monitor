@@ -23,8 +23,9 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     const userId = uuidv4();
     try {
       await signUp(userId, givenName, familyName, email, password);
-    } catch (err: any) {
-      addAlert(err.message, AlertSeverity.Error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addAlert(message, AlertSeverity.Error);
       return;
     }
     addAlert('Sign up successful! Please check your emails and confirm your account.', AlertSeverity.Success);

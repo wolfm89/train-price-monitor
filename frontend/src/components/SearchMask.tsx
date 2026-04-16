@@ -4,10 +4,11 @@ import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { JourneySearchQuery } from '../api/journey';
 import { LocationSearchQuery } from '../api/location';
+import { Journey, SearchData } from './SearchResult';
 
 interface Props {
-  setSearchData: (searchData: any) => void;
-  setSearchResult: (searchResult: any) => void;
+  setSearchData: (searchData: SearchData) => void;
+  setSearchResult: (searchResult: Journey[] | undefined) => void;
   setLoading: (loading: boolean) => void;
   setSearchClicked: (searchClicked: boolean) => void;
 }
@@ -116,8 +117,8 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     setSearchClicked(true);
     setLoading(true);
     setSearchData({
-      departure: from?.name,
-      destination: to?.name,
+      departure: from?.name ?? '',
+      destination: to?.name ?? '',
       date: departureDay,
       time: departureTime,
     });
@@ -155,7 +156,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           loading={fromFetching}
           renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
           isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
-          onChange={(_event: any, newValue: Location | null) => {
+          onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
             setFromSuggestions(newValue ? [newValue, ...(fromSuggestions ?? [])] : fromSuggestions ?? []);
             setFrom(newValue);
           }}
@@ -180,7 +181,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           loading={toFetching}
           renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
           isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
-          onChange={(_event: any, newValue: Location | null) => {
+          onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
             setToSuggestions(newValue ? [newValue, ...(toSuggestions ?? [])] : toSuggestions ?? []);
             setTo(newValue);
           }}

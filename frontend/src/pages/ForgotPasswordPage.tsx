@@ -19,8 +19,9 @@ export default function ForgotPasswordPage() {
       await forgotPassword(email);
       addAlert('Check your email for the confirmation code to reset your password.', AlertSeverity.Success);
       setSuccess(true);
-    } catch (err: any) {
-      addAlert(err.message, AlertSeverity.Error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addAlert(message, AlertSeverity.Error);
     }
 
     setIsLoading(false);

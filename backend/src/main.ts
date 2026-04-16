@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'http';
-import { execute, parse } from 'graphql';
+import { execute, parse, GraphQLSchema } from 'graphql';
 import type { Context, APIGatewayProxyEventV2, SQSEvent } from 'aws-lambda';
 import { createYoga, createSchema, YogaSchemaDefinition, useErrorHandler } from 'graphql-yoga';
 import { createInMemoryCache, useResponseCache } from '@graphql-yoga/plugin-response-cache';
@@ -38,36 +38,42 @@ const yoga = createYoga({
   cors: false,
 });
 
-function isSQSEvent(event: any): event is SQSEvent {
-  return event.Records?.[0]?.eventSource === 'aws:sqs';
+function isSQSEvent(event: APIGatewayProxyEventV2 | SQSEvent): event is SQSEvent {
+  return 'Records' in event && (event as SQSEvent).Records?.[0]?.eventSource === 'aws:sqs';
 }
 
-function isAPIGatewayEvent(event: any): boolean {
+function isAPIGatewayEvent(event: APIGatewayProxyEventV2 | SQSEvent): boolean {
+  const e = event as APIGatewayProxyEventV2;
   // Check for v2 format (requestContext.http)
-  if (event.requestContext?.http) return true;
+  if (e.requestContext?.http) return true;
   // Check for v1 format (pathParameters.proxy)
-  if (event.pathParameters?.proxy) return true;
+  if (e.pathParameters?.proxy) return true;
   // Check for API Gateway with requestContext
-  if (event.requestContext?.resourceId) return true;
+  if ((e.requestContext as unknown as Record<string, unknown>)?.resourceId) return true;
   return false;
 }
 
-function extractHttpContext(event: any): { method: string; path: string; queryString: string } | null {
+function extractHttpContext(
+  event: APIGatewayProxyEventV2 | SQSEvent
+): { method: string; path: string; queryString: string } | null {
+  const e = event as APIGatewayProxyEventV2;
   // Try v2 format first
-  if (event.requestContext?.http) {
+  if (e.requestContext?.http) {
     return {
-      method: event.requestContext.http.method,
-      path: event.requestContext.http.path,
-      queryString: event.rawQueryString || '',
+      method: e.requestContext.http.method,
+      path: e.requestContext.http.path,
+      queryString: e.rawQueryString || '',
     };
   }
 
   // Try v1 format (Lambda proxy integration)
-  if (event.pathParameters?.proxy) {
-    const path = '/' + event.pathParameters.proxy;
-    const queryString = event.queryStringParameters ? new URLSearchParams(event.queryStringParameters).toString() : '';
+  if (e.pathParameters?.proxy) {
+    const path = '/' + e.pathParameters.proxy;
+    const queryString = e.queryStringParameters
+      ? new URLSearchParams(e.queryStringParameters as Record<string, string>).toString()
+      : '';
     return {
-      method: event.httpMethod || 'GET',
+      method: (e as unknown as Record<string, string>).httpMethod || 'GET',
       path,
       queryString,
     };
@@ -83,15 +89,21 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Credentials': 'true',
 };
 
-export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context: Context): Promise<any> => {
+interface LambdaResponse {
+  statusCode: number;
+  headers?: Record<string, string>;
+  body: string;
+}
+
+export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context: Context): Promise<LambdaResponse> => {
   if (process.env.AWS_EXECUTION_ENV) {
     logger.addContext(context);
   }
 
   logger.info('Lambda invoked', {
     eventSource: isSQSEvent(event) ? event.Records?.[0]?.eventSource : undefined,
-    httpMethod: !isSQSEvent(event) ? (event.requestContext as any)?.http?.method : undefined,
-    path: !isSQSEvent(event) ? (event.requestContext as any)?.http?.path : undefined,
+    httpMethod: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.method : undefined,
+    path: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.path : undefined,
   });
 
   if (isSQSEvent(event)) {
@@ -113,7 +125,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
 
     const graphqlContext = (await createContext(cache, {})) as GraphQLContext;
     const result = await execute({
-      schema: schema as any,
+      schema: schema as unknown as GraphQLSchema,
       document: parse(query),
       variableValues: variables,
       contextValue: graphqlContext,

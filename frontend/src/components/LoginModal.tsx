@@ -19,8 +19,9 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const handleLogin = async () => {
     try {
       await signIn(email, password);
-    } catch (err: any) {
-      addAlert(err.message, AlertSeverity.Error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addAlert(message, AlertSeverity.Error);
       return;
     }
     addAlert('Sign in successful!', AlertSeverity.Success);

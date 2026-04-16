@@ -1,22 +1,14 @@
-import tseslint from '@typescript-eslint/eslint-plugin';
-import tsparser from '@typescript-eslint/parser';
-import globals from 'globals';
-import awscdk from 'eslint-plugin-awscdk';
+const tseslint = require('@typescript-eslint/eslint-plugin');
+const tsparser = require('@typescript-eslint/parser');
+const globals = require('globals');
+const awscdk = require('eslint-plugin-awscdk');
 
-export default [
+module.exports = [
   {
     ignores: ['**/dist/**', '**/build/**', '**/node_modules/**', '**/*.generated.ts', '**/generated/**'],
   },
   {
-    rules: {
-      'no-unused-vars': 'off',
-      'no-undef': 'off',
-      'no-redeclare': 'off',
-    },
-  },
-  {
     files: ['frontend/**/*.{ts,tsx}'],
-    ignores: ['**/generated/**', '**/*.generated.ts'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
@@ -43,7 +35,6 @@ export default [
   },
   {
     files: ['backend/**/*.{ts,tsx}'],
-    ignores: ['**/generated/**', '**/*.generated.ts'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
@@ -63,12 +54,10 @@ export default [
       'no-console': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
-      'preserve-caught-error': 'off',
     },
   },
   {
     files: ['infrastructure/**/*.{ts,tsx}'],
-    ignores: ['**/generated/**', '**/*.generated.ts'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
