@@ -5,6 +5,9 @@ import globals from 'globals';
 import awscdk from 'eslint-plugin-awscdk';
 
 export default [
+  {
+    ignores: ['**/dist/**', '**/build/**', '**/node_modules/**', '**/*.generated.ts', '**/generated/**'],
+  },
   js.configs.recommended,
   {
     files: ['frontend/**/*.{ts,tsx}'],
