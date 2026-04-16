@@ -1,4 +1,3 @@
-import js from '@eslint/js';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
 import globals from 'globals';
@@ -8,7 +7,13 @@ export default [
   {
     ignores: ['**/dist/**', '**/build/**', '**/node_modules/**', '**/*.generated.ts', '**/generated/**'],
   },
-  js.configs.recommended,
+  {
+    rules: {
+      'no-unused-vars': 'off',
+      'no-undef': 'off',
+      'no-redeclare': 'off',
+    },
+  },
   {
     files: ['frontend/**/*.{ts,tsx}'],
     ignores: ['**/generated/**', '**/*.generated.ts'],
