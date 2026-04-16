@@ -6,7 +6,6 @@ import {
   UpdateItemCommand,
   DeleteItemCommand,
   QueryCommand,
-  ScanCommand,
 } from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
@@ -37,11 +36,12 @@ export const userResolvers: UserResolvers = {
     args,
     context: GraphQLContext
   ): Promise<(JourneyExpiryNotification | PriceAlertNotification)[]> => {
-    const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(ScanCommand)
+    const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
+      .query({ partition: `USER#${parent.id}`, range: { beginsWith: 'NOTIFICATION#' } })
       .send();
 
-    const userNotifications = dbNotifications?.filter((n: { userId: string }) => n.userId === parent.id) ?? [];
+    const userNotifications = dbNotifications ?? [];
 
     const filteredNotifications = userNotifications.filter(
       (n: { read?: boolean }) => args.read === undefined || n.read === args.read

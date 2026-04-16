@@ -202,9 +202,14 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
   const notificationsArray = existingNotifications?.Items ?? [];
   if (
-    notificationsArray.some(
-      (item: { data?: string }) => item.data && JSON.parse(item.data).journeyId === args.journeyId
-    )
+    notificationsArray.some((item: { data?: string }) => {
+      if (!item.data) return false;
+      try {
+        return JSON.parse(item.data).journeyId === args.journeyId;
+      } catch {
+        return false;
+      }
+    })
   ) {
     Logger.info(`Notification already exists for journey`);
     return journeyMonitor;
@@ -303,9 +308,14 @@ export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyM
     .query({ partition: `USER#${userId}` })
     .send();
 
-  const journeyNotifications = notifications?.filter(
-    (item: { data?: string }) => item.data && JSON.parse(item.data).journeyId === journeyId
-  );
+  const journeyNotifications = notifications?.filter((item: { data?: string }) => {
+    if (!item.data) return false;
+    try {
+      return JSON.parse(item.data).journeyId === journeyId;
+    } catch {
+      return false;
+    }
+  });
 
   if (journeyNotifications) {
     for (const notification of journeyNotifications) {
