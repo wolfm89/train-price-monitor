@@ -184,6 +184,9 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
 
+    // Clean up any existing PRICE_ALERT notifications for this journey
+    await deletePriceAlertNotificationsForJourney(context, args.userId, args.journeyId);
+
     await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
 
     return journeyMonitor;
@@ -253,6 +256,37 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
   return journeyMonitor;
 };
+
+async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, userId: string, journeyId: string) {
+  const { Items: priceAlertNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
+    .entities(context.entities.Notification)
+    .query({ partition: `USER#${userId}` })
+    .options({
+      filters: {
+        Notification: { attr: 'type', eq: NOTIFICATION_TYPES.PRICE_ALERT.name },
+      },
+    })
+    .send();
+
+  const toDelete = priceAlertNotifications?.filter((item: { data?: string }) => {
+    if (!item.data) return false;
+    try {
+      return JSON.parse(item.data).journeyId === journeyId;
+    } catch {
+      return false;
+    }
+  });
+
+  if (toDelete && toDelete.length > 0) {
+    await Promise.all(
+      toDelete.map((notification) =>
+        context.entities.Notification.build(DeleteItemCommand).key({ userId, id: notification.id }).send()
+      )
+    );
+    context.cache.invalidate([{ typename: 'Notification' }]);
+    Logger.info(`Deleted ${toDelete.length} PRICE_ALERT notifications for journey`);
+  }
+}
 
 async function sendNotificationEmailIfEnabled(context: GraphQLContext, userId: string, notificationId: string) {
   // Get setting for email notifications for user from database
