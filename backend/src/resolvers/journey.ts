@@ -184,10 +184,10 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
 
-    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
-
     // Clean up any existing PRICE_ALERT notifications for this journey
     await deletePriceAlertNotificationsForJourney(context, args.userId, args.journeyId);
+
+    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
 
     return journeyMonitor;
   }
@@ -278,9 +278,11 @@ async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, 
   });
 
   if (toDelete && toDelete.length > 0) {
-    for (const notification of toDelete) {
-      await context.entities.Notification.build(DeleteItemCommand).key({ userId, id: notification.id }).send();
-    }
+    await Promise.all(
+      toDelete.map((notification) =>
+        context.entities.Notification.build(DeleteItemCommand).key({ userId, id: notification.id }).send()
+      )
+    );
     context.cache.invalidate([{ typename: 'Notification' }]);
     Logger.info(`Deleted ${toDelete.length} PRICE_ALERT notifications for journey`);
   }
