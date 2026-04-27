@@ -1,7 +1,6 @@
-FROM public.ecr.aws/lambda/nodejs:24 as builder
+FROM public.ecr.aws/lambda/nodejs:24 AS builder
 WORKDIR /build
 COPY package*.json ./
-COPY package-lock.json* ./
 RUN npm ci
 COPY . .
 RUN npm run codegen

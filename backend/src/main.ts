@@ -191,7 +191,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
 
   return {
     statusCode: response.status,
-    headers: { ...CORS_HEADERS, ...responseHeaders },
+    headers: responseHeaders,
     body: responseBody,
   };
 };
