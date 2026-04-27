@@ -16,7 +16,6 @@ import Logger from '../lib/logger';
 
 class SESManager {
   private ses: SESv2Client;
-  private from: string = 'trainpricemonitor@wolfgangmoser.eu';
 
   constructor() {
     this.ses = new SESv2Client({ region: process.env.AWS_REGION });
@@ -24,7 +23,7 @@ class SESManager {
 
   private createEmail(to: string, subject: string, htmlBody: string): SendEmailCommand {
     const input: SendEmailCommandInput = {
-      FromEmailAddress: this.from,
+      FromEmailAddress: process.env.SES_FROM_EMAIL || 'noreply@example.com',
       Destination: {
         ToAddresses: [to],
       },

@@ -39,7 +39,9 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
         <p>Hi ${user.givenName},</p>
         <p>The price for your journey from <b>${journey.from}</b> to <b>${journey.to}</b> has changed.</p>
         <p>It is now <b>€${journey.price?.toFixed(2)}</b> (your limit price was <b>€${limitPrice.toFixed(2)}</b>).</p>
-        <p>Check it out here: <a href="https://tpm.wolfgangmoser.eu/journeys#${id}">https://tpm.wolfgangmoser.eu/journeys#${id}</a></p>
+        <p>Check it out here: <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/journeys#${id}">${
+          process.env.FRONTEND_URL || 'http://localhost:3000'
+        }/journeys#${id}</a></p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;
       return { to: user.email, subject, htmlBody };
@@ -74,7 +76,9 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
       const htmlBody = `
         <p>Hi ${user.givenName},</p>
         <p>Your journey from <b>${from}</b> to <b>${to}</b> has expired and was therefore deleted.<br/>
-        Visit <a href="https://tpm.wolfgangmoser.eu/">https://tpm.wolfgangmoser.eu/</a> to monitor a new journey.</p>
+        Visit <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/">${
+          process.env.FRONTEND_URL || 'http://localhost:3000'
+        }/</a> to monitor a new journey.</p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;
       return { to: user.email, subject, htmlBody };
