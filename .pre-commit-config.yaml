@@ -20,12 +20,12 @@ repos:
       - id: prettier
 
   - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: 'v9.39.0'
+    rev: 'v10.2.0'
     hooks:
       - id: eslint
         args: ['--max-warnings=0', '--config', 'eslint.config.cjs']
         additional_dependencies:
-          - 'eslint@9.39.0'
+          - 'eslint@10.2.0'
           - '@typescript-eslint/eslint-plugin@8.58.2'
           - '@typescript-eslint/parser@8.58.2'
           - 'typescript@5.9.3'

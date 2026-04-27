@@ -46,6 +46,7 @@
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "cross-fetch": "^4.0.0",
+    "db-hafas-stations": "^2.0.0",
     "db-vendo-client": "^6.10.8",
     "dotenv": "^16.4.5",
     "dynamodb-toolbox": "^2.0.0",

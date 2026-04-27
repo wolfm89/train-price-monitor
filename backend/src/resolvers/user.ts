@@ -58,7 +58,14 @@ export const userResolvers: UserResolvers = {
           sent: boolean;
           data?: string;
         }) => {
-          const data = dbNotification.data ? JSON.parse(dbNotification.data) : {};
+          let data: Record<string, unknown> = {};
+          if (dbNotification.data) {
+            try {
+              data = typeof dbNotification.data === 'string' ? JSON.parse(dbNotification.data) : dbNotification.data;
+            } catch {
+              data = {};
+            }
+          }
           const additionalData = await NOTIFICATION_TYPES[dbNotification.type].mapAdditionalData(
             context,
             dbNotification.userId,

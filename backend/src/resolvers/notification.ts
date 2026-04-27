@@ -84,7 +84,14 @@ export const sendEmailNotification: NonNullable<MutationResolvers['sendEmailNoti
   }
 
   // Send the email
-  const data = dbNotification.data ? JSON.parse(dbNotification.data) : {};
+  let data: Record<string, unknown> = {};
+  if (dbNotification.data) {
+    try {
+      data = typeof dbNotification.data === 'string' ? JSON.parse(dbNotification.data) : dbNotification.data;
+    } catch {
+      data = {};
+    }
+  }
   const emailNotificationInfo = await NOTIFICATION_TYPES[dbNotification.type].formatEmail(context, dbUser, data);
   await context.ses.sendEmailNotification(emailNotificationInfo);
 

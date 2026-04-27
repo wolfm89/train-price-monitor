@@ -30,8 +30,8 @@ const SearchPage: React.FC<Props> = () => {
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
             <CircularProgress />
           </div>
-        ) : searchResult ?? false ? (
-          <SearchResult searchData={searchData!} searchResult={searchResult!} />
+        ) : searchResult !== undefined && searchResult.length > 0 ? (
+          <SearchResult searchData={searchData!} searchResult={searchResult} />
         ) : (
           searchClicked && <Typography variant="subtitle1">No results found</Typography>
         )}

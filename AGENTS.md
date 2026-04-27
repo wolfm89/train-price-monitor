@@ -67,8 +67,8 @@ mise run test                  # Run tests (via mise)
 
 - **TypeScript strict mode** enabled in all modules
 - Use `const` by default; use `let` only when reassignment is necessary
-- **No `console.log`** in frontend code (ESLint: `no-console: error`)
-- **Backend** allows `console.log`
+- **No `console.log`** in any module (ESLint: `no-console: error`)
+- **Backend**: use `@aws-lambda-powertools/logger` for structured logging instead
 
 ### Formatting (Prettier)
 

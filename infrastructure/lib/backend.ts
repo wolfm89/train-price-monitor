@@ -17,7 +17,7 @@ import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
 export class Backend extends Construct {
-  constructor(scope: Construct, id: string, userPool: UserPool) {
+  constructor(scope: Construct, id: string, userPool: UserPool, frontendDomainName: string) {
     super(scope, id);
 
     // Create DynamoDB tables
@@ -35,8 +35,13 @@ export class Backend extends Construct {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       cors: [
         {
-          allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.PUT],
-          allowedOrigins: ['*'], // Will be restricted in production
+          allowedMethods: [s3.HttpMethods.GET],
+          allowedOrigins: ['*'],
+          allowedHeaders: ['*'],
+        },
+        {
+          allowedMethods: [s3.HttpMethods.PUT],
+          allowedOrigins: [`https://${frontendDomainName}`, 'http://localhost:3000'],
           allowedHeaders: ['*'],
         },
       ],

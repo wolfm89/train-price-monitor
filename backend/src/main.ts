@@ -86,7 +86,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
-  'Access-Control-Allow-Credentials': 'true',
 };
 
 interface LambdaResponse {
@@ -130,7 +129,14 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
       variableValues: variables,
       contextValue: graphqlContext,
     });
-    logger.info('SQS message processed', { hasErrors: !!result.errors });
+    if (result.errors && result.errors.length > 0) {
+      logger.error('SQS message processing failed', {
+        errorCount: result.errors.length,
+        errors: result.errors.map((error) => ({ message: error.message, path: error.path })),
+      });
+      throw new Error('SQS GraphQL execution failed');
+    }
+    logger.info('SQS message processed', { hasErrors: false });
     return { statusCode: 200, body: '' };
   }
 
