@@ -17,7 +17,7 @@ import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
 export class Backend extends Construct {
-  constructor(scope: Construct, id: string, userPool: UserPool, frontendDomainName: string) {
+  constructor(scope: Construct, id: string, userPool: UserPool, frontendDomainName: string, sesFromEmail: string) {
     super(scope, id);
 
     // Create DynamoDB tables
@@ -65,6 +65,8 @@ export class Backend extends Construct {
       environment: {
         PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
         TPM_SQS_QUEUE_URL: queue.queueUrl,
+        FRONTEND_URL: `https://${frontendDomainName}`,
+        SES_FROM_EMAIL: sesFromEmail,
         NODE_OPTIONS: '--enable-source-maps',
         DEPLOY_VERSION: 'v11',
       },
@@ -128,8 +130,7 @@ export class Backend extends Construct {
       },
     });
 
-    // AWS SES email identity already exists in account - no need to create
-    // See: trainpricemonitor@wolfgangmoser.eu in SES console
+    // AWS SES email identity must exist in the account for the configured ses_from_email
 
     // Allow Lambda function to send emails and create email identities
     lambdaFunction.addToRolePolicy(

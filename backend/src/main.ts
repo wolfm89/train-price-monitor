@@ -22,7 +22,7 @@ const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
 const yoga = createYoga({
   schema,
   context: ({ request }) => createContext(cache, { request }),
-  fetch: globalThis.fetch,
+  fetchAPI: { fetch: globalThis.fetch },
   plugins: [
     useResponseCache({ session: () => null, cache }),
     useErrorHandler(({ errors, phase }) => {

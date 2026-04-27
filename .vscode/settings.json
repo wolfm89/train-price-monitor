@@ -4,5 +4,9 @@
   },
   "files.watcherExclude": {
     "**/target": true
+  },
+  "chat.tools.terminal.autoApprove": {
+    "npm run typecheck": true,
+    "npm run build": true
   }
 }

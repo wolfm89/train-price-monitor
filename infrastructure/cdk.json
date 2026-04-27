@@ -44,6 +44,8 @@
     "@aws-cdk/aws-stepfunctions-tasks:enableEmrServicePolicyV2": true,
     "@aws-cdk/aws-ec2:restrictDefaultSecurityGroup": true,
     "@aws-cdk/aws-apigateway:requestValidatorUniqueId": true,
-    "app_name": "Train Price Monitor"
+    "app_name": "Train Price Monitor",
+    "domain_name": "tpm.wolfgangmoser.eu",
+    "ses_from_email": "trainpricemonitor@wolfgangmoser.eu"
   }
 }

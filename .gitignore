@@ -29,5 +29,8 @@ request.json
 # mise
 .mise.local.toml
 
+# plans
+.github/plans/
+
 # stats
 stats/
