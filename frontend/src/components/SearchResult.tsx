@@ -49,7 +49,7 @@ interface Props {
   searchResult: Journey[];
   onNavigateEarlier?: () => void;
   onNavigateLater?: () => void;
-  navigating?: boolean;
+  navigatingDirection?: 'earlier' | 'later' | null;
 }
 
 const SearchResult: React.FC<Props> = ({
@@ -57,7 +57,7 @@ const SearchResult: React.FC<Props> = ({
   searchResult,
   onNavigateEarlier,
   onNavigateLater,
-  navigating,
+  navigatingDirection,
 }) => {
   const theme = useTheme();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
@@ -214,8 +214,8 @@ const SearchResult: React.FC<Props> = ({
             <Button
               variant="outlined"
               onClick={onNavigateEarlier}
-              disabled={navigating}
-              startIcon={navigating ? <CircularProgress size={16} /> : <NavigateBeforeIcon />}
+              disabled={!!navigatingDirection}
+              startIcon={navigatingDirection === 'earlier' ? <CircularProgress size={16} /> : <NavigateBeforeIcon />}
             >
               Earlier trains
             </Button>
@@ -226,8 +226,8 @@ const SearchResult: React.FC<Props> = ({
             <Button
               variant="outlined"
               onClick={onNavigateLater}
-              disabled={navigating}
-              endIcon={navigating ? <CircularProgress size={16} /> : <NavigateNextIcon />}
+              disabled={!!navigatingDirection}
+              endIcon={navigatingDirection === 'later' ? <CircularProgress size={16} /> : <NavigateNextIcon />}
             >
               Later trains
             </Button>

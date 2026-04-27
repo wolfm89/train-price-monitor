@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CircularProgress, Grid, Typography } from '@mui/material';
 import { useQuery } from 'urql';
 import SearchMask from '../components/SearchMask';
@@ -20,6 +20,7 @@ const SearchPage: React.FC<Props> = () => {
   const [searchData, setSearchData] = useState<SearchData | null>(null);
   const [queryVars, setQueryVars] = useState<QueryVars | null>(null);
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
+  const [navigatingDirection, setNavigatingDirection] = useState<'earlier' | 'later' | null>(null);
 
   const [{ data, fetching }] = useQuery({
     query: JourneySearchQuery,
@@ -32,17 +33,29 @@ const SearchPage: React.FC<Props> = () => {
   const earlierRef: string | undefined = data?.journeys?.earlierRef ?? undefined;
   const laterRef: string | undefined = data?.journeys?.laterRef ?? undefined;
 
+  useEffect(() => {
+    if (!fetching) {
+      setNavigatingDirection(null);
+    }
+  }, [fetching]);
+
   const handleSearch = (from: string, to: string, departure: string) => {
     setSearchClicked(true);
     setQueryVars({ from, to, departure });
   };
 
   const handleNavigateEarlier = earlierRef
-    ? () => setQueryVars((prev) => ({ ...prev!, earlierThan: earlierRef, laterThan: undefined }))
+    ? () => {
+        setNavigatingDirection('earlier');
+        setQueryVars((prev) => ({ ...prev!, earlierThan: earlierRef, laterThan: undefined }));
+      }
     : undefined;
 
   const handleNavigateLater = laterRef
-    ? () => setQueryVars((prev) => ({ ...prev!, laterThan: laterRef, earlierThan: undefined }))
+    ? () => {
+        setNavigatingDirection('later');
+        setQueryVars((prev) => ({ ...prev!, laterThan: laterRef, earlierThan: undefined }));
+      }
     : undefined;
 
   return (
@@ -66,7 +79,7 @@ const SearchPage: React.FC<Props> = () => {
                 searchResult={searchResult ?? []}
                 onNavigateEarlier={handleNavigateEarlier}
                 onNavigateLater={handleNavigateLater}
-                navigating={fetching}
+                navigatingDirection={navigatingDirection}
               />
             ) : (
               <Typography variant="subtitle1">No results found</Typography>
