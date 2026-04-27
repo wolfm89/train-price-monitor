@@ -47,6 +47,13 @@ export type JourneyMonitor = {
   userId: Scalars['ID']['output'];
 };
 
+export type JourneysResult = {
+  __typename?: 'JourneysResult';
+  earlierRef?: Maybe<Scalars['String']['output']>;
+  journeys?: Maybe<Array<Maybe<Journey>>>;
+  laterRef?: Maybe<Scalars['String']['output']>;
+};
+
 export type Location = {
   __typename?: 'Location';
   id: Scalars['String']['output'];
@@ -153,7 +160,7 @@ export type PriceAlertNotification = Notification & {
 
 export type Query = {
   __typename?: 'Query';
-  journeys?: Maybe<Array<Maybe<Journey>>>;
+  journeys?: Maybe<JourneysResult>;
   locations?: Maybe<Array<Maybe<Location>>>;
   user?: Maybe<User>;
   userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
@@ -162,7 +169,9 @@ export type Query = {
 
 export type QueryJourneysArgs = {
   departure: Scalars['DateTime']['input'];
+  earlierThan?: InputMaybe<Scalars['String']['input']>;
   from: Scalars['String']['input'];
+  laterThan?: InputMaybe<Scalars['String']['input']>;
   to: Scalars['String']['input'];
 };
 

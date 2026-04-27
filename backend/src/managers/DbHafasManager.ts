@@ -49,9 +49,24 @@ export class DbHafasManager {
    * @param to - The destination station or location.
    * @param departure - The departure date and time.
    * @param results - The maximum number of results to retrieve (default is 3).
+   * @param earlierThan - Ref token to fetch earlier journeys (mutually exclusive with departure/laterThan).
+   * @param laterThan - Ref token to fetch later journeys (mutually exclusive with departure/earlierThan).
    * @returns A promise that resolves to the retrieved journeys.
    */
-  async queryJourneys(from: string, to: string, departure: Date, results: number = 3): Promise<Journeys> {
+  async queryJourneys(
+    from: string,
+    to: string,
+    departure: Date,
+    results: number = 3,
+    earlierThan?: string,
+    laterThan?: string
+  ): Promise<Journeys> {
+    if (earlierThan) {
+      return await this.client.journeys(from, to, { earlierThan, results, tickets: true });
+    }
+    if (laterThan) {
+      return await this.client.journeys(from, to, { laterThan, results, tickets: true });
+    }
     return await this.client.journeys(from, to, { departure, results, tickets: true });
   }
 

@@ -10,7 +10,7 @@ import {
 import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers } from '../schema/generated/resolvers.generated';
 import { v4 as uuidv4 } from 'uuid';
-import { Journey, JourneyMonitor } from '../schema/generated/typeDefs.generated';
+import { JourneyMonitor, JourneysResult } from '../schema/generated/typeDefs.generated';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 
 /**
@@ -18,24 +18,31 @@ import { NOTIFICATION_TYPES } from './notificationTypes';
  * @param _parent - The parent object.
  * @param args - The arguments provided in the query.
  * @param context - The GraphQL context.
- * @returns A list of journeys.
+ * @returns A JourneysResult with journeys and pagination refs.
  */
 export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   _parent,
   args,
   context: GraphQLContext
-): Promise<Journey[]> => {
+): Promise<JourneysResult> => {
   // Query journeys using Hafas API
-  const journeys = await context.dbHafas.queryJourneys(args.from, args.to, args.departure);
+  const result = await context.dbHafas.queryJourneys(
+    args.from,
+    args.to,
+    args.departure,
+    undefined,
+    args.earlierThan ?? undefined,
+    args.laterThan ?? undefined
+  );
 
   // Check if no journeys were found
-  if (!journeys || !journeys.journeys || journeys.journeys.length === 0) {
+  if (!result || !result.journeys || result.journeys.length === 0) {
     Logger.info(`No journeys found from ${args.from} to ${args.to} at ${args.departure.toISOString()}`);
-    return [];
+    return { journeys: [], earlierRef: null, laterRef: null };
   }
 
   // Map and format the journeys for response
-  return journeys.journeys
+  const journeys = result.journeys
     .filter((journey) => !journey.legs.some((leg) => leg.cancelled))
     .map((journey) => {
       return {
@@ -48,6 +55,12 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
         means: getMeans(journey),
       };
     });
+
+  return {
+    journeys,
+    earlierRef: result.earlierRef ?? null,
+    laterRef: result.laterRef ?? null,
+  };
 };
 
 /**
