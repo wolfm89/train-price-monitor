@@ -1,4 +1,7 @@
 schema: 'src/schema/*.graphql'
+hooks:
+  afterOneFileWrite:
+    - 'prettier --write'
 generates:
   src/schema/generated/typeDefs.generated.ts:
     plugins:
@@ -12,6 +15,5 @@ generates:
     config:
       scalars:
         File: File
-hooks:
-  afterOneFileWrite:
-    - 'prettier --write'
+      contextType: ../context#GraphQLContext
+      import: './typeDefs.generated'

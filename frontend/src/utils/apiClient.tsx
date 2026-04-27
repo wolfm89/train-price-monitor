@@ -2,13 +2,15 @@ import { authExchange } from '@urql/exchange-auth';
 import * as auth from '../utils/auth';
 import { Client, cacheExchange, fetchExchange } from 'urql';
 
-const apiGatewayEndpoint = `${process.env.REACT_APP_API_GATEWAY_ENDPOINT!}graphql`;
+const apiGatewayEndpoint = `${process.env.REACT_APP_GRAPHQL_ENDPOINT!}graphql`;
 
 const getJwtToken = async () => {
   let session;
   try {
     session = await auth.getSession();
-  } catch (error) {}
+  } catch {
+    // Ignore errors - session will be undefined
+  }
   return session?.getIdToken().getJwtToken();
 };
 

@@ -1,4 +1,31 @@
 import { GraphQLResolveInfo, GraphQLScalarType, GraphQLScalarTypeConfig } from 'graphql';
+import { GraphQLContext } from '../../context';
+import type {
+  Maybe,
+  Scalars,
+  Journey,
+  JourneyMonitor,
+  JourneyExpiryNotification,
+  PriceAlertNotification,
+  User,
+  PresignedUrl,
+  Notification,
+  MutationCreateUserArgs,
+  MutationDeleteJourneyMonitorArgs,
+  MutationDeleteUserArgs,
+  MutationMarkNotificationAsReadArgs,
+  MutationMonitorJourneyArgs,
+  MutationSendEmailNotificationArgs,
+  MutationUpdateJourneyMonitorArgs,
+  MutationUpdateUserProfilePictureArgs,
+  MutationUpdateUserSettingsArgs,
+  QueryJourneysArgs,
+  QueryLocationsArgs,
+  QueryUserArgs,
+  QueryUserProfilePicturePresignedUrlArgs,
+  UserJourneyMonitorsArgs,
+  UserNotificationsArgs,
+} from './typeDefs.generated';
 export type RequireFields<T, K extends keyof T> = Omit<T, K> & { [P in K]-?: NonNullable<T[P]> };
 
 export type ResolverTypeWrapper<T> = Promise<T> | T;
@@ -127,8 +154,8 @@ export interface FileScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes
 }
 
 export type JourneyResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['Journey'] = ResolversParentTypes['Journey']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['Journey'] = ResolversParentTypes['Journey'],
 > = {
   arrival?: Resolver<Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
   departure?: Resolver<Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
@@ -141,8 +168,9 @@ export type JourneyResolvers<
 };
 
 export type JourneyExpiryNotificationResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['JourneyExpiryNotification'] = ResolversParentTypes['JourneyExpiryNotification']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['JourneyExpiryNotification'] =
+    ResolversParentTypes['JourneyExpiryNotification'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
@@ -155,8 +183,8 @@ export type JourneyExpiryNotificationResolvers<
 };
 
 export type JourneyMonitorResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['JourneyMonitor'] = ResolversParentTypes['JourneyMonitor']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['JourneyMonitor'] = ResolversParentTypes['JourneyMonitor'],
 > = {
   expires?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -167,8 +195,8 @@ export type JourneyMonitorResolvers<
 };
 
 export type LocationResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['Location'] = ResolversParentTypes['Location']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['Location'] = ResolversParentTypes['Location'],
 > = {
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   name?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
@@ -177,8 +205,8 @@ export type LocationResolvers<
 };
 
 export type MutationResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation'],
 > = {
   createUser?: Resolver<
     Maybe<ResolversTypes['User']>,
@@ -238,8 +266,8 @@ export type MutationResolvers<
 };
 
 export type NotificationResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['Notification'] = ResolversParentTypes['Notification']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['Notification'] = ResolversParentTypes['Notification'],
 > = {
   __resolveType: TypeResolveFn<'JourneyExpiryNotification' | 'PriceAlertNotification', ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
@@ -251,8 +279,8 @@ export type NotificationResolvers<
 };
 
 export type PresignedUrlResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['PresignedUrl'] = ResolversParentTypes['PresignedUrl']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['PresignedUrl'] = ResolversParentTypes['PresignedUrl'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   url?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
@@ -260,8 +288,8 @@ export type PresignedUrlResolvers<
 };
 
 export type PriceAlertNotificationResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['PriceAlertNotification'] = ResolversParentTypes['PriceAlertNotification']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['PriceAlertNotification'] = ResolversParentTypes['PriceAlertNotification'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journeyMonitor?: Resolver<ResolversTypes['JourneyMonitor'], ParentType, ContextType>;
@@ -274,8 +302,8 @@ export type PriceAlertNotificationResolvers<
 };
 
 export type QueryResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query'],
 > = {
   journeys?: Resolver<
     Maybe<Array<Maybe<ResolversTypes['Journey']>>>,
@@ -299,8 +327,8 @@ export type QueryResolvers<
 };
 
 export type UserResolvers<
-  ContextType = any,
-  ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User']
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User'],
 > = {
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
@@ -323,7 +351,7 @@ export type UserResolvers<
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 };
 
-export type Resolvers<ContextType = any> = {
+export type Resolvers<ContextType = GraphQLContext> = {
   DateTime?: GraphQLScalarType;
   File?: GraphQLScalarType;
   Journey?: JourneyResolvers<ContextType>;

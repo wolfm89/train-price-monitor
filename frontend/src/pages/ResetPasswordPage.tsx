@@ -19,8 +19,9 @@ export default function ResetPasswordPage() {
       await confirmPassword(email, confirmationCode, newPassword);
       setSuccess(true);
       addAlert('Your password has been reset successfully!', AlertSeverity.Success);
-    } catch (err: any) {
-      addAlert(err.message, AlertSeverity.Error);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addAlert(message, AlertSeverity.Error);
     }
   };
 
@@ -31,7 +32,7 @@ export default function ResetPasswordPage() {
       </Typography>
       <form onSubmit={handleSubmit}>
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               type="text"
               label="Email"
@@ -42,7 +43,7 @@ export default function ResetPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               type="text"
               label="Confirmation code"
@@ -53,7 +54,7 @@ export default function ResetPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               type="password"
               label="New password"
@@ -64,10 +65,10 @@ export default function ResetPasswordPage() {
               margin="normal"
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Box />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Button
                 type="submit"

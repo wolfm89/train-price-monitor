@@ -35,7 +35,7 @@ const ProfilePage: React.FC = () => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [enableEmailNotifications, setEnableEmailNotifications] = useState(false);
-  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false); // State to control the visibility of the delete confirmation dialog
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [accountDeletionConfirmed, setAccountDeletionConfirmed] = useState(false);
   const { addAlert } = useAlert();
   const [, updateUserProfilePicture] = useMutation(UpdateUserProfilePicture);
@@ -54,12 +54,11 @@ const ProfilePage: React.FC = () => {
   }, [userSettingsData]);
 
   const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
-  const allowedMaxSize = 0.5 * 1024 * 1024; // 0.5 MB
+  const allowedMaxSize = 0.5 * 1024 * 1024;
 
   const handleProfilePictureChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file: File = event.target.files![0]; // Get the first selected file
+    const file: File = event.target.files![0];
 
-    // Perform any desired actions with the file
     if (file) {
       if (!allowedTypes.includes(file.type)) {
         addAlert('Invalid file type. Only JPEG, PNG, and GIF images are allowed.', AlertSeverity.Error);
@@ -83,16 +82,14 @@ const ProfilePage: React.FC = () => {
   };
 
   const handleSaveChanges = async () => {
-    // Only if password was changed
     if (oldPassword !== '' && newPassword !== '') {
       try {
         await changePassword(oldPassword, newPassword);
         addAlert('Password changed successfully!', AlertSeverity.Success);
-      } catch (error) {
+      } catch {
         addAlert('Password change failed. Please try again.', AlertSeverity.Error);
       }
     }
-    // Only if email notifications setting was changed
     if (enableEmailNotifications !== userSettingsData?.user?.emailNotificationsEnabled) {
       updateUserSettings({ id: user?.['custom:id'], emailNotificationsEnabled: enableEmailNotifications }).then(
         (result) => {
@@ -111,13 +108,11 @@ const ProfilePage: React.FC = () => {
   };
 
   const handleDeleteAccount = async () => {
-    // Show confirmation dialog
     setShowDeleteConfirmation(true);
   };
 
   const handleConfirmDeleteAccount = async () => {
     setAccountDeletionConfirmed(true);
-    // Delete the account
     deleteUser({ id: user?.['custom:id'] })
       .then(() => {
         deleteCognitoUser()
@@ -133,12 +128,10 @@ const ProfilePage: React.FC = () => {
         addAlert('Account deletion failed.', AlertSeverity.Error);
       });
 
-    // Hide the confirmation dialog
     setShowDeleteConfirmation(false);
   };
 
   const handleCancelDeleteAccount = () => {
-    // Hide the confirmation dialog
     setShowDeleteConfirmation(false);
   };
 
@@ -168,7 +161,7 @@ const ProfilePage: React.FC = () => {
             </Box>
           </Box>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="First Name"
                 variant="outlined"
@@ -178,7 +171,7 @@ const ProfilePage: React.FC = () => {
                 disabled
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Last Name"
                 variant="outlined"
@@ -188,7 +181,7 @@ const ProfilePage: React.FC = () => {
                 disabled
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Email"
                 variant="outlined"
@@ -198,10 +191,10 @@ const ProfilePage: React.FC = () => {
                 disabled
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <Box />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 id="oldPassword"
                 label="Old Password"
@@ -211,7 +204,7 @@ const ProfilePage: React.FC = () => {
                 fullWidth
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 id="newPassword"
                 label="New Password"
@@ -221,24 +214,23 @@ const ProfilePage: React.FC = () => {
                 fullWidth
               />
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <FormControlLabel
                 control={<Checkbox checked={enableEmailNotifications} onChange={handleEmailNoficationsEnabledChange} />}
                 label="Enable Email Notifications for Price Alerts"
               />
             </Grid>
-            <Grid item xs={6}>
+            <Grid size={6}>
               <Button variant="contained" color="primary" onClick={handleSaveChanges}>
                 Save Changes
               </Button>
             </Grid>
-            <Grid item xs={6} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Grid size={6} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
               <Button variant="contained" color="error" onClick={handleDeleteAccount}>
                 Delete Account
               </Button>
             </Grid>
           </Grid>
-          {/* Confirmation Dialog */}
           <Dialog open={showDeleteConfirmation} onClose={handleCancelDeleteAccount}>
             <DialogTitle>Delete Account</DialogTitle>
             <DialogContent>

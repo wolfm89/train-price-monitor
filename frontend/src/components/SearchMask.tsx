@@ -4,10 +4,11 @@ import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { JourneySearchQuery } from '../api/journey';
 import { LocationSearchQuery } from '../api/location';
+import { Journey, SearchData } from './SearchResult';
 
 interface Props {
-  setSearchData: (searchData: any) => void;
-  setSearchResult: (searchResult: any) => void;
+  setSearchData: (searchData: SearchData) => void;
+  setSearchResult: (searchResult: Journey[] | undefined) => void;
   setLoading: (loading: boolean) => void;
   setSearchClicked: (searchClicked: boolean) => void;
 }
@@ -37,7 +38,6 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     },
     pause: true,
   });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const getFromSuggestionsDelayed = useCallback(
     debounce(() => {
       reexecuteFromSearchQuery({ requestPolicy: 'network-only' });
@@ -51,7 +51,6 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     },
     pause: true,
   });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const getToSuggestionsDelayed = useCallback(
     debounce(() => {
       reexecuteToSearchQuery({ requestPolicy: 'network-only' });
@@ -118,8 +117,8 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     setSearchClicked(true);
     setLoading(true);
     setSearchData({
-      departure: from?.name,
-      destination: to?.name,
+      departure: from?.name ?? '',
+      destination: to?.name ?? '',
       date: departureDay,
       time: departureTime,
     });
@@ -141,25 +140,24 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
 
   return (
     <Grid container spacing={2}>
-      <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
+      <Grid size={{ xs: 3, sm: 1 }} container justifyContent="flex-end" alignItems="center">
         <Typography>From:</Typography>
       </Grid>
-      <Grid item xs={9} sm={5}>
+      <Grid size={{ xs: 9, sm: 5 }}>
         <Autocomplete
           id="departure"
           value={from}
+          options={fromSuggestions ?? []}
           filterOptions={(x) => x}
-          options={fromSuggestions}
-          getOptionLabel={(option) => option.name}
-          autoComplete
+          getOptionLabel={(option) => option?.name ?? ''}
           includeInputInList
           filterSelectedOptions
           noOptionsText="No locations found"
           loading={fromFetching}
           renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
-          isOptionEqualToValue={(option: Location, value: Location) => option.id === value.id}
-          onChange={(_event: any, newValue: Location | null) => {
-            setFromSuggestions(newValue ? [newValue, ...fromSuggestions] : fromSuggestions);
+          isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
+          onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
+            setFromSuggestions(newValue ? [newValue, ...(fromSuggestions ?? [])] : fromSuggestions ?? []);
             setFrom(newValue);
           }}
           onInputChange={(_event, newInputValue) => {
@@ -167,25 +165,24 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           }}
         />
       </Grid>
-      <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
+      <Grid size={{ xs: 3, sm: 1 }} container justifyContent="flex-end" alignItems="center">
         <Typography>To:</Typography>
       </Grid>
-      <Grid item xs={9} sm={5}>
+      <Grid size={{ xs: 9, sm: 5 }}>
         <Autocomplete
-          id="departure"
+          id="arrival"
           value={to}
+          options={toSuggestions ?? []}
           filterOptions={(x) => x}
-          options={toSuggestions}
-          getOptionLabel={(option) => option.name}
-          autoComplete
+          getOptionLabel={(option) => option?.name ?? ''}
           includeInputInList
           filterSelectedOptions
           noOptionsText="No locations found"
           loading={toFetching}
           renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
-          isOptionEqualToValue={(option: Location, value: Location) => option.id === value.id}
-          onChange={(_event: any, newValue: Location | null) => {
-            setToSuggestions(newValue ? [newValue, ...toSuggestions] : toSuggestions);
+          isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
+          onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
+            setToSuggestions(newValue ? [newValue, ...(toSuggestions ?? [])] : toSuggestions ?? []);
             setTo(newValue);
           }}
           onInputChange={(_event, newInputValue) => {
@@ -193,10 +190,10 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           }}
         />
       </Grid>
-      <Grid item xs={3} sm={1} container justifyContent="flex-end" alignItems="center">
+      <Grid size={{ xs: 3, sm: 1 }} container justifyContent="flex-end" alignItems="center">
         <Typography>Departure:</Typography>
       </Grid>
-      <Grid item xs={5} sm={3}>
+      <Grid size={{ xs: 5, sm: 3 }}>
         <TextField
           id="date"
           type="date"
@@ -205,7 +202,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           fullWidth
         />
       </Grid>
-      <Grid item xs={4} sm={2}>
+      <Grid size={{ xs: 4, sm: 2 }}>
         <TextField
           id="time"
           type="time"
@@ -217,7 +214,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
           }}
         />
       </Grid>
-      <Grid item sm={6} container justifyContent="right" alignItems="center">
+      <Grid size={{ sm: 6 }} container justifyContent="right" alignItems="center">
         <Button variant="contained" type="submit" disabled={!formValid} onClick={handleSearchClick}>
           Search
         </Button>

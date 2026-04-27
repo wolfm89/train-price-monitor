@@ -8,6 +8,8 @@ export const tableDefinitions: TableProps[] = [
     sortKey: { name: 'sk', type: AttributeType.STRING },
     billingMode: BillingMode.PAY_PER_REQUEST,
     removalPolicy: RemovalPolicy.DESTROY,
-    pointInTimeRecovery: true,
+    pointInTimeRecoverySpecification: {
+      pointInTimeRecoveryEnabled: true,
+    },
   },
 ];

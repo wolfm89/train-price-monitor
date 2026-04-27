@@ -42,6 +42,7 @@ const HomePage: React.FC<Props> = () => {
           }
         })
         .catch((reason) => {
+          // eslint-disable-next-line no-console
           console.log(reason);
         });
     }

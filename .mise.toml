@@ -1,0 +1,47 @@
+min_version = "2024.9.5"
+
+[tools]
+node = "24"
+
+[env]
+_.file = '.env'
+PROJECT_NAME = "train-price-monitor"
+NODE_ENV = "development"
+AWS_REGION = "eu-central-1"
+
+[tasks.install]
+description = "Install dependencies for all modules"
+run = """
+  cd frontend && npm install
+  cd ../backend && npm install
+  cd ../infrastructure && npm install
+"""
+
+[tasks.dev]
+alias = "s"
+description = "Start frontend dev server"
+run = "cd frontend && npm run dev"
+
+[tasks.build]
+description = "Build all modules"
+run = """
+  cd frontend && npm run build
+  cd ../backend && npm run build
+  cd ../infrastructure && npm run build
+"""
+
+[tasks.lint]
+alias = "l"
+description = "Run ESLint on all modules"
+run = """
+  cd frontend && npm run lint
+  cd ../backend && npm run lint
+  cd ../infrastructure && npm run lint
+"""
+
+[tasks.test]
+description = "Run tests"
+run = """
+  cd frontend && npm test
+  cd ../infrastructure && npm test
+"""

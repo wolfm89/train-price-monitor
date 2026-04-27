@@ -1,38 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { ServerlessAdapter, getCurrentInvoke } from '@h4ad/serverless-adapter';
-import { ExpressFramework } from '@h4ad/serverless-adapter/lib/frameworks/express';
-import { DefaultHandler } from '@h4ad/serverless-adapter/lib/handlers/default';
-import { PromiseResolver } from '@h4ad/serverless-adapter/lib/resolvers/promise';
-import { ApiGatewayV1Adapter } from '@h4ad/serverless-adapter/lib/adapters/aws';
-import express from 'express';
-import cors from 'cors';
+import { createServer } from 'http';
+import { execute, parse, GraphQLSchema } from 'graphql';
+import type { Context, APIGatewayProxyEventV2, SQSEvent } from 'aws-lambda';
 import { createYoga, createSchema, YogaSchemaDefinition, useErrorHandler } from 'graphql-yoga';
 import { createInMemoryCache, useResponseCache } from '@graphql-yoga/plugin-response-cache';
 import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
 import logger from './lib/logger';
-import morgan from './config/morgan';
-import bodyParser from 'body-parser';
-import { Logger } from '@aws-lambda-powertools/logger';
-import { SQSAdapter } from './adapters/SQSAdapter';
 
-dotenv.config(); // Load environment variables from .env file
-
-const app = express();
-
-if (process.env.AWS_EXECUTION_ENV) {
-  app.use((_req, _res, next) => {
-    const { context } = getCurrentInvoke();
-    logger.addContext(context);
-    next();
-  });
-}
-
-app.use(bodyParser.json());
-app.use(morgan);
-
-const port = process.env.PORT || 4000; // Use the specified port from environment variable or default to 4000
+dotenv.config();
 
 const cache = createInMemoryCache();
 
@@ -41,9 +18,11 @@ const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
   typeDefs,
   resolvers,
 }) as YogaSchemaDefinition<unknown, GraphQLContext>;
+
 const yoga = createYoga({
   schema,
-  context: createContext(cache),
+  context: ({ request }) => createContext(cache, { request }),
+  fetch: globalThis.fetch,
   plugins: [
     useResponseCache({ session: () => null, cache }),
     useErrorHandler(({ errors, phase }) => {
@@ -56,39 +35,188 @@ const yoga = createYoga({
       }
     }),
   ],
+  cors: false,
 });
 
-// Enable all CORS requests
-app.use(cors());
-app.options('*', cors());
-
-// Bind GraphQL Yoga to the graphql endpoint to avoid rendering the playground on any path
-app.use(yoga.graphqlEndpoint, yoga);
-
-class ServerlessExpressLogger {
-  constructor(private logger: Logger) {}
-
-  info = (message: string) => this.logger.info(message);
-  debug = (message: string) => this.logger.debug(message);
-  warn = (message: string) => this.logger.warn(message);
-  error = (message: string) => this.logger.error(message);
-  verbose = (message: string) => this.debug(message);
+function isSQSEvent(event: APIGatewayProxyEventV2 | SQSEvent): event is SQSEvent {
+  return 'Records' in event && (event as SQSEvent).Records?.[0]?.eventSource === 'aws:sqs';
 }
 
-// Check if running locally or in Lambda environment
-if (process.env.AWS_EXECUTION_ENV) {
-  // Running in AWS Lambda
-  module.exports.handler = ServerlessAdapter.new(app)
-    .setLogger(new ServerlessExpressLogger(logger))
-    .setFramework(new ExpressFramework())
-    .setHandler(new DefaultHandler())
-    .setResolver(new PromiseResolver())
-    .addAdapter(new ApiGatewayV1Adapter())
-    .addAdapter(new SQSAdapter({ sqsForwardPath: '/graphql', sqsForwardMethod: 'POST' }))
-    .build();
-} else {
-  // Running locally
-  app.listen(port, () => {
-    console.log(`Running a GraphQL API server at http://localhost:${port}/graphql`);
+function isAPIGatewayEvent(event: APIGatewayProxyEventV2 | SQSEvent): boolean {
+  const e = event as APIGatewayProxyEventV2;
+  // Check for v2 format (requestContext.http)
+  if (e.requestContext?.http) return true;
+  // Check for v1 format (pathParameters.proxy)
+  if (e.pathParameters?.proxy) return true;
+  // Check for API Gateway with requestContext
+  if ((e.requestContext as unknown as Record<string, unknown>)?.resourceId) return true;
+  return false;
+}
+
+function extractHttpContext(
+  event: APIGatewayProxyEventV2 | SQSEvent
+): { method: string; path: string; queryString: string } | null {
+  const e = event as APIGatewayProxyEventV2;
+  // Try v2 format first
+  if (e.requestContext?.http) {
+    return {
+      method: e.requestContext.http.method,
+      path: e.requestContext.http.path,
+      queryString: e.rawQueryString || '',
+    };
+  }
+
+  // Try v1 format (Lambda proxy integration)
+  if (e.pathParameters?.proxy) {
+    const path = '/' + e.pathParameters.proxy;
+    const queryString = e.queryStringParameters
+      ? new URLSearchParams(e.queryStringParameters as Record<string, string>).toString()
+      : '';
+    return {
+      method: (e as unknown as Record<string, string>).httpMethod || 'GET',
+      path,
+      queryString,
+    };
+  }
+
+  return null;
+}
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
+};
+
+interface LambdaResponse {
+  statusCode: number;
+  headers?: Record<string, string>;
+  body: string;
+}
+
+export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context: Context): Promise<LambdaResponse> => {
+  if (process.env.AWS_EXECUTION_ENV) {
+    logger.addContext(context);
+  }
+
+  logger.info('Lambda invoked', {
+    eventSource: isSQSEvent(event) ? event.Records?.[0]?.eventSource : undefined,
+    httpMethod: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.method : undefined,
+    path: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.path : undefined,
+  });
+
+  if (isSQSEvent(event)) {
+    const body = event.Records[0]?.body || '{}';
+    let query = 'mutation { updateJourneyMonitors }';
+    let variables: Record<string, unknown> = {};
+
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.query) {
+        query = parsed.query;
+        variables = parsed.variables || {};
+      }
+    } catch {
+      logger.warn('Failed to parse SQS message body', { body });
+    }
+
+    logger.info('Processing SQS message', { query, hasVariables: Object.keys(variables).length > 0 });
+
+    const graphqlContext = (await createContext(cache, {})) as GraphQLContext;
+    const result = await execute({
+      schema: schema as unknown as GraphQLSchema,
+      document: parse(query),
+      variableValues: variables,
+      contextValue: graphqlContext,
+    });
+    if (result.errors && result.errors.length > 0) {
+      logger.error('SQS message processing failed', {
+        errorCount: result.errors.length,
+        errors: result.errors.map((error) => ({ message: error.message, path: error.path })),
+      });
+      throw new Error('SQS GraphQL execution failed');
+    }
+    logger.info('SQS message processed', { hasErrors: false });
+    return { statusCode: 200, body: '' };
+  }
+
+  if (!isAPIGatewayEvent(event)) {
+    logger.error('Unknown event type', { event: JSON.stringify(event) });
+    return { statusCode: 400, headers: CORS_HEADERS, body: 'Unknown event type' };
+  }
+
+  const httpContext = extractHttpContext(event);
+
+  if (!httpContext) {
+    logger.error('Failed to extract HTTP context', { event: JSON.stringify(event) });
+    return { statusCode: 400, headers: CORS_HEADERS, body: 'Invalid request' };
+  }
+
+  if (httpContext.method === 'OPTIONS') {
+    return { statusCode: 200, headers: CORS_HEADERS, body: '' };
+  }
+
+  const queryString = httpContext.queryString;
+  const body = event.body && event.isBase64Encoded ? Buffer.from(event.body, 'base64') : event.body;
+  const headers = event.headers as Record<string, string>;
+
+  logger.info('Processing GraphQL request', {
+    method: httpContext.method,
+    path: httpContext.path,
+    queryStringLength: queryString.length,
+  });
+
+  // Create a mock Request object for yoga
+  const url = `https://example.com${httpContext.path}${queryString ? '?' + queryString : ''}`;
+
+  const response = await yoga.fetch(url, {
+    method: httpContext.method,
+    headers,
+    body,
+  });
+
+  const responseBody = await response.text();
+  logger.info('GraphQL response', { status: response.status, bodyLength: responseBody.length });
+
+  const responseHeaders: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    responseHeaders[key] = value;
+  });
+
+  return {
+    statusCode: response.status,
+    headers: { ...CORS_HEADERS, ...responseHeaders },
+    body: responseBody,
+  };
+};
+
+if (process.env.LOCAL_DEV) {
+  const port = parseInt(process.env.PORT || '4000', 10);
+
+  const server = createServer(async (req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+    }
+
+    const url = `http://localhost:${port}${req.url}`;
+    const response = await yoga.fetch(url, {
+      method: req.method || 'GET',
+      headers: req.headers as Record<string, string>,
+      body: body || undefined,
+    });
+
+    res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+    res.end(await response.text());
+  });
+
+  server.listen(port, () => {
+    logger.info(`Running a GraphQL API server at http://localhost:${port}/graphql`);
   });
 }

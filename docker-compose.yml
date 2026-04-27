@@ -8,6 +8,7 @@ services:
       - 4000:4000
     environment:
       PORT: 4000
+      LOCAL_DEV: '1'
       PROFILE_IMAGE_BUCKET_NAME: ${PROFILE_IMAGE_BUCKET_NAME}
       TPM_SQS_QUEUE_URL: ${TPM_SQS_QUEUE_URL}
       AWS_PROFILE: ${AWS_PROFILE}
@@ -35,7 +36,7 @@ services:
     ports:
       - 3000:3000
     environment:
-      REACT_APP_API_GATEWAY_ENDPOINT: http://localhost:4000/
+      REACT_APP_GRAPHQL_ENDPOINT: http://localhost:4000/
       CHOKIDAR_USEPOLLING: true
     healthcheck:
       test: ['CMD-SHELL', 'curl -f http://localhost:3000 || exit 1']

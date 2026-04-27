@@ -1,5 +1,6 @@
 import { GraphQLContext } from '../context';
 import { User } from '../schema/generated/typeDefs.generated';
+import { GetItemCommand } from '../model/trainPriceMonitor';
 import { getJourneyMonitor } from './user';
 
 interface NotificationType {
@@ -82,11 +83,11 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
 };
 
 async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: string, journeyId: string) {
-  // Retrieve the journey from the database
-  const { Item: dbJourney } = await context.entities.Journey.get({ userId, id: journeyId });
+  const { Item: dbJourney } = await context.entities.Journey.build(GetItemCommand)
+    .key({ userId, id: journeyId })
+    .send();
   if (!dbJourney) {
     throw new Error(`Journey with ID ${journeyId} not found in database`);
   }
-  // Create a journey monitor object including the journey
   return getJourneyMonitor(context, dbJourney);
 }

@@ -20,7 +20,7 @@ const stream: StreamOptions = {
       const query = rawQuery.replace(/\n/g, '').replace(/\s+/g, ' ');
       try {
         logger.info(logMessage, { query }, { variables: JSON.parse(variables) });
-      } catch (e) {
+      } catch {
         logger.info(logMessage, { query });
       }
     } else {

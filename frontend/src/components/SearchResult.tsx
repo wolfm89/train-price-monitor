@@ -24,7 +24,7 @@ import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 
-interface Journey {
+export interface Journey {
   refreshToken: string;
   from: string;
   to: string;
@@ -34,8 +34,15 @@ interface Journey {
   price?: number;
 }
 
+export interface SearchData {
+  departure: string;
+  destination: string;
+  date: string;
+  time: string;
+}
+
 interface Props {
-  searchData: any;
+  searchData: SearchData;
   searchResult: Journey[];
 }
 
@@ -86,6 +93,7 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
         }
       })
       .catch((reason) => {
+        // eslint-disable-next-line no-console
         console.log(reason);
         setLoading(false);
       });

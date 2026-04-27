@@ -17,7 +17,7 @@ import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
 export class Backend extends Construct {
-  constructor(scope: Construct, id: string, userPool: UserPool) {
+  constructor(scope: Construct, id: string, userPool: UserPool, frontendDomainName: string) {
     super(scope, id);
 
     // Create DynamoDB tables
@@ -25,7 +25,6 @@ export class Backend extends Construct {
       if (tableDefinition.tableName === undefined) {
         throw new Error('Table name is not set.');
       }
-      // eslint-disable-next-line awscdk/require-dynamodb-ptr, awscdk/require-dynamodb-autoscale
       return new dynamodb.Table(this, tableDefinition.tableName, tableDefinition);
     });
 
@@ -34,6 +33,18 @@ export class Backend extends Construct {
       enforceSSL: true,
       encryption: s3.BucketEncryption.KMS_MANAGED,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.GET],
+          allowedOrigins: ['*'],
+          allowedHeaders: ['*'],
+        },
+        {
+          allowedMethods: [s3.HttpMethods.PUT],
+          allowedOrigins: [`https://${frontendDomainName}`, 'http://localhost:3000'],
+          allowedHeaders: ['*'],
+        },
+      ],
     });
 
     // Create SQS queue
@@ -42,15 +53,20 @@ export class Backend extends Construct {
     });
 
     // Create Lambda function
+    const apiLogGroup = new logs.LogGroup(this, 'LambdaLogs', {
+      retention: logs.RetentionDays.TWO_WEEKS,
+    });
+
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
-      logRetention: logs.RetentionDays.TWO_WEEKS,
-      timeout: cdk.Duration.seconds(10),
+      logGroup: apiLogGroup,
+      timeout: cdk.Duration.seconds(30),
       memorySize: 512,
       environment: {
         PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
         TPM_SQS_QUEUE_URL: queue.queueUrl,
         NODE_OPTIONS: '--enable-source-maps',
+        DEPLOY_VERSION: 'v11',
       },
     });
 
@@ -60,7 +76,7 @@ export class Backend extends Construct {
       table.grantReadWriteData(lambdaFunction);
     });
 
-    const logGroup = new logs.LogGroup(this, 'ApiLogs', {
+    const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,
     });
 
@@ -112,10 +128,8 @@ export class Backend extends Construct {
       },
     });
 
-    // Create AWS SES email address identity
-    new ses.EmailIdentity(this, 'EmailIdentity', {
-      identity: ses.Identity.email('trainpricemonitor@wolfgangmoser.eu'),
-    });
+    // AWS SES email identity already exists in account - no need to create
+    // See: trainpricemonitor@wolfgangmoser.eu in SES console
 
     // Allow Lambda function to send emails and create email identities
     lambdaFunction.addToRolePolicy(

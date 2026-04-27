@@ -1,4 +1,4 @@
-import { createContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useEffect, useCallback } from 'react';
 import * as auth from '../utils/auth';
 import { UserData } from '../utils/auth';
 import { useQuery } from 'urql';
@@ -33,6 +33,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(user);
     } catch (err) {
       // not logged in
+      // eslint-disable-next-line no-console
       console.log(err);
       setUser(null);
     }
@@ -100,6 +101,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem(imageUrlKey, newUrl);
       localStorage.setItem(imageUrlTimestampKey, now.toString());
     } else if (userProfilePictureUrlResult.error) {
+      // eslint-disable-next-line no-console
       console.error('Error fetching user profile picture URL:', userProfilePictureUrlResult.error);
       addAlert('Error fetching user profile picture URL.', AlertSeverity.Error);
     }
