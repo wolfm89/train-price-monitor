@@ -41,7 +41,12 @@ const AccountMenu: React.FC<Props> = ({ anchorEl, onClose }) => {
       <MenuItem component={Link} to="/profile" onClick={handleMenuClose}>
         <ListItemIcon>
           {userProfilePictureUrl && (
-            <Avatar alt="Profile Picture" src={userProfilePictureUrl} sx={{ width: 24, height: 24 }} />
+            <Avatar
+              alt="Profile Picture"
+              src={userProfilePictureUrl}
+              sx={{ width: 24, height: 24 }}
+              slotProps={{ img: { crossOrigin: 'anonymous' } }}
+            />
           )}
           {!userProfilePictureUrl && <AccountCircleIcon />}
         </ListItemIcon>
