@@ -1,4 +1,8 @@
 min_version = "2024.9.5"
+experimental_monorepo_root = true
+
+[monorepo]
+config_roots = ["frontend", "backend", "infrastructure"]
 
 [tools]
 node = "24"
@@ -11,37 +15,30 @@ AWS_REGION = "eu-central-1"
 
 [tasks.install]
 description = "Install dependencies for all modules"
-run = """
-  cd frontend && npm install
-  cd ../backend && npm install
-  cd ../infrastructure && npm install
-"""
+depends = ["//...:install"]
 
 [tasks.dev]
 alias = "s"
 description = "Start frontend dev server"
-run = "cd frontend && npm run dev"
+depends = ["//frontend:dev"]
 
 [tasks.build]
 description = "Build all modules"
-run = """
-  cd frontend && npm run build
-  cd ../backend && npm run build
-  cd ../infrastructure && npm run build
-"""
+depends = ["//...:build"]
 
 [tasks.lint]
 alias = "l"
 description = "Run ESLint on all modules"
-run = """
-  cd frontend && npm run lint
-  cd ../backend && npm run lint
-  cd ../infrastructure && npm run lint
-"""
+depends = ["//...:lint"]
 
 [tasks.test]
 description = "Run tests"
-run = """
-  cd frontend && npm test
-  cd ../infrastructure && npm test
-"""
+depends = ["//...:test"]
+
+[tasks.typecheck]
+description = "Typecheck all modules"
+depends = ["//...:typecheck"]
+
+[tasks.deploy]
+description = "Deploy all CDK stacks to AWS"
+depends = ["//infrastructure:deploy"]
