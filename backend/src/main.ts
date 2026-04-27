@@ -23,6 +23,11 @@ const yoga = createYoga({
   schema,
   context: ({ request }) => createContext(cache, { request }),
   fetchAPI: { fetch: globalThis.fetch },
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
+  },
   plugins: [
     useResponseCache({ session: () => null, cache }),
     useErrorHandler(({ errors, phase }) => {
@@ -35,7 +40,6 @@ const yoga = createYoga({
       }
     }),
   ],
-  cors: false,
 });
 
 function isSQSEvent(event: APIGatewayProxyEventV2 | SQSEvent): event is SQSEvent {

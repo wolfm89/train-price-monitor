@@ -173,7 +173,7 @@ export type JourneyResolvers<
 export type JourneyExpiryNotificationResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['JourneyExpiryNotification'] =
-    ResolversParentTypes['JourneyExpiryNotification'],
+  ResolversParentTypes['JourneyExpiryNotification'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
