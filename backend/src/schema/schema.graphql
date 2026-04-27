@@ -93,6 +93,12 @@ extend type Mutation {
 
 # Journeys
 
+type JourneysResult {
+  journeys: [Journey]
+  earlierRef: String
+  laterRef: String
+}
+
 type Journey {
   refreshToken: String!
   from: String
@@ -114,7 +120,7 @@ type JourneyMonitor {
 ## Queries
 
 extend type Query {
-  journeys(from: String!, to: String!, departure: DateTime!): [Journey]
+  journeys(from: String!, to: String!, departure: DateTime!, earlierThan: String, laterThan: String): JourneysResult
 }
 
 ## Mutations

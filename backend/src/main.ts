@@ -19,10 +19,17 @@ const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
   resolvers,
 }) as YogaSchemaDefinition<unknown, GraphQLContext>;
 
+const YOGA_CORS_CONFIG = {
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
+};
+
 const yoga = createYoga({
   schema,
   context: ({ request }) => createContext(cache, { request }),
   fetchAPI: { fetch: globalThis.fetch },
+  cors: YOGA_CORS_CONFIG,
   plugins: [
     useResponseCache({ session: () => null, cache }),
     useErrorHandler(({ errors, phase }) => {
@@ -35,7 +42,6 @@ const yoga = createYoga({
       }
     }),
   ],
-  cors: false,
 });
 
 function isSQSEvent(event: APIGatewayProxyEventV2 | SQSEvent): event is SQSEvent {
@@ -83,9 +89,9 @@ function extractHttpContext(
 }
 
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
+  'Access-Control-Allow-Origin': YOGA_CORS_CONFIG.origin,
+  'Access-Control-Allow-Methods': YOGA_CORS_CONFIG.methods.join(', '),
+  'Access-Control-Allow-Headers': YOGA_CORS_CONFIG.allowedHeaders.join(', '),
 };
 
 interface LambdaResponse {

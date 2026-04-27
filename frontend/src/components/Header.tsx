@@ -168,7 +168,12 @@ const Header = () => {
               </IconButton>
               <IconButton aria-label="user profile" color="inherit" onClick={handleAccountClick}>
                 {userProfilePictureUrl && (
-                  <Avatar alt="Profile Picture" src={userProfilePictureUrl} sx={{ width: 24, height: 24 }} />
+                  <Avatar
+                    alt="Profile Picture"
+                    src={userProfilePictureUrl}
+                    sx={{ width: 24, height: 24 }}
+                    slotProps={{ img: { crossOrigin: 'anonymous' } }}
+                  />
                 )}
                 {!userProfilePictureUrl && <AccountCircleIcon />}
               </IconButton>

@@ -1,13 +1,17 @@
 import { gql } from 'urql';
 
 export const JourneySearchQuery = gql`
-  query ($departure: DateTime!, $from: String!, $to: String!) {
-    journeys(departure: $departure, from: $from, to: $to) {
-      departure
-      arrival
-      refreshToken
-      means
-      price
+  query ($departure: DateTime!, $from: String!, $to: String!, $earlierThan: String, $laterThan: String) {
+    journeys(departure: $departure, from: $from, to: $to, earlierThan: $earlierThan, laterThan: $laterThan) {
+      journeys {
+        departure
+        arrival
+        refreshToken
+        means
+        price
+      }
+      earlierRef
+      laterRef
     }
   }
 `;

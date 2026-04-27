@@ -9,6 +9,7 @@ import {
   TableCell,
   useTheme,
   Button,
+  Box,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -18,6 +19,8 @@ import {
   useMediaQuery,
 } from '@mui/material';
 import AlarmAddIcon from '@mui/icons-material/AlarmAdd';
+import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
+import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import { MonitorJourney } from '../api/journey';
 import { useMutation } from 'urql';
 import { AuthContext } from '../providers/AuthProvider';
@@ -44,9 +47,18 @@ export interface SearchData {
 interface Props {
   searchData: SearchData;
   searchResult: Journey[];
+  onNavigateEarlier?: () => void;
+  onNavigateLater?: () => void;
+  navigatingDirection?: 'earlier' | 'later' | null;
 }
 
-const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
+const SearchResult: React.FC<Props> = ({
+  searchData,
+  searchResult,
+  onNavigateEarlier,
+  onNavigateLater,
+  navigatingDirection,
+}) => {
   const theme = useTheme();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { addAlert } = useAlert();
@@ -195,6 +207,33 @@ const SearchResult: React.FC<Props> = ({ searchData, searchResult }) => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {(onNavigateEarlier || onNavigateLater) && (
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2, mb: 1 }}>
+          {onNavigateEarlier ? (
+            <Button
+              variant="outlined"
+              onClick={onNavigateEarlier}
+              disabled={!!navigatingDirection}
+              startIcon={navigatingDirection === 'earlier' ? <CircularProgress size={16} /> : <NavigateBeforeIcon />}
+            >
+              Earlier trains
+            </Button>
+          ) : (
+            <span />
+          )}
+          {onNavigateLater && (
+            <Button
+              variant="outlined"
+              onClick={onNavigateLater}
+              disabled={!!navigatingDirection}
+              endIcon={navigatingDirection === 'later' ? <CircularProgress size={16} /> : <NavigateNextIcon />}
+            >
+              Later trains
+            </Button>
+          )}
+        </Box>
+      )}
 
       {/* Watch Modal */}
       <Dialog open={openModal} onClose={handleCloseModal}>

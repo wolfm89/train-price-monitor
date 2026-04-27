@@ -5,6 +5,7 @@ import type {
   Scalars,
   Journey,
   JourneyMonitor,
+  JourneysResult,
   JourneyExpiryNotification,
   PriceAlertNotification,
   User,
@@ -114,6 +115,7 @@ export type ResolversTypes = {
   Journey: ResolverTypeWrapper<Journey>;
   JourneyExpiryNotification: ResolverTypeWrapper<JourneyExpiryNotification>;
   JourneyMonitor: ResolverTypeWrapper<JourneyMonitor>;
+  JourneysResult: ResolverTypeWrapper<JourneysResult>;
   Location: ResolverTypeWrapper<Location>;
   Mutation: ResolverTypeWrapper<{}>;
   Notification: ResolverTypeWrapper<ResolversInterfaceTypes<ResolversTypes>['Notification']>;
@@ -135,6 +137,7 @@ export type ResolversParentTypes = {
   Journey: Journey;
   JourneyExpiryNotification: JourneyExpiryNotification;
   JourneyMonitor: JourneyMonitor;
+  JourneysResult: JourneysResult;
   Location: Location;
   Mutation: {};
   Notification: ResolversInterfaceTypes<ResolversParentTypes>['Notification'];
@@ -170,7 +173,7 @@ export type JourneyResolvers<
 export type JourneyExpiryNotificationResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['JourneyExpiryNotification'] =
-    ResolversParentTypes['JourneyExpiryNotification'],
+  ResolversParentTypes['JourneyExpiryNotification'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
@@ -306,7 +309,7 @@ export type QueryResolvers<
   ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query'],
 > = {
   journeys?: Resolver<
-    Maybe<Array<Maybe<ResolversTypes['Journey']>>>,
+    Maybe<ResolversTypes['JourneysResult']>,
     ParentType,
     ContextType,
     RequireFields<QueryJourneysArgs, 'departure' | 'from' | 'to'>

@@ -6,9 +6,9 @@ This document provides guidance for AI agents working in this codebase.
 
 Train price monitoring webapp built with React, TypeScript, GraphQL, Docker, and AWS serverless services. The codebase is split into three modules:
 
-- **frontend/** - React app with Material-UI, urql, and Vite
-- **backend/** - Express/GraphQL Yoga API with AWS integrations
-- **infrastructure/** - AWS CDK infrastructure definitions
+- **frontend/** - React 19 app with Material-UI v7, urql, and Vite
+- **backend/** - GraphQL Yoga API with native AWS Lambda handler and AWS integrations
+- **infrastructure/** - AWS CDK v2 infrastructure definitions
 
 ## Tooling
 
@@ -33,12 +33,14 @@ npm run lint           # ESLint check
 ```bash
 cd backend
 npm install            # Install dependencies
-npm run dev           # Start with hot reload
+LOCAL_DEV=1 npm run dev  # Start local HTTP server with hot reload (port 4000)
 npm run build         # Bundle with esbuild to backend/dist
 npm run codegen       # Generate GraphQL types from schema
 npm run typecheck     # TypeScript check
 npm run lint          # ESLint check
 ```
+
+> `LOCAL_DEV=1` switches the entry point from exporting a Lambda handler to starting a plain HTTP server. The mise task `mise run //backend:dev` sets this automatically.
 
 ### Infrastructure (CDK)
 
@@ -53,12 +55,18 @@ npm run typecheck     # TypeScript check
 npm run lint          # ESLint check
 ```
 
-### Root Level
+### Root Level (mise monorepo)
+
+This project is configured as a mise monorepo. Tasks defined in each module's `mise.toml` are accessible via `mise run //module:task`.
 
 ```bash
-npx pre-commit run --all-files  # Run all pre-commit hooks
-mise run build                  # Build all modules (via mise)
-mise run test                  # Run tests (via mise)
+npx pre-commit run --all-files       # Run all pre-commit hooks
+mise run //...:build                 # Build all modules in parallel
+mise run //...:test                  # Run tests across all modules
+mise run //...:lint                  # Lint all modules
+mise run //frontend:dev              # Start frontend dev server
+mise run //backend:dev               # Start backend local server (sets LOCAL_DEV=1)
+mise run //infrastructure:deploy     # Deploy all CDK stacks
 ```
 
 ## Code Style Guidelines
@@ -181,12 +189,16 @@ The backend bundles with `--format=cjs` for Lambda compatibility. Critical rules
 ## AWS Deployment
 
 ```bash
-# Source root .env first (sets AWS_PROFILE etc.)
+# Source root .env first (sets AWS_PROFILE, CDK_DOMAIN_NAME, etc.)
 source .env
 
-# Deploy all stacks (from infrastructure/)
+# Deploy all stacks — from infrastructure/ or via mise
 npx cdk deploy --all --require-approval never
+# or:
+mise run //infrastructure:deploy
 ```
+
+`CDK_APP_NAME`, `CDK_DOMAIN_NAME`, and `CDK_SES_FROM_EMAIL` must be set before running `cdk deploy` (either via env vars or `-c` CDK context flags). Missing values cause a synth-time error.
 
 - Lambda runs as a Docker image — expect **~15s cold start** on first invocation after deployment.
 - If the Lambda crashes silently, check CloudWatch: log group is `/aws/lambda/InfrastructureStack-BackendGraphql*`.
@@ -194,10 +206,34 @@ npx cdk deploy --all --require-approval never
 
 ## Environment Variables
 
-Never commit `.env` files or secrets. Required:
+Never commit `.env` files or secrets.
 
-- **Backend**: `PROFILE_IMAGE_BUCKET_NAME`, `TPM_SQS_QUEUE_URL`
-- **Infrastructure**: AWS credentials via AWS CLI
+### Backend
+
+| Variable                    | Description                                                              |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `PROFILE_IMAGE_BUCKET_NAME` | S3 bucket name for profile images                                        |
+| `TPM_SQS_QUEUE_URL`         | SQS queue URL for journey monitor updates                                |
+| `SES_FROM_EMAIL`            | Sender address for SES notification emails (injected by CDK)             |
+| `FRONTEND_URL`              | Frontend base URL for notification links (injected by CDK)               |
+| `LOCAL_DEV`                 | Set to `1` to start an HTTP server instead of exporting a Lambda handler |
+| `PORT`                      | HTTP port for local dev server (default: `4000`)                         |
+
+### Frontend
+
+| Variable                     | Description                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `REACT_APP_GRAPHQL_ENDPOINT` | API Gateway base URL (e.g. `https://xxx.execute-api.eu-central-1.amazonaws.com/`) |
+
+### Infrastructure
+
+AWS credentials must be available via the AWS CLI. The following variables override CDK context values and must be set before `cdk deploy`:
+
+| Variable             | Description                                                    |
+| -------------------- | -------------------------------------------------------------- |
+| `CDK_APP_NAME`       | Application name                                               |
+| `CDK_DOMAIN_NAME`    | Custom domain name for the deployment                          |
+| `CDK_SES_FROM_EMAIL` | Sender email address, injected into Lambda as `SES_FROM_EMAIL` |
 
 See `.env` for example values.
 

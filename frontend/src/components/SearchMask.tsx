@@ -2,15 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button, TextField, Grid, Typography, Autocomplete } from '@mui/material';
 import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
-import { JourneySearchQuery } from '../api/journey';
 import { LocationSearchQuery } from '../api/location';
-import { Journey, SearchData } from './SearchResult';
+import { SearchData } from './SearchResult';
 
 interface Props {
   setSearchData: (searchData: SearchData) => void;
-  setSearchResult: (searchResult: Journey[] | undefined) => void;
-  setLoading: (loading: boolean) => void;
-  setSearchClicked: (searchClicked: boolean) => void;
+  onSearch: (from: string, to: string, departure: string) => void;
 }
 
 interface Location {
@@ -18,7 +15,7 @@ interface Location {
   name: string;
 }
 
-const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoading, setSearchClicked }) => {
+const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
   const [from, setFrom] = useState<Location | null>(null);
   const [fromInput, setFromInput] = useState<string>('');
   const [fromSuggestions, setFromSuggestions] = useState<readonly Location[]>([]);
@@ -57,20 +54,6 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
     }, 250),
     [reexecuteToSearchQuery]
   );
-  const [{ data, fetching }, reexecuteJourneySearchQuery] = useQuery({
-    query: JourneySearchQuery,
-    variables: {
-      from: from?.id,
-      to: to?.id,
-      departure: `${formValid ? createISODateString(departureDay.trim(), departureTime.trim()) : ''}`,
-    },
-    pause: true,
-  });
-
-  useEffect(() => {
-    setSearchResult(data?.journeys);
-    setLoading(fetching);
-  }, [data, fetching, setLoading, setSearchResult]);
 
   useEffect(() => {
     if (fromInput === '') {
@@ -108,21 +91,17 @@ const SearchMask: React.FC<Props> = ({ setSearchData, setSearchResult, setLoadin
   }
 
   function createISODateString(day: string, time: string): string {
-    const dateObject = createDateFromDayAndTime(day, time);
-
-    return dateObject.toISOString();
+    return createDateFromDayAndTime(day, time).toISOString();
   }
 
   const handleSearchClick = () => {
-    setSearchClicked(true);
-    setLoading(true);
     setSearchData({
       departure: from?.name ?? '',
       destination: to?.name ?? '',
       date: departureDay,
       time: departureTime,
     });
-    reexecuteJourneySearchQuery({ requestPolicy: 'network-only' });
+    onSearch(from?.id ?? '', to?.id ?? '', createISODateString(departureDay.trim(), departureTime.trim()));
   };
 
   // Update form validity based on input fields
