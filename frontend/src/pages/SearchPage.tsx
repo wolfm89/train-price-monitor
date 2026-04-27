@@ -54,21 +54,24 @@ const SearchPage: React.FC<Props> = () => {
         <SearchMask setSearchData={setSearchData} onSearch={handleSearch} />
       </Grid>
       <Grid size={12}>
-        {fetching ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
-            <CircularProgress />
-          </div>
-        ) : searchResult !== undefined && searchResult.length > 0 ? (
-          <SearchResult
-            searchData={searchData!}
-            searchResult={searchResult}
-            onNavigateEarlier={handleNavigateEarlier}
-            onNavigateLater={handleNavigateLater}
-            navigating={fetching}
-          />
-        ) : (
-          searchClicked && !fetching && <Typography variant="subtitle1">No results found</Typography>
-        )}
+        {searchClicked &&
+          (fetching && !data ? (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
+              <CircularProgress />
+            </div>
+          ) : data !== undefined ? (
+            (searchResult ?? []).length > 0 || fetching || earlierRef || laterRef ? (
+              <SearchResult
+                searchData={searchData!}
+                searchResult={searchResult ?? []}
+                onNavigateEarlier={handleNavigateEarlier}
+                onNavigateLater={handleNavigateLater}
+                navigating={fetching}
+              />
+            ) : (
+              <Typography variant="subtitle1">No results found</Typography>
+            )
+          ) : null)}
       </Grid>
     </Grid>
   );

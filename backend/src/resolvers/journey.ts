@@ -26,14 +26,10 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   context: GraphQLContext
 ): Promise<JourneysResult> => {
   // Query journeys using Hafas API
-  const result = await context.dbHafas.queryJourneys(
-    args.from,
-    args.to,
-    args.departure,
-    undefined,
-    args.earlierThan ?? undefined,
-    args.laterThan ?? undefined
-  );
+  const result = await context.dbHafas.queryJourneys(args.from, args.to, args.departure, {
+    earlierThan: args.earlierThan ?? undefined,
+    laterThan: args.laterThan ?? undefined,
+  });
 
   // Check if no journeys were found
   if (!result || !result.journeys || result.journeys.length === 0) {

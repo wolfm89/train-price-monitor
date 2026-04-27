@@ -48,19 +48,22 @@ export class DbHafasManager {
    * @param from - The departure station or location.
    * @param to - The destination station or location.
    * @param departure - The departure date and time.
-   * @param results - The maximum number of results to retrieve (default is 3).
-   * @param earlierThan - Ref token to fetch earlier journeys (mutually exclusive with departure/laterThan).
-   * @param laterThan - Ref token to fetch later journeys (mutually exclusive with departure/earlierThan).
+   * @param options - Optional query options.
+   * @param options.results - The maximum number of results to retrieve (default is 3).
+   * @param options.earlierThan - Ref token to fetch earlier journeys (mutually exclusive with laterThan).
+   * @param options.laterThan - Ref token to fetch later journeys (mutually exclusive with earlierThan).
    * @returns A promise that resolves to the retrieved journeys.
    */
   async queryJourneys(
     from: string,
     to: string,
     departure: Date,
-    results: number = 3,
-    earlierThan?: string,
-    laterThan?: string
+    options?: { results?: number; earlierThan?: string; laterThan?: string }
   ): Promise<Journeys> {
+    const { results = 3, earlierThan, laterThan } = options ?? {};
+    if (earlierThan && laterThan) {
+      throw new Error('earlierThan and laterThan are mutually exclusive');
+    }
     if (earlierThan) {
       return await this.client.journeys(from, to, { earlierThan, results, tickets: true });
     }
@@ -110,7 +113,7 @@ export class DbHafasManager {
     const departure = new Date(refreshedJourney.legs[0].plannedDeparture!);
 
     for (const n of [1, 5]) {
-      const journeys = await this.queryJourneys(from, to, departure, n);
+      const journeys = await this.queryJourneys(from, to, departure, { results: n });
       if (journeys.journeys === undefined || journeys.journeys.length === 0) {
         break;
       }
