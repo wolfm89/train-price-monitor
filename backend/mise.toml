@@ -1,2 +1,10 @@
 [task_config]
 includes = ["../mise.tasks.toml"]
+
+[tasks.dev]
+description = "Start backend dev server with hot reload"
+run = "npm run dev"
+
+[tasks.dev.env]
+LOCAL_DEV = "1"
+PORT = "4000"

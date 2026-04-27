@@ -17,10 +17,17 @@ AWS_REGION = "eu-central-1"
 description = "Install dependencies for all modules"
 depends = ["//...:install"]
 
-[tasks.dev]
-alias = "s"
+[tasks."dev:frontend"]
 description = "Start frontend dev server"
 depends = ["//frontend:dev"]
+
+[tasks."dev:backend"]
+description = "Start backend dev server (native, no Docker)"
+depends = ["//backend:dev"]
+
+[tasks."dev:docker"]
+description = "Start full stack with Docker Compose"
+run = "docker compose up"
 
 [tasks.build]
 description = "Build all modules"
