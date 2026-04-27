@@ -25,6 +25,7 @@ request.json
 .nvmrc
 
 .vscode/launch.json
+.vscode/settings.json
 
 # mise
 .mise.local.toml
