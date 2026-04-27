@@ -57,10 +57,18 @@ jobs:
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
         run: npm run cdk diff
+        env:
+          CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
+          CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
+          CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
         run: npm run cdk -- --app cdk.out deploy --require-approval never --all
+        env:
+          CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
+          CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
+          CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
 
       - name: Invalidate CloudFront cache
         uses: badsyntax/github-action-aws-cloudfront@master
