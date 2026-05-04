@@ -35,3 +35,6 @@ request.json
 
 # stats
 stats/
+
+# playwright mcp artifacts
+.playwright-mcp/
