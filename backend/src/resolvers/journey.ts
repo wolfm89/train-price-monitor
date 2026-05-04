@@ -3,6 +3,7 @@ import { GraphQLContext } from '../context';
 import {
   GetItemCommand,
   PutItemCommand,
+  UpdateItemCommand,
   DeleteItemCommand,
   ScanCommand,
   QueryCommand,
@@ -42,8 +43,8 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
     .filter((journey) => !journey.legs.some((leg) => leg.cancelled))
     .map((journey) => {
       return {
-        from: args.from,
-        to: args.to,
+        fromId: journey.legs[0].origin!.id!,
+        toId: journey.legs[journey.legs.length - 1].destination!.id!,
         departure: new Date(journey.legs[0].plannedDeparture!),
         arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
         refreshToken: journey.refreshToken!,
@@ -88,6 +89,9 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
       limitPrice: args.limitPrice,
       refreshToken: args.refreshToken,
       expires: args.expires,
+      fromId: args.fromId,
+      toId: args.toId,
+      departure: args.departure,
     })
     .send();
 
@@ -126,10 +130,21 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
 
   if (allJourneys) {
     for (const journey of allJourneys) {
-      const userId = journey.userId;
-      const id = journey.id;
-      // Schedule message for each journey
-      await context.sqs.sendUpdateJourneyMessage(userId, id);
+      // Skip expired journeys
+      if (new Date(journey.expires) < new Date()) {
+        Logger.info('Skipping expired journey in update scan', { journeyId: journey.id });
+        continue;
+      }
+
+      try {
+        await context.sqs.sendUpdateJourneyMessage(journey.userId, journey.id);
+      } catch (error) {
+        Logger.error('Failed to send update message for journey', {
+          journeyId: journey.id,
+          userId: journey.userId,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
     }
   }
 
@@ -201,21 +216,16 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     return journeyMonitor;
   }
 
-  // Check if notification already exists
+  // Check if notification already exists (PRICE_ALERT or JOURNEY_STALE for this journey)
   const existingNotifications = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
     .query({ partition: `USER#${args.userId}` })
-    .options({
-      filters: {
-        Notification: { attr: 'type', eq: NOTIFICATION_TYPES.PRICE_ALERT.name },
-      },
-    })
     .send();
 
   const notificationsArray = existingNotifications?.Items ?? [];
   if (
-    notificationsArray.some((item: { data?: string }) => {
-      if (!item.data) return false;
+    notificationsArray.some((item: { data?: string; type?: string }) => {
+      if (item.type !== NOTIFICATION_TYPES.PRICE_ALERT.name || !item.data) return false;
       try {
         return JSON.parse(item.data).journeyId === args.journeyId;
       } catch {
@@ -223,14 +233,92 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       }
     })
   ) {
-    Logger.info(`Notification already exists for journey`);
+    Logger.info(`PRICE_ALERT notification already exists for journey`);
     return journeyMonitor;
   }
 
   // Get new price for journey and compare to limit price
-  const journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken);
+  let journey: HafasJourney | undefined;
+
+  try {
+    journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken);
+  } catch (error) {
+    Logger.error('Error requerying journey, treating as stale', {
+      journeyId: args.journeyId,
+      error: error instanceof Error ? error.message : error,
+    });
+  }
+
   if (!journey) {
-    throw new Error('Could not requery journey');
+    // Token is stale — attempt recovery using stored station IDs and departure
+    Logger.warn('Refresh token stale, attempting recovery', { journeyId: args.journeyId });
+
+    const fromStationId = dbJourney.Item.fromId;
+    const toStationId = dbJourney.Item.toId;
+    const departure = new Date(dbJourney.Item.departure);
+
+    try {
+      const result = await context.dbHafas.queryJourneys(fromStationId, toStationId, departure, { results: 5 });
+      const matchingJourney = result.journeys?.find(
+        (j) => j.legs[0]?.origin?.id === fromStationId && j.legs[j.legs.length - 1]?.destination?.id === toStationId
+      );
+
+      if (matchingJourney) {
+        // Update token in DB
+        await context.entities.Journey.build(UpdateItemCommand)
+          .item({ userId: args.userId, id: args.journeyId, refreshToken: matchingJourney.refreshToken! })
+          .send();
+        journey = matchingJourney;
+        Logger.info('Successfully recovered journey with new token', { journeyId: args.journeyId });
+      }
+    } catch (recoveryError) {
+      Logger.error('Journey recovery failed', {
+        journeyId: args.journeyId,
+        error: recoveryError instanceof Error ? recoveryError.message : recoveryError,
+      });
+    }
+  }
+
+  if (!journey) {
+    // Recovery failed — journey may be cancelled or rescheduled. Notify user.
+    Logger.warn('Journey recovery failed completely, creating notification', { journeyId: args.journeyId });
+
+    // Check if a JOURNEY_STALE notification already exists for this journey
+    const hasExistingStaleNotification = notificationsArray.some((item: { data?: string; type?: string }) => {
+      if (item.type !== NOTIFICATION_TYPES.JOURNEY_STALE.name || !item.data) return false;
+      try {
+        return JSON.parse(item.data).journeyId === args.journeyId;
+      } catch {
+        return false;
+      }
+    });
+
+    if (hasExistingStaleNotification) {
+      Logger.info('JOURNEY_STALE notification already exists for journey, skipping');
+      return journeyMonitor;
+    }
+
+    const notificationId = uuidv4();
+    await context.entities.Notification.build(PutItemCommand)
+      .item({
+        id: notificationId,
+        userId: args.userId,
+        type: NOTIFICATION_TYPES.JOURNEY_STALE.name,
+        read: false,
+        sent: false,
+        timestamp: new Date().toISOString(),
+        data: JSON.stringify({
+          journeyId: args.journeyId,
+          fromId: dbJourney.Item.fromId,
+          toId: dbJourney.Item.toId,
+        }),
+      })
+      .send();
+    context.cache.invalidate([{ typename: 'Notification' }]);
+
+    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
+
+    return journeyMonitor; // Return gracefully, don't throw
   }
   const newPrice = journey.price?.amount;
 

@@ -148,4 +148,14 @@ export class DbHafasManager {
       .sort((a, b) => b.weight - a.weight)
       .slice(0, results) as unknown as readonly Station[];
   }
+
+  /**
+   * Looks up a station by its HAFAS station ID from the in-memory station cache.
+   * @param id - The HAFAS station ID to look up.
+   * @returns A promise that resolves to the matching station, or undefined if not found.
+   */
+  async getStationById(id: string): Promise<SimpleStation | undefined> {
+    const stations = await getStationCache();
+    return stations.find((s) => s.id === id);
+  }
 }

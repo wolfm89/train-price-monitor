@@ -78,7 +78,20 @@ type JourneyExpiryNotification implements Notification {
   timestamp: DateTime!
   read: Boolean!
   sent: Boolean!
-  journey: Journey!
+  from: String!
+  to: String!
+}
+
+type JourneyStaleNotification implements Notification {
+  id: ID!
+  type: ID!
+  userId: ID!
+  timestamp: DateTime!
+  read: Boolean!
+  sent: Boolean!
+  journeyId: ID!
+  from: String!
+  to: String!
 }
 
 ## Mutations
@@ -101,8 +114,8 @@ type JourneysResult {
 
 type Journey {
   refreshToken: String!
-  from: String
-  to: String
+  fromId: String
+  toId: String
   departure: DateTime
   arrival: DateTime
   means: [String]
@@ -115,6 +128,8 @@ type JourneyMonitor {
   limitPrice: Float!
   expires: DateTime!
   journey: Journey
+  from: String
+  to: String
 }
 
 ## Queries
@@ -126,7 +141,15 @@ extend type Query {
 ## Mutations
 
 extend type Mutation {
-  monitorJourney(userId: ID!, refreshToken: String!, limitPrice: Float!, expires: DateTime!): JourneyMonitor
+  monitorJourney(
+    userId: ID!
+    refreshToken: String!
+    limitPrice: Float!
+    expires: DateTime!
+    fromId: String!
+    toId: String!
+    departure: DateTime!
+  ): JourneyMonitor
 }
 
 extend type Mutation {

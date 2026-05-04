@@ -26,19 +26,19 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
       return { journeyMonitor: getJourneyMonitorByJourneyId(context, userId, data['journeyId'] as string) };
     },
     formatEmail: async (context, user, data) => {
-      const { id, journey, limitPrice } = await getJourneyMonitorByJourneyId(
+      const { id, from, to, journey, limitPrice } = await getJourneyMonitorByJourneyId(
         context,
         user.id,
         data['journeyId'] as string
       );
-      if (!journey) {
-        throw new Error('Could not retrieve journey');
+      if (!from || !to) {
+        throw new Error('Could not retrieve journey station names');
       }
-      const subject = `Price alert for your journey from ${journey.from} to ${journey.to}`;
+      const subject = `Price alert for your journey from ${from} to ${to}`;
       const htmlBody = `
         <p>Hi ${user.givenName},</p>
-        <p>The price for your journey from <b>${journey.from}</b> to <b>${journey.to}</b> has changed.</p>
-        <p>It is now <b>€${journey.price?.toFixed(2)}</b> (your limit price was <b>€${limitPrice.toFixed(2)}</b>).</p>
+        <p>The price for your journey from <b>${from}</b> to <b>${to}</b> has changed.</p>
+        <p>It is now <b>€${journey?.price?.toFixed(2)}</b> (your limit price was <b>€${limitPrice.toFixed(2)}</b>).</p>
         <p>Check it out here: <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/journeys#${id}">${
           process.env.FRONTEND_URL || 'http://localhost:3000'
         }/journeys#${id}</a></p>
@@ -49,20 +49,14 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   },
   JOURNEY_EXPIRED: {
     name: 'JOURNEY_EXPIRED',
-    mapAdditionalData: async (context, userId, data) => {
+    mapAdditionalData: async (context, _userId, data) => {
       const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
       if (!journey) {
         throw new Error('Could not requery journey');
       }
       return {
-        journey: {
-          refreshToken: journey.refreshToken!,
-          from: journey.legs[0].origin!.name!,
-          to: journey.legs[journey.legs.length - 1].destination!.name!,
-          departure: new Date(journey.legs[0].plannedDeparture!),
-          arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
-          price: journey.price?.amount,
-        },
+        from: journey.legs[0].origin!.name!,
+        to: journey.legs[journey.legs.length - 1].destination!.name!,
       };
     },
     formatEmail: async (context, user, data) => {
@@ -79,6 +73,40 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
         Visit <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/">${
           process.env.FRONTEND_URL || 'http://localhost:3000'
         }/</a> to monitor a new journey.</p>
+        <p>Best regards,<br/>Train Price Monitor</p>
+      `;
+      return { to: user.email, subject, htmlBody };
+    },
+  },
+  JOURNEY_STALE: {
+    name: 'JOURNEY_STALE',
+    mapAdditionalData: async (context, _userId, data) => {
+      const fromId = data['fromId'] as string;
+      const toId = data['toId'] as string;
+      const fromStation = await context.dbHafas.getStationById(fromId);
+      const toStation = await context.dbHafas.getStationById(toId);
+      return {
+        journeyId: data['journeyId'] as string,
+        from: fromStation?.name ?? fromId,
+        to: toStation?.name ?? toId,
+      };
+    },
+    formatEmail: async (context, user, data) => {
+      const fromId = data['fromId'] as string;
+      const toId = data['toId'] as string;
+      const fromStation = await context.dbHafas.getStationById(fromId);
+      const toStation = await context.dbHafas.getStationById(toId);
+      const from = fromStation?.name ?? fromId;
+      const to = toStation?.name ?? toId;
+      const journeyId = data['journeyId'] as string;
+      const subject = `Your train from ${from} to ${to} can no longer be tracked`;
+      const htmlBody = `
+        <p>Hi ${user.givenName},</p>
+        <p>The train from <b>${from}</b> to <b>${to}</b> that you're monitoring can no longer be tracked.</p>
+        <p>This typically happens when the train has been <b>cancelled</b> or its <b>schedule has changed</b>.</p>
+        <p>You may want to <a href="${
+          process.env.FRONTEND_URL || 'http://localhost:3000'
+        }/journeys#${journeyId}">delete this journey monitor</a> and set one up again once updated schedules are available.</p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;
       return { to: user.email, subject, htmlBody };
