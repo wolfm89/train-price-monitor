@@ -25,13 +25,25 @@ const YOGA_CORS_CONFIG = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
 };
 
+function extractUserId(request: Request): string | null {
+  const auth = request.headers.get('authorization');
+  if (!auth) return null;
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as Record<string, unknown>;
+    return typeof payload['sub'] === 'string' ? payload['sub'] : null;
+  } catch {
+    return null;
+  }
+}
+
 const yoga = createYoga({
   schema,
   context: ({ request }) => createContext(cache, { request }),
   fetchAPI: { fetch: globalThis.fetch },
   cors: YOGA_CORS_CONFIG,
   plugins: [
-    useResponseCache({ session: () => null, cache }),
+    useResponseCache({ session: (request) => extractUserId(request), cache }),
     useErrorHandler(({ errors, phase }) => {
       for (const error of errors) {
         if (error instanceof Error) {
