@@ -109,23 +109,22 @@ source .env
 echo "Using test user: $TEST_USER_EMAIL"
 ```
 
-The login dialog is triggered by clicking the Login button on the home page:
+The login dialog is triggered by clicking the Login button on the home page. Credentials are read
+from `process.env` — they are injected at startup via the root `.env` file (see above):
 
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
     await page.getByRole('button', { name: 'Login' }).click();
     await page.waitForTimeout(500);
-    await page.getByRole('textbox', { name: 'Email' }).fill('$TEST_USER_EMAIL');
-    await page.getByRole('textbox', { name: 'Password' }).fill('$TEST_USER_PASSWORD');
+    await page.getByRole('textbox', { name: 'Email' }).fill(process.env.TEST_USER_EMAIL);
+    await page.getByRole('textbox', { name: 'Password' }).fill(process.env.TEST_USER_PASSWORD);
     await page.getByRole('button', { name: 'Login' }).click();
     await page.waitForTimeout(3000);
   }`
 }
 playwright_browser_take_screenshot { filename: "after-login.png", type: "png" }
 ```
-
-Credentials are sourced from `.env`: `TEST_USER_EMAIL` / `TEST_USER_PASSWORD`.
 
 After login, the header shows Search / Journey Watchlist / notification bell / profile picture. If it still shows Sign up / Login, check for auth errors in the console.
 

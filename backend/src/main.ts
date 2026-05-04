@@ -148,11 +148,15 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
       contextValue: graphqlContext,
     });
     if (result.errors && result.errors.length > 0) {
-      logger.error('SQS message processing failed, dropping message', {
+      const messages = result.errors.map((e) => e.message).join('; ');
+      logger.error('SQS message processing failed', {
         errorCount: result.errors.length,
         errors: result.errors.map((error) => ({ message: error.message, path: error.path })),
       });
-      return { statusCode: 200, body: '' }; // Don't throw - message will be removed from queue
+      // Throw so SQS retries the message (up to maxReceiveCount) before routing to the DLQ.
+      // Expected outcomes like stale journeys are handled inside the resolver without errors,
+      // so anything reaching here is a genuine transient failure worth retrying.
+      throw new Error(`GraphQL execution error(s): ${messages}`);
     }
     logger.info('SQS message processed', { hasErrors: false });
     return { statusCode: 200, body: '' };

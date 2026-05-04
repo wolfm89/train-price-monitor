@@ -9,8 +9,11 @@ import {
   ListItem,
   IconButton,
   CircularProgress,
+  Chip,
+  Alert,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useMutation, useQuery } from 'urql';
 import { UserJourneysQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
@@ -31,7 +34,7 @@ interface Journey {
     arrival: string;
     means: string[];
     price: number;
-  };
+  } | null;
 }
 
 const JourneysPage: React.FC = () => {
@@ -121,31 +124,49 @@ const JourneysPage: React.FC = () => {
                         <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
                       </Grid>
                       <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            color: journey.price !== null ? (journey.price > limitPrice ? 'red' : 'green') : 'inherit',
-                          }}
-                        >
-                          Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
-                        </Typography>
+                        {journey ? (
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color:
+                                journey.price !== null ? (journey.price > limitPrice ? 'red' : 'green') : 'inherit',
+                            }}
+                          >
+                            Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
+                          </Typography>
+                        ) : (
+                          <Chip
+                            icon={<WarningAmberIcon />}
+                            label="No longer tracked"
+                            color="warning"
+                            size="small"
+                            variant="outlined"
+                          />
+                        )}
                       </Grid>
                     </Grid>
                   </AccordionSummary>
                   <AccordionDetails>
-                    <Grid container spacing={2}>
-                      <Grid size={12}>
-                        <Typography variant="body2">{`Departure: ${formatDateTime(journey.departure)}`}</Typography>
+                    {journey ? (
+                      <Grid container spacing={2}>
+                        <Grid size={12}>
+                          <Typography variant="body2">{`Departure: ${formatDateTime(journey.departure)}`}</Typography>
+                        </Grid>
+                        <Grid size={12}>
+                          <Typography variant="body2">{`Arrival: ${formatDateTime(journey.arrival)}`}</Typography>
+                        </Grid>
+                        <Grid size={12}>
+                          <Typography variant="body2">{`Means of Transport: ${journey.means
+                            .map((mean: string) => (mean === 'walk' ? '\u{1F6B6}' : mean))
+                            .join(' \u{2192} ')}`}</Typography>
+                        </Grid>
                       </Grid>
-                      <Grid size={12}>
-                        <Typography variant="body2">{`Arrival: ${formatDateTime(journey.arrival)}`}</Typography>
-                      </Grid>
-                      <Grid size={12}>
-                        <Typography variant="body2">{`Means of Transport: ${journey.means
-                          .map((mean: string) => (mean === 'walk' ? '\u{1F6B6}' : mean))
-                          .join(' \u{2192} ')}`}</Typography>
-                      </Grid>
-                    </Grid>
+                    ) : (
+                      <Alert severity="warning" icon={<WarningAmberIcon />}>
+                        This journey can no longer be tracked — it may have been cancelled or rescheduled. You can
+                        safely remove it from your watchlist.
+                      </Alert>
+                    )}
                   </AccordionDetails>
                 </Accordion>
                 <IconButton

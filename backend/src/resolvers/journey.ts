@@ -259,9 +259,21 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
     try {
       const result = await context.dbHafas.queryJourneys(fromStationId, toStationId, departure, { results: 5 });
-      const matchingJourney = result.journeys?.find(
+
+      // Filter by matching origin/destination station IDs, then pick the candidate whose
+      // planned departure is closest to the stored departure time to avoid reattaching to a
+      // different service on the same route.
+      const candidates = result.journeys?.filter(
         (j) => j.legs[0]?.origin?.id === fromStationId && j.legs[j.legs.length - 1]?.destination?.id === toStationId
       );
+      const matchingJourney = candidates?.reduce<(typeof candidates)[number] | undefined>((best, j) => {
+        const jDep = new Date(j.legs[0]?.plannedDeparture ?? j.legs[0]?.departure ?? 0).getTime();
+        const jDiff = Math.abs(jDep - departure.getTime());
+        if (!best) return j;
+        const bestDep = new Date(best.legs[0]?.plannedDeparture ?? best.legs[0]?.departure ?? 0).getTime();
+        const bestDiff = Math.abs(bestDep - departure.getTime());
+        return jDiff < bestDiff ? j : best;
+      }, undefined);
 
       if (matchingJourney) {
         // Update token in DB
