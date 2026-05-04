@@ -136,11 +136,11 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
       contextValue: graphqlContext,
     });
     if (result.errors && result.errors.length > 0) {
-      logger.error('SQS message processing failed', {
+      logger.error('SQS message processing failed, dropping message', {
         errorCount: result.errors.length,
         errors: result.errors.map((error) => ({ message: error.message, path: error.path })),
       });
-      throw new Error('SQS GraphQL execution failed');
+      return { statusCode: 200, body: '' }; // Don't throw - message will be removed from queue
     }
     logger.info('SQS message processed', { hasErrors: false });
     return { statusCode: 200, body: '' };
