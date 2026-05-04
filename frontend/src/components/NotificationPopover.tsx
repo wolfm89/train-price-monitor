@@ -10,16 +10,13 @@ export interface Notification {
   type: string;
   read: boolean;
   timestamp: Date;
-  journey?: {
+  from?: string;
+  to?: string;
+  journeyId?: string;
+  journeyMonitor?: {
+    id: string;
     from: string;
     to: string;
-  };
-  journeyMonitor: {
-    id: string;
-    journey: {
-      from: string;
-      to: string;
-    };
   };
 }
 
@@ -36,11 +33,15 @@ interface NotificationPopoverProps {
 const formatNotification = (notification: Notification) => {
   switch (notification.type) {
     case 'PRICE_ALERT':
-      return `Price limit reached for journey from ${notification.journeyMonitor.journey.from} to ${notification.journeyMonitor.journey.to}`;
+      return `Price limit reached for journey from ${notification.journeyMonitor?.from} to ${notification.journeyMonitor?.to}`;
     case 'JOURNEY_EXPIRED':
-      return notification.journey
-        ? `Watched journey from ${notification.journey.from} to ${notification.journey.to} expired`
+      return notification.from && notification.to
+        ? `Watched journey from ${notification.from} to ${notification.to} expired`
         : 'A watched journey has expired';
+    case 'JOURNEY_STALE':
+      return notification.from && notification.to
+        ? `Journey from ${notification.from} to ${notification.to} can no longer be tracked`
+        : 'A watched journey can no longer be tracked';
     default:
       return '';
   }

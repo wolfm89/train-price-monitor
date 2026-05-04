@@ -29,8 +29,8 @@ import { AlertSeverity } from '../providers/AlertProvider';
 
 export interface Journey {
   refreshToken: string;
-  from: string;
-  to: string;
+  fromId: string;
+  toId: string;
   departure: string;
   arrival: string;
   means: string[];
@@ -94,6 +94,9 @@ const SearchResult: React.FC<Props> = ({
       refreshToken: refreshToken,
       limitPrice: parseFloat(limitPrice),
       expires: expires,
+      fromId: selectedJourney?.fromId,
+      toId: selectedJourney?.toId,
+      departure: selectedJourney?.departure,
     })
       .then((result) => {
         setLoading(false);

@@ -194,10 +194,13 @@ const Header = () => {
         handleNotificationClicked={(notification: Notification) => {
           if (notification?.type === 'PRICE_ALERT') {
             // Navigate to JourneysPage with the correct accordion open
-            navigate(`/journeys#${notification.journeyMonitor.id}`);
+            navigate(`/journeys#${notification.journeyMonitor?.id}`);
           } else if (notification?.type === 'JOURNEY_EXPIRED') {
             // Navigate to JourneysPage
             navigate(`/journeys`);
+          } else if (notification?.type === 'JOURNEY_STALE') {
+            // Navigate to the specific journey monitor so the user can delete it
+            navigate(`/journeys#${notification.journeyId}`);
           }
           handleNotificationClose();
         }}

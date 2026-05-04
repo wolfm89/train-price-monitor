@@ -23,9 +23,9 @@ import useAlert from '../hooks/useAlert';
 interface Journey {
   id: string;
   limitPrice: number;
+  from: string;
+  to: string;
   journey: {
-    from: string;
-    to: string;
     refreshToken: string;
     departure: string;
     arrival: string;
@@ -103,7 +103,7 @@ const JourneysPage: React.FC = () => {
           <Typography variant="body1">Loading journeys...</Typography>
         ) : userJourneysResult && userJourneysResult.user.journeyMonitors.length > 0 ? (
           <List>
-            {userJourneysResult.user.journeyMonitors.map(({ id, limitPrice, journey }: Journey) => (
+            {userJourneysResult.user.journeyMonitors.map(({ id, limitPrice, from, to, journey }: Journey) => (
               <ListItem key={id} alignItems="flex-start">
                 <Accordion
                   sx={{ width: '100%' }}
@@ -114,7 +114,7 @@ const JourneysPage: React.FC = () => {
                     <Grid container justifyContent="space-between" alignItems="center" spacing={2}>
                       <Grid size={{ sm: 6, xs: 12 }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                          {`${journey.from} to ${journey.to}`}
+                          {`${from} to ${to}`}
                         </Typography>
                       </Grid>
                       <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>
