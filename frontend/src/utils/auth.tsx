@@ -115,11 +115,12 @@ export type UserData = {
   [key: string]: string;
 };
 
-export async function getCurrentUser() {
-  return new Promise<UserData>((resolve, reject) => {
+export async function getCurrentUser(): Promise<UserData | null> {
+  return new Promise((resolve, reject) => {
     const cognitoUser = userPool.getCurrentUser();
 
     if (!cognitoUser) {
+      resolve(null);
       return;
     }
 
