@@ -85,7 +85,7 @@ const SearchResult: React.FC<Props> = ({
 
   const handleConfirmWatch = () => {
     setLoading(true);
-    const { refreshToken, departure } = selectedJourney!;
+    const { refreshToken, departure, fromId, toId } = selectedJourney!;
     const expires = new Date(departure);
     expires.setHours(expires.getHours() - 1);
 
@@ -94,9 +94,9 @@ const SearchResult: React.FC<Props> = ({
       refreshToken: refreshToken,
       limitPrice: parseFloat(limitPrice),
       expires: expires,
-      fromId: selectedJourney?.fromId,
-      toId: selectedJourney?.toId,
-      departure: selectedJourney?.departure,
+      fromId: fromId,
+      toId: toId,
+      departure: departure,
     })
       .then((result) => {
         setLoading(false);

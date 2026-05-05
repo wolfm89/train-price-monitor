@@ -219,7 +219,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   // Check if notification already exists (PRICE_ALERT or JOURNEY_STALE for this journey)
   const existingNotifications = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
-    .query({ partition: `USER#${args.userId}` })
+    .query({ partition: `USER#${args.userId}`, range: { beginsWith: 'NOTIFICATION#' } })
     .send();
 
   const notificationsArray = existingNotifications?.Items ?? [];
@@ -243,51 +243,58 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   try {
     journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken);
   } catch (error) {
-    Logger.error('Error requerying journey, treating as stale', {
+    Logger.error('Error requerying journey', {
       journeyId: args.journeyId,
       error: error instanceof Error ? error.message : error,
     });
+    throw error;
   }
 
   if (!journey) {
     // Token is stale — attempt recovery using stored station IDs and departure
     Logger.warn('Refresh token stale, attempting recovery', { journeyId: args.journeyId });
 
-    const fromStationId = dbJourney.Item.fromId;
-    const toStationId = dbJourney.Item.toId;
-    const departure = new Date(dbJourney.Item.departure);
+    const fromStationId = dbJourney.Item.fromId as string | undefined;
+    const toStationId = dbJourney.Item.toId as string | undefined;
+    const storedDeparture = dbJourney.Item.departure as string | undefined;
 
-    try {
-      const result = await context.dbHafas.queryJourneys(fromStationId, toStationId, departure, { results: 5 });
+    if (!fromStationId || !toStationId || !storedDeparture) {
+      Logger.warn('Missing station IDs or departure for recovery, skipping', { journeyId: args.journeyId });
+    } else {
+      const departure = new Date(storedDeparture);
 
-      // Filter by matching origin/destination station IDs, then pick the candidate whose
-      // planned departure is closest to the stored departure time to avoid reattaching to a
-      // different service on the same route.
-      const candidates = result.journeys?.filter(
-        (j) => j.legs[0]?.origin?.id === fromStationId && j.legs[j.legs.length - 1]?.destination?.id === toStationId
-      );
-      const matchingJourney = candidates?.reduce<(typeof candidates)[number] | undefined>((best, j) => {
-        const jDep = new Date(j.legs[0]?.plannedDeparture ?? j.legs[0]?.departure ?? 0).getTime();
-        const jDiff = Math.abs(jDep - departure.getTime());
-        if (!best) return j;
-        const bestDep = new Date(best.legs[0]?.plannedDeparture ?? best.legs[0]?.departure ?? 0).getTime();
-        const bestDiff = Math.abs(bestDep - departure.getTime());
-        return jDiff < bestDiff ? j : best;
-      }, undefined);
+      try {
+        const result = await context.dbHafas.queryJourneys(fromStationId, toStationId, departure, { results: 5 });
 
-      if (matchingJourney) {
-        // Update token in DB
-        await context.entities.Journey.build(UpdateItemCommand)
-          .item({ userId: args.userId, id: args.journeyId, refreshToken: matchingJourney.refreshToken! })
-          .send();
-        journey = matchingJourney;
-        Logger.info('Successfully recovered journey with new token', { journeyId: args.journeyId });
+        // Filter by matching origin/destination station IDs, then pick the candidate whose
+        // planned departure is closest to the stored departure time to avoid reattaching to a
+        // different service on the same route.
+        const candidates = result.journeys?.filter(
+          (j) => j.legs[0]?.origin?.id === fromStationId && j.legs[j.legs.length - 1]?.destination?.id === toStationId
+        );
+        const matchingJourney = candidates?.reduce<(typeof candidates)[number] | undefined>((best, j) => {
+          const jDep = new Date(j.legs[0]?.plannedDeparture ?? j.legs[0]?.departure ?? 0).getTime();
+          const jDiff = Math.abs(jDep - departure.getTime());
+          if (!best) return j;
+          const bestDep = new Date(best.legs[0]?.plannedDeparture ?? best.legs[0]?.departure ?? 0).getTime();
+          const bestDiff = Math.abs(bestDep - departure.getTime());
+          return jDiff < bestDiff ? j : best;
+        }, undefined);
+
+        if (matchingJourney) {
+          // Update token in DB
+          await context.entities.Journey.build(UpdateItemCommand)
+            .item({ userId: args.userId, id: args.journeyId, refreshToken: matchingJourney.refreshToken! })
+            .send();
+          journey = matchingJourney;
+          Logger.info('Successfully recovered journey with new token', { journeyId: args.journeyId });
+        }
+      } catch (recoveryError) {
+        Logger.error('Journey recovery failed', {
+          journeyId: args.journeyId,
+          error: recoveryError instanceof Error ? recoveryError.message : recoveryError,
+        });
       }
-    } catch (recoveryError) {
-      Logger.error('Journey recovery failed', {
-        journeyId: args.journeyId,
-        error: recoveryError instanceof Error ? recoveryError.message : recoveryError,
-      });
     }
   }
 
@@ -369,7 +376,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, userId: string, journeyId: string) {
   const { Items: priceAlertNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
-    .query({ partition: `USER#${userId}` })
+    .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
     .options({
       filters: {
         Notification: { attr: 'type', eq: NOTIFICATION_TYPES.PRICE_ALERT.name },
@@ -448,7 +455,7 @@ export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyM
   // Delete all notifications for the journey (with data containing the journey ID)
   const { Items: notifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
-    .query({ partition: `USER#${userId}` })
+    .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
     .send();
 
   const journeyNotifications = notifications?.filter((item: { data?: string }) => {

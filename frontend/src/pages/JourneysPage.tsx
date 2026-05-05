@@ -26,8 +26,8 @@ import useAlert from '../hooks/useAlert';
 interface Journey {
   id: string;
   limitPrice: number;
-  from: string;
-  to: string;
+  from?: string | null;
+  to?: string | null;
   journey: {
     refreshToken: string;
     departure: string;
@@ -117,7 +117,7 @@ const JourneysPage: React.FC = () => {
                     <Grid container justifyContent="space-between" alignItems="center" spacing={2}>
                       <Grid size={{ sm: 6, xs: 12 }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                          {`${from} to ${to}`}
+                          {`${from ?? 'Unknown'} to ${to ?? 'Unknown'}`}
                         </Typography>
                       </Grid>
                       <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>

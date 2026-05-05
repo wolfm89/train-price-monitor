@@ -83,15 +83,9 @@ export class DbHafasManager {
       throw new Error('refreshToken is undefined');
     }
 
-    let result: JourneyWithRealtimeData | undefined;
-    try {
-      result = await this.client.refreshJourney!(refreshToken, {
-        tickets: true,
-      });
-    } catch {
-      Logger.error('Error refreshing journey');
-      return undefined;
-    }
+    const result: JourneyWithRealtimeData | undefined = await this.client.refreshJourney!(refreshToken, {
+      tickets: true,
+    });
 
     if (!result) {
       return undefined;

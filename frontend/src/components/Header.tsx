@@ -200,7 +200,7 @@ const Header = () => {
             navigate(`/journeys`);
           } else if (notification?.type === 'JOURNEY_STALE') {
             // Navigate to the specific journey monitor so the user can delete it
-            navigate(`/journeys#${notification.journeyId}`);
+            navigate(notification.journeyId ? `/journeys#${notification.journeyId}` : '/journeys');
           }
           handleNotificationClose();
         }}
