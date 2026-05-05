@@ -1,5 +1,6 @@
 import React, { useContext } from 'react';
 import { Navigate } from 'react-router-dom';
+import { CircularProgress, Box } from '@mui/material';
 import { AuthContext } from '../providers/AuthProvider';
 
 interface RouteGuardProps {
@@ -7,7 +8,21 @@ interface RouteGuardProps {
 }
 
 function RouteGuard({ children }: RouteGuardProps) {
-  const { user } = useContext(AuthContext);
+  const context = useContext(AuthContext);
+
+  if (!context) {
+    throw new Error('RouteGuard must be used within an AuthProvider');
+  }
+
+  const { user, isInitialCheckDone } = context;
+
+  if (!isInitialCheckDone) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   if (!user) {
     return <Navigate to="/" />;
