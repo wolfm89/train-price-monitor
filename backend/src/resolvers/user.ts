@@ -15,6 +15,7 @@ import {
   PresignedUrl,
   JourneyMonitor,
   JourneyExpiryNotification,
+  JourneyStaleNotification,
   PriceAlertNotification,
   InputMaybe,
 } from '../schema/generated/typeDefs.generated';
@@ -35,7 +36,7 @@ export const userResolvers: UserResolvers = {
     parent,
     args,
     context: GraphQLContext
-  ): Promise<(JourneyExpiryNotification | PriceAlertNotification)[]> => {
+  ): Promise<(JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification)[]> => {
     const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
       .query({ partition: `USER#${parent.id}`, range: { beginsWith: 'NOTIFICATION#' } })
@@ -79,7 +80,7 @@ export const userResolvers: UserResolvers = {
             read: dbNotification.read,
             sent: dbNotification.sent,
             ...additionalData,
-          } as JourneyExpiryNotification | PriceAlertNotification;
+          } as JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification;
         }
       )
     );
@@ -338,12 +339,12 @@ export async function getJourneyMonitor(
     userId: dbJourney.userId,
     limitPrice: dbJourney.limitPrice,
     expires: dbJourney.expires,
+    from: journey?.legs[0].origin?.name ?? undefined,
+    to: journey ? journey.legs[journey.legs.length - 1].destination?.name ?? undefined : undefined,
     journey: !journey
       ? undefined
       : {
           refreshToken: journey.refreshToken!,
-          from: journey.legs[0].origin!.name!,
-          to: journey.legs[journey.legs.length - 1].destination!.name!,
           departure: new Date(journey.legs[0].plannedDeparture!),
           arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
           means: getMeans(journey),

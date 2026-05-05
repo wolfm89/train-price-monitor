@@ -1,32 +1,7 @@
+import * as Types from './typeDefs.generated';
 import { GraphQLResolveInfo, GraphQLScalarType, GraphQLScalarTypeConfig } from 'graphql';
+import { User, Notification } from './typeDefs.generated';
 import { GraphQLContext } from '../../context';
-import type {
-  Maybe,
-  Scalars,
-  Journey,
-  JourneyMonitor,
-  JourneysResult,
-  JourneyExpiryNotification,
-  PriceAlertNotification,
-  User,
-  PresignedUrl,
-  Notification,
-  MutationCreateUserArgs,
-  MutationDeleteJourneyMonitorArgs,
-  MutationDeleteUserArgs,
-  MutationMarkNotificationAsReadArgs,
-  MutationMonitorJourneyArgs,
-  MutationSendEmailNotificationArgs,
-  MutationUpdateJourneyMonitorArgs,
-  MutationUpdateUserProfilePictureArgs,
-  MutationUpdateUserSettingsArgs,
-  QueryJourneysArgs,
-  QueryLocationsArgs,
-  QueryUserArgs,
-  QueryUserProfilePicturePresignedUrlArgs,
-  UserJourneyMonitorsArgs,
-  UserNotificationsArgs,
-} from './typeDefs.generated';
 export type RequireFields<T, K extends keyof T> = Omit<T, K> & { [P in K]-?: NonNullable<T[P]> };
 
 export type ResolverTypeWrapper<T> = Promise<T> | T;
@@ -34,9 +9,12 @@ export type ResolverTypeWrapper<T> = Promise<T> | T;
 export type ResolverWithResolve<TResult, TParent, TContext, TArgs> = {
   resolve: ResolverFn<TResult, TParent, TContext, TArgs>;
 };
-export type Resolver<TResult, TParent = {}, TContext = {}, TArgs = {}> =
-  | ResolverFn<TResult, TParent, TContext, TArgs>
-  | ResolverWithResolve<TResult, TParent, TContext, TArgs>;
+export type Resolver<
+  TResult,
+  TParent = Record<PropertyKey, never>,
+  TContext = Record<PropertyKey, never>,
+  TArgs = Record<PropertyKey, never>,
+> = ResolverFn<TResult, TParent, TContext, TArgs> | ResolverWithResolve<TResult, TParent, TContext, TArgs>;
 
 export type ResolverFn<TResult, TParent, TContext, TArgs> = (
   parent: TParent,
@@ -73,17 +51,23 @@ export type SubscriptionObject<TResult, TKey extends string, TParent, TContext, 
   | SubscriptionSubscriberObject<TResult, TKey, TParent, TContext, TArgs>
   | SubscriptionResolverObject<TResult, TParent, TContext, TArgs>;
 
-export type SubscriptionResolver<TResult, TKey extends string, TParent = {}, TContext = {}, TArgs = {}> =
+export type SubscriptionResolver<
+  TResult,
+  TKey extends string,
+  TParent = Record<PropertyKey, never>,
+  TContext = Record<PropertyKey, never>,
+  TArgs = Record<PropertyKey, never>,
+> =
   | ((...args: any[]) => SubscriptionObject<TResult, TKey, TParent, TContext, TArgs>)
   | SubscriptionObject<TResult, TKey, TParent, TContext, TArgs>;
 
-export type TypeResolveFn<TTypes, TParent = {}, TContext = {}> = (
+export type TypeResolveFn<TTypes, TParent = Record<PropertyKey, never>, TContext = Record<PropertyKey, never>> = (
   parent: TParent,
   context: TContext,
   info: GraphQLResolveInfo
-) => Maybe<TTypes> | Promise<Maybe<TTypes>>;
+) => Types.Maybe<TTypes> | Promise<Types.Maybe<TTypes>>;
 
-export type IsTypeOfResolverFn<T = {}, TContext = {}> = (
+export type IsTypeOfResolverFn<T = Record<PropertyKey, never>, TContext = Record<PropertyKey, never>> = (
   obj: T,
   context: TContext,
   info: GraphQLResolveInfo
@@ -91,7 +75,12 @@ export type IsTypeOfResolverFn<T = {}, TContext = {}> = (
 
 export type NextResolverFn<T> = () => Promise<T>;
 
-export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs = {}> = (
+export type DirectiveResolverFn<
+  TResult = Record<PropertyKey, never>,
+  TParent = Record<PropertyKey, never>,
+  TContext = Record<PropertyKey, never>,
+  TArgs = Record<PropertyKey, never>,
+> = (
   next: NextResolverFn<TResult>,
   parent: TParent,
   args: TArgs,
@@ -99,52 +88,49 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
   info: GraphQLResolveInfo
 ) => TResult | Promise<TResult>;
 
-/** Mapping of interface types */
-export type ResolversInterfaceTypes<RefType extends Record<string, unknown>> = {
-  Notification: JourneyExpiryNotification | PriceAlertNotification;
-};
-
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = {
-  Boolean: ResolverTypeWrapper<Scalars['Boolean']['output']>;
-  DateTime: ResolverTypeWrapper<Scalars['DateTime']['output']>;
-  File: ResolverTypeWrapper<Scalars['File']['output']>;
-  Float: ResolverTypeWrapper<Scalars['Float']['output']>;
-  ID: ResolverTypeWrapper<Scalars['ID']['output']>;
-  Int: ResolverTypeWrapper<Scalars['Int']['output']>;
-  Journey: ResolverTypeWrapper<Journey>;
-  JourneyExpiryNotification: ResolverTypeWrapper<JourneyExpiryNotification>;
-  JourneyMonitor: ResolverTypeWrapper<JourneyMonitor>;
-  JourneysResult: ResolverTypeWrapper<JourneysResult>;
-  Location: ResolverTypeWrapper<Location>;
-  Mutation: ResolverTypeWrapper<{}>;
-  Notification: ResolverTypeWrapper<ResolversInterfaceTypes<ResolversTypes>['Notification']>;
-  PresignedUrl: ResolverTypeWrapper<PresignedUrl>;
-  PriceAlertNotification: ResolverTypeWrapper<PriceAlertNotification>;
-  Query: ResolverTypeWrapper<{}>;
-  String: ResolverTypeWrapper<Scalars['String']['output']>;
+  Boolean: ResolverTypeWrapper<Types.Scalars['Boolean']['output']>;
+  DateTime: ResolverTypeWrapper<Types.Scalars['DateTime']['output']>;
+  File: ResolverTypeWrapper<Types.Scalars['File']['output']>;
+  Float: ResolverTypeWrapper<Types.Scalars['Float']['output']>;
+  ID: ResolverTypeWrapper<Types.Scalars['ID']['output']>;
+  Int: ResolverTypeWrapper<Types.Scalars['Int']['output']>;
+  Journey: ResolverTypeWrapper<Types.Journey>;
+  JourneyExpiryNotification: ResolverTypeWrapper<Types.JourneyExpiryNotification>;
+  JourneyMonitor: ResolverTypeWrapper<Types.JourneyMonitor>;
+  JourneyStaleNotification: ResolverTypeWrapper<Types.JourneyStaleNotification>;
+  JourneysResult: ResolverTypeWrapper<Types.JourneysResult>;
+  Location: ResolverTypeWrapper<Types.Location>;
+  Mutation: ResolverTypeWrapper<Record<PropertyKey, never>>;
+  Notification: ResolverTypeWrapper<Notification>;
+  PresignedUrl: ResolverTypeWrapper<Types.PresignedUrl>;
+  PriceAlertNotification: ResolverTypeWrapper<Types.PriceAlertNotification>;
+  Query: ResolverTypeWrapper<Record<PropertyKey, never>>;
+  String: ResolverTypeWrapper<Types.Scalars['String']['output']>;
   User: ResolverTypeWrapper<User>;
 };
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = {
-  Boolean: Scalars['Boolean']['output'];
-  DateTime: Scalars['DateTime']['output'];
-  File: Scalars['File']['output'];
-  Float: Scalars['Float']['output'];
-  ID: Scalars['ID']['output'];
-  Int: Scalars['Int']['output'];
-  Journey: Journey;
-  JourneyExpiryNotification: JourneyExpiryNotification;
-  JourneyMonitor: JourneyMonitor;
-  JourneysResult: JourneysResult;
-  Location: Location;
-  Mutation: {};
-  Notification: ResolversInterfaceTypes<ResolversParentTypes>['Notification'];
-  PresignedUrl: PresignedUrl;
-  PriceAlertNotification: PriceAlertNotification;
-  Query: {};
-  String: Scalars['String']['output'];
+  Boolean: Types.Scalars['Boolean']['output'];
+  DateTime: Types.Scalars['DateTime']['output'];
+  File: Types.Scalars['File']['output'];
+  Float: Types.Scalars['Float']['output'];
+  ID: Types.Scalars['ID']['output'];
+  Int: Types.Scalars['Int']['output'];
+  Journey: Types.Journey;
+  JourneyExpiryNotification: Types.JourneyExpiryNotification;
+  JourneyMonitor: Types.JourneyMonitor;
+  JourneyStaleNotification: Types.JourneyStaleNotification;
+  JourneysResult: Types.JourneysResult;
+  Location: Types.Location;
+  Mutation: Record<PropertyKey, never>;
+  Notification: Notification;
+  PresignedUrl: Types.PresignedUrl;
+  PriceAlertNotification: Types.PriceAlertNotification;
+  Query: Record<PropertyKey, never>;
+  String: Types.Scalars['String']['output'];
   User: User;
 };
 
@@ -160,26 +146,26 @@ export type JourneyResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['Journey'] = ResolversParentTypes['Journey'],
 > = {
-  arrival?: Resolver<Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
-  departure?: Resolver<Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
-  from?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  means?: Resolver<Maybe<Array<Maybe<ResolversTypes['String']>>>, ParentType, ContextType>;
-  price?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
+  arrival?: Resolver<Types.Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
+  departure?: Resolver<Types.Maybe<ResolversTypes['DateTime']>, ParentType, ContextType>;
+  fromId?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  means?: Resolver<Types.Maybe<Array<Types.Maybe<ResolversTypes['String']>>>, ParentType, ContextType>;
+  price?: Resolver<Types.Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
   refreshToken?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  to?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+  toId?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
 export type JourneyExpiryNotificationResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['JourneyExpiryNotification'] =
-  ResolversParentTypes['JourneyExpiryNotification'],
+    ResolversParentTypes['JourneyExpiryNotification'],
 > = {
+  from?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  journey?: Resolver<ResolversTypes['Journey'], ParentType, ContextType>;
   read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  to?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
@@ -190,11 +176,38 @@ export type JourneyMonitorResolvers<
   ParentType extends ResolversParentTypes['JourneyMonitor'] = ResolversParentTypes['JourneyMonitor'],
 > = {
   expires?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  from?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  journey?: Resolver<Maybe<ResolversTypes['Journey']>, ParentType, ContextType>;
+  journey?: Resolver<Types.Maybe<ResolversTypes['Journey']>, ParentType, ContextType>;
   limitPrice?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
+  to?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+};
+
+export type JourneyStaleNotificationResolvers<
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['JourneyStaleNotification'] =
+    ResolversParentTypes['JourneyStaleNotification'],
+> = {
+  from?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  journeyId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  to?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+};
+
+export type JourneysResultResolvers<
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['JourneysResult'] = ResolversParentTypes['JourneysResult'],
+> = {
+  earlierRef?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  journeys?: Resolver<Types.Maybe<Array<Types.Maybe<ResolversTypes['Journey']>>>, ParentType, ContextType>;
+  laterRef?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
 export type LocationResolvers<
@@ -204,7 +217,6 @@ export type LocationResolvers<
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   name?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 };
 
 export type MutationResolvers<
@@ -212,59 +224,62 @@ export type MutationResolvers<
   ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation'],
 > = {
   createUser?: Resolver<
-    Maybe<ResolversTypes['User']>,
+    Types.Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationCreateUserArgs, 'email' | 'givenName' | 'id'>
+    RequireFields<Types.MutationCreateUserArgs, 'email' | 'givenName' | 'id'>
   >;
   deleteJourneyMonitor?: Resolver<
-    Maybe<ResolversTypes['JourneyMonitor']>,
+    Types.Maybe<ResolversTypes['JourneyMonitor']>,
     ParentType,
     ContextType,
-    RequireFields<MutationDeleteJourneyMonitorArgs, 'journeyId' | 'userId'>
+    RequireFields<Types.MutationDeleteJourneyMonitorArgs, 'journeyId' | 'userId'>
   >;
   deleteUser?: Resolver<
-    Maybe<ResolversTypes['User']>,
+    Types.Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationDeleteUserArgs, 'id'>
+    RequireFields<Types.MutationDeleteUserArgs, 'id'>
   >;
   markNotificationAsRead?: Resolver<
-    Maybe<ResolversTypes['Notification']>,
+    Types.Maybe<ResolversTypes['Notification']>,
     ParentType,
     ContextType,
-    RequireFields<MutationMarkNotificationAsReadArgs, 'notificationId' | 'userId'>
+    RequireFields<Types.MutationMarkNotificationAsReadArgs, 'notificationId' | 'userId'>
   >;
   monitorJourney?: Resolver<
-    Maybe<ResolversTypes['JourneyMonitor']>,
+    Types.Maybe<ResolversTypes['JourneyMonitor']>,
     ParentType,
     ContextType,
-    RequireFields<MutationMonitorJourneyArgs, 'expires' | 'limitPrice' | 'refreshToken' | 'userId'>
+    RequireFields<
+      Types.MutationMonitorJourneyArgs,
+      'departure' | 'expires' | 'fromId' | 'limitPrice' | 'refreshToken' | 'toId' | 'userId'
+    >
   >;
   sendEmailNotification?: Resolver<
-    Maybe<ResolversTypes['Notification']>,
+    Types.Maybe<ResolversTypes['Notification']>,
     ParentType,
     ContextType,
-    RequireFields<MutationSendEmailNotificationArgs, 'notificationId' | 'userId'>
+    RequireFields<Types.MutationSendEmailNotificationArgs, 'notificationId' | 'userId'>
   >;
   updateJourneyMonitor?: Resolver<
-    Maybe<ResolversTypes['JourneyMonitor']>,
+    Types.Maybe<ResolversTypes['JourneyMonitor']>,
     ParentType,
     ContextType,
-    RequireFields<MutationUpdateJourneyMonitorArgs, 'journeyId' | 'userId'>
+    RequireFields<Types.MutationUpdateJourneyMonitorArgs, 'journeyId' | 'userId'>
   >;
-  updateJourneyMonitors?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
+  updateJourneyMonitors?: Resolver<Types.Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   updateUserProfilePicture?: Resolver<
-    Maybe<ResolversTypes['User']>,
+    Types.Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
+    RequireFields<Types.MutationUpdateUserProfilePictureArgs, 'id' | 'image'>
   >;
   updateUserSettings?: Resolver<
-    Maybe<ResolversTypes['User']>,
+    Types.Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<MutationUpdateUserSettingsArgs, 'emailNotificationsEnabled' | 'id'>
+    RequireFields<Types.MutationUpdateUserSettingsArgs, 'emailNotificationsEnabled' | 'id'>
   >;
 };
 
@@ -272,13 +287,11 @@ export type NotificationResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['Notification'] = ResolversParentTypes['Notification'],
 > = {
-  __resolveType: TypeResolveFn<'JourneyExpiryNotification' | 'PriceAlertNotification', ParentType, ContextType>;
-  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  read?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
-  sent?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
-  timestamp?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
-  type?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  __resolveType: TypeResolveFn<
+    'JourneyExpiryNotification' | 'JourneyStaleNotification' | 'PriceAlertNotification',
+    ParentType,
+    ContextType
+  >;
 };
 
 export type PresignedUrlResolvers<
@@ -286,8 +299,7 @@ export type PresignedUrlResolvers<
   ParentType extends ResolversParentTypes['PresignedUrl'] = ResolversParentTypes['PresignedUrl'],
 > = {
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  url?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+  url?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
 export type PriceAlertNotificationResolvers<
@@ -309,23 +321,28 @@ export type QueryResolvers<
   ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query'],
 > = {
   journeys?: Resolver<
-    Maybe<ResolversTypes['JourneysResult']>,
+    Types.Maybe<ResolversTypes['JourneysResult']>,
     ParentType,
     ContextType,
-    RequireFields<QueryJourneysArgs, 'departure' | 'from' | 'to'>
+    RequireFields<Types.QueryJourneysArgs, 'departure' | 'from' | 'to'>
   >;
   locations?: Resolver<
-    Maybe<Array<Maybe<ResolversTypes['Location']>>>,
+    Types.Maybe<Array<Types.Maybe<ResolversTypes['Location']>>>,
     ParentType,
     ContextType,
-    RequireFields<QueryLocationsArgs, 'query'>
+    RequireFields<Types.QueryLocationsArgs, 'query'>
   >;
-  user?: Resolver<Maybe<ResolversTypes['User']>, ParentType, ContextType, RequireFields<QueryUserArgs, 'id'>>;
-  userProfilePicturePresignedUrl?: Resolver<
-    Maybe<ResolversTypes['PresignedUrl']>,
+  user?: Resolver<
+    Types.Maybe<ResolversTypes['User']>,
     ParentType,
     ContextType,
-    RequireFields<QueryUserProfilePicturePresignedUrlArgs, 'id'>
+    RequireFields<Types.QueryUserArgs, 'id'>
+  >;
+  userProfilePicturePresignedUrl?: Resolver<
+    Types.Maybe<ResolversTypes['PresignedUrl']>,
+    ParentType,
+    ContextType,
+    RequireFields<Types.QueryUserProfilePicturePresignedUrlArgs, 'id'>
   >;
 };
 
@@ -335,23 +352,22 @@ export type UserResolvers<
 > = {
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
-  familyName?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  familyName?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   givenName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journeyMonitors?: Resolver<
-    Maybe<Array<Maybe<ResolversTypes['JourneyMonitor']>>>,
+    Types.Maybe<Array<Types.Maybe<ResolversTypes['JourneyMonitor']>>>,
     ParentType,
     ContextType,
-    Partial<UserJourneyMonitorsArgs>
+    Partial<Types.UserJourneyMonitorsArgs>
   >;
   notifications?: Resolver<
-    Maybe<Array<Maybe<ResolversTypes['Notification']>>>,
+    Types.Maybe<Array<Types.Maybe<ResolversTypes['Notification']>>>,
     ParentType,
     ContextType,
-    Partial<UserNotificationsArgs>
+    Partial<Types.UserNotificationsArgs>
   >;
-  profilePicture?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+  profilePicture?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
 export type Resolvers<ContextType = GraphQLContext> = {
@@ -360,6 +376,8 @@ export type Resolvers<ContextType = GraphQLContext> = {
   Journey?: JourneyResolvers<ContextType>;
   JourneyExpiryNotification?: JourneyExpiryNotificationResolvers<ContextType>;
   JourneyMonitor?: JourneyMonitorResolvers<ContextType>;
+  JourneyStaleNotification?: JourneyStaleNotificationResolvers<ContextType>;
+  JourneysResult?: JourneysResultResolvers<ContextType>;
   Location?: LocationResolvers<ContextType>;
   Mutation?: MutationResolvers<ContextType>;
   Notification?: NotificationResolvers<ContextType>;

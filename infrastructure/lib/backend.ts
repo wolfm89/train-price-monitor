@@ -47,9 +47,16 @@ export class Backend extends Construct {
       ],
     });
 
-    // Create SQS queue
+    // Create DLQ for failed messages
+    const dlq = new sqs.Queue(this, 'TrainPriceMonitorDLQ', {
+      retentionPeriod: cdk.Duration.days(14),
+      visibilityTimeout: cdk.Duration.seconds(60),
+    });
+
+    // Create SQS queue with DLQ
     const queue = new sqs.Queue(this, 'TrainPriceMonitorQueue', {
-      visibilityTimeout: cdk.Duration.seconds(60), // Set visibility timeout as needed
+      visibilityTimeout: cdk.Duration.seconds(60),
+      deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
     });
 
     // Create Lambda function

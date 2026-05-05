@@ -65,6 +65,9 @@ export const Journey = new Entity({
     limitPrice: number().required(),
     refreshToken: string().required(),
     expires: string().required(),
+    fromId: string().required(),
+    toId: string().required(),
+    departure: string().required(),
   }),
   computeKey: ({ userId, id }) => ({
     pk: `USER#${userId}`,

@@ -25,13 +25,25 @@ const YOGA_CORS_CONFIG = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
 };
 
+function extractUserId(request: Request): string | null {
+  const auth = request.headers.get('authorization');
+  if (!auth) return null;
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as Record<string, unknown>;
+    return typeof payload['sub'] === 'string' ? payload['sub'] : null;
+  } catch {
+    return null;
+  }
+}
+
 const yoga = createYoga({
   schema,
   context: ({ request }) => createContext(cache, { request }),
   fetchAPI: { fetch: globalThis.fetch },
   cors: YOGA_CORS_CONFIG,
   plugins: [
-    useResponseCache({ session: () => null, cache }),
+    useResponseCache({ session: (request) => extractUserId(request), cache }),
     useErrorHandler(({ errors, phase }) => {
       for (const error of errors) {
         if (error instanceof Error) {
@@ -136,11 +148,15 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
       contextValue: graphqlContext,
     });
     if (result.errors && result.errors.length > 0) {
+      const messages = result.errors.map((e) => e.message).join('; ');
       logger.error('SQS message processing failed', {
         errorCount: result.errors.length,
         errors: result.errors.map((error) => ({ message: error.message, path: error.path })),
       });
-      throw new Error('SQS GraphQL execution failed');
+      // Throw so SQS retries the message (up to maxReceiveCount) before routing to the DLQ.
+      // Expected outcomes like stale journeys are handled inside the resolver without errors,
+      // so anything reaching here is a genuine transient failure worth retrying.
+      throw new Error(`GraphQL execution error(s): ${messages}`);
     }
     logger.info('SQS message processed', { hasErrors: false });
     return { statusCode: 200, body: '' };

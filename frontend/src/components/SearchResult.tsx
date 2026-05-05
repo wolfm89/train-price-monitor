@@ -29,8 +29,8 @@ import { AlertSeverity } from '../providers/AlertProvider';
 
 export interface Journey {
   refreshToken: string;
-  from: string;
-  to: string;
+  fromId: string;
+  toId: string;
   departure: string;
   arrival: string;
   means: string[];
@@ -85,7 +85,7 @@ const SearchResult: React.FC<Props> = ({
 
   const handleConfirmWatch = () => {
     setLoading(true);
-    const { refreshToken, departure } = selectedJourney!;
+    const { refreshToken, departure, fromId, toId } = selectedJourney!;
     const expires = new Date(departure);
     expires.setHours(expires.getHours() - 1);
 
@@ -94,6 +94,9 @@ const SearchResult: React.FC<Props> = ({
       refreshToken: refreshToken,
       limitPrice: parseFloat(limitPrice),
       expires: expires,
+      fromId: fromId,
+      toId: toId,
+      departure: departure,
     })
       .then((result) => {
         setLoading(false);

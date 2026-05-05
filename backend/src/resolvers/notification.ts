@@ -2,7 +2,11 @@ import { GraphQLContext } from '../context';
 import { GetItemCommand, UpdateItemCommand } from '../model/trainPriceMonitor';
 import { MutationResolvers, NotificationResolvers } from '../schema/generated/resolvers.generated';
 import Logger from '../lib/logger';
-import { JourneyExpiryNotification, PriceAlertNotification } from '../schema/generated/typeDefs.generated';
+import {
+  JourneyExpiryNotification,
+  JourneyStaleNotification,
+  PriceAlertNotification,
+} from '../schema/generated/typeDefs.generated';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 
 export const notificationResolvers: NotificationResolvers = {
@@ -13,6 +17,9 @@ export const notificationResolvers: NotificationResolvers = {
     if (data.type === NOTIFICATION_TYPES.JOURNEY_EXPIRED.name) {
       return 'JourneyExpiryNotification';
     }
+    if (data.type === NOTIFICATION_TYPES.JOURNEY_STALE.name) {
+      return 'JourneyStaleNotification';
+    }
     return null;
   },
 };
@@ -21,7 +28,7 @@ export const markNotificationAsRead: NonNullable<MutationResolvers['markNotifica
   _parent,
   args,
   context: GraphQLContext
-): Promise<JourneyExpiryNotification | PriceAlertNotification> => {
+): Promise<JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification> => {
   // Add user and notification ID to persistent log attributes
   Logger.addPersistentLogAttributes({ userId: args.userId, notificationId: args.notificationId });
 
@@ -38,7 +45,7 @@ export const markNotificationAsRead: NonNullable<MutationResolvers['markNotifica
   // Check if the notification is already read
   if (dbNotification.read) {
     Logger.info(`Notification is already read`);
-    return dbNotification as unknown as JourneyExpiryNotification | PriceAlertNotification;
+    return dbNotification as unknown as JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification;
   }
 
   // Update the notification in the database
@@ -50,14 +57,14 @@ export const markNotificationAsRead: NonNullable<MutationResolvers['markNotifica
   context.cache.invalidate([{ typename: 'Notification' }]);
   Logger.info(`Marked notification as read`);
 
-  return notification as unknown as JourneyExpiryNotification | PriceAlertNotification;
+  return notification as unknown as JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification;
 };
 
 export const sendEmailNotification: NonNullable<MutationResolvers['sendEmailNotification']> = async (
   _parent,
   { userId, notificationId },
   context: GraphQLContext
-): Promise<JourneyExpiryNotification | PriceAlertNotification> => {
+): Promise<JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification> => {
   // Add user and notification ID to persistent log attributes
   Logger.addPersistentLogAttributes({ userId, notificationId });
 
@@ -74,7 +81,7 @@ export const sendEmailNotification: NonNullable<MutationResolvers['sendEmailNoti
   // Check if the notification is already sent
   if (dbNotification.sent) {
     Logger.info(`Notification is already sent`);
-    return dbNotification as unknown as JourneyExpiryNotification | PriceAlertNotification;
+    return dbNotification as unknown as JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification;
   }
 
   // Get the user from the database
@@ -104,5 +111,5 @@ export const sendEmailNotification: NonNullable<MutationResolvers['sendEmailNoti
   context.cache.invalidate([{ typename: 'Notification' }]);
   Logger.info(`Marked notification as sent`);
 
-  return notification as unknown as JourneyExpiryNotification | PriceAlertNotification;
+  return notification as unknown as JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification;
 };

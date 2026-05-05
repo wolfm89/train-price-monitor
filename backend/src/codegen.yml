@@ -11,9 +11,14 @@ generates:
         File: File
   src/schema/generated/resolvers.generated.ts:
     plugins:
+      - add:
+          content: 'import * as Types from "./typeDefs.generated";'
       - 'typescript-resolvers'
     config:
       scalars:
         File: File
-      contextType: ../context#GraphQLContext
-      import: './typeDefs.generated'
+      contextType: ../../context#GraphQLContext
+      namespacedImportName: Types
+      mappers:
+        User: ./typeDefs.generated#User
+        Notification: ./typeDefs.generated#Notification

@@ -4,6 +4,8 @@ export const JourneySearchQuery = gql`
   query ($departure: DateTime!, $from: String!, $to: String!, $earlierThan: String, $laterThan: String) {
     journeys(departure: $departure, from: $from, to: $to, earlierThan: $earlierThan, laterThan: $laterThan) {
       journeys {
+        fromId
+        toId
         departure
         arrival
         refreshToken
@@ -17,8 +19,24 @@ export const JourneySearchQuery = gql`
 `;
 
 export const MonitorJourney = gql`
-  mutation ($userId: ID!, $refreshToken: String!, $limitPrice: Float!, $expires: DateTime!) {
-    monitorJourney(userId: $userId, refreshToken: $refreshToken, limitPrice: $limitPrice, expires: $expires) {
+  mutation (
+    $userId: ID!
+    $refreshToken: String!
+    $limitPrice: Float!
+    $expires: DateTime!
+    $fromId: String!
+    $toId: String!
+    $departure: DateTime!
+  ) {
+    monitorJourney(
+      userId: $userId
+      refreshToken: $refreshToken
+      limitPrice: $limitPrice
+      expires: $expires
+      fromId: $fromId
+      toId: $toId
+      departure: $departure
+    ) {
       id
     }
   }

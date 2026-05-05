@@ -63,17 +63,18 @@ export const UserNotificationsQuery = gql`
         ... on PriceAlertNotification {
           journeyMonitor {
             id
-            journey {
-              from
-              to
-            }
-          }
-        }
-        ... on JourneyExpiryNotification {
-          journey {
             from
             to
           }
+        }
+        ... on JourneyExpiryNotification {
+          from
+          to
+        }
+        ... on JourneyStaleNotification {
+          journeyId
+          from
+          to
         }
       }
     }
@@ -87,10 +88,10 @@ export const UserJourneysQuery = gql`
       journeyMonitors {
         id
         limitPrice
+        from
+        to
         journey {
           refreshToken
-          from
-          to
           departure
           arrival
           means
