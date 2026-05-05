@@ -8,6 +8,7 @@ import { AlertSeverity } from './AlertProvider';
 
 interface AuthContextType {
   user: UserData | null;
+  isInitialCheckDone: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   userProfilePictureUrl: string | undefined;
@@ -20,6 +21,7 @@ const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const { addAlert } = useAlert();
   const [user, setUser] = useState<UserData | null>(null);
+  const [isInitialCheckDone, setIsInitialCheckDone] = useState<boolean>(false);
   const [userProfilePictureUrl, setUserProfilePictureUrl] = useState<string | undefined>(undefined);
   const [userProfilePictureUrlResult, reexecuteUserProfilePictureUrlQuery] = useQuery({
     query: UserProfilePictureUrlQuery,
@@ -36,6 +38,8 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       // eslint-disable-next-line no-console
       console.log(err);
       setUser(null);
+    } finally {
+      setIsInitialCheckDone(true);
     }
   };
 
@@ -109,6 +113,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const authValue: AuthContextType = {
     user,
+    isInitialCheckDone,
     signIn,
     signOut,
     userProfilePictureUrl,

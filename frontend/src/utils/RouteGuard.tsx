@@ -7,7 +7,11 @@ interface RouteGuardProps {
 }
 
 function RouteGuard({ children }: RouteGuardProps) {
-  const { user } = useContext(AuthContext);
+  const { user, isInitialCheckDone } = useContext(AuthContext);
+
+  if (!isInitialCheckDone) {
+    return <></>;
+  }
 
   if (!user) {
     return <Navigate to="/" />;
