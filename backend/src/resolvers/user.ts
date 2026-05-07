@@ -102,7 +102,7 @@ export const userResolvers: UserResolvers = {
     if (!dbJourneys) {
       return [];
     }
-    const journeys: JourneyMonitor[] = await Promise.all(
+    const journeyResults = await Promise.allSettled(
       dbJourneys.map(
         async (dbJourney: {
           expires: string;
@@ -117,8 +117,17 @@ export const userResolvers: UserResolvers = {
             return await getJourneyMonitor(context, dbJourney);
           } catch (error) {
             Logger.error(`Failed to refresh journey ${dbJourney.id}: ${error}`);
-            const fromStation = await context.dbHafas.getStationById(dbJourney.fromId);
-            const toStation = await context.dbHafas.getStationById(dbJourney.toId);
+            let fromStation, toStation;
+            try {
+              fromStation = await context.dbHafas.getStationById(dbJourney.fromId);
+            } catch {
+              // ignore station lookup failure
+            }
+            try {
+              toStation = await context.dbHafas.getStationById(dbJourney.toId);
+            } catch {
+              // ignore station lookup failure
+            }
             return {
               id: dbJourney.id,
               userId: dbJourney.userId,
@@ -132,6 +141,10 @@ export const userResolvers: UserResolvers = {
         }
       )
     );
+
+    const journeys: JourneyMonitor[] = journeyResults
+      .filter((result): result is PromiseFulfilledResult<JourneyMonitor> => result.status === 'fulfilled')
+      .map((result) => result.value);
     journeys.sort(
       (a: JourneyMonitor, b: JourneyMonitor) =>
         (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
