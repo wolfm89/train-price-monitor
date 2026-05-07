@@ -50,11 +50,10 @@ const JourneysPage: React.FC = () => {
 
   const [expandedJourneyIds, setExpandedJourneyIds] = useState<string[]>([]);
   const [loadingJourneyId, setLoadingJourneyId] = useState<string | null>(null);
-  const [deletedJourneyIds, setDeletedJourneyIds] = useState<string[]>([]);
+  const [deletedJourneyIds, setDeletedJourneyIds] = useState<Set<string>>(new Set());
 
   const journeyMonitors =
-    userJourneysResult?.user?.journeyMonitors?.filter((journey: Journey) => !deletedJourneyIds.includes(journey.id)) ??
-    [];
+    userJourneysResult?.user?.journeyMonitors?.filter((journey: Journey) => !deletedJourneyIds.has(journey.id)) ?? [];
 
   const toggleJourneyDetails = (journeyId: string) => {
     setExpandedJourneyIds((prevIds) => {
@@ -97,7 +96,11 @@ const JourneysPage: React.FC = () => {
       if (result.error) {
         addAlert(result.error.message, AlertSeverity.Error);
       } else {
-        setDeletedJourneyIds((prev) => [...prev, id]);
+        setDeletedJourneyIds((prev) => {
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        });
       }
       setLoadingJourneyId(null);
     });
