@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Chip, CircularProgress, IconButton, Paper, Typography } from '@mui/material';
+import { Box, Chip, CircularProgress, IconButton, Paper, Typography, Theme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -20,7 +20,7 @@ export interface Journey {
     departure: string;
     arrival: string;
     means: string[];
-    price: number;
+    price: number | null;
   } | null;
 }
 
@@ -29,7 +29,7 @@ export interface Journey {
 // ---------------------------------------------------------------------------
 
 const formatDate = (dt: string) =>
-  new Date(dt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  new Date(dt).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
 const formatTime = (dt: string) => new Date(dt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
@@ -46,7 +46,7 @@ const formatDuration = (dep: string, arr: string) => {
 
 const MONO_FONT = 'IBM Plex Mono, monospace';
 
-const ticketSx = (theme: { palette: { divider: string } }) => ({
+const ticketSx = (theme: Theme) => ({
   borderRadius: 2,
   backgroundColor: 'background.paper',
   boxShadow: `0 0 0 1px ${theme.palette.divider}`,
@@ -71,7 +71,7 @@ const dotSx = {
 const trackLineSx = {
   flex: 1,
   height: '2px',
-  backgroundImage: (theme: { palette: { divider: string } }) =>
+  backgroundImage: (theme: Theme) =>
     `repeating-linear-gradient(90deg, ${theme.palette.divider} 0, ${theme.palette.divider} 4px, transparent 4px, transparent 8px)`,
 };
 
@@ -285,9 +285,9 @@ interface TicketStubProps {
 }
 
 function TicketStub({ journey, limitPrice }: TicketStubProps) {
-  const underLimit = journey.price <= limitPrice;
-  const diff = Math.abs(limitPrice - journey.price).toFixed(2);
-  const priceColor = underLimit ? 'success.main' : 'error.main';
+  const underLimit = journey.price !== null && journey.price <= limitPrice;
+  const diff = journey.price !== null ? Math.abs(limitPrice - journey.price).toFixed(2) : '0.00';
+  const priceColor = journey.price !== null ? (underLimit ? 'success.main' : 'error.main') : 'text.disabled';
 
   return (
     <Box
@@ -373,10 +373,10 @@ function NoTrackBanner() {
 export interface JourneyTicketProps {
   monitor: Journey;
   onOpenMenu: (el: HTMLElement, id: string) => void;
-  loadingId: string | null;
+  loadingIds: Set<string>;
 }
 
-export default function JourneyTicket({ monitor, onOpenMenu, loadingId }: JourneyTicketProps) {
+export default function JourneyTicket({ monitor, onOpenMenu, loadingIds }: JourneyTicketProps) {
   const { id, limitPrice, from, to, journey } = monitor;
 
   return (
@@ -387,6 +387,7 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingId }: Journe
           <IconButton
             aria-label="more options"
             size="small"
+            disabled={loadingIds.has(id)}
             onClick={(e) => onOpenMenu(e.currentTarget, id)}
             sx={{
               position: 'absolute',
@@ -398,7 +399,7 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingId }: Journe
               '&:hover': { color: 'text.primary' },
             }}
           >
-            {loadingId === id ? <CircularProgress size={14} /> : <MoreVertIcon sx={{ fontSize: 18 }} />}
+            {loadingIds.has(id) ? <CircularProgress size={14} /> : <MoreVertIcon sx={{ fontSize: 18 }} />}
           </IconButton>
 
           <RouteHeader from={from} to={to} />

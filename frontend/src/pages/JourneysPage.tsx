@@ -20,26 +20,35 @@ const JourneysPage: React.FC = () => {
   });
   const [, deleteJourneyMonitor] = useMutation(DeleteJourneyMonitor);
 
-  const [loadingJourneyId, setLoadingJourneyId] = useState<string | null>(null);
-  const [deletedJourneyIds, setDeletedJourneyIds] = useState<string[]>([]);
+  const [loadingJourneyIds, setLoadingJourneyIds] = useState<Set<string>>(new Set());
+  const [deletedJourneyIds, setDeletedJourneyIds] = useState<Set<string>>(new Set());
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; id: string } | null>(null);
 
   const journeyMonitors =
-    userJourneysResult?.user?.journeyMonitors?.filter((j: Journey) => !deletedJourneyIds.includes(j.id)) ?? [];
+    userJourneysResult?.user?.journeyMonitors?.filter((j: Journey) => !deletedJourneyIds.has(j.id)) ?? [];
 
   useEffect(() => {
     reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
   }, [reexecuteUserJourneysQuery]);
 
   function handleJourneyMonitorDelete(id: string): void {
-    setLoadingJourneyId(id);
+    setLoadingJourneyIds((prev) => new Set([...prev, id]));
     deleteJourneyMonitor({ userId: user?.['custom:id'], journeyId: id }).then((result) => {
       if (result.error) {
         addAlert(result.error.message, AlertSeverity.Error);
+        setLoadingJourneyIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       } else {
-        setDeletedJourneyIds((prev) => [...prev, id]);
+        setDeletedJourneyIds((prev) => new Set([...prev, id]));
+        setLoadingJourneyIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       }
-      setLoadingJourneyId(null);
     });
   }
 
@@ -58,7 +67,7 @@ const JourneysPage: React.FC = () => {
                 key={monitor.id}
                 monitor={monitor}
                 onOpenMenu={(el, id) => setMenuAnchor({ el, id })}
-                loadingId={loadingJourneyId}
+                loadingIds={loadingJourneyIds}
               />
             ))}
           </Stack>
@@ -82,7 +91,7 @@ const JourneysPage: React.FC = () => {
                 setMenuAnchor(null);
               }
             }}
-            disabled={loadingJourneyId === menuAnchor?.id}
+            disabled={loadingJourneyIds.has(menuAnchor?.id ?? '')}
             sx={{ color: 'error.main' }}
           >
             <ListItemIcon>
