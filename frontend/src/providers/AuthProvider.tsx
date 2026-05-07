@@ -97,13 +97,15 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (userProfilePictureUrlResult.data) {
-      const newUrl = userProfilePictureUrlResult.data.userProfilePicturePresignedUrl.url;
-      setUserProfilePictureUrl(newUrl);
-      const imageUrlKey = `image_url_${user?.['custom:id']}`;
-      const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
-      const now = new Date().getTime();
-      localStorage.setItem(imageUrlKey, newUrl);
-      localStorage.setItem(imageUrlTimestampKey, now.toString());
+      const newUrl = userProfilePictureUrlResult.data.userProfilePicturePresignedUrl?.url;
+      if (newUrl) {
+        setUserProfilePictureUrl(newUrl);
+        const imageUrlKey = `image_url_${user?.['custom:id']}`;
+        const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
+        const now = new Date().getTime();
+        localStorage.setItem(imageUrlKey, newUrl);
+        localStorage.setItem(imageUrlTimestampKey, now.toString());
+      }
     } else if (userProfilePictureUrlResult.error) {
       // eslint-disable-next-line no-console
       console.error('Error fetching user profile picture URL:', userProfilePictureUrlResult.error);
