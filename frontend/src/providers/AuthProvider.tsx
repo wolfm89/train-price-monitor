@@ -105,6 +105,12 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         const now = new Date().getTime();
         localStorage.setItem(imageUrlKey, newUrl);
         localStorage.setItem(imageUrlTimestampKey, now.toString());
+      } else {
+        setUserProfilePictureUrl(undefined);
+        const imageUrlKey = `image_url_${user?.['custom:id']}`;
+        const imageUrlTimestampKey = `image_url_timestamp_${user?.['custom:id']}`;
+        localStorage.removeItem(imageUrlKey);
+        localStorage.removeItem(imageUrlTimestampKey);
       }
     } else if (userProfilePictureUrlResult.error) {
       // eslint-disable-next-line no-console
