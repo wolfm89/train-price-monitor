@@ -1,108 +1,54 @@
 import React, { useContext, useEffect, useState } from 'react';
-import {
-  Grid,
-  Typography,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  List,
-  ListItem,
-  IconButton,
-  CircularProgress,
-  Chip,
-  Alert,
-} from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import { Grid, ListItemIcon, ListItemText, Menu, MenuItem, Stack, Typography } from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { useMutation, useQuery } from 'urql';
+
 import { UserJourneysQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
-import { useLocation } from 'react-router-dom';
-import DeleteIcon from '@mui/icons-material/Delete';
 import { DeleteJourneyMonitor } from '../api/journey';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
-
-interface Journey {
-  id: string;
-  limitPrice: number;
-  from?: string | null;
-  to?: string | null;
-  journey: {
-    refreshToken: string;
-    departure: string;
-    arrival: string;
-    means: string[];
-    price: number;
-  } | null;
-}
+import JourneyTicket, { Journey } from '../components/JourneyTicket';
 
 const JourneysPage: React.FC = () => {
   const { user } = useContext(AuthContext);
-  const { hash } = useLocation();
   const { addAlert } = useAlert();
   const [{ data: userJourneysResult, fetching: userJourneysFetching }, reexecuteUserJourneysQuery] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user?.['custom:id'],
   });
-  const [{ fetching: deleteJourneyMonitorFetching }, deleteJourneyMonitor] = useMutation(DeleteJourneyMonitor);
+  const [, deleteJourneyMonitor] = useMutation(DeleteJourneyMonitor);
 
-  const [expandedJourneyIds, setExpandedJourneyIds] = useState<string[]>([]);
-  const [loadingJourneyId, setLoadingJourneyId] = useState<string | null>(null);
+  const [loadingJourneyIds, setLoadingJourneyIds] = useState<Set<string>>(new Set());
   const [deletedJourneyIds, setDeletedJourneyIds] = useState<Set<string>>(new Set());
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; id: string } | null>(null);
 
   const journeyMonitors =
-    userJourneysResult?.user?.journeyMonitors?.filter((journey: Journey) => !deletedJourneyIds.has(journey.id)) ?? [];
-
-  const toggleJourneyDetails = (journeyId: string) => {
-    setExpandedJourneyIds((prevIds) => {
-      if (prevIds.includes(journeyId)) {
-        return prevIds.filter((id) => id !== journeyId);
-      } else {
-        return [...prevIds, journeyId];
-      }
-    });
-  };
-
-  useEffect(() => {
-    if (hash) {
-      const journeyId = hash.split('#').pop()!;
-      setExpandedJourneyIds([journeyId]);
-    }
-  }, [hash]);
+    userJourneysResult?.user?.journeyMonitors?.filter((j: Journey) => !deletedJourneyIds.has(j.id)) ?? [];
 
   useEffect(() => {
     reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
   }, [reexecuteUserJourneysQuery]);
 
-  const formatDateTime = (dateTime: string) => {
-    const date = new Date(dateTime);
-    const formattedDate = date.toLocaleDateString('de-DE', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
-    const formattedTime = date.toLocaleTimeString('de-DE', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    return `${formattedDate} ${formattedTime}`;
-  };
-
   function handleJourneyMonitorDelete(id: string): void {
-    setLoadingJourneyId(id);
+    setLoadingJourneyIds((prev) => new Set([...prev, id]));
     deleteJourneyMonitor({ userId: user?.['custom:id'], journeyId: id }).then((result) => {
       if (result.error) {
         addAlert(result.error.message, AlertSeverity.Error);
-      } else {
-        setDeletedJourneyIds((prev) => {
+        setLoadingJourneyIds((prev) => {
           const next = new Set(prev);
-          next.add(id);
+          next.delete(id);
+          return next;
+        });
+      } else {
+        setDeletedJourneyIds((prev) => new Set([...prev, id]));
+        setLoadingJourneyIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
           return next;
         });
       }
-      setLoadingJourneyId(null);
     });
   }
 
@@ -115,83 +61,45 @@ const JourneysPage: React.FC = () => {
         {userJourneysFetching ? (
           <Typography variant="body1">Loading journeys...</Typography>
         ) : journeyMonitors.length > 0 ? (
-          <List>
-            {journeyMonitors.map(({ id, limitPrice, from, to, journey }: Journey) => (
-              <ListItem key={id} alignItems="flex-start">
-                <Accordion
-                  sx={{ width: '100%' }}
-                  expanded={expandedJourneyIds.includes(id)}
-                  onChange={() => toggleJourneyDetails(id)}
-                >
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Grid container justifyContent="space-between" alignItems="center" spacing={2}>
-                      <Grid size={{ sm: 6, xs: 12 }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                          {`${from ?? 'Unknown'} to ${to ?? 'Unknown'}`}
-                        </Typography>
-                      </Grid>
-                      <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>
-                        <Typography variant="body2">{`Limit Price: €${limitPrice.toFixed(2)}`}</Typography>
-                      </Grid>
-                      <Grid size={{ sm: 3, xs: 6 }} sx={{ textAlign: 'right' }}>
-                        {journey ? (
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              color:
-                                journey.price !== null ? (journey.price > limitPrice ? 'red' : 'green') : 'inherit',
-                            }}
-                          >
-                            Current Price: {journey.price !== null ? `€${journey.price.toFixed(2)}` : 'n/a'}
-                          </Typography>
-                        ) : (
-                          <Chip
-                            icon={<WarningAmberIcon />}
-                            label="No longer tracked"
-                            color="warning"
-                            size="small"
-                            variant="outlined"
-                          />
-                        )}
-                      </Grid>
-                    </Grid>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    {journey ? (
-                      <Grid container spacing={2}>
-                        <Grid size={12}>
-                          <Typography variant="body2">{`Departure: ${formatDateTime(journey.departure)}`}</Typography>
-                        </Grid>
-                        <Grid size={12}>
-                          <Typography variant="body2">{`Arrival: ${formatDateTime(journey.arrival)}`}</Typography>
-                        </Grid>
-                        <Grid size={12}>
-                          <Typography variant="body2">{`Means of Transport: ${journey.means
-                            .map((mean: string) => (mean === 'walk' ? '\u{1F6B6}' : mean))
-                            .join(' \u{2192} ')}`}</Typography>
-                        </Grid>
-                      </Grid>
-                    ) : (
-                      <Alert severity="warning" icon={<WarningAmberIcon />}>
-                        This journey can no longer be tracked — it may have been cancelled or rescheduled. You can
-                        safely remove it from your watchlist.
-                      </Alert>
-                    )}
-                  </AccordionDetails>
-                </Accordion>
-                <IconButton
-                  aria-label="delete"
-                  disabled={deleteJourneyMonitorFetching || loadingJourneyId === id}
-                  onClick={() => handleJourneyMonitorDelete(id)}
-                >
-                  {loadingJourneyId === id ? <CircularProgress size={20} /> : <DeleteIcon />}
-                </IconButton>
-              </ListItem>
+          <Stack spacing={2}>
+            {journeyMonitors.map((monitor: Journey) => (
+              <JourneyTicket
+                key={monitor.id}
+                monitor={monitor}
+                onOpenMenu={(el, id) => setMenuAnchor({ el, id })}
+                loadingIds={loadingJourneyIds}
+              />
             ))}
-          </List>
+          </Stack>
         ) : (
           <Typography variant="body1">No journeys found.</Typography>
         )}
+
+        {/* Shared overflow menu — one instance, anchored to whichever ticket's button was tapped */}
+        <Menu
+          anchorEl={menuAnchor?.el}
+          open={Boolean(menuAnchor)}
+          onClose={() => setMenuAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          slotProps={{ paper: { sx: { minWidth: 200 } } }}
+        >
+          <MenuItem
+            onClick={() => {
+              if (menuAnchor) {
+                handleJourneyMonitorDelete(menuAnchor.id);
+                setMenuAnchor(null);
+              }
+            }}
+            disabled={loadingJourneyIds.has(menuAnchor?.id ?? '')}
+            sx={{ color: 'error.main' }}
+          >
+            <ListItemIcon>
+              <DeleteIcon sx={{ fontSize: 18, color: 'error.main' }} />
+            </ListItemIcon>
+            <ListItemText>Remove from watchlist</ListItemText>
+          </MenuItem>
+        </Menu>
       </Grid>
     </Grid>
   );
