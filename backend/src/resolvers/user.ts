@@ -102,7 +102,7 @@ export const userResolvers: UserResolvers = {
     if (!dbJourneys) {
       return [];
     }
-    const journeys: JourneyMonitor[] = await Promise.all(
+    const journeyResults = await Promise.allSettled(
       dbJourneys.map(
         async (dbJourney: {
           expires: string;
@@ -110,11 +110,41 @@ export const userResolvers: UserResolvers = {
           refreshToken: string;
           userId: string;
           id: string;
+          fromId: string;
+          toId: string;
         }) => {
-          return await getJourneyMonitor(context, dbJourney);
+          try {
+            return await getJourneyMonitor(context, dbJourney);
+          } catch (error) {
+            Logger.error(`Failed to refresh journey ${dbJourney.id}: ${error}`);
+            let fromStation, toStation;
+            try {
+              fromStation = await context.dbHafas.getStationById(dbJourney.fromId);
+            } catch {
+              // ignore station lookup failure
+            }
+            try {
+              toStation = await context.dbHafas.getStationById(dbJourney.toId);
+            } catch {
+              // ignore station lookup failure
+            }
+            return {
+              id: dbJourney.id,
+              userId: dbJourney.userId,
+              limitPrice: dbJourney.limitPrice,
+              expires: dbJourney.expires,
+              from: fromStation?.name ?? undefined,
+              to: toStation?.name ?? undefined,
+              journey: undefined,
+            } as JourneyMonitor;
+          }
         }
       )
     );
+
+    const journeys: JourneyMonitor[] = journeyResults
+      .filter((result): result is PromiseFulfilledResult<JourneyMonitor> => result.status === 'fulfilled')
+      .map((result) => result.value);
     journeys.sort(
       (a: JourneyMonitor, b: JourneyMonitor) =>
         (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
@@ -331,6 +361,8 @@ export async function getJourneyMonitor(
     refreshToken: string;
     userId: string;
     id: string;
+    fromId: string;
+    toId: string;
   }
 ): Promise<JourneyMonitor> {
   const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
