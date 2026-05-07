@@ -110,8 +110,25 @@ export const userResolvers: UserResolvers = {
           refreshToken: string;
           userId: string;
           id: string;
+          fromId: string;
+          toId: string;
         }) => {
-          return await getJourneyMonitor(context, dbJourney);
+          try {
+            return await getJourneyMonitor(context, dbJourney);
+          } catch (error) {
+            Logger.error(`Failed to refresh journey ${dbJourney.id}: ${error}`);
+            const fromStation = await context.dbHafas.getStationById(dbJourney.fromId);
+            const toStation = await context.dbHafas.getStationById(dbJourney.toId);
+            return {
+              id: dbJourney.id,
+              userId: dbJourney.userId,
+              limitPrice: dbJourney.limitPrice,
+              expires: dbJourney.expires,
+              from: fromStation?.name ?? undefined,
+              to: toStation?.name ?? undefined,
+              journey: undefined,
+            } as JourneyMonitor;
+          }
         }
       )
     );
@@ -331,6 +348,8 @@ export async function getJourneyMonitor(
     refreshToken: string;
     userId: string;
     id: string;
+    fromId: string;
+    toId: string;
   }
 ): Promise<JourneyMonitor> {
   const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
