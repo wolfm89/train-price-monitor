@@ -91,6 +91,8 @@ const JourneysPage: React.FC = () => {
     deleteJourneyMonitor({ userId: user?.['custom:id'], journeyId: id }).then((result) => {
       if (result.error) {
         addAlert(result.error.message, AlertSeverity.Error);
+      } else {
+        reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
       }
       setLoadingJourneyId(null);
     });
@@ -104,7 +106,7 @@ const JourneysPage: React.FC = () => {
       <Grid size={12}>
         {userJourneysFetching ? (
           <Typography variant="body1">Loading journeys...</Typography>
-        ) : userJourneysResult && userJourneysResult.user.journeyMonitors.length > 0 ? (
+        ) : userJourneysResult?.user?.journeyMonitors?.length > 0 ? (
           <List>
             {userJourneysResult.user.journeyMonitors.map(({ id, limitPrice, from, to, journey }: Journey) => (
               <ListItem key={id} alignItems="flex-start">
