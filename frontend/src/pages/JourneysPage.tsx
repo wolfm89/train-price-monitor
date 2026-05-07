@@ -50,6 +50,10 @@ const JourneysPage: React.FC = () => {
 
   const [expandedJourneyIds, setExpandedJourneyIds] = useState<string[]>([]);
   const [loadingJourneyId, setLoadingJourneyId] = useState<string | null>(null);
+  const [deletedJourneyIds, setDeletedJourneyIds] = useState<Set<string>>(new Set());
+
+  const journeyMonitors =
+    userJourneysResult?.user?.journeyMonitors?.filter((journey: Journey) => !deletedJourneyIds.has(journey.id)) ?? [];
 
   const toggleJourneyDetails = (journeyId: string) => {
     setExpandedJourneyIds((prevIds) => {
@@ -92,7 +96,11 @@ const JourneysPage: React.FC = () => {
       if (result.error) {
         addAlert(result.error.message, AlertSeverity.Error);
       } else {
-        reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
+        setDeletedJourneyIds((prev) => {
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        });
       }
       setLoadingJourneyId(null);
     });
@@ -106,9 +114,9 @@ const JourneysPage: React.FC = () => {
       <Grid size={12}>
         {userJourneysFetching ? (
           <Typography variant="body1">Loading journeys...</Typography>
-        ) : userJourneysResult?.user?.journeyMonitors?.length > 0 ? (
+        ) : journeyMonitors.length > 0 ? (
           <List>
-            {userJourneysResult.user.journeyMonitors.map(({ id, limitPrice, from, to, journey }: Journey) => (
+            {journeyMonitors.map(({ id, limitPrice, from, to, journey }: Journey) => (
               <ListItem key={id} alignItems="flex-start">
                 <Accordion
                   sx={{ width: '100%' }}
