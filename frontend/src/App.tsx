@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { Container } from '@mui/material';
+import { Box, Container } from '@mui/material';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import HomePage from './pages/HomePage';
@@ -21,39 +21,41 @@ export default function App() {
       <AlertProvider>
         <AuthProvider>
           <Router>
-            <Header />
-            <Container maxWidth="md" sx={{ my: 4 }}>
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route
-                  path="/search"
-                  element={
-                    <RouteGuard>
-                      <SearchPage />
-                    </RouteGuard>
-                  }
-                />
-                <Route
-                  path="/journeys"
-                  element={
-                    <RouteGuard>
-                      <JourneysPage />
-                    </RouteGuard>
-                  }
-                />
-                <Route
-                  path="/profile"
-                  element={
-                    <RouteGuard>
-                      <ProfilePage />
-                    </RouteGuard>
-                  }
-                />
-                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-                <Route path="/reset-password" element={<ResetPasswordPage />} />
-              </Routes>
-            </Container>
-            <Footer />
+            <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+              <Header />
+              <Container maxWidth="md" sx={{ my: 4, flex: 1 }}>
+                <Routes>
+                  <Route path="/" element={<HomePage />} />
+                  <Route
+                    path="/search"
+                    element={
+                      <RouteGuard>
+                        <SearchPage />
+                      </RouteGuard>
+                    }
+                  />
+                  <Route
+                    path="/journeys"
+                    element={
+                      <RouteGuard>
+                        <JourneysPage />
+                      </RouteGuard>
+                    }
+                  />
+                  <Route
+                    path="/profile"
+                    element={
+                      <RouteGuard>
+                        <ProfilePage />
+                      </RouteGuard>
+                    }
+                  />
+                  <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                  <Route path="/reset-password" element={<ResetPasswordPage />} />
+                </Routes>
+              </Container>
+              <Footer />
+            </Box>
             <AlertBar />
           </Router>
         </AuthProvider>

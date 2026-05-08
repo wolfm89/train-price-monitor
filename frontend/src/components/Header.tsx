@@ -6,17 +6,13 @@ import {
   Typography,
   IconButton,
   Badge,
-  Container,
   useMediaQuery,
   useTheme,
   Avatar,
+  Box,
+  Button,
 } from '@mui/material';
-import {
-  Search as SearchIcon,
-  AccountCircle as AccountCircleIcon,
-  Notifications as NotificationsIcon,
-  Train as TrainIcon,
-} from '@mui/icons-material';
+import { Search as SearchIcon, Notifications as NotificationsIcon, Train as TrainIcon } from '@mui/icons-material';
 import NotificationPopover, { Notification } from './NotificationPopover';
 import AccountMenu from './AccountMenu';
 import { AuthContext } from '../providers/AuthProvider';
@@ -24,6 +20,22 @@ import { UserNotificationsQuery } from '../api/user';
 import { useMutation, useQuery } from 'urql';
 import { MarkNotificationAsRead } from '../api/notification';
 import { useNavigate } from 'react-router-dom';
+
+const NAV_HEIGHT = 54;
+
+const navBtnSx = {
+  color: 'rgba(255,255,255,0.8)',
+  fontSize: 14,
+  fontWeight: 500,
+  borderRadius: '6px',
+  px: 1.5,
+  py: 0.75,
+  textTransform: 'none' as const,
+  '&:hover': {
+    backgroundColor: 'rgba(255,255,255,0.13)',
+    color: '#fff',
+  },
+};
 
 const Header = () => {
   const theme = useTheme();
@@ -61,7 +73,6 @@ const Header = () => {
     setAccountAnchorEl(null);
   };
 
-  // Schedule the notification query to run every 30 seconds
   useEffect(() => {
     const intervalId = setInterval(() => {
       if (user?.['custom:id']) {
@@ -69,118 +80,112 @@ const Header = () => {
       }
     }, 30000);
 
-    // Clean up the interval when the component is unmounted
     return () => clearInterval(intervalId);
   }, [reexecuteUserNotificationsQuery, user]);
 
-  // useEffect to store notifications in local variable
   useEffect(() => {
     if (!stale) {
       setNotifications(userNotificationsResult?.user?.notifications);
     }
   }, [stale, userNotificationsResult?.user?.notifications]);
 
+  const initials = user ? `${user.given_name?.[0] ?? ''}${user.family_name?.[0] ?? ''}`.toUpperCase() : '';
+
   return (
-    <AppBar position="static" sx={{ maxWidth: 'lg', mx: 'auto' }}>
-      <Container maxWidth="xl">
-        <Toolbar disableGutters sx={{ display: 'flex', justifyContent: 'space-between' }}>
-          <Link
-            to="/"
-            style={{
-              textDecoration: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              color: 'inherit',
-              marginLeft: -5,
-            }}
-          >
-            <img
-              src={process.env.PUBLIC_URL + '/logo192.png'}
-              alt="Train Price Monitor Logo"
-              style={{ width: 50, height: 50, marginRight: 2 }}
-            />
-            {!isScreenSmall && (
-              <Typography variant="h6" component="div" sx={{ marginLeft: 1, color: 'inherit', whiteSpace: 'nowrap' }}>
-                Train Price Monitor
-              </Typography>
-            )}
-          </Link>
-          {user && (
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <Link
-                to="/search"
-                style={{
-                  textDecoration: 'none',
-                  color: 'inherit',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
-              >
-                <IconButton color="inherit" sx={{ borderRadius: 4 }}>
-                  <SearchIcon />
-                  {!isScreenSmall && (
-                    <Typography
-                      variant="subtitle1"
-                      component="div"
-                      sx={{
-                        marginLeft: 1,
-                        xs: 'none',
-                        md: 'block',
-                        color: 'inherit',
-                      }}
-                    >
-                      Search
-                    </Typography>
-                  )}
-                </IconButton>
-              </Link>
-              <Link
-                to="/journeys"
-                style={{
-                  textDecoration: 'none',
-                  color: 'inherit',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
-              >
-                <IconButton color="inherit" sx={{ borderRadius: 4 }}>
-                  <TrainIcon />
-                  {!isScreenSmall && (
-                    <Typography
-                      variant="subtitle1"
-                      component="div"
-                      sx={{
-                        marginLeft: 1,
-                        xs: 'none',
-                        md: 'block',
-                        color: 'inherit',
-                      }}
-                    >
-                      Journey Watchlist
-                    </Typography>
-                  )}
-                </IconButton>
-              </Link>
-              <IconButton color="inherit" onClick={handleNotificationClick}>
-                <Badge badgeContent={notifications?.length} color="error">
-                  <NotificationsIcon />
-                </Badge>
-              </IconButton>
-              <IconButton aria-label="user profile" color="inherit" onClick={handleAccountClick}>
-                {userProfilePictureUrl && (
-                  <Avatar
-                    alt="Profile Picture"
-                    src={userProfilePictureUrl}
-                    sx={{ width: 24, height: 24 }}
-                    slotProps={{ img: { crossOrigin: 'anonymous' } }}
-                  />
-                )}
-                {!userProfilePictureUrl && <AccountCircleIcon />}
-              </IconButton>
-            </div>
+    <AppBar position="static" elevation={0} sx={{ height: NAV_HEIGHT }}>
+      <Toolbar
+        disableGutters
+        sx={{
+          height: NAV_HEIGHT,
+          minHeight: `${NAV_HEIGHT}px !important`,
+          px: 3,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          maxWidth: 'md',
+          width: '100%',
+          mx: 'auto',
+        }}
+      >
+        <Link
+          to="/"
+          style={{
+            textDecoration: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 9,
+            color: 'inherit',
+            padding: '4px 8px 4px 0',
+            borderRadius: 6,
+          }}
+        >
+          <img
+            src={process.env.PUBLIC_URL + '/logo192.png'}
+            alt="Train Price Monitor Logo"
+            style={{ width: 30, height: 30, borderRadius: 6 }}
+          />
+          {!isScreenSmall && (
+            <Typography sx={{ fontWeight: 700, fontSize: 16, color: '#fff', whiteSpace: 'nowrap' }}>
+              Train Price Monitor
+            </Typography>
           )}
-        </Toolbar>
-      </Container>
+        </Link>
+
+        {user && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+            <Button
+              component={Link}
+              to="/search"
+              startIcon={<SearchIcon sx={{ fontSize: '16px !important' }} />}
+              sx={navBtnSx}
+            >
+              {!isScreenSmall && 'Search'}
+            </Button>
+            <Button
+              component={Link}
+              to="/journeys"
+              startIcon={<TrainIcon sx={{ fontSize: '16px !important' }} />}
+              sx={navBtnSx}
+            >
+              {!isScreenSmall && 'Journey Watchlist'}
+            </Button>
+            <IconButton
+              size="small"
+              onClick={handleNotificationClick}
+              sx={{
+                color: 'rgba(255,255,255,0.8)',
+                '&:hover': { color: '#fff', backgroundColor: 'rgba(255,255,255,0.13)' },
+              }}
+            >
+              <Badge
+                badgeContent={notifications?.length}
+                color="error"
+                sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16 } }}
+              >
+                <NotificationsIcon sx={{ fontSize: 18 }} />
+              </Badge>
+            </IconButton>
+            <IconButton aria-label="user profile" onClick={handleAccountClick} sx={{ ml: 0.5, p: 0 }}>
+              <Avatar
+                alt="Profile Picture"
+                src={userProfilePictureUrl || undefined}
+                sx={{
+                  width: 28,
+                  height: 28,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  bgcolor: 'secondary.light',
+                  color: 'secondary.dark',
+                  border: '2px solid rgba(255,255,255,0.25)',
+                }}
+                slotProps={{ img: { crossOrigin: 'anonymous' } }}
+              >
+                {initials}
+              </Avatar>
+            </IconButton>
+          </Box>
+        )}
+      </Toolbar>
       <NotificationPopover
         anchorEl={notificationAnchorEl}
         id={id}
@@ -193,13 +198,10 @@ const Header = () => {
         }}
         handleNotificationClicked={(notification: Notification) => {
           if (notification?.type === 'PRICE_ALERT') {
-            // Navigate to JourneysPage with the correct accordion open
             navigate(`/journeys#${notification.journeyMonitor?.id}`);
           } else if (notification?.type === 'JOURNEY_EXPIRED') {
-            // Navigate to JourneysPage
             navigate(`/journeys`);
           } else if (notification?.type === 'JOURNEY_STALE') {
-            // Navigate to the specific journey monitor so the user can delete it
             navigate(notification.journeyId ? `/journeys#${notification.journeyId}` : '/journeys');
           }
           handleNotificationClose();

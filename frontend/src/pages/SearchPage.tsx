@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CircularProgress, Grid, Typography } from '@mui/material';
+import { Box, CircularProgress, Typography } from '@mui/material';
 import { useQuery } from 'urql';
 import SearchMask from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
@@ -59,34 +59,35 @@ const SearchPage: React.FC<Props> = () => {
     : undefined;
 
   return (
-    <Grid container spacing={2}>
-      <Grid size={12}>
-        <Typography variant="h6">Search for Train Rides</Typography>
-      </Grid>
-      <Grid size={12}>
-        <SearchMask setSearchData={setSearchData} onSearch={handleSearch} />
-      </Grid>
-      <Grid size={12}>
-        {searchClicked &&
-          (fetching && !data ? (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px' }}>
-              <CircularProgress />
-            </div>
-          ) : data !== undefined ? (
-            (searchResult ?? []).length > 0 || fetching || earlierRef || laterRef ? (
-              <SearchResult
-                searchData={searchData!}
-                searchResult={searchResult ?? []}
-                onNavigateEarlier={handleNavigateEarlier}
-                onNavigateLater={handleNavigateLater}
-                navigatingDirection={navigatingDirection}
-              />
-            ) : (
-              <Typography variant="subtitle1">No results found</Typography>
-            )
-          ) : null)}
-      </Grid>
-    </Grid>
+    <Box>
+      <Typography sx={{ fontSize: 20, fontWeight: 700, color: 'text.primary', letterSpacing: '-0.02em', mb: 0.5 }}>
+        Search for train rides
+      </Typography>
+      <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 3 }}>
+        Find a connection and add it to your watchlist.
+      </Typography>
+
+      <SearchMask setSearchData={setSearchData} onSearch={handleSearch} />
+
+      {searchClicked &&
+        (fetching && !data ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
+            <CircularProgress />
+          </Box>
+        ) : data !== undefined ? (
+          (searchResult ?? []).length > 0 || fetching || earlierRef || laterRef ? (
+            <SearchResult
+              searchData={searchData!}
+              searchResult={searchResult ?? []}
+              onNavigateEarlier={handleNavigateEarlier}
+              onNavigateLater={handleNavigateLater}
+              navigatingDirection={navigatingDirection}
+            />
+          ) : (
+            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>No results found</Typography>
+          )
+        ) : null)}
+    </Box>
   );
 };
 

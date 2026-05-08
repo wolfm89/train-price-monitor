@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, TextField, Grid, Typography, Autocomplete } from '@mui/material';
+import { Button, TextField, Grid, Typography, Autocomplete, Paper, Box, InputAdornment } from '@mui/material';
+import {
+  Search as SearchIcon,
+  LocationOn as LocationOnIcon,
+  CalendarToday as CalendarTodayIcon,
+  AccessTime as AccessTimeIcon,
+} from '@mui/icons-material';
 import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { LocationSearchQuery } from '../api/location';
@@ -14,6 +20,15 @@ interface Location {
   id: string;
   name: string;
 }
+
+const fieldLabelSx = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: 'text.secondary',
+  textTransform: 'uppercase' as const,
+  letterSpacing: '0.06em',
+  mb: 0.5,
+};
 
 const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
   const [from, setFrom] = useState<Location | null>(null);
@@ -104,7 +119,6 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
     onSearch(from?.id ?? '', to?.id ?? '', createISODateString(departureDay.trim(), departureTime.trim()));
   };
 
-  // Update form validity based on input fields
   React.useEffect(() => {
     const day = departureDay.trim();
     const time = departureTime.trim();
@@ -118,87 +132,149 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
   }, [from, to, departureDay, departureTime]);
 
   return (
-    <Grid container spacing={2}>
-      <Grid size={{ xs: 3, sm: 1 }} container justifyContent="flex-end" alignItems="center">
-        <Typography>From:</Typography>
+    <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.75, mb: 2.75 }}>
+      <Grid container spacing={1.75} sx={{ mb: 1.75 }}>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <Typography sx={fieldLabelSx}>From</Typography>
+          <Autocomplete
+            id="departure"
+            value={from}
+            options={fromSuggestions ?? []}
+            filterOptions={(x) => x}
+            getOptionLabel={(option) => option?.name ?? ''}
+            includeInputInList
+            filterSelectedOptions
+            noOptionsText="No locations found"
+            loading={fromFetching}
+            size="small"
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                placeholder="Station"
+                fullWidth
+                slotProps={{
+                  input: {
+                    ...params.InputProps,
+                    startAdornment: (
+                      <>
+                        <InputAdornment position="start">
+                          <LocationOnIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
+                        </InputAdornment>
+                        {params.InputProps.startAdornment}
+                      </>
+                    ),
+                  },
+                }}
+              />
+            )}
+            isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
+            onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
+              setFromSuggestions(newValue ? [newValue, ...(fromSuggestions ?? [])] : fromSuggestions ?? []);
+              setFrom(newValue);
+            }}
+            onInputChange={(_event, newInputValue) => {
+              setFromInput(newInputValue);
+            }}
+          />
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <Typography sx={fieldLabelSx}>To</Typography>
+          <Autocomplete
+            id="arrival"
+            value={to}
+            options={toSuggestions ?? []}
+            filterOptions={(x) => x}
+            getOptionLabel={(option) => option?.name ?? ''}
+            includeInputInList
+            filterSelectedOptions
+            noOptionsText="No locations found"
+            loading={toFetching}
+            size="small"
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                placeholder="Station"
+                fullWidth
+                slotProps={{
+                  input: {
+                    ...params.InputProps,
+                    startAdornment: (
+                      <>
+                        <InputAdornment position="start">
+                          <LocationOnIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
+                        </InputAdornment>
+                        {params.InputProps.startAdornment}
+                      </>
+                    ),
+                  },
+                }}
+              />
+            )}
+            isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
+            onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
+              setToSuggestions(newValue ? [newValue, ...(toSuggestions ?? [])] : toSuggestions ?? []);
+              setTo(newValue);
+            }}
+            onInputChange={(_event, newInputValue) => {
+              setToInput(newInputValue);
+            }}
+          />
+        </Grid>
       </Grid>
-      <Grid size={{ xs: 9, sm: 5 }}>
-        <Autocomplete
-          id="departure"
-          value={from}
-          options={fromSuggestions ?? []}
-          filterOptions={(x) => x}
-          getOptionLabel={(option) => option?.name ?? ''}
-          includeInputInList
-          filterSelectedOptions
-          noOptionsText="No locations found"
-          loading={fromFetching}
-          renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
-          isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
-          onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
-            setFromSuggestions(newValue ? [newValue, ...(fromSuggestions ?? [])] : fromSuggestions ?? []);
-            setFrom(newValue);
-          }}
-          onInputChange={(_event, newInputValue) => {
-            setFromInput(newInputValue);
-          }}
-        />
-      </Grid>
-      <Grid size={{ xs: 3, sm: 1 }} container justifyContent="flex-end" alignItems="center">
-        <Typography>To:</Typography>
-      </Grid>
-      <Grid size={{ xs: 9, sm: 5 }}>
-        <Autocomplete
-          id="arrival"
-          value={to}
-          options={toSuggestions ?? []}
-          filterOptions={(x) => x}
-          getOptionLabel={(option) => option?.name ?? ''}
-          includeInputInList
-          filterSelectedOptions
-          noOptionsText="No locations found"
-          loading={toFetching}
-          renderInput={(params) => <TextField {...params} label="Station" fullWidth />}
-          isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
-          onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
-            setToSuggestions(newValue ? [newValue, ...(toSuggestions ?? [])] : toSuggestions ?? []);
-            setTo(newValue);
-          }}
-          onInputChange={(_event, newInputValue) => {
-            setToInput(newInputValue);
-          }}
-        />
-      </Grid>
-      <Grid size={{ xs: 3, sm: 1 }} container justifyContent="flex-end" alignItems="center">
-        <Typography>Departure:</Typography>
-      </Grid>
-      <Grid size={{ xs: 5, sm: 3 }}>
-        <TextField
-          id="date"
-          type="date"
-          value={departureDay}
-          onChange={(e) => setDepartureDay(e.target.value)}
-          fullWidth
-        />
-      </Grid>
-      <Grid size={{ xs: 4, sm: 2 }}>
-        <TextField
-          id="time"
-          type="time"
-          value={departureTime}
-          onChange={(e) => setDepartureTime(e.target.value)}
-          fullWidth
-          inputProps={{
-            style: { textAlign: 'right' },
-          }}
-        />
-      </Grid>
-      <Grid size={{ sm: 6 }} container justifyContent="right" alignItems="center">
-        <Button variant="contained" type="submit" disabled={!formValid} onClick={handleSearchClick}>
+      <Box
+        sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 130px auto' }, gap: 1.5, alignItems: 'end' }}
+      >
+        <Box>
+          <Typography sx={fieldLabelSx}>Departure date</Typography>
+          <TextField
+            id="date"
+            type="date"
+            value={departureDay}
+            onChange={(e) => setDepartureDay(e.target.value)}
+            fullWidth
+            size="small"
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <CalendarTodayIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
+        </Box>
+        <Box>
+          <Typography sx={fieldLabelSx}>Time</Typography>
+          <TextField
+            id="time"
+            type="time"
+            value={departureTime}
+            onChange={(e) => setDepartureTime(e.target.value)}
+            fullWidth
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <AccessTimeIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                  </InputAdornment>
+                ),
+              },
+            }}
+            size="small"
+          />
+        </Box>
+        <Button
+          variant="contained"
+          disabled={!formValid}
+          onClick={handleSearchClick}
+          startIcon={<SearchIcon sx={{ fontSize: '16px !important' }} />}
+          sx={{ textTransform: 'none', fontWeight: 600, height: 40, whiteSpace: 'nowrap' }}
+        >
           Search
         </Button>
-      </Grid>
-    </Grid>
+      </Box>
+    </Paper>
   );
 };
 

@@ -374,9 +374,10 @@ export interface JourneyTicketProps {
   monitor: Journey;
   onOpenMenu: (el: HTMLElement, id: string) => void;
   loadingIds: Set<string>;
+  showMenu?: boolean;
 }
 
-export default function JourneyTicket({ monitor, onOpenMenu, loadingIds }: JourneyTicketProps) {
+export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMenu = true }: JourneyTicketProps) {
   const { id, limitPrice, from, to, journey } = monitor;
 
   return (
@@ -384,23 +385,25 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingIds }: Journ
       <Paper elevation={0} sx={ticketSx}>
         {/* Upper zone */}
         <Box sx={upperZoneSx}>
-          <IconButton
-            aria-label="more options"
-            size="small"
-            disabled={loadingIds.has(id)}
-            onClick={(e) => onOpenMenu(e.currentTarget, id)}
-            sx={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              width: 28,
-              height: 28,
-              color: 'text.disabled',
-              '&:hover': { color: 'text.primary' },
-            }}
-          >
-            {loadingIds.has(id) ? <CircularProgress size={14} /> : <MoreVertIcon sx={{ fontSize: 18 }} />}
-          </IconButton>
+          {showMenu && (
+            <IconButton
+              aria-label="more options"
+              size="small"
+              disabled={loadingIds.has(id)}
+              onClick={(e) => onOpenMenu(e.currentTarget, id)}
+              sx={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                width: 28,
+                height: 28,
+                color: 'text.disabled',
+                '&:hover': { color: 'text.primary' },
+              }}
+            >
+              {loadingIds.has(id) ? <CircularProgress size={14} /> : <MoreVertIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+          )}
 
           <RouteHeader from={from} to={to} />
           <TimesRow journey={journey} />

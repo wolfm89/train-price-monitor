@@ -6,8 +6,8 @@ import {
   Button,
   Avatar,
   Box,
-  Checkbox,
-  FormControlLabel,
+  Switch,
+  Paper,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -21,6 +21,35 @@ import { useMutation, useQuery } from 'urql';
 import { DeleteUser, UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
 import { useNavigate } from 'react-router-dom';
 
+// ---------------------------------------------------------------------------
+// Style constants
+// ---------------------------------------------------------------------------
+
+const sectionTitleSx = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: 'text.secondary',
+  textTransform: 'uppercase' as const,
+  letterSpacing: '0.07em',
+  mb: 1.75,
+  pb: 1.25,
+  borderBottom: 1,
+  borderColor: 'divider',
+};
+
+const fieldLabelSx = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: 'text.secondary',
+  textTransform: 'uppercase' as const,
+  letterSpacing: '0.05em',
+  mb: 0.5,
+};
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 const ProfilePage: React.FC = () => {
   const {
     user,
@@ -29,11 +58,12 @@ const ProfilePage: React.FC = () => {
     deleteUser: deleteCognitoUser,
   } = useContext(AuthContext);
   const navigate = useNavigate();
-  const [firstName, setFirstName] = useState(user?.given_name);
-  const [lastName, setLastName] = useState(user?.family_name);
-  const [email, setEmail] = useState(user?.email);
-  const [oldPassword, setOldPassword] = useState('');
+  const [firstName] = useState(user?.given_name);
+  const [lastName] = useState(user?.family_name);
+  const [email] = useState(user?.email);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [enableEmailNotifications, setEnableEmailNotifications] = useState(false);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [accountDeletionConfirmed, setAccountDeletionConfirmed] = useState(false);
@@ -81,33 +111,37 @@ const ProfilePage: React.FC = () => {
     }
   };
 
-  const handleSaveChanges = async () => {
-    if (oldPassword !== '' && newPassword !== '') {
+  const handlePasswordUpdate = async () => {
+    if (newPassword !== confirmPassword) {
+      addAlert('New passwords do not match.', AlertSeverity.Error);
+      return;
+    }
+    if (currentPassword !== '' && newPassword !== '') {
       try {
-        await changePassword(oldPassword, newPassword);
+        await changePassword(currentPassword, newPassword);
         addAlert('Password changed successfully!', AlertSeverity.Success);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
       } catch {
         addAlert('Password change failed. Please try again.', AlertSeverity.Error);
       }
     }
-    if (enableEmailNotifications !== userSettingsData?.user?.emailNotificationsEnabled) {
-      updateUserSettings({ id: user?.['custom:id'], emailNotificationsEnabled: enableEmailNotifications }).then(
-        (result) => {
-          if (result.error) {
-            addAlert('Updating user settings failed. Please try again.', AlertSeverity.Error);
-          } else {
-            addAlert('User settings updated successfully!', AlertSeverity.Success);
-          }
-        }
-      );
-    }
   };
 
-  const handleEmailNoficationsEnabledChange = (_event: ChangeEvent<HTMLInputElement>, checked: boolean) => {
+  const handleNotificationToggle = (_event: ChangeEvent<HTMLInputElement>, checked: boolean) => {
     setEnableEmailNotifications(checked);
+    updateUserSettings({ id: user?.['custom:id'], emailNotificationsEnabled: checked }).then((result) => {
+      if (result.error) {
+        addAlert('Updating user settings failed. Please try again.', AlertSeverity.Error);
+        setEnableEmailNotifications(!checked);
+      } else {
+        addAlert('User settings updated successfully!', AlertSeverity.Success);
+      }
+    });
   };
 
-  const handleDeleteAccount = async () => {
+  const handleDeleteAccount = () => {
     setShowDeleteConfirmation(true);
   };
 
@@ -131,121 +165,200 @@ const ProfilePage: React.FC = () => {
     setShowDeleteConfirmation(false);
   };
 
-  const handleCancelDeleteAccount = () => {
-    setShowDeleteConfirmation(false);
-  };
+  const initials = user ? `${user.given_name?.[0] ?? ''}${user.family_name?.[0] ?? ''}`.toUpperCase() : '';
+
+  if (userSettingsFetching) {
+    return <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>Loading profile...</Typography>;
+  }
 
   return (
-    <>
-      <Typography variant="h6" gutterBottom>
-        Profile
+    <Box>
+      <Typography sx={{ fontSize: 20, fontWeight: 700, color: 'text.primary', letterSpacing: '-0.02em', mb: 2.5 }}>
+        Account settings
       </Typography>
-      {userSettingsFetching ? (
-        <Typography variant="body1">Loading profile...</Typography>
-      ) : (
-        <>
-          <Box
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '200px 1fr' }, gap: 3, alignItems: 'start' }}>
+        {/* Sidebar */}
+        <Paper
+          elevation={0}
+          sx={{
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: 3,
+            p: 2.75,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 1.5,
+            textAlign: 'center',
+          }}
+        >
+          <Avatar
+            alt="Profile Picture"
+            src={userProfilePictureUrl || undefined}
             sx={{
-              display: 'flex',
-              justifyContent: 'left',
-              alignItems: 'center',
-              marginBottom: 4,
+              width: 72,
+              height: 72,
+              fontSize: 26,
+              fontWeight: 700,
+              bgcolor: 'secondary.light',
+              color: 'secondary.dark',
+              border: '3px solid',
+              borderColor: '#a3c485',
+            }}
+            slotProps={{ img: { crossOrigin: 'anonymous' } }}
+          >
+            {initials}
+          </Avatar>
+          <Box>
+            <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'text.primary' }}>
+              {firstName} {lastName}
+            </Typography>
+            <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{email}</Typography>
+          </Box>
+          <Button
+            variant="outlined"
+            component="label"
+            size="small"
+            sx={{
+              fontSize: 11,
+              fontWeight: 600,
+              textTransform: 'none',
+              borderColor: 'divider',
+              color: 'text.secondary',
+              '&:hover': { borderColor: 'primary.main', color: 'primary.main' },
             }}
           >
-            <Avatar alt="Profile Picture" src={userProfilePictureUrl} sx={{ width: 120, height: 120 }} />
-            <Box sx={{ flexGrow: 0, marginLeft: 2 }}>
-              <Button variant="outlined" component="label">
-                Change Picture
-                <input type="file" accept="image/*" hidden onChange={handleProfilePictureChange} />
+            Change picture
+            <input type="file" accept="image/*" hidden onChange={handleProfilePictureChange} />
+          </Button>
+        </Paper>
+
+        {/* Main content */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* Personal Information */}
+          <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
+            <Typography sx={sectionTitleSx}>Personal information</Typography>
+            <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <Typography sx={fieldLabelSx}>First name</Typography>
+                <TextField value={firstName} fullWidth size="small" disabled />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <Typography sx={fieldLabelSx}>Last name</Typography>
+                <TextField value={lastName} fullWidth size="small" disabled />
+              </Grid>
+              <Grid size={12}>
+                <Typography sx={fieldLabelSx}>Email address</Typography>
+                <TextField value={email} fullWidth size="small" disabled />
+              </Grid>
+            </Grid>
+          </Paper>
+
+          {/* Change Password */}
+          <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
+            <Typography sx={sectionTitleSx}>Change password</Typography>
+            <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
+              <Grid size={12}>
+                <Typography sx={fieldLabelSx}>Current password</Typography>
+                <TextField
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  fullWidth
+                  size="small"
+                />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <Typography sx={fieldLabelSx}>New password</Typography>
+                <TextField
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="New password"
+                  fullWidth
+                  size="small"
+                />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <Typography sx={fieldLabelSx}>Confirm new password</Typography>
+                <TextField
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm"
+                  fullWidth
+                  size="small"
+                />
+              </Grid>
+            </Grid>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', pt: 1.75, borderTop: 1, borderColor: 'divider' }}>
+              <Button
+                variant="contained"
+                onClick={handlePasswordUpdate}
+                disabled={!currentPassword || !newPassword || !confirmPassword}
+                sx={{ textTransform: 'none', fontWeight: 600 }}
+              >
+                Update password
               </Button>
             </Box>
-          </Box>
-          <Grid container spacing={2}>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                label="First Name"
-                variant="outlined"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                fullWidth
-                disabled
-              />
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                label="Last Name"
-                variant="outlined"
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                fullWidth
-                disabled
-              />
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                label="Email"
-                variant="outlined"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                fullWidth
-                disabled
-              />
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <Box />
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                id="oldPassword"
-                label="Old Password"
-                type="password"
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.target.value)}
-                fullWidth
-              />
-            </Grid>
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <TextField
-                id="newPassword"
-                label="New Password"
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                fullWidth
-              />
-            </Grid>
-            <Grid size={12}>
-              <FormControlLabel
-                control={<Checkbox checked={enableEmailNotifications} onChange={handleEmailNoficationsEnabledChange} />}
-                label="Enable Email Notifications for Price Alerts"
-              />
-            </Grid>
-            <Grid size={6}>
-              <Button variant="contained" color="primary" onClick={handleSaveChanges}>
-                Save Changes
-              </Button>
-            </Grid>
-            <Grid size={6} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button variant="contained" color="error" onClick={handleDeleteAccount}>
-                Delete Account
-              </Button>
-            </Grid>
-          </Grid>
-          <Dialog open={showDeleteConfirmation} onClose={handleCancelDeleteAccount}>
-            <DialogTitle>Delete Account</DialogTitle>
-            <DialogContent>
-              <Typography>Are you sure you want to delete your account?</Typography>
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={handleCancelDeleteAccount}>Cancel</Button>
-              <Button onClick={handleConfirmDeleteAccount} color="error">
-                Delete
-              </Button>
-            </DialogActions>
-          </Dialog>
-        </>
-      )}
-    </>
+          </Paper>
+
+          {/* Notifications */}
+          <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
+            <Typography sx={sectionTitleSx}>Notifications</Typography>
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                pt: 1.5,
+              }}
+            >
+              <Box>
+                <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'text.primary' }}>
+                  Email alerts for price changes
+                </Typography>
+                <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+                  Get an email when a monitored ticket rises above your limit
+                </Typography>
+              </Box>
+              <Switch checked={enableEmailNotifications} onChange={handleNotificationToggle} color="secondary" />
+            </Box>
+          </Paper>
+
+          {/* Danger Zone */}
+          <Paper elevation={0} sx={{ border: 1, borderColor: '#f0b0b0', borderRadius: 3, p: 2.5 }}>
+            <Typography sx={{ ...sectionTitleSx, color: 'error.main', borderColor: '#f0b0b0' }}>Danger zone</Typography>
+            <Typography sx={{ fontSize: 12, color: 'text.secondary', lineHeight: 1.55, mb: 1.75 }}>
+              Permanently delete your account and all associated journey monitors. This action cannot be undone.
+            </Typography>
+            <Button
+              variant="outlined"
+              color="error"
+              onClick={handleDeleteAccount}
+              sx={{ textTransform: 'none', fontWeight: 500 }}
+            >
+              Delete my account
+            </Button>
+          </Paper>
+        </Box>
+      </Box>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={showDeleteConfirmation} onClose={() => setShowDeleteConfirmation(false)}>
+        <DialogTitle>Delete Account</DialogTitle>
+        <DialogContent>
+          <Typography>Are you sure you want to delete your account? This action cannot be undone.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowDeleteConfirmation(false)}>Cancel</Button>
+          <Button onClick={handleConfirmDeleteAccount} color="error">
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 };
 
