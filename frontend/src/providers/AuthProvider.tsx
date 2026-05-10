@@ -84,11 +84,11 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     const imageUrl = localStorage.getItem(imageUrlKey);
     const imageUrlTimestamp = localStorage.getItem(imageUrlTimestampKey);
 
-    // 24 hours in milliseconds
-    const oneDay = 24 * 60 * 60 * 1000;
+    // 1 hour in milliseconds (presigned URLs use temporary STS credentials that expire)
+    const oneHour = 60 * 60 * 1000;
     const now = new Date().getTime();
 
-    if (imageUrl && imageUrlTimestamp && now - Number(imageUrlTimestamp) < oneDay) {
+    if (imageUrl && imageUrlTimestamp && now - Number(imageUrlTimestamp) < oneHour) {
       setUserProfilePictureUrl(imageUrl);
     } else {
       fetchAndCacheUserProfilePictureUrl();

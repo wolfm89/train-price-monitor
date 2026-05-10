@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Grid, ListItemIcon, ListItemText, Menu, MenuItem, Stack, Typography } from '@mui/material';
+import { Box, Button, ListItemIcon, ListItemText, Menu, MenuItem, Stack, Typography } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from 'urql';
 
 import { UserJourneysQuery } from '../api/user';
@@ -27,6 +28,10 @@ const JourneysPage: React.FC = () => {
   const journeyMonitors =
     userJourneysResult?.user?.journeyMonitors?.filter((j: Journey) => !deletedJourneyIds.has(j.id)) ?? [];
 
+  const belowLimitCount = journeyMonitors.filter(
+    (j: Journey) => j.journey?.price != null && j.journey.price <= j.limitPrice
+  ).length;
+
   useEffect(() => {
     reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
   }, [reexecuteUserJourneysQuery]);
@@ -48,60 +53,81 @@ const JourneysPage: React.FC = () => {
           next.delete(id);
           return next;
         });
+        reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
       }
     });
   }
 
   return (
-    <Grid container spacing={2}>
-      <Grid size={12}>
-        <Typography variant="h6">Journey Watchlist</Typography>
-      </Grid>
-      <Grid size={12}>
-        {userJourneysFetching ? (
-          <Typography variant="body1">Loading journeys...</Typography>
-        ) : journeyMonitors.length > 0 ? (
-          <Stack spacing={2}>
-            {journeyMonitors.map((monitor: Journey) => (
-              <JourneyTicket
-                key={monitor.id}
-                monitor={monitor}
-                onOpenMenu={(el, id) => setMenuAnchor({ el, id })}
-                loadingIds={loadingJourneyIds}
-              />
-            ))}
-          </Stack>
-        ) : (
-          <Typography variant="body1">No journeys found.</Typography>
-        )}
+    <Box>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 1.5,
+          mb: 2.75,
+        }}
+      >
+        <Box>
+          <Typography variant="h5" sx={{ mb: 0.25 }}>
+            Journey Watchlist
+          </Typography>
+          {!userJourneysFetching && journeyMonitors.length > 0 && (
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+              Monitoring {journeyMonitors.length} journey{journeyMonitors.length !== 1 ? 's' : ''} · {belowLimitCount}{' '}
+              below limit
+            </Typography>
+          )}
+        </Box>
+        <Button variant="contained" component={Link} to="/search" sx={{ textTransform: 'none', fontWeight: 600 }}>
+          + Add journey
+        </Button>
+      </Box>
 
-        {/* Shared overflow menu — one instance, anchored to whichever ticket's button was tapped */}
-        <Menu
-          anchorEl={menuAnchor?.el}
-          open={Boolean(menuAnchor)}
-          onClose={() => setMenuAnchor(null)}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          slotProps={{ paper: { sx: { minWidth: 200 } } }}
+      {userJourneysFetching ? (
+        <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>Loading journeys...</Typography>
+      ) : journeyMonitors.length > 0 ? (
+        <Stack spacing={1.5}>
+          {journeyMonitors.map((monitor: Journey) => (
+            <JourneyTicket
+              key={monitor.id}
+              monitor={monitor}
+              onOpenMenu={(el, id) => setMenuAnchor({ el, id })}
+              loadingIds={loadingJourneyIds}
+            />
+          ))}
+        </Stack>
+      ) : (
+        <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>No journeys found.</Typography>
+      )}
+
+      <Menu
+        anchorEl={menuAnchor?.el}
+        open={Boolean(menuAnchor)}
+        onClose={() => setMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{ paper: { sx: { minWidth: 200 } } }}
+      >
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) {
+              handleJourneyMonitorDelete(menuAnchor.id);
+              setMenuAnchor(null);
+            }
+          }}
+          disabled={loadingJourneyIds.has(menuAnchor?.id ?? '')}
+          sx={{ color: 'error.main' }}
         >
-          <MenuItem
-            onClick={() => {
-              if (menuAnchor) {
-                handleJourneyMonitorDelete(menuAnchor.id);
-                setMenuAnchor(null);
-              }
-            }}
-            disabled={loadingJourneyIds.has(menuAnchor?.id ?? '')}
-            sx={{ color: 'error.main' }}
-          >
-            <ListItemIcon>
-              <DeleteIcon sx={{ fontSize: 18, color: 'error.main' }} />
-            </ListItemIcon>
-            <ListItemText>Remove from watchlist</ListItemText>
-          </MenuItem>
-        </Menu>
-      </Grid>
-    </Grid>
+          <ListItemIcon>
+            <DeleteIcon sx={{ fontSize: 18, color: 'error.main' }} />
+          </ListItemIcon>
+          <ListItemText>Remove from watchlist</ListItemText>
+        </MenuItem>
+      </Menu>
+    </Box>
   );
 };
 

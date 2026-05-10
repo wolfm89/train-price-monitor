@@ -5,7 +5,7 @@ import { getJourneyMonitor } from './user';
 
 interface NotificationType {
   name: string;
-  mapAdditionalData: (context: GraphQLContext, userId: string, data: { [key: string]: unknown }) => object;
+  mapAdditionalData: (context: GraphQLContext, userId: string, data: { [key: string]: unknown }) => Promise<object>;
   formatEmail: (
     context: GraphQLContext,
     user: User,
@@ -22,8 +22,8 @@ export interface EmailNotificationInfo {
 export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   PRICE_ALERT: {
     name: 'PRICE_ALERT',
-    mapAdditionalData: (context, userId, data) => {
-      return { journeyMonitor: getJourneyMonitorByJourneyId(context, userId, data['journeyId'] as string) };
+    mapAdditionalData: async (context, userId, data) => {
+      return { journeyMonitor: await getJourneyMonitorByJourneyId(context, userId, data['journeyId'] as string) };
     },
     formatEmail: async (context, user, data) => {
       const { id, from, to, journey, limitPrice } = await getJourneyMonitorByJourneyId(

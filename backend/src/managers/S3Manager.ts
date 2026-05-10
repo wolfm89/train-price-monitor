@@ -27,7 +27,7 @@ export class S3Manager {
 
   async getPresignedUrl(bucketName: string, filename: string): Promise<string> {
     const cmd = new GetObjectCommand({ Bucket: bucketName, Key: filename });
-    return getSignedUrl(this.s3, cmd, { expiresIn: 86400 });
+    return getSignedUrl(this.s3, cmd, { expiresIn: 3600 });
   }
 
   async deleteFilesWithPrefix(bucketName: string, prefix: string): Promise<void> {

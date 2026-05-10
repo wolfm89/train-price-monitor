@@ -1,13 +1,6 @@
 import React, { useContext, useState } from 'react';
 import {
   Typography,
-  TableContainer,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
-  useTheme,
   Button,
   Box,
   Dialog,
@@ -16,9 +9,10 @@ import {
   DialogActions,
   TextField,
   CircularProgress,
-  useMediaQuery,
+  Chip,
+  Paper,
 } from '@mui/material';
-import AlarmAddIcon from '@mui/icons-material/AlarmAdd';
+import { Train as TrainIcon } from '@mui/icons-material';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import { MonitorJourney } from '../api/journey';
@@ -52,15 +46,15 @@ interface Props {
   navigatingDirection?: 'earlier' | 'later' | null;
 }
 
+const MONO_FONT = '"IBM Plex Mono", monospace';
+
 const SearchResult: React.FC<Props> = ({
-  searchData,
+  searchData: _searchData,
   searchResult,
   onNavigateEarlier,
   onNavigateLater,
   navigatingDirection,
 }) => {
-  const theme = useTheme();
-  const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { addAlert } = useAlert();
   const [openModal, setOpenModal] = useState(false);
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
@@ -76,10 +70,9 @@ const SearchResult: React.FC<Props> = ({
 
   const handleCloseModal = () => {
     setOpenModal(false);
-
     setTimeout(() => {
-      setSelectedJourney(null); // Clear selected journey when the modal is closed
-      setLimitPrice(''); // Clear limit price when the modal is closed
+      setSelectedJourney(null);
+      setLimitPrice('');
     }, 100);
   };
 
@@ -107,14 +100,13 @@ const SearchResult: React.FC<Props> = ({
           addAlert('Journey successfully added to watchlist!', AlertSeverity.Success);
         }
       })
-      .catch((reason) => {
-        // eslint-disable-next-line no-console
-        console.log(reason);
+      .catch(() => {
         setLoading(false);
+        addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
       });
 
     setOpenModal(false);
-    setLimitPrice(''); // Clear limit price when the modal is closed
+    setLimitPrice('');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -128,97 +120,180 @@ const SearchResult: React.FC<Props> = ({
     return !isNaN(floatValue) && floatValue > (selectedJourney?.price ?? 0);
   };
 
-  const formatDateTime = (dateTime: string) => {
-    const date = new Date(dateTime);
-    const formattedDate = date.toLocaleDateString('de-DE', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
-    const formattedTime = date.toLocaleTimeString('de-DE', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    return `${formattedDate} ${formattedTime}`;
+  const formatTime = (dateTime: string) =>
+    new Date(dateTime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+  const formatDuration = (dep: string, arr: string) => {
+    const mins = Math.round((new Date(arr).getTime() - new Date(dep).getTime()) / 60000);
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h > 0 ? `${h}h ${m.toString().padStart(2, '0')}m` : `${m}m`;
   };
-
-  function formatTimeDifference(startDate: Date, endDate: Date): string {
-    const differenceMilliseconds = endDate.getTime() - startDate.getTime();
-    const differenceHours = differenceMilliseconds / (1000 * 60 * 60);
-
-    const hours = Math.floor(differenceHours);
-    const minutes = Math.round((differenceHours - hours) * 60);
-
-    return `${hours} h ${minutes} min`;
-  }
 
   return (
     <>
-      <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-        {`${searchData.departure} to ${searchData.destination}, ${formatDateTime(
-          searchData.date + 'T' + searchData.time
-        )}`}
+      <Typography variant="overline" sx={{ mb: 1.25, display: 'block' }}>
+        {searchResult.length} connection{searchResult.length !== 1 ? 's' : ''} found
       </Typography>
-      <TableContainer>
-        <Table size={isScreenSmall ? 'small' : 'medium'}>
-          <TableHead>
-            <TableRow>
-              <TableCell>Departure Time</TableCell>
-              <TableCell>Arrival Time</TableCell>
-              <TableCell>Duration</TableCell>
-              <TableCell>Means{!isScreenSmall && ' of Transport'}</TableCell>
-              <TableCell>Price</TableCell>
-              <TableCell></TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {searchResult.map((result: Journey, index: number) => (
-              <TableRow
-                key={index}
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {searchResult.map((result: Journey, index: number) => (
+          <Paper
+            key={index}
+            elevation={0}
+            sx={{
+              bgcolor: 'background.ticket',
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 2,
+              px: 2,
+              py: 1.75,
+              display: 'flex',
+              alignItems: { xs: 'flex-start', sm: 'center' },
+              gap: { xs: 1, sm: 1.75 },
+              cursor: 'default',
+              transition: 'border-color 0.15s',
+              flexWrap: 'nowrap',
+            }}
+          >
+            {/* Times */}
+            <Box sx={{ minWidth: 76, flexShrink: 0 }}>
+              <Typography sx={{ fontFamily: MONO_FONT, fontSize: 17, fontWeight: 500, lineHeight: 1 }}>
+                {formatTime(result.departure)}
+              </Typography>
+              <Typography sx={{ fontSize: 11, color: 'text.secondary', mt: 0.25 }}>
+                → {formatTime(result.arrival)}
+              </Typography>
+            </Box>
+
+            {/* Route line — sm+ only */}
+            <Box sx={{ flex: 1, display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: '5px' }}>
+              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
+              <Box
                 sx={{
-                  backgroundColor: index % 2 === 0 ? theme.palette.background.default : theme.palette.background.paper,
+                  flex: 1,
+                  height: '1px',
+                  backgroundImage: (theme) =>
+                    `repeating-linear-gradient(90deg, ${theme.palette.divider} 0, ${theme.palette.divider} 4px, transparent 4px, transparent 8px)`,
                 }}
-              >
-                <TableCell>{formatDateTime(result.departure)}</TableCell>
-                <TableCell>{formatDateTime(result.arrival)}</TableCell>
-                <TableCell>{formatTimeDifference(new Date(result.departure), new Date(result.arrival))}</TableCell>
-                <TableCell>
-                  {result.means.map((mean: string) => (mean === 'walk' ? '\u{1F6B6}' : mean)).join(' \u{2192} ')}
-                </TableCell>
-                <TableCell>{result.price ? `€${result.price.toFixed(2)}` : 'n/a'}</TableCell>
-                <TableCell>
-                  {result.price && (
-                    <Button
-                      variant="outlined"
-                      color="primary"
-                      disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
-                      onClick={() => handleWatchClick(result)}
-                    >
-                      {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                        <CircularProgress size={24} />
-                      ) : (
-                        <>
-                          <AlarmAddIcon />
-                          {!isScreenSmall && <span style={{ marginLeft: '8px' }}>Watch</span>}
-                        </>
-                      )}
-                    </Button>
+              />
+              <TrainIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
+              <Box
+                sx={{
+                  flex: 1,
+                  height: '1px',
+                  backgroundImage: (theme) =>
+                    `repeating-linear-gradient(90deg, ${theme.palette.divider} 0, ${theme.palette.divider} 4px, transparent 4px, transparent 8px)`,
+                }}
+              />
+              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
+            </Box>
+
+            {/* Duration — sm+ only */}
+            <Chip
+              label={formatDuration(result.departure, result.arrival)}
+              size="small"
+              variant="outlined"
+              sx={{ fontSize: 11, fontWeight: 500, height: 24, display: { xs: 'none', sm: 'flex' } }}
+            />
+
+            {/* Means — sm+ only */}
+            <Box sx={{ display: { xs: 'none', sm: 'flex' }, gap: 0.5, flexWrap: 'wrap', minWidth: 70 }}>
+              {result.means.map((mean: string, i: number) => (
+                <Chip
+                  key={i}
+                  label={mean === 'walk' ? '\u{1F6B6}' : mean}
+                  size="small"
+                  sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
+                />
+              ))}
+            </Box>
+
+            {/* xs middle: Duration + Means — xs only; flex:1 lets it grow, items wrap internally */}
+            <Box
+              sx={{
+                display: { xs: 'flex', sm: 'none' },
+                flex: 1,
+                flexWrap: 'wrap',
+                gap: '5px',
+                alignItems: 'center',
+                alignContent: 'flex-start',
+              }}
+            >
+              <Chip
+                label={formatDuration(result.departure, result.arrival)}
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: 11, fontWeight: 500, height: 24 }}
+              />
+              {result.means.map((mean: string, i: number) => (
+                <Chip
+                  key={i}
+                  label={mean === 'walk' ? '\u{1F6B6}' : mean}
+                  size="small"
+                  sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
+                />
+              ))}
+            </Box>
+
+            {/* Price + Watch — fixed right column: stacked vertically on xs, inline on sm+ */}
+            <Box
+              sx={{
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                alignItems: { xs: 'flex-end', sm: 'center' },
+                gap: { xs: 0.5, sm: 1.75 },
+              }}
+            >
+              <Box sx={{ textAlign: 'right', minWidth: { xs: 60, sm: 68 } }}>
+                <Typography sx={{ fontFamily: MONO_FONT, fontSize: { xs: 15, sm: 16 }, fontWeight: 500 }}>
+                  {result.price ? `€${result.price.toFixed(2)}` : 'n/a'}
+                </Typography>
+              </Box>
+
+              {result.price && (
+                <Button
+                  size="small"
+                  disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
+                  onClick={() => handleWatchClick(result)}
+                  sx={{
+                    bgcolor: 'secondary.light',
+                    color: 'secondary.dark',
+                    border: '1.5px solid',
+                    borderColor: 'secondary.main',
+                    borderRadius: '7px',
+                    px: 1.5,
+                    py: 0.5,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    textTransform: 'none',
+                    whiteSpace: 'nowrap',
+                    '&:hover': { bgcolor: 'secondary.main', color: '#fff' },
+                  }}
+                >
+                  {loading && selectedJourney?.refreshToken === result.refreshToken ? (
+                    <CircularProgress size={16} />
+                  ) : (
+                    '+ Watch'
                   )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+                </Button>
+              )}
+            </Box>
+          </Paper>
+        ))}
+      </Box>
 
       {(onNavigateEarlier || onNavigateLater) && (
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2, mb: 1 }}>
           {onNavigateEarlier ? (
             <Button
               variant="outlined"
+              size="small"
               onClick={onNavigateEarlier}
               disabled={!!navigatingDirection}
               startIcon={navigatingDirection === 'earlier' ? <CircularProgress size={16} /> : <NavigateBeforeIcon />}
+              sx={{ textTransform: 'none' }}
             >
               Earlier trains
             </Button>
@@ -228,9 +303,11 @@ const SearchResult: React.FC<Props> = ({
           {onNavigateLater && (
             <Button
               variant="outlined"
+              size="small"
               onClick={onNavigateLater}
               disabled={!!navigatingDirection}
               endIcon={navigatingDirection === 'later' ? <CircularProgress size={16} /> : <NavigateNextIcon />}
+              sx={{ textTransform: 'none' }}
             >
               Later trains
             </Button>
@@ -242,7 +319,7 @@ const SearchResult: React.FC<Props> = ({
       <Dialog open={openModal} onClose={handleCloseModal}>
         <DialogTitle>Set Limit Price</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="textSecondary" sx={{ marginBottom: 2 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
             Current Price: {selectedJourney?.price ? `€${selectedJourney.price.toFixed(2)}` : 'n/a'}
           </Typography>
           <TextField
@@ -251,15 +328,13 @@ const SearchResult: React.FC<Props> = ({
             value={limitPrice}
             onChange={(e) => setLimitPrice(e.target.value)}
             onKeyPress={handleKeyPress}
-            error={!isValidLimitPrice() && limitPrice !== ''} // Show error only when limitPrice is not empty
+            error={!isValidLimitPrice() && limitPrice !== ''}
             helperText={!isValidLimitPrice() && limitPrice !== '' ? 'Invalid limit price' : ''}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseModal} color="primary">
-            Cancel
-          </Button>
-          <Button onClick={handleConfirmWatch} color="primary" disabled={!isValidLimitPrice()}>
+          <Button onClick={handleCloseModal}>Cancel</Button>
+          <Button onClick={handleConfirmWatch} disabled={!isValidLimitPrice()}>
             Confirm
           </Button>
         </DialogActions>
