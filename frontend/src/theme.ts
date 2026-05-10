@@ -48,7 +48,7 @@ export const theme = createTheme({
     background: {
       default: '#f8f8f4',
       paper: '#ffffff',
-      ticket: '#f2efe8',
+      ticket: '#eeeeee',
     },
     text: {
       primary: '#1a1a16',

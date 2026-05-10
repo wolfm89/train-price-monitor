@@ -26,6 +26,7 @@ import { useNavigate } from 'react-router-dom';
 // ---------------------------------------------------------------------------
 
 const sectionTitleSx = {
+  display: 'block',
   mb: 1.75,
   pb: 1.25,
   borderBottom: 1,
