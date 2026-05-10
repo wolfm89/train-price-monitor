@@ -125,9 +125,9 @@ const Header = () => {
         >
           <Box
             sx={{
-              bgcolor: 'secondary.light',
+              bgcolor: 'background.paper',
               borderRadius: '8px',
-              p: '5px',
+              p: '3px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -137,7 +137,7 @@ const Header = () => {
             <img
               src={process.env.PUBLIC_URL + '/logo192.png'}
               alt="Train Price Monitor Logo"
-              style={{ width: 34, height: 34, display: 'block' }}
+              style={{ width: 38, height: 38, display: 'block' }}
             />
           </Box>
           {!isScreenSmall && (
