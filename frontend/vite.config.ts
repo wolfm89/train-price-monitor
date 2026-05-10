@@ -11,8 +11,32 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'build',
-      sourcemap: true,
-      chunkSizeWarningLimit: 1200,
+      sourcemap: false,
+      chunkSizeWarningLimit: 500,
+      rollupOptions: {
+        output: {
+          // Split the monolithic bundle into independently cacheable chunks.
+          // Each chunk is named with a content hash so CloudFront's 1-year cache
+          // policy only needs to be invalidated when that chunk actually changes.
+          manualChunks(id) {
+            if (
+              id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/react-router') ||
+              id.includes('node_modules/amazon-cognito-identity-js/') ||
+              id.includes('node_modules/lodash')
+            ) {
+              return 'vendor';
+            }
+            if (id.includes('node_modules/@mui/') || id.includes('node_modules/@emotion/')) {
+              return 'mui';
+            }
+            if (id.includes('node_modules/urql') || id.includes('node_modules/@urql/')) {
+              return 'urql';
+            }
+          },
+        },
+      },
     },
     optimizeDeps: {
       include: ['amazon-cognito-identity-js'],
