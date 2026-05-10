@@ -61,7 +61,7 @@ export class Frontend extends Construct {
       additionalBehaviors: {
         // Vite writes all JS/CSS bundles under /assets/ with content hashes in
         // their filenames, so they are safe to cache for a full year.
-        '/assets/*': {
+        'assets/*': {
           origin: S3BucketOrigin.withOriginAccessControl(bucket),
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           compress: true,
@@ -87,7 +87,6 @@ export class Frontend extends Construct {
       sources: [Source.asset(path.resolve(__dirname, '../../frontend/build'))],
       destinationBucket: bucket,
       distribution,
-      distributionPaths: ['/*'],
     });
 
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
