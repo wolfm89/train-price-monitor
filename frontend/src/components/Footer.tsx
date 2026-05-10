@@ -38,7 +38,7 @@ const Footer: React.FC<Props> = () => {
       >
         <GithubIcon sx={{ fontSize: 14 }} />
         <Typography component="span" sx={{ fontSize: 11 }}>
-          Source on Github
+          Source on GitHub
         </Typography>
       </Link>
     </Box>

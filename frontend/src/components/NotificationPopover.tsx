@@ -1,5 +1,5 @@
 import React from 'react';
-import { Popover, Box, Typography, IconButton, Chip } from '@mui/material';
+import { Popover, Box, Typography, IconButton, Chip, ButtonBase } from '@mui/material';
 import { CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 
 export interface Notification {
@@ -151,7 +151,8 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
       {/* Notification items */}
       {notifications && notifications.length > 0 ? (
         notifications.map((notification: Notification) => (
-          <Box
+          <ButtonBase
+            component="div"
             key={notification.id}
             sx={{
               display: 'flex',
@@ -161,7 +162,8 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
               py: 1.25,
               borderBottom: 1,
               borderColor: 'divider',
-              cursor: 'pointer',
+              width: '100%',
+              textAlign: 'left',
               transition: 'background 0.12s',
               '&:hover': { bgcolor: 'background.default' },
               '&:last-child': { borderBottom: 0 },
@@ -204,7 +206,7 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
                 <CheckCircleIcon sx={{ fontSize: 16 }} />
               </IconButton>
             )}
-          </Box>
+          </ButtonBase>
         ))
       ) : (
         <Box sx={{ px: 2, py: 3, textAlign: 'center' }}>

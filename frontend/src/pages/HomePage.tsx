@@ -133,7 +133,7 @@ const HomePage: React.FC<Props> = () => {
   });
   const [, createUser] = useMutation(CreateUser);
 
-  const [{ data: userJourneysData }] = useQuery({
+  const [{ data: userJourneysData, fetching: journeysFetching, error: journeysError }] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user?.['custom:id'],
@@ -177,6 +177,24 @@ const HomePage: React.FC<Props> = () => {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
         <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (journeysFetching) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (journeysError) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
+        <Typography sx={{ fontSize: 13, color: 'error.main' }}>
+          Failed to load journey data. Please try again later.
+        </Typography>
       </Box>
     );
   }

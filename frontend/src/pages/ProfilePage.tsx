@@ -270,6 +270,7 @@ const ProfilePage: React.FC = () => {
                   onChange={(e) => setCurrentPassword(e.target.value)}
                   fullWidth
                   size="small"
+                  slotProps={{ htmlInput: { 'aria-label': 'Current password' } }}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
@@ -283,6 +284,7 @@ const ProfilePage: React.FC = () => {
                   placeholder="New password"
                   fullWidth
                   size="small"
+                  slotProps={{ htmlInput: { 'aria-label': 'New password' } }}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
@@ -296,6 +298,7 @@ const ProfilePage: React.FC = () => {
                   placeholder="Confirm"
                   fullWidth
                   size="small"
+                  slotProps={{ htmlInput: { 'aria-label': 'Confirm new password' } }}
                 />
               </Grid>
             </Grid>

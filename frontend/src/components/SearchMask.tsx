@@ -149,6 +149,10 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
                 {...params}
                 placeholder="Station"
                 fullWidth
+                inputProps={{
+                  ...params.inputProps,
+                  'aria-label': 'From station',
+                }}
                 slotProps={{
                   input: {
                     ...params.InputProps,
@@ -194,6 +198,10 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
                 {...params}
                 placeholder="Station"
                 fullWidth
+                inputProps={{
+                  ...params.inputProps,
+                  'aria-label': 'To station',
+                }}
                 slotProps={{
                   input: {
                     ...params.InputProps,
@@ -235,6 +243,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
             fullWidth
             size="small"
             slotProps={{
+              htmlInput: { 'aria-label': 'Departure date' },
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
@@ -256,6 +265,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
             onChange={(e) => setDepartureTime(e.target.value)}
             fullWidth
             slotProps={{
+              htmlInput: { 'aria-label': 'Departure time' },
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
