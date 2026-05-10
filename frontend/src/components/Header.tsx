@@ -28,7 +28,7 @@ const navBtnSx = {
   fontSize: 14,
   fontWeight: 500,
   borderRadius: '6px',
-  px: { xs: 0.75, sm: 1.5 },
+  px: { xs: 1.25, sm: 1.5 },
   py: 0.75,
   minWidth: 0, // override MUI Button default 64px min-width so icon-only buttons are compact on mobile
   textTransform: 'none' as const,
@@ -152,7 +152,7 @@ const Header = () => {
             <Button
               component={Link}
               to="/search"
-              startIcon={<SearchIcon sx={{ fontSize: '16px !important' }} />}
+              startIcon={<SearchIcon sx={{ fontSize: { xs: '24px', sm: '16px' } }} />}
               sx={navBtnSx}
             >
               {!isScreenSmall && 'Search'}
@@ -160,7 +160,7 @@ const Header = () => {
             <Button
               component={Link}
               to="/journeys"
-              startIcon={<TrainIcon sx={{ fontSize: '16px !important' }} />}
+              startIcon={<TrainIcon sx={{ fontSize: { xs: '24px', sm: '16px' } }} />}
               sx={navBtnSx}
             >
               {!isScreenSmall && 'Journey Watchlist'}
@@ -178,7 +178,7 @@ const Header = () => {
                 color="error"
                 sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16 } }}
               >
-                <NotificationsIcon sx={{ fontSize: 18 }} />
+                <NotificationsIcon sx={{ fontSize: { xs: 26, sm: 18 } }} />
               </Badge>
             </IconButton>
             <IconButton aria-label="user profile" onClick={handleAccountClick} sx={{ ml: 0.5, p: 0 }}>
@@ -186,8 +186,8 @@ const Header = () => {
                 alt="Profile Picture"
                 src={userProfilePictureUrl || undefined}
                 sx={{
-                  width: 28,
-                  height: 28,
+                  width: { xs: 34, sm: 28 },
+                  height: { xs: 34, sm: 28 },
                   fontSize: 10,
                   fontWeight: 700,
                   bgcolor: 'secondary.light',
