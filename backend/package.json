@@ -35,12 +35,12 @@
   },
   "dependencies": {
     "@aws-lambda-powertools/logger": "^2.32.0",
-    "@aws-sdk/client-dynamodb": "^3.750.0",
-    "@aws-sdk/client-s3": "^3.750.0",
-    "@aws-sdk/client-sesv2": "^3.750.0",
-    "@aws-sdk/client-sqs": "^3.750.0",
-    "@aws-sdk/lib-dynamodb": "^3.750.0",
-    "@aws-sdk/s3-request-presigner": "^3.750.0",
+    "@aws-sdk/client-dynamodb": "^3.1045.0",
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/client-sesv2": "^3.1045.0",
+    "@aws-sdk/client-sqs": "^3.1045.0",
+    "@aws-sdk/lib-dynamodb": "^3.1045.0",
+    "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@graphql-tools/schema": "^10.0.0",
     "@graphql-yoga/plugin-response-cache": "^3.20.0",
     "body-parser": "^1.20.2",
@@ -55,6 +55,6 @@
     "graphql-scalars": "^1.25.0",
     "graphql-yoga": "^5.18.1",
     "morgan": "^1.10.0",
-    "uuid": "^9.0.1"
+    "uuid": "^11.1.1"
   }
 }
