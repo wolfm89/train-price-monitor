@@ -159,7 +159,7 @@ const HomePage: React.FC<Props> = () => {
           }
         })
         .catch(() => {
-          // Handled by alert
+          addAlert('Failed to create account. Please try again.', AlertSeverity.Error);
         });
     }
   }, [addAlert, createUser, reexecuteUserExistsQuery, user, userExistsResult]);
@@ -247,7 +247,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: { sm: 5 }, mb: 4.5 }}>
         <Box
           component="img"
-          src={process.env.PUBLIC_URL + '/logo512.png'}
+          src={process.env.PUBLIC_URL + '/logo256.png'}
           alt="Train Price Monitor Logo"
           sx={{ display: { xs: 'none', sm: 'block' }, width: 220, height: 220, flexShrink: 0 }}
         />

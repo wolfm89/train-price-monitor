@@ -102,6 +102,7 @@ const SearchResult: React.FC<Props> = ({
       })
       .catch(() => {
         setLoading(false);
+        addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
       });
 
     setOpenModal(false);
@@ -150,9 +151,8 @@ const SearchResult: React.FC<Props> = ({
               display: 'flex',
               alignItems: { xs: 'flex-start', sm: 'center' },
               gap: { xs: 1, sm: 1.75 },
-              cursor: 'pointer',
+              cursor: 'default',
               transition: 'border-color 0.15s',
-              '&:hover': { borderColor: 'secondary.light' },
               flexWrap: 'nowrap',
             }}
           >

@@ -50,9 +50,13 @@ function formatNotificationText(notification: Notification): React.ReactNode {
       return (
         <>
           Price limit reached for{' '}
-          <strong>
-            {notification.journeyMonitor?.from} → {notification.journeyMonitor?.to}
-          </strong>
+          {notification.journeyMonitor ? (
+            <strong>
+              {notification.journeyMonitor.from} → {notification.journeyMonitor.to}
+            </strong>
+          ) : (
+            'a watched journey'
+          )}
         </>
       );
     case 'JOURNEY_EXPIRED':
