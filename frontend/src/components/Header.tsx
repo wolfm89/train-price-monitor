@@ -123,11 +123,23 @@ const Header = () => {
             borderRadius: 6,
           }}
         >
-          <img
-            src={process.env.PUBLIC_URL + '/logo192.png'}
-            alt="Train Price Monitor Logo"
-            style={{ width: 30, height: 30, borderRadius: 6 }}
-          />
+          <Box
+            sx={{
+              bgcolor: 'secondary.light',
+              borderRadius: '8px',
+              p: '5px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <img
+              src={process.env.PUBLIC_URL + '/logo192.png'}
+              alt="Train Price Monitor Logo"
+              style={{ width: 34, height: 34, display: 'block' }}
+            />
+          </Box>
           {!isScreenSmall && (
             <Typography sx={{ fontWeight: 700, fontSize: 16, color: '#fff', whiteSpace: 'nowrap' }}>
               Train Price Monitor

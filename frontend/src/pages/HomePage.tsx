@@ -222,51 +222,62 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           border: 1,
           borderColor: 'secondary.main',
           letterSpacing: '0.04em',
-          mb: 2.25,
+          mb: 2,
+          display: { xs: 'none', sm: 'inline-flex' },
         }}
       />
-      <Typography
-        variant="h1"
-        sx={{
-          fontSize: { xs: 24, sm: 30 },
-          mb: 1.25,
-        }}
-      >
-        Stop overpaying for
-        <br />
-        <Box component="span" sx={{ color: 'primary.main' }}>
-          train tickets.
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: { sm: 5 }, mb: 4.5 }}>
+        <Box
+          component="img"
+          src={process.env.PUBLIC_URL + '/logo512.png'}
+          alt="Train Price Monitor Logo"
+          sx={{ display: { xs: 'none', sm: 'block' }, width: 220, height: 220, flexShrink: 0 }}
+        />
+        <Box>
+          <Typography
+            variant="h1"
+            sx={{
+              fontSize: { xs: 24, sm: 30 },
+              mb: 1.25,
+            }}
+          >
+            Stop overpaying for
+            <br />
+            <Box component="span" sx={{ color: 'primary.main' }}>
+              train tickets.
+            </Box>
+          </Typography>
+          <Typography
+            sx={{
+              fontSize: 14,
+              color: 'text.secondary',
+              lineHeight: 1.65,
+              maxWidth: 460,
+              mb: 3,
+            }}
+          >
+            Watch a journey and set your price limit. Train Price Monitor checks fares hourly and alerts you the moment
+            the price rises above your threshold — so you can act before it&apos;s too late.
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
+            <Button variant="contained" onClick={onSignup} sx={{ textTransform: 'none', fontWeight: 600 }}>
+              Create free account →
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={onLogin}
+              sx={{
+                textTransform: 'none',
+                fontWeight: 500,
+                color: 'text.primary',
+                borderColor: 'divider',
+                '&:hover': { borderColor: 'primary.main', color: 'primary.main' },
+              }}
+            >
+              Log in
+            </Button>
+          </Box>
         </Box>
-      </Typography>
-      <Typography
-        sx={{
-          fontSize: 14,
-          color: 'text.secondary',
-          lineHeight: 1.65,
-          maxWidth: 460,
-          mb: 3,
-        }}
-      >
-        Watch a journey and set your price limit. Train Price Monitor checks fares hourly and alerts you the moment the
-        price rises above your threshold — so you can act before it&apos;s too late.
-      </Typography>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap', mb: 4.5 }}>
-        <Button variant="contained" onClick={onSignup} sx={{ textTransform: 'none', fontWeight: 600 }}>
-          Create free account →
-        </Button>
-        <Button
-          variant="outlined"
-          onClick={onLogin}
-          sx={{
-            textTransform: 'none',
-            fontWeight: 500,
-            color: 'text.primary',
-            borderColor: 'divider',
-            '&:hover': { borderColor: 'primary.main', color: 'primary.main' },
-          }}
-        >
-          Log in
-        </Button>
       </Box>
       <Grid container spacing={1.75}>
         <Grid size={{ xs: 12, sm: 4 }}>
