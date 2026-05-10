@@ -28,9 +28,13 @@ const navBtnSx = {
   fontSize: 14,
   fontWeight: 500,
   borderRadius: '6px',
-  px: 1.5,
+  px: { xs: 0.75, sm: 1.5 },
   py: 0.75,
+  minWidth: 0, // override MUI Button default 64px min-width so icon-only buttons are compact on mobile
   textTransform: 'none' as const,
+  '& .MuiButton-startIcon': {
+    marginRight: { xs: 0, sm: '8px' }, // collapse icon trailing margin when no text follows on mobile
+  },
   '&:hover': {
     backgroundColor: 'rgba(255,255,255,0.13)',
     color: '#fff',

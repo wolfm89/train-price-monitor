@@ -71,7 +71,7 @@ function StatsBanner({ monitored, belowLimit }: StatsBannerProps) {
       sx={{
         bgcolor: 'secondary.light',
         border: 1,
-        borderColor: '#a3c485',
+        borderColor: 'secondary.main',
         borderRadius: 3,
         px: 2.75,
         py: 2.25,
@@ -83,7 +83,7 @@ function StatsBanner({ monitored, belowLimit }: StatsBannerProps) {
       }}
     >
       <StatItem value={monitored} label="Monitored" />
-      <Box sx={{ width: '1px', height: 32, bgcolor: '#a3c485' }} />
+      <Box sx={{ width: '1px', height: 32, bgcolor: 'secondary.main' }} />
       <StatItem value={belowLimit} label="Below limit" />
     </Box>
   );
@@ -220,7 +220,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           fontWeight: 700,
           fontSize: 11,
           border: 1,
-          borderColor: '#a3c485',
+          borderColor: 'secondary.main',
           letterSpacing: '0.04em',
           mb: 2.25,
         }}
@@ -229,11 +229,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
         variant="h1"
         sx={{
           fontSize: { xs: 24, sm: 30 },
-          fontWeight: 700,
-          color: 'text.primary',
-          lineHeight: 1.2,
           mb: 1.25,
-          letterSpacing: '-0.025em',
         }}
       >
         Stop overpaying for
@@ -332,10 +328,10 @@ function LoggedInDashboard({ userName, journeyMonitors, recentJourneys, belowLim
         }}
       >
         <Box>
-          <Typography sx={{ fontSize: 20, fontWeight: 700, color: 'text.primary', letterSpacing: '-0.02em' }}>
+          <Typography variant="h5">
             {getGreeting()}, {userName} 👋
           </Typography>
-          <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
             Here&apos;s an overview of your monitored journeys.
           </Typography>
         </Box>
@@ -347,17 +343,7 @@ function LoggedInDashboard({ userName, journeyMonitors, recentJourneys, belowLim
       <StatsBanner monitored={journeyMonitors.length} belowLimit={belowLimitCount} />
 
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-        <Typography
-          sx={{
-            fontSize: 12,
-            fontWeight: 700,
-            color: 'text.secondary',
-            textTransform: 'uppercase',
-            letterSpacing: '0.07em',
-          }}
-        >
-          Recent journeys
-        </Typography>
+        <Typography variant="overline">Recent journeys</Typography>
         <Button
           component={Link}
           to="/journeys"
@@ -386,7 +372,7 @@ function LoggedInDashboard({ userName, journeyMonitors, recentJourneys, belowLim
           ))}
         </Box>
       ) : (
-        <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
           No journeys yet. Search for a connection to get started.
         </Typography>
       )}

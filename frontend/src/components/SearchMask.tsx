@@ -22,11 +22,6 @@ interface Location {
 }
 
 const fieldLabelSx = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: 'text.secondary',
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.06em',
   mb: 0.5,
 };
 
@@ -135,7 +130,9 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
     <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.75, mb: 2.75 }}>
       <Grid container spacing={1.75} sx={{ mb: 1.75 }}>
         <Grid size={{ xs: 12, sm: 6 }}>
-          <Typography sx={fieldLabelSx}>From</Typography>
+          <Typography variant="fieldLabel" sx={fieldLabelSx}>
+            From
+          </Typography>
           <Autocomplete
             id="departure"
             value={from}
@@ -178,7 +175,9 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
           />
         </Grid>
         <Grid size={{ xs: 12, sm: 6 }}>
-          <Typography sx={fieldLabelSx}>To</Typography>
+          <Typography variant="fieldLabel" sx={fieldLabelSx}>
+            To
+          </Typography>
           <Autocomplete
             id="arrival"
             value={to}
@@ -225,7 +224,9 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
         sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 130px auto' }, gap: 1.5, alignItems: 'end' }}
       >
         <Box>
-          <Typography sx={fieldLabelSx}>Departure date</Typography>
+          <Typography variant="fieldLabel" sx={fieldLabelSx}>
+            Departure date
+          </Typography>
           <TextField
             id="date"
             type="date"
@@ -245,7 +246,9 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
           />
         </Box>
         <Box>
-          <Typography sx={fieldLabelSx}>Time</Typography>
+          <Typography variant="fieldLabel" sx={fieldLabelSx}>
+            Time
+          </Typography>
           <TextField
             id="time"
             type="time"

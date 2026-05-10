@@ -60,10 +60,10 @@ const SearchPage: React.FC<Props> = () => {
 
   return (
     <Box>
-      <Typography sx={{ fontSize: 20, fontWeight: 700, color: 'text.primary', letterSpacing: '-0.02em', mb: 0.5 }}>
+      <Typography variant="h5" sx={{ mb: 0.5 }}>
         Search for train rides
       </Typography>
-      <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 3 }}>
+      <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>
         Find a connection and add it to your watchlist.
       </Typography>
 

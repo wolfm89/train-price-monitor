@@ -48,7 +48,7 @@ const MONO_FONT = 'IBM Plex Mono, monospace';
 
 const ticketSx = (theme: Theme) => ({
   borderRadius: 2,
-  backgroundColor: 'background.paper',
+  backgroundColor: 'background.ticket',
   boxShadow: `0 0 0 1px ${theme.palette.divider}`,
 });
 

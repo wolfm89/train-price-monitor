@@ -131,16 +131,7 @@ const SearchResult: React.FC<Props> = ({
 
   return (
     <>
-      <Typography
-        sx={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: 'text.secondary',
-          textTransform: 'uppercase',
-          letterSpacing: '0.07em',
-          mb: 1.25,
-        }}
-      >
+      <Typography variant="overline" sx={{ mb: 1.25, display: 'block' }}>
         {searchResult.length} connection{searchResult.length !== 1 ? 's' : ''} found
       </Typography>
 
@@ -150,22 +141,23 @@ const SearchResult: React.FC<Props> = ({
             key={index}
             elevation={0}
             sx={{
+              bgcolor: 'background.ticket',
               border: 1,
               borderColor: 'divider',
               borderRadius: 2,
               px: 2,
               py: 1.75,
               display: 'flex',
-              alignItems: 'center',
+              alignItems: { xs: 'flex-start', sm: 'center' },
               gap: { xs: 1, sm: 1.75 },
               cursor: 'pointer',
               transition: 'border-color 0.15s',
-              '&:hover': { borderColor: '#a3c485' },
-              flexWrap: { xs: 'wrap', sm: 'nowrap' },
+              '&:hover': { borderColor: 'secondary.light' },
+              flexWrap: 'nowrap',
             }}
           >
             {/* Times */}
-            <Box sx={{ minWidth: 84 }}>
+            <Box sx={{ minWidth: 76, flexShrink: 0 }}>
               <Typography sx={{ fontFamily: MONO_FONT, fontSize: 17, fontWeight: 500, lineHeight: 1 }}>
                 {formatTime(result.departure)}
               </Typography>
@@ -174,7 +166,7 @@ const SearchResult: React.FC<Props> = ({
               </Typography>
             </Box>
 
-            {/* Route line */}
+            {/* Route line — sm+ only */}
             <Box sx={{ flex: 1, display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: '5px' }}>
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
               <Box
@@ -197,66 +189,97 @@ const SearchResult: React.FC<Props> = ({
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
             </Box>
 
-            {/* Duration */}
+            {/* Duration — sm+ only */}
             <Chip
               label={formatDuration(result.departure, result.arrival)}
               size="small"
               variant="outlined"
-              sx={{ fontSize: 11, fontWeight: 500, height: 24 }}
+              sx={{ fontSize: 11, fontWeight: 500, height: 24, display: { xs: 'none', sm: 'flex' } }}
             />
 
-            {/* Means */}
-            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', minWidth: 70 }}>
+            {/* Means — sm+ only */}
+            <Box sx={{ display: { xs: 'none', sm: 'flex' }, gap: 0.5, flexWrap: 'wrap', minWidth: 70 }}>
               {result.means.map((mean: string, i: number) => (
                 <Chip
                   key={i}
                   label={mean === 'walk' ? '\u{1F6B6}' : mean}
                   size="small"
-                  sx={{
-                    height: 22,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    borderRadius: '4px',
-                  }}
+                  sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
                 />
               ))}
             </Box>
 
-            {/* Price */}
-            <Box sx={{ textAlign: 'right', minWidth: 68 }}>
-              <Typography sx={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 500 }}>
-                {result.price ? `€${result.price.toFixed(2)}` : 'n/a'}
-              </Typography>
+            {/* xs middle: Duration + Means — xs only; flex:1 lets it grow, items wrap internally */}
+            <Box
+              sx={{
+                display: { xs: 'flex', sm: 'none' },
+                flex: 1,
+                flexWrap: 'wrap',
+                gap: '5px',
+                alignItems: 'center',
+                alignContent: 'flex-start',
+              }}
+            >
+              <Chip
+                label={formatDuration(result.departure, result.arrival)}
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: 11, fontWeight: 500, height: 24 }}
+              />
+              {result.means.map((mean: string, i: number) => (
+                <Chip
+                  key={i}
+                  label={mean === 'walk' ? '\u{1F6B6}' : mean}
+                  size="small"
+                  sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
+                />
+              ))}
             </Box>
 
-            {/* Watch button */}
-            {result.price && (
-              <Button
-                size="small"
-                disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
-                onClick={() => handleWatchClick(result)}
-                sx={{
-                  bgcolor: 'secondary.light',
-                  color: 'secondary.dark',
-                  border: '1.5px solid',
-                  borderColor: '#a3c485',
-                  borderRadius: '7px',
-                  px: 1.5,
-                  py: 0.5,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  textTransform: 'none',
-                  whiteSpace: 'nowrap',
-                  '&:hover': { bgcolor: '#a3c485', color: '#fff' },
-                }}
-              >
-                {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                  <CircularProgress size={16} />
-                ) : (
-                  '+ Watch'
-                )}
-              </Button>
-            )}
+            {/* Price + Watch — fixed right column: stacked vertically on xs, inline on sm+ */}
+            <Box
+              sx={{
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                alignItems: { xs: 'flex-end', sm: 'center' },
+                gap: { xs: 0.5, sm: 1.75 },
+              }}
+            >
+              <Box sx={{ textAlign: 'right', minWidth: { xs: 60, sm: 68 } }}>
+                <Typography sx={{ fontFamily: MONO_FONT, fontSize: { xs: 15, sm: 16 }, fontWeight: 500 }}>
+                  {result.price ? `€${result.price.toFixed(2)}` : 'n/a'}
+                </Typography>
+              </Box>
+
+              {result.price && (
+                <Button
+                  size="small"
+                  disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
+                  onClick={() => handleWatchClick(result)}
+                  sx={{
+                    bgcolor: 'secondary.light',
+                    color: 'secondary.dark',
+                    border: '1.5px solid',
+                    borderColor: 'secondary.main',
+                    borderRadius: '7px',
+                    px: 1.5,
+                    py: 0.5,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    textTransform: 'none',
+                    whiteSpace: 'nowrap',
+                    '&:hover': { bgcolor: 'secondary.main', color: '#fff' },
+                  }}
+                >
+                  {loading && selectedJourney?.refreshToken === result.refreshToken ? (
+                    <CircularProgress size={16} />
+                  ) : (
+                    '+ Watch'
+                  )}
+                </Button>
+              )}
+            </Box>
           </Paper>
         ))}
       </Box>

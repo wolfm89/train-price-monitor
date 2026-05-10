@@ -26,11 +26,6 @@ import { useNavigate } from 'react-router-dom';
 // ---------------------------------------------------------------------------
 
 const sectionTitleSx = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: 'text.secondary',
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.07em',
   mb: 1.75,
   pb: 1.25,
   borderBottom: 1,
@@ -38,11 +33,6 @@ const sectionTitleSx = {
 };
 
 const fieldLabelSx = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: 'text.secondary',
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.05em',
   mb: 0.5,
 };
 
@@ -173,7 +163,7 @@ const ProfilePage: React.FC = () => {
 
   return (
     <Box>
-      <Typography sx={{ fontSize: 20, fontWeight: 700, color: 'text.primary', letterSpacing: '-0.02em', mb: 2.5 }}>
+      <Typography variant="h5" sx={{ mb: 2.5 }}>
         Account settings
       </Typography>
 
@@ -204,7 +194,7 @@ const ProfilePage: React.FC = () => {
               bgcolor: 'secondary.light',
               color: 'secondary.dark',
               border: '3px solid',
-              borderColor: '#a3c485',
+              borderColor: 'secondary.main',
             }}
             slotProps={{ img: { crossOrigin: 'anonymous' } }}
           >
@@ -238,18 +228,26 @@ const ProfilePage: React.FC = () => {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {/* Personal Information */}
           <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
-            <Typography sx={sectionTitleSx}>Personal information</Typography>
+            <Typography variant="sectionTitle" sx={sectionTitleSx}>
+              Personal information
+            </Typography>
             <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <Typography sx={fieldLabelSx}>First name</Typography>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  First name
+                </Typography>
                 <TextField value={firstName} fullWidth size="small" disabled />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <Typography sx={fieldLabelSx}>Last name</Typography>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  Last name
+                </Typography>
                 <TextField value={lastName} fullWidth size="small" disabled />
               </Grid>
               <Grid size={12}>
-                <Typography sx={fieldLabelSx}>Email address</Typography>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  Email address
+                </Typography>
                 <TextField value={email} fullWidth size="small" disabled />
               </Grid>
             </Grid>
@@ -257,10 +255,14 @@ const ProfilePage: React.FC = () => {
 
           {/* Change Password */}
           <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
-            <Typography sx={sectionTitleSx}>Change password</Typography>
+            <Typography variant="sectionTitle" sx={sectionTitleSx}>
+              Change password
+            </Typography>
             <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
               <Grid size={12}>
-                <Typography sx={fieldLabelSx}>Current password</Typography>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  Current password
+                </Typography>
                 <TextField
                   type="password"
                   value={currentPassword}
@@ -270,7 +272,9 @@ const ProfilePage: React.FC = () => {
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <Typography sx={fieldLabelSx}>New password</Typography>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  New password
+                </Typography>
                 <TextField
                   type="password"
                   value={newPassword}
@@ -281,7 +285,9 @@ const ProfilePage: React.FC = () => {
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <Typography sx={fieldLabelSx}>Confirm new password</Typography>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  Confirm new password
+                </Typography>
                 <TextField
                   type="password"
                   value={confirmPassword}
@@ -306,7 +312,9 @@ const ProfilePage: React.FC = () => {
 
           {/* Notifications */}
           <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
-            <Typography sx={sectionTitleSx}>Notifications</Typography>
+            <Typography variant="sectionTitle" sx={sectionTitleSx}>
+              Notifications
+            </Typography>
             <Box
               sx={{
                 display: 'flex',
@@ -328,8 +336,10 @@ const ProfilePage: React.FC = () => {
           </Paper>
 
           {/* Danger Zone */}
-          <Paper elevation={0} sx={{ border: 1, borderColor: '#f0b0b0', borderRadius: 3, p: 2.5 }}>
-            <Typography sx={{ ...sectionTitleSx, color: 'error.main', borderColor: '#f0b0b0' }}>Danger zone</Typography>
+          <Paper elevation={0} sx={{ border: 1, borderColor: 'error.main', borderRadius: 3, p: 2.5 }}>
+            <Typography variant="sectionTitle" sx={{ ...sectionTitleSx, borderColor: 'error.main' }} color="error.main">
+              Danger zone
+            </Typography>
             <Typography sx={{ fontSize: 12, color: 'text.secondary', lineHeight: 1.55, mb: 1.75 }}>
               Permanently delete your account and all associated journey monitors. This action cannot be undone.
             </Typography>

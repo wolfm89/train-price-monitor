@@ -71,11 +71,11 @@ const JourneysPage: React.FC = () => {
         }}
       >
         <Box>
-          <Typography sx={{ fontSize: 20, fontWeight: 700, color: 'text.primary', letterSpacing: '-0.02em', mb: 0.25 }}>
+          <Typography variant="h5" sx={{ mb: 0.25 }}>
             Journey Watchlist
           </Typography>
           {!userJourneysFetching && journeyMonitors.length > 0 && (
-            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
               Monitoring {journeyMonitors.length} journey{journeyMonitors.length !== 1 ? 's' : ''} · {belowLimitCount}{' '}
               below limit
             </Typography>
