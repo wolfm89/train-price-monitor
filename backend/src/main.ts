@@ -43,7 +43,7 @@ const yoga = createYoga({
   fetchAPI: { fetch: globalThis.fetch },
   cors: YOGA_CORS_CONFIG,
   plugins: [
-    useResponseCache({ session: (request) => extractUserId(request), cache }),
+    useResponseCache({ session: (request) => extractUserId(request), cache, ttl: 30_000 }),
     useErrorHandler(({ errors, phase }) => {
       for (const error of errors) {
         if (error instanceof Error) {
