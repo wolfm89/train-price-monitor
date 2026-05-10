@@ -1,7 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { Bucket, BucketAccessControl, BucketEncryption } from 'aws-cdk-lib/aws-s3';
-import { Distribution, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
+import {
+  CachePolicy,
+  CacheCookieBehavior,
+  CacheHeaderBehavior,
+  CacheQueryStringBehavior,
+  Distribution,
+  ViewerProtocolPolicy,
+} from 'aws-cdk-lib/aws-cloudfront';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
@@ -23,6 +30,21 @@ export class Frontend extends Construct {
       accessControl: BucketAccessControl.PRIVATE,
     });
 
+    // Cache policy for versioned/hashed static assets (JS, CSS in /assets/*).
+    // Content-hashed filenames never collide, so 1-year immutable caching is safe.
+    const assetsCachePolicy = new CachePolicy(this, 'AssetsCachePolicy', {
+      cachePolicyName: `${id}-AssetsCachePolicy`,
+      comment: 'Long-term cache for content-hashed frontend assets',
+      defaultTtl: cdk.Duration.days(365),
+      maxTtl: cdk.Duration.days(365),
+      minTtl: cdk.Duration.seconds(0),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+      cookieBehavior: CacheCookieBehavior.none(),
+      headerBehavior: CacheHeaderBehavior.none(),
+      queryStringBehavior: CacheQueryStringBehavior.none(),
+    });
+
     // CloudFront distribution with custom domain
     const distribution = new Distribution(this, 'DistributionNew', {
       defaultRootObject: 'index.html',
@@ -32,6 +54,19 @@ export class Frontend extends Construct {
         origin: S3BucketOrigin.withOriginAccessControl(bucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         compress: true,
+        // index.html must always be fresh so browsers pick up new chunk filenames
+        // after a deployment — disable caching at the CDN layer for root files.
+        cachePolicy: CachePolicy.CACHING_DISABLED,
+      },
+      additionalBehaviors: {
+        // Vite writes all JS/CSS bundles under /assets/ with content hashes in
+        // their filenames, so they are safe to cache for a full year.
+        '/assets/*': {
+          origin: S3BucketOrigin.withOriginAccessControl(bucket),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          compress: true,
+          cachePolicy: assetsCachePolicy,
+        },
       },
       errorResponses: [
         {
