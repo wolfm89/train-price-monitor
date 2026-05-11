@@ -4,6 +4,7 @@ import { PricingOptions } from '../managers/DbHafasManager';
 
 export function loadStoredPricingOptions(dbJourney: {
   firstClass?: boolean;
+  bike?: boolean;
   loyaltyCard?: string;
   ageGroup?: string;
   deutschlandTicketDiscount?: boolean;
@@ -12,6 +13,10 @@ export function loadStoredPricingOptions(dbJourney: {
 
   if (dbJourney.firstClass !== undefined) {
     opts.firstClass = dbJourney.firstClass;
+  }
+
+  if (dbJourney.bike !== undefined) {
+    opts.bike = dbJourney.bike;
   }
 
   if (dbJourney.loyaltyCard) {
