@@ -31,7 +31,7 @@ export const theme = createTheme({
     secondary: {
       main: '#6D9E51',
       light: '#BCD9A2',
-      dark: '#4e7539',
+      dark: '#3d5c2d',
     },
     success: {
       main: '#2d7a3a',
@@ -52,8 +52,8 @@ export const theme = createTheme({
     },
     text: {
       primary: '#1a1a16',
-      secondary: '#787870',
-      disabled: '#a0a090',
+      secondary: '#606058',
+      disabled: '#757568',
     },
     divider: '#e2e2d8',
   },
@@ -79,21 +79,21 @@ export const theme = createTheme({
       letterSpacing: '0.07em',
       textTransform: 'uppercase',
       lineHeight: 1.6,
-      color: '#787870',
+      color: '#606058',
     },
     sectionTitle: {
       fontSize: 12,
       fontWeight: 700,
       letterSpacing: '0.07em',
       textTransform: 'uppercase',
-      color: '#787870',
+      color: '#606058',
     },
     fieldLabel: {
       fontSize: 11,
       fontWeight: 700,
       letterSpacing: '0.06em',
       textTransform: 'uppercase',
-      color: '#787870',
+      color: '#606058',
     },
   },
   shape: {
