@@ -23,7 +23,7 @@ export default function App() {
           <Router>
             <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
               <Header />
-              <Container maxWidth="md" sx={{ my: 4, flex: 1 }}>
+              <Container component="main" maxWidth="md" sx={{ my: 4, flex: 1 }}>
                 <Routes>
                   <Route path="/" element={<HomePage />} />
                   <Route
