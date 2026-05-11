@@ -70,10 +70,13 @@ function buildHafasOptions(pricingOptions?: PricingOptions): Record<string, unkn
     opts.deutschlandTicketDiscount = pricingOptions.deutschlandTicketDiscount;
   }
 
-  if (pricingOptions.products) {
-    // Only pass products if at least one is explicitly set to false
-    const hasFiltering = Object.values(pricingOptions.products).some((v) => v === false);
-    if (hasFiltering) {
+  if (pricingOptions.products && Object.keys(pricingOptions.products).length > 0) {
+    // The vendo API classifies both RE (regionalExpress) and RB (regional) trains
+    // under the same 'REGIONAL' product key. When the user selects RE, we must
+    // also include RB so the vendo API correctly matches all regional trains.
+    if (pricingOptions.products.regionalExpress === true && pricingOptions.products.regional !== true) {
+      opts.products = { ...pricingOptions.products, regional: true };
+    } else {
       opts.products = pricingOptions.products;
     }
   }
