@@ -114,34 +114,50 @@ export class Frontend extends Construct {
       ],
     });
 
-    // Deploy frontend to S3 bucket using separate deployments for different
+    // Deploy frontend to S3 bucket using two deployments with different
     // cache-control strategies. This ensures browsers cache hashed assets
     // long-term while always revalidating mutable files like index.html.
+    //
+    // NOTE: Source.asset exclude patterns do NOT support negation ("!foo").
+    // CDK passes them to minimatch as an ignore list and the "!" prefix is
+    // treated as a literal character, not a negation operator.  Using a
+    // subdirectory as the source (AssetsDeployment) or a plain exclude list
+    // without negation (RootFilesDeployment) avoids this pitfall.
+    //
+    // NOTE: All BucketDeployment instances that share the same destination
+    // bucket root will prune each other's files when prune=true (the default),
+    // because each deployment runs "aws s3 sync --delete" against the full
+    // bucket prefix.  The BucketDeployment-level `exclude` option maps to
+    // "--exclude" flags on that sync command and prevents the RootFiles
+    // deployment from deleting the assets uploaded by AssetsDeployment.
 
     const buildPath = path.resolve(__dirname, '../../frontend/build');
 
-    // Hashed assets (JS/CSS in /assets/) — immutable, 1-year browser cache
+    // Hashed assets (JS/CSS in /assets/) — immutable, 1-year browser cache.
+    // Using the assets/ subdirectory directly as the source avoids the
+    // broken-negation-pattern problem and scopes prune=true to assets/ only.
     new BucketDeployment(this, 'AssetsDeployment', {
-      sources: [Source.asset(buildPath, { exclude: ['*', '!assets/**'] })],
+      sources: [Source.asset(path.join(buildPath, 'assets'))],
       destinationBucket: bucket,
+      destinationKeyPrefix: 'assets',
       distribution,
+      distributionPaths: ['/assets/*'],
       cacheControl: [CacheControl.setPublic(), CacheControl.maxAge(cdk.Duration.days(365)), CacheControl.immutable()],
+      prune: true, // safe: scoped to the 'assets/' prefix by destinationKeyPrefix
     });
 
-    // Static images (logos, icons) — cacheable but not immutable
-    new BucketDeployment(this, 'ImagesDeployment', {
-      sources: [Source.asset(buildPath, { exclude: ['*', '!*.png', '!*.ico', '!*.svg', '!*.webp'] })],
-      destinationBucket: bucket,
-      distribution,
-      cacheControl: [CacheControl.setPublic(), CacheControl.maxAge(cdk.Duration.days(7))],
-    });
-
-    // Mutable root files (index.html, manifest.json, etc.) — always revalidate
+    // Mutable root files (index.html, images, manifest.json, etc.) — always
+    // revalidate.  Images are not content-hashed so no-cache is correct.
+    // The BucketDeployment-level exclude prevents this deployment from pruning
+    // the assets/ objects uploaded above.
     new BucketDeployment(this, 'RootFilesDeployment', {
-      sources: [Source.asset(buildPath, { exclude: ['assets/**', '*.png', '*.ico', '*.svg', '*.webp'] })],
+      sources: [Source.asset(buildPath, { exclude: ['assets/**'] })],
       destinationBucket: bucket,
       distribution,
+      distributionPaths: ['/*'],
       cacheControl: [CacheControl.noCache()],
+      prune: true,
+      exclude: ['assets/*'], // don't --delete s3://bucket/assets/* during sync
     });
 
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
