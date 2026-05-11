@@ -3,7 +3,7 @@ includes = ["../mise.tasks.toml"]
 
 [tasks.dev]
 description = "Start backend dev server with hot reload"
-run = "npm run dev"
+run = "npm run dev 2>&1 | tee /tmp/backend.log"
 
 [tasks.dev.env]
 LOCAL_DEV = "1"
