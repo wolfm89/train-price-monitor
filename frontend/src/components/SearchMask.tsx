@@ -304,9 +304,10 @@ const SearchMask: React.FC<Props> = ({
         to?.id !== '' &&
         day !== '' &&
         time !== '' &&
+        enabledProducts.size > 0 &&
         createDateFromDayAndTime(departureDay, departureTime) > new Date()
     );
-  }, [from, to, departureDay, departureTime]);
+  }, [from, to, departureDay, departureTime, enabledProducts]);
 
   const handleProductToggle = (keys: (keyof ProductFilter)[]) => {
     setEnabledProducts((prev) => {
