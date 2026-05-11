@@ -243,7 +243,7 @@ const TravelPreferences: React.FC = () => {
         <Button
           variant="contained"
           onClick={handleSave}
-          disabled={!dirty || saving}
+          disabled={!dirty || saving || !userId}
           sx={{ textTransform: 'none', fontWeight: 600 }}
         >
           {saving ? 'Saving...' : 'Save preferences'}
