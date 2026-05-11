@@ -3,8 +3,11 @@ import { Box, Chip, CircularProgress, IconButton, Paper, Typography, Theme } fro
 import { alpha } from '@mui/material/styles';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import PedalBikeIcon from '@mui/icons-material/PedalBike';
 import TrainIcon from '@mui/icons-material/Train';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+
+import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,6 +18,11 @@ export interface Journey {
   limitPrice: number;
   from?: string | null;
   to?: string | null;
+  firstClass?: boolean | null;
+  bike?: boolean | null;
+  deutschlandTicketDiscount?: boolean | null;
+  ageGroup?: string | null;
+  loyaltyCard?: LoyaltyCardInput | null;
   journey: {
     refreshToken: string;
     departure: string;
@@ -282,12 +290,69 @@ function PerforationDivider() {
 interface TicketStubProps {
   journey: NonNullable<Journey['journey']>;
   limitPrice: number;
+  firstClass?: boolean | null;
+  bike?: boolean | null;
+  deutschlandTicketDiscount?: boolean | null;
+  ageGroup?: string | null;
+  loyaltyCard?: LoyaltyCardInput | null;
 }
 
-function TicketStub({ journey, limitPrice }: TicketStubProps) {
+function TicketStub({
+  journey,
+  limitPrice,
+  firstClass,
+  bike,
+  deutschlandTicketDiscount,
+  ageGroup,
+  loyaltyCard,
+}: TicketStubProps) {
   const underLimit = journey.price !== null && journey.price <= limitPrice;
   const diff = journey.price !== null ? Math.abs(limitPrice - journey.price).toFixed(2) : '0.00';
   const priceColor = journey.price !== null ? (underLimit ? 'success.main' : 'error.main') : 'text.disabled';
+
+  // Build options pills
+  const ageGroupLabel =
+    ageGroup && ageGroup !== 'ADULT' ? AGE_GROUP_OPTIONS.find((o) => o.value === ageGroup)?.label ?? ageGroup : null;
+
+  const neutralPillSx = (theme: Theme) => ({
+    height: 20,
+    fontSize: 11,
+    fontWeight: 500,
+    borderRadius: '10px',
+    backgroundColor: alpha(theme.palette.text.disabled, 0.1),
+    color: 'text.secondary',
+    border: 'none',
+    '& .MuiChip-label': { px: '7px' },
+  });
+
+  const cardPillSx = (theme: Theme) => ({
+    height: 20,
+    fontSize: 11,
+    fontWeight: 500,
+    borderRadius: '10px',
+    backgroundColor: alpha(theme.palette.info.main, 0.12),
+    color: 'info.main',
+    border: 'none',
+    '& .MuiChip-label': { px: '7px' },
+  });
+
+  const dtPillSx = (theme: Theme) => ({
+    height: 20,
+    fontSize: 11,
+    fontWeight: 500,
+    borderRadius: '10px',
+    backgroundColor: alpha(theme.palette.secondary.main, 0.14),
+    color: 'secondary.dark',
+    border: 'none',
+    '& .MuiChip-label': { px: '7px' },
+  });
+
+  const hasOptions =
+    (firstClass !== undefined && firstClass !== null) ||
+    loyaltyCard ||
+    deutschlandTicketDiscount ||
+    bike ||
+    ageGroupLabel;
 
   return (
     <Box
@@ -300,8 +365,8 @@ function TicketStub({ journey, limitPrice }: TicketStubProps) {
         gap: { xs: 1.5, sm: 2 },
       }}
     >
-      {/* Means of transport */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+      {/* Left: means of transport + options */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
         {journey.means.map((mean, i) => (
           <React.Fragment key={i}>
             {i > 0 && <Typography sx={{ fontSize: 10, color: 'text.disabled' }}>{'\u203A'}</Typography>}
@@ -312,6 +377,45 @@ function TicketStub({ journey, limitPrice }: TicketStubProps) {
             />
           </React.Fragment>
         ))}
+
+        {hasOptions && (
+          <>
+            {/* Thin vertical rule separating train chain from options */}
+            <Box
+              sx={(theme) => ({
+                width: '1px',
+                height: 14,
+                backgroundColor: theme.palette.divider,
+                mx: 0.5,
+                flexShrink: 0,
+              })}
+            />
+
+            {/* Travel class */}
+            {firstClass !== undefined && firstClass !== null && (
+              <Chip label={firstClass ? '1st class' : '2nd class'} size="small" sx={neutralPillSx} />
+            )}
+
+            {/* Age group (non-adult) */}
+            {ageGroupLabel && <Chip label={ageGroupLabel} size="small" sx={neutralPillSx} />}
+
+            {/* Loyalty card */}
+            {loyaltyCard && <Chip label={cardShortLabel(loyaltyCard)} size="small" sx={cardPillSx} />}
+
+            {/* D-Ticket */}
+            {deutschlandTicketDiscount && <Chip label="D-Ticket" size="small" sx={dtPillSx} />}
+
+            {/* Bike */}
+            {bike && (
+              <Chip
+                icon={<PedalBikeIcon sx={{ fontSize: '12px !important' }} />}
+                label="Bike"
+                size="small"
+                sx={neutralPillSx}
+              />
+            )}
+          </>
+        )}
       </Box>
 
       {/* Price block */}
@@ -378,7 +482,8 @@ export interface JourneyTicketProps {
 }
 
 export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMenu = true }: JourneyTicketProps) {
-  const { id, limitPrice, from, to, journey } = monitor;
+  const { id, limitPrice, from, to, journey, firstClass, bike, deutschlandTicketDiscount, ageGroup, loyaltyCard } =
+    monitor;
 
   return (
     <Box sx={{ position: 'relative' }}>
@@ -412,7 +517,19 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMen
         <PerforationDivider />
 
         {/* Lower zone */}
-        {journey !== null ? <TicketStub journey={journey} limitPrice={limitPrice} /> : <NoTrackBanner />}
+        {journey !== null ? (
+          <TicketStub
+            journey={journey}
+            limitPrice={limitPrice}
+            firstClass={firstClass}
+            bike={bike}
+            deutschlandTicketDiscount={deutschlandTicketDiscount}
+            ageGroup={ageGroup}
+            loyaltyCard={loyaltyCard}
+          />
+        ) : (
+          <NoTrackBanner />
+        )}
       </Paper>
     </Box>
   );

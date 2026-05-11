@@ -84,7 +84,7 @@ const SearchPage: React.FC<Props> = () => {
       <SearchMask
         setSearchData={setSearchData}
         onSearch={handleSearch}
-        initialLoyaltyCards={profileData?.user?.loyaltyCards}
+        initialWalletCards={profileData?.user?.loyaltyCards}
         initialAgeGroup={profileData?.user?.ageGroup}
         initialDeutschlandTicketDiscount={profileData?.user?.deutschlandTicketDiscount}
       />

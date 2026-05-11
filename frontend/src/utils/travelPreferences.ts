@@ -50,6 +50,32 @@ export function keyToCard(key: string): LoyaltyCardInput | undefined {
   return LOYALTY_CARD_OPTIONS.find((opt) => opt.key === key)?.card;
 }
 
+export function cardShortLabel(card: LoyaltyCardInput): string {
+  switch (card.type) {
+    case 'BAHNCARD':
+      if (card.discount === 25) return card.class === 1 ? 'BC 25 (1.)' : 'BC 25';
+      if (card.discount === 50) return card.class === 1 ? 'BC 50 (1.)' : 'BC 50';
+      if (card.discount === 100) return 'BC 100';
+      return `BC ${card.discount ?? ''}`;
+    case 'VORTEILSCARD':
+      return 'Vorteilscard AT';
+    case 'AT_KLIMATICKET':
+      return 'Klimaticket AT';
+    case 'HALBTAXABO':
+      return 'Halbtax';
+    case 'GENERALABONNEMENT':
+      return card.class === 1 ? 'GA 1. Kl.' : 'GA 2. Kl.';
+    case 'VOORDEELURENABO':
+      return 'Voordeel';
+    case 'NL_40':
+      return 'NL 40%';
+    case 'SHCARD':
+      return 'SH-Card';
+    default:
+      return cardLabel(card);
+  }
+}
+
 export function cardLabel(card: LoyaltyCardInput): string {
   const match = LOYALTY_CARD_OPTIONS.find(
     (opt) =>
@@ -58,4 +84,37 @@ export function cardLabel(card: LoyaltyCardInput): string {
       (opt.card.class ?? null) === (card.class ?? null)
   );
   return match?.label ?? card.type;
+}
+
+/**
+ * Ordered list of loyalty card keys from most to least valuable for DB pricing.
+ * Used to pick the best default card from the user's wallet.
+ */
+export const CARD_VALUE_ORDER: string[] = [
+  'BC50_1',
+  'BC50_2',
+  'BC25_1',
+  'BC25_2',
+  'GA_1',
+  'GA_2',
+  'AT_KLIMATICKET',
+  'HALBTAXABO',
+  'VORTEILSCARD',
+  'VOORDEELURENABO',
+  'NL_40',
+  'SHCARD',
+];
+
+/**
+ * Returns the highest-value card from the user's wallet, or null if empty.
+ */
+export function bestWalletCard(walletCards: LoyaltyCardInput[]): LoyaltyCardInput | null {
+  if (walletCards.length === 0) return null;
+  const walletKeys = walletCards.map(cardToKey);
+  for (const key of CARD_VALUE_ORDER) {
+    const idx = walletKeys.indexOf(key);
+    if (idx !== -1) return walletCards[idx];
+  }
+  // Fallback: return first card if none matched the ordering
+  return walletCards[0];
 }

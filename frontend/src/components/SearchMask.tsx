@@ -15,7 +15,7 @@ import {
   FormControl,
   Select,
   MenuItem,
-  Menu,
+  ListSubheader,
   Switch,
   SelectChangeEvent,
 } from '@mui/material';
@@ -25,7 +25,6 @@ import {
   CalendarToday as CalendarTodayIcon,
   AccessTime as AccessTimeIcon,
   PedalBike as BikeIcon,
-  Add as AddIcon,
   PersonOutline as PersonIcon,
   TuneRounded as TuneIcon,
 } from '@mui/icons-material';
@@ -40,6 +39,7 @@ import {
   cardToKey,
   keyToCard,
   cardLabel,
+  bestWalletCard,
 } from '../utils/travelPreferences';
 
 export interface ProductFilter {
@@ -62,7 +62,7 @@ export interface JourneySearchOptions {
   transferTime?: number;
   bike?: boolean;
   results?: number;
-  loyaltyCards?: LoyaltyCardInput[];
+  loyaltyCard?: LoyaltyCardInput;
   ageGroup?: string;
   deutschlandTicketDiscount?: boolean;
 }
@@ -70,7 +70,7 @@ export interface JourneySearchOptions {
 interface Props {
   setSearchData: (searchData: SearchData) => void;
   onSearch: (from: string, to: string, departure: string, options?: JourneySearchOptions) => void;
-  initialLoyaltyCards?: LoyaltyCardInput[];
+  initialWalletCards?: LoyaltyCardInput[];
   initialAgeGroup?: string;
   initialDeutschlandTicketDiscount?: boolean;
 }
@@ -131,7 +131,7 @@ function dedupLocations(items: readonly Location[]): Location[] {
 const SearchMask: React.FC<Props> = ({
   setSearchData,
   onSearch,
-  initialLoyaltyCards,
+  initialWalletCards,
   initialAgeGroup,
   initialDeutschlandTicketDiscount,
 }) => {
@@ -155,14 +155,20 @@ const SearchMask: React.FC<Props> = ({
   const [bike, setBike] = useState(false);
 
   // Travel preference state (initialised from profile, overridable per search)
-  const [loyaltyCards, setLoyaltyCards] = useState<LoyaltyCardInput[]>(initialLoyaltyCards ?? []);
+  const [loyaltyCard, setLoyaltyCard] = useState<LoyaltyCardInput | null>(
+    initialWalletCards ? bestWalletCard(initialWalletCards) : null
+  );
+  const [walletCards, setWalletCards] = useState<LoyaltyCardInput[]>(initialWalletCards ?? []);
   const [ageGroup, setAgeGroup] = useState<string>(initialAgeGroup ?? 'ADULT');
   const [deutschlandTicketDiscount, setDeutschlandTicketDiscount] = useState(initialDeutschlandTicketDiscount ?? false);
 
   // Sync when profile data arrives asynchronously
   useEffect(() => {
-    if (initialLoyaltyCards !== undefined) setLoyaltyCards(initialLoyaltyCards);
-  }, [initialLoyaltyCards]);
+    if (initialWalletCards !== undefined) {
+      setWalletCards(initialWalletCards);
+      setLoyaltyCard(bestWalletCard(initialWalletCards));
+    }
+  }, [initialWalletCards]);
   useEffect(() => {
     if (initialAgeGroup !== undefined) setAgeGroup(initialAgeGroup);
   }, [initialAgeGroup]);
@@ -240,9 +246,8 @@ const SearchMask: React.FC<Props> = ({
     const opts: JourneySearchOptions = {};
 
     // Always include travel-preference fields (profile defaults, overridable per search)
-    if (loyaltyCards.length > 0) {
-      // Strip __typename that urql may have added
-      opts.loyaltyCards = loyaltyCards.map((c) => ({ type: c.type, discount: c.discount, class: c.class }));
+    if (loyaltyCard) {
+      opts.loyaltyCard = { type: loyaltyCard.type, discount: loyaltyCard.discount, class: loyaltyCard.class };
     }
     if (ageGroup && ageGroup !== 'ADULT') {
       opts.ageGroup = ageGroup;
@@ -336,31 +341,6 @@ const SearchMask: React.FC<Props> = ({
     setMaxTransfers(Number(e.target.value));
   };
 
-  // Loyalty card handlers
-  const usedCardKeys = new Set(loyaltyCards.map(cardToKey));
-  const canAddMoreCards = LOYALTY_CARD_OPTIONS.some((opt) => !usedCardKeys.has(opt.key));
-  const [addCardAnchor, setAddCardAnchor] = useState<null | HTMLElement>(null);
-
-  const handleOpenAddCard = (event: React.MouseEvent<HTMLElement>) => {
-    setAddCardAnchor(event.currentTarget);
-  };
-
-  const handleCloseAddCard = () => {
-    setAddCardAnchor(null);
-  };
-
-  const handleSelectCard = (key: string) => {
-    const card = keyToCard(key);
-    if (card) {
-      setLoyaltyCards([...loyaltyCards, card]);
-    }
-    setAddCardAnchor(null);
-  };
-
-  const handleRemoveCard = (index: number) => {
-    setLoyaltyCards(loyaltyCards.filter((_, i) => i !== index));
-  };
-
   const handleAgeGroupChange = (e: SelectChangeEvent) => {
     setAgeGroup(e.target.value);
   };
@@ -369,12 +349,17 @@ const SearchMask: React.FC<Props> = ({
     setDeutschlandTicketDiscount(checked);
   };
 
+  const handleLoyaltyCardChange = (e: SelectChangeEvent<string>) => {
+    const key = e.target.value;
+    setLoyaltyCard(key ? keyToCard(key) ?? null : null);
+  };
+
   const optionsActive =
     firstClass ||
     enabledProducts.size < ALL_PRODUCT_KEYS.length ||
     maxTransfers >= 0 ||
     bike ||
-    loyaltyCards.length > 0 ||
+    loyaltyCard !== null ||
     deutschlandTicketDiscount ||
     ageGroup !== 'ADULT';
 
@@ -711,65 +696,92 @@ const SearchMask: React.FC<Props> = ({
           <Paper elevation={0} sx={cardSx}>
             <Typography sx={sectionTitleSx}>Discounts &amp; Pricing</Typography>
 
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
-              {loyaltyCards.map((card, index) => (
-                <Chip
-                  key={index}
-                  label={cardLabel(card)}
-                  size="small"
-                  variant="outlined"
-                  onDelete={() => handleRemoveCard(index)}
-                  sx={{ fontSize: 12 }}
-                />
-              ))}
-              {canAddMoreCards && (
-                <>
-                  <Chip
-                    label="Add card"
-                    size="small"
-                    variant="outlined"
-                    icon={<AddIcon sx={{ fontSize: '16px !important' }} />}
-                    onClick={handleOpenAddCard}
-                    sx={{ fontSize: 12, cursor: 'pointer' }}
-                  />
-                  <Menu
-                    anchorEl={addCardAnchor}
-                    open={Boolean(addCardAnchor)}
-                    onClose={handleCloseAddCard}
-                    slotProps={{ paper: { sx: { maxHeight: 300 } } }}
-                  >
-                    {LOYALTY_CARD_OPTIONS.filter((opt) => !usedCardKeys.has(opt.key)).map((opt) => (
-                      <MenuItem key={opt.key} onClick={() => handleSelectCard(opt.key)} sx={{ fontSize: 13 }}>
-                        {opt.label}
-                      </MenuItem>
-                    ))}
-                  </Menu>
-                </>
-              )}
-            </Box>
-
             <Box
               sx={{
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                pt: 1.5,
-                borderTop: 1,
-                borderColor: 'divider',
+                alignItems: 'flex-start',
+                flexWrap: { xs: 'wrap', sm: 'nowrap' },
+                gap: { xs: 2, sm: 0 },
               }}
             >
-              <Box>
-                <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'text.primary' }}>Deutschlandticket</Typography>
-                <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
-                  Regional costs deducted from prices
+              {/* Discount card */}
+              <Box sx={{ flexShrink: 0 }}>
+                <Typography variant="fieldLabel" sx={{ display: 'block', mb: 0.75 }}>
+                  Discount card
                 </Typography>
+                <FormControl size="small">
+                  <Select
+                    value={loyaltyCard ? cardToKey(loyaltyCard) : ''}
+                    onChange={handleLoyaltyCardChange}
+                    displayEmpty
+                    sx={{ fontSize: 13, minWidth: 200 }}
+                  >
+                    <MenuItem value="" sx={{ fontSize: 13, color: 'text.secondary' }}>
+                      No card
+                    </MenuItem>
+                    {walletCards.length > 0 && [
+                      <ListSubheader key="wallet-header" sx={{ fontSize: 11, lineHeight: '28px' }}>
+                        My cards
+                      </ListSubheader>,
+                      ...walletCards.map((card) => (
+                        <MenuItem
+                          key={`wallet-${cardToKey(card)}`}
+                          value={cardToKey(card)}
+                          sx={{ fontSize: 13, fontWeight: 600 }}
+                        >
+                          {cardLabel(card)}
+                        </MenuItem>
+                      )),
+                      <ListSubheader key="other-header" sx={{ fontSize: 11, lineHeight: '28px' }}>
+                        Other cards
+                      </ListSubheader>,
+                      ...LOYALTY_CARD_OPTIONS.filter((opt) => !walletCards.some((wc) => cardToKey(wc) === opt.key)).map(
+                        (opt) => (
+                          <MenuItem key={opt.key} value={opt.key} sx={{ fontSize: 13 }}>
+                            {opt.label}
+                          </MenuItem>
+                        )
+                      ),
+                    ]}
+                    {walletCards.length === 0 &&
+                      LOYALTY_CARD_OPTIONS.map((opt) => (
+                        <MenuItem key={opt.key} value={opt.key} sx={{ fontSize: 13 }}>
+                          {opt.label}
+                        </MenuItem>
+                      ))}
+                  </Select>
+                </FormControl>
               </Box>
-              <Switch
-                checked={deutschlandTicketDiscount}
-                onChange={handleDTicketToggle}
-                color="secondary"
-                size="small"
+
+              {/* Vertical rule */}
+              <Box
+                sx={{
+                  display: { xs: 'none', sm: 'block' },
+                  alignSelf: 'stretch',
+                  width: '1px',
+                  backgroundColor: 'divider',
+                  mx: 3,
+                  flexShrink: 0,
+                }}
               />
+
+              {/* Deutschlandticket */}
+              <Box sx={{ flexShrink: 0 }}>
+                <Typography variant="fieldLabel" sx={{ display: 'block', mb: 0.75 }}>
+                  Deutschlandticket
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Switch
+                    checked={deutschlandTicketDiscount}
+                    onChange={handleDTicketToggle}
+                    color="secondary"
+                    size="small"
+                  />
+                  <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+                    Regional costs deducted from prices
+                  </Typography>
+                </Box>
+              </Box>
             </Box>
           </Paper>
         </Box>

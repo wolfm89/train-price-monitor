@@ -90,6 +90,15 @@ export const UserJourneysQuery = gql`
         limitPrice
         from
         to
+        firstClass
+        bike
+        deutschlandTicketDiscount
+        ageGroup
+        loyaltyCard {
+          type
+          discount
+          class
+        }
         journey {
           refreshToken
           departure
