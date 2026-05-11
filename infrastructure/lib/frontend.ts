@@ -7,6 +7,9 @@ import {
   CacheHeaderBehavior,
   CacheQueryStringBehavior,
   Distribution,
+  HeadersFrameOption,
+  HeadersReferrerPolicy,
+  ResponseHeadersPolicy,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
@@ -45,6 +48,33 @@ export class Frontend extends Construct {
       queryStringBehavior: CacheQueryStringBehavior.none(),
     });
 
+    // Security response headers policy applied to all CloudFront responses.
+    const responseHeadersPolicy = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
+      responseHeadersPolicyName: `${id}-SecurityHeaders`,
+      comment: 'Security headers for frontend distribution',
+      securityHeadersBehavior: {
+        strictTransportSecurity: {
+          accessControlMaxAge: cdk.Duration.days(365),
+          includeSubdomains: true,
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: {
+          frameOption: HeadersFrameOption.DENY,
+          override: true,
+        },
+        referrerPolicy: {
+          referrerPolicy: HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+          override: true,
+        },
+        xssProtection: {
+          protection: true,
+          modeBlock: true,
+          override: true,
+        },
+      },
+    });
+
     // CloudFront distribution with custom domain
     const distribution = new Distribution(this, 'DistributionNew', {
       defaultRootObject: 'index.html',
@@ -54,6 +84,7 @@ export class Frontend extends Construct {
         origin: S3BucketOrigin.withOriginAccessControl(bucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         compress: true,
+        responseHeadersPolicy,
         // index.html must always be fresh so browsers pick up new chunk filenames
         // after a deployment — disable caching at the CDN layer for root files.
         cachePolicy: CachePolicy.CACHING_DISABLED,
@@ -65,6 +96,7 @@ export class Frontend extends Construct {
           origin: S3BucketOrigin.withOriginAccessControl(bucket),
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           compress: true,
+          responseHeadersPolicy,
           cachePolicy: assetsCachePolicy,
         },
       },
