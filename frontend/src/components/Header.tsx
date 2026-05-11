@@ -135,9 +135,11 @@ const Header = () => {
             }}
           >
             <img
-              src={process.env.PUBLIC_URL + '/logo192.png'}
+              src={process.env.PUBLIC_URL + '/logo-header.webp'}
               alt="Train Price Monitor Logo"
-              style={{ width: 38, height: 38, display: 'block' }}
+              width={38}
+              height={38}
+              style={{ display: 'block' }}
             />
           </Box>
           {!isScreenSmall && (

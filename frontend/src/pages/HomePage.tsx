@@ -247,9 +247,11 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: { sm: 5 }, mb: 4.5 }}>
         <Box
           component="img"
-          src={process.env.PUBLIC_URL + '/logo256.png'}
+          src={process.env.PUBLIC_URL + '/logo-hero.webp'}
           alt="Train Price Monitor Logo"
-          sx={{ display: { xs: 'none', sm: 'block' }, width: 220, height: 220, flexShrink: 0 }}
+          width={220}
+          height={220}
+          sx={{ display: { xs: 'none', sm: 'block' }, flexShrink: 0 }}
         />
         <Box>
           <Typography
