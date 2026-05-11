@@ -11,8 +11,9 @@ import RouteGuard from './utils/RouteGuard';
 import { client } from './utils/apiClient';
 import { Provider } from 'urql';
 
-// Lazy-load routes that require authentication so their JS chunks are
-// only fetched when a logged-in user navigates to them.
+// Lazy-load routed page components to reduce initial bundle size.
+// Auth-protected pages (search, journeys, profile) only fetch their
+// chunk after login; forgot/reset password pages are publicly accessible.
 const SearchPage = lazy(() => import('./pages/SearchPage'));
 const JourneysPage = lazy(() => import('./pages/JourneysPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));

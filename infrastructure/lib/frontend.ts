@@ -141,7 +141,6 @@ export class Frontend extends Construct {
       destinationBucket: bucket,
       destinationKeyPrefix: 'assets',
       distribution,
-      distributionPaths: ['/assets/*'],
       cacheControl: [CacheControl.setPublic(), CacheControl.maxAge(cdk.Duration.days(365)), CacheControl.immutable()],
       prune: true, // safe: scoped to the 'assets/' prefix by destinationKeyPrefix
     });
