@@ -9,7 +9,7 @@ import {
   Distribution,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
-import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
+import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
@@ -82,11 +82,34 @@ export class Frontend extends Construct {
       ],
     });
 
-    // Deploy frontend to S3 bucket using BucketDeployment
-    new BucketDeployment(this, 'FrontendDeployment', {
-      sources: [Source.asset(path.resolve(__dirname, '../../frontend/build'))],
+    // Deploy frontend to S3 bucket using separate deployments for different
+    // cache-control strategies. This ensures browsers cache hashed assets
+    // long-term while always revalidating mutable files like index.html.
+
+    const buildPath = path.resolve(__dirname, '../../frontend/build');
+
+    // Hashed assets (JS/CSS in /assets/) — immutable, 1-year browser cache
+    new BucketDeployment(this, 'AssetsDeployment', {
+      sources: [Source.asset(buildPath, { exclude: ['*', '!assets/**'] })],
       destinationBucket: bucket,
       distribution,
+      cacheControl: [CacheControl.setPublic(), CacheControl.maxAge(cdk.Duration.days(365)), CacheControl.immutable()],
+    });
+
+    // Static images (logos, icons) — cacheable but not immutable
+    new BucketDeployment(this, 'ImagesDeployment', {
+      sources: [Source.asset(buildPath, { exclude: ['*', '!*.png', '!*.ico', '!*.svg', '!*.webp'] })],
+      destinationBucket: bucket,
+      distribution,
+      cacheControl: [CacheControl.setPublic(), CacheControl.maxAge(cdk.Duration.days(7))],
+    });
+
+    // Mutable root files (index.html, manifest.json, etc.) — always revalidate
+    new BucketDeployment(this, 'RootFilesDeployment', {
+      sources: [Source.asset(buildPath, { exclude: ['assets/**', '*.png', '*.ico', '*.svg', '*.webp'] })],
+      destinationBucket: bucket,
+      distribution,
+      cacheControl: [CacheControl.noCache()],
     });
 
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
