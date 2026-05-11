@@ -4,6 +4,66 @@ type Mutation
 scalar File
 scalar DateTime
 
+# Enums
+
+enum LoyaltyCardType {
+  BAHNCARD
+  VORTEILSCARD
+  HALBTAXABO
+  VOORDEELURENABO
+  SHCARD
+  GENERALABONNEMENT
+  NL_40
+  AT_KLIMATICKET
+}
+
+enum AgeGroup {
+  BABY
+  CHILD
+  YOUTH
+  ADULT
+  SENIOR
+}
+
+# Shared types & inputs
+
+type LoyaltyCard {
+  type: LoyaltyCardType!
+  discount: Int
+  class: Int
+}
+
+input LoyaltyCardInput {
+  type: LoyaltyCardType!
+  discount: Int
+  class: Int
+}
+
+input ProductFilter {
+  nationalExpress: Boolean
+  national: Boolean
+  regionalExpress: Boolean
+  regional: Boolean
+  suburban: Boolean
+  bus: Boolean
+  ferry: Boolean
+  subway: Boolean
+  tram: Boolean
+  taxi: Boolean
+}
+
+input JourneySearchOptions {
+  firstClass: Boolean
+  loyaltyCard: LoyaltyCardInput
+  ageGroup: AgeGroup
+  deutschlandTicketDiscount: Boolean
+  products: ProductFilter
+  transfers: Int
+  transferTime: Int
+  bike: Boolean
+  results: Int
+}
+
 # User
 
 type User {
@@ -13,6 +73,9 @@ type User {
   email: String!
   profilePicture: String
   emailNotificationsEnabled: Boolean!
+  loyaltyCards: [LoyaltyCard!]
+  ageGroup: AgeGroup
+  deutschlandTicketDiscount: Boolean
   notifications(limit: Int, read: Boolean): [Notification]
   journeyMonitors(limit: Int): [JourneyMonitor]
 }
@@ -44,6 +107,15 @@ extend type Mutation {
 
 extend type Mutation {
   updateUserSettings(id: ID!, emailNotificationsEnabled: Boolean!): User
+}
+
+extend type Mutation {
+  updateTravelPreferences(
+    userId: ID!
+    loyaltyCards: [LoyaltyCardInput!]
+    ageGroup: AgeGroup
+    deutschlandTicketDiscount: Boolean
+  ): User
 }
 
 extend type Mutation {
@@ -130,12 +202,24 @@ type JourneyMonitor {
   journey: Journey
   from: String
   to: String
+  firstClass: Boolean
+  bike: Boolean
+  deutschlandTicketDiscount: Boolean
+  ageGroup: AgeGroup
+  loyaltyCard: LoyaltyCard
 }
 
 ## Queries
 
 extend type Query {
-  journeys(from: String!, to: String!, departure: DateTime!, earlierThan: String, laterThan: String): JourneysResult
+  journeys(
+    from: String!
+    to: String!
+    departure: DateTime!
+    earlierThan: String
+    laterThan: String
+    options: JourneySearchOptions
+  ): JourneysResult
 }
 
 ## Mutations
@@ -149,6 +233,7 @@ extend type Mutation {
     fromId: String!
     toId: String!
     departure: DateTime!
+    options: JourneySearchOptions
   ): JourneyMonitor
 }
 

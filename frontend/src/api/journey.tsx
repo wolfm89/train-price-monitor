@@ -1,8 +1,22 @@
 import { gql } from 'urql';
 
 export const JourneySearchQuery = gql`
-  query ($departure: DateTime!, $from: String!, $to: String!, $earlierThan: String, $laterThan: String) {
-    journeys(departure: $departure, from: $from, to: $to, earlierThan: $earlierThan, laterThan: $laterThan) {
+  query (
+    $departure: DateTime!
+    $from: String!
+    $to: String!
+    $earlierThan: String
+    $laterThan: String
+    $options: JourneySearchOptions
+  ) {
+    journeys(
+      departure: $departure
+      from: $from
+      to: $to
+      earlierThan: $earlierThan
+      laterThan: $laterThan
+      options: $options
+    ) {
       journeys {
         fromId
         toId
@@ -27,6 +41,7 @@ export const MonitorJourney = gql`
     $fromId: String!
     $toId: String!
     $departure: DateTime!
+    $options: JourneySearchOptions
   ) {
     monitorJourney(
       userId: $userId
@@ -36,6 +51,7 @@ export const MonitorJourney = gql`
       fromId: $fromId
       toId: $toId
       departure: $departure
+      options: $options
     ) {
       id
     }

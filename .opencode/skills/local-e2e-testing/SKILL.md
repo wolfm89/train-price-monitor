@@ -17,29 +17,41 @@ Walk through the full local E2E test workflow:
 
 ---
 
-## Step 1 — Install Playwright browser (once)
+## Step 1 — Ensure Playwright browser is available
+
+Check if a Playwright browser is already installed (e.g. from a previous run):
+
+```bash
+ls ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome 2>/dev/null && echo "already installed" || echo "needs install"
+```
+
+If not installed (or after a Playwright version bump):
 
 ```bash
 npx @playwright/mcp install-browser chrome-for-testing
 ```
 
-Only needed on first use or after a Playwright version bump. Safe to run again — it's a no-op if already installed.
-
 ---
 
-## Step 2 — Start dev servers
+## Step 2 — Start dev servers (if not already running)
 
-Run both in the background, capturing logs:
+Check if each server is already running before starting:
 
 ```bash
-# Terminal / background — backend (sets LOCAL_DEV=1 automatically via mise task)
-cd /path/to/project && mise run //backend:dev > /tmp/backend.log 2>&1 &
-echo "Backend PID: $!"
+# Backend — only start if not listening on :4000
+ss -tlnp | grep -q ':4000' && echo "backend already running" || {
+  mise run //backend:dev &
+  echo "Backend PID: $!"
+}
 
-# Terminal / background — frontend
-cd /path/to/project && mise run //frontend:dev > /tmp/frontend.log 2>&1 &
-echo "Frontend PID: $!"
+# Frontend — only start if not listening on :3000
+ss -tlnp | grep -q ':3000' && echo "frontend already running" || {
+  mise run //frontend:dev &
+  echo "Frontend PID: $!"
+}
 ```
+
+The mise tasks now pipe output through `tee` — stdout appears in your terminal AND is logged to `/tmp/{module}.log`. No need to redirect manually. The servers watch for file changes, so there is no need to kill and restart them if they are already running.
 
 **Ports:**
 
@@ -130,6 +142,10 @@ After login, the header shows Search / Journey Watchlist / notification bell / p
 
 ### Search for journeys
 
+The Search button is not `type="submit"` — use `getByRole('button', { name: 'Search', exact: true })` instead.
+
+The transport modes chips now merge RE and RB into a single **"RE/RB"** toggle — the db-vendo-client vendo API classifies all regional trains under the `REGIONAL` product key. There are now 9 product toggles (down from 10).
+
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
@@ -146,7 +162,7 @@ playwright_browser_run_code_unsafe {
     tomorrow.setDate(tomorrow.getDate() + 1);
     await page.locator('input[type="date"]').fill(tomorrow.toISOString().split('T')[0]);
     await page.locator('input[type="time"]').fill('10:00');
-    await page.locator('button[type="submit"]').click();
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
     await page.waitForTimeout(8000);
   }`
 }
@@ -242,7 +258,9 @@ Any other errors should be investigated.
 
 ---
 
-## Step 7 — Kill dev servers
+## Step 7 — Kill dev servers (if running in this session)
+
+If you started the servers in this session and they need to be cleaned up:
 
 ```bash
 # Kill by finding the processes
@@ -255,6 +273,8 @@ kill -9 <BACKEND_PID> <FRONTEND_PID>
 # Verify ports are free
 ss -tlnp | grep -E ':3000|:4000' || echo "ports clear"
 ```
+
+If the servers were already running before this session (checked in Step 2), leave them running — they continue to watch for changes.
 
 ---
 

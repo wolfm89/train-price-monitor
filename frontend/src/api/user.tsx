@@ -90,6 +90,15 @@ export const UserJourneysQuery = gql`
         limitPrice
         from
         to
+        firstClass
+        bike
+        deutschlandTicketDiscount
+        ageGroup
+        loyaltyCard {
+          type
+          discount
+          class
+        }
         journey {
           refreshToken
           departure
@@ -110,6 +119,46 @@ export const UserSettingsQuery = gql`
       givenName
       familyName
       emailNotificationsEnabled
+    }
+  }
+`;
+
+export const UserTravelPreferencesQuery = gql`
+  query ($id: ID!) {
+    user(id: $id) {
+      id
+      loyaltyCards {
+        type
+        discount
+        class
+      }
+      ageGroup
+      deutschlandTicketDiscount
+    }
+  }
+`;
+
+export const UpdateTravelPreferences = gql`
+  mutation (
+    $userId: ID!
+    $loyaltyCards: [LoyaltyCardInput!]
+    $ageGroup: AgeGroup
+    $deutschlandTicketDiscount: Boolean
+  ) {
+    updateTravelPreferences(
+      userId: $userId
+      loyaltyCards: $loyaltyCards
+      ageGroup: $ageGroup
+      deutschlandTicketDiscount: $deutschlandTicketDiscount
+    ) {
+      id
+      loyaltyCards {
+        type
+        discount
+        class
+      }
+      ageGroup
+      deutschlandTicketDiscount
     }
   }
 `;

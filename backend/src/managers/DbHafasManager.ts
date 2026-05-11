@@ -2,12 +2,30 @@ import type { HafasClient, Journey, JourneyWithRealtimeData, Journeys, Station }
 import { createClient } from 'db-vendo-client';
 import { profile as dbProfile } from 'db-vendo-client/p/db/index.js';
 import Logger from '../lib/logger';
+import { LoyaltyCardData, toHafasLoyaltyCard, toHafasAgeGroup } from '../lib/loyaltyCards';
 
 interface SimpleStation {
   type: string;
   id: string;
   name: string;
   weight: number;
+}
+
+export interface PricingOptions {
+  firstClass?: boolean;
+  loyaltyCard?: LoyaltyCardData;
+  ageGroup?: string;
+  deutschlandTicketDiscount?: boolean;
+  products?: Record<string, boolean>;
+  transfers?: number;
+  transferTime?: number;
+  bike?: boolean;
+}
+
+export interface QueryJourneysOptions extends PricingOptions {
+  results?: number;
+  earlierThan?: string;
+  laterThan?: string;
 }
 
 let stationCachePromise: Promise<SimpleStation[]> | null = null;
@@ -26,6 +44,53 @@ function getStationCache(): Promise<SimpleStation[]> {
     stationCachePromise = loadStationCache();
   }
   return stationCachePromise;
+}
+
+function buildHafasOptions(pricingOptions?: PricingOptions): Record<string, unknown> {
+  if (!pricingOptions) return {};
+
+  const opts: Record<string, unknown> = {};
+
+  if (pricingOptions.firstClass !== undefined) {
+    opts.firstClass = pricingOptions.firstClass;
+  }
+
+  if (pricingOptions.loyaltyCard) {
+    opts.loyaltyCard = toHafasLoyaltyCard(pricingOptions.loyaltyCard);
+  }
+
+  if (pricingOptions.ageGroup) {
+    opts.ageGroup = toHafasAgeGroup(pricingOptions.ageGroup);
+  }
+
+  if (pricingOptions.deutschlandTicketDiscount !== undefined) {
+    opts.deutschlandTicketDiscount = pricingOptions.deutschlandTicketDiscount;
+  }
+
+  if (pricingOptions.products && Object.keys(pricingOptions.products).length > 0) {
+    // The vendo API classifies both RE (regionalExpress) and RB (regional) trains
+    // under the same 'REGIONAL' product key. When the user selects RE, we must
+    // also include RB so the vendo API correctly matches all regional trains.
+    if (pricingOptions.products.regionalExpress === true && pricingOptions.products.regional !== true) {
+      opts.products = { ...pricingOptions.products, regional: true };
+    } else {
+      opts.products = pricingOptions.products;
+    }
+  }
+
+  if (pricingOptions.transfers !== undefined) {
+    opts.transfers = pricingOptions.transfers;
+  }
+
+  if (pricingOptions.transferTime !== undefined) {
+    opts.transferTime = pricingOptions.transferTime;
+  }
+
+  if (pricingOptions.bike !== undefined) {
+    opts.bike = pricingOptions.bike;
+  }
+
+  return opts;
 }
 
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
@@ -48,43 +113,42 @@ export class DbHafasManager {
    * @param from - The departure station or location.
    * @param to - The destination station or location.
    * @param departure - The departure date and time.
-   * @param options - Optional query options.
-   * @param options.results - The maximum number of results to retrieve (default is 3).
-   * @param options.earlierThan - Ref token to fetch earlier journeys (mutually exclusive with laterThan).
-   * @param options.laterThan - Ref token to fetch later journeys (mutually exclusive with earlierThan).
+   * @param options - Optional query options including pagination and pricing.
    * @returns A promise that resolves to the retrieved journeys.
    */
-  async queryJourneys(
-    from: string,
-    to: string,
-    departure: Date,
-    options?: { results?: number; earlierThan?: string; laterThan?: string }
-  ): Promise<Journeys> {
-    const { results = 3, earlierThan, laterThan } = options ?? {};
+  async queryJourneys(from: string, to: string, departure: Date, options?: QueryJourneysOptions): Promise<Journeys> {
+    const { results = 3, earlierThan, laterThan, ...pricingOpts } = options ?? {};
     if (earlierThan && laterThan) {
       throw new Error('earlierThan and laterThan are mutually exclusive');
     }
+
+    const hafasOpts = buildHafasOptions(pricingOpts);
+
     if (earlierThan) {
-      return await this.client.journeys(from, to, { earlierThan, results, tickets: true });
+      return await this.client.journeys(from, to, { earlierThan, results, tickets: true, ...hafasOpts });
     }
     if (laterThan) {
-      return await this.client.journeys(from, to, { laterThan, results, tickets: true });
+      return await this.client.journeys(from, to, { laterThan, results, tickets: true, ...hafasOpts });
     }
-    return await this.client.journeys(from, to, { departure, results, tickets: true });
+    return await this.client.journeys(from, to, { departure, results, tickets: true, ...hafasOpts });
   }
 
   /**
-   * Refreshes a journey using the provided refresh token and optional parameters.
+   * Refreshes a journey using the provided refresh token and pricing options.
    * @param refreshToken - The refresh token associated with the journey.
+   * @param pricingOptions - Optional pricing options (loyalty card, class, age, D-Ticket).
    * @returns A promise that resolves to the refreshed journey.
    */
-  async requeryJourney(refreshToken: string): Promise<Journey | undefined> {
+  async requeryJourney(refreshToken: string, pricingOptions?: PricingOptions): Promise<Journey | undefined> {
     if (refreshToken === undefined) {
       throw new Error('refreshToken is undefined');
     }
 
+    const hafasOpts = buildHafasOptions(pricingOptions);
+
     const result: JourneyWithRealtimeData | undefined = await this.client.refreshJourney!(refreshToken, {
       tickets: true,
+      ...hafasOpts,
     });
 
     if (!result) {
@@ -107,7 +171,7 @@ export class DbHafasManager {
     const departure = new Date(refreshedJourney.legs[0].plannedDeparture!);
 
     for (const n of [1, 5]) {
-      const journeys = await this.queryJourneys(from, to, departure, { results: n });
+      const journeys = await this.queryJourneys(from, to, departure, { results: n, ...pricingOptions });
       if (journeys.journeys === undefined || journeys.journeys.length === 0) {
         break;
       }

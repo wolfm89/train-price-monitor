@@ -31,6 +31,9 @@ export const User = new Entity({
     familyName: string().optional(),
     profilePicture: string().optional(),
     emailNotificationsEnabled: boolean().default(true).required(),
+    loyaltyCards: string().optional(),
+    ageGroup: string().optional(),
+    deutschlandTicketDiscount: boolean().optional(),
   }),
   computeKey: ({ id }) => ({
     pk: `USER#${id}`,
@@ -68,6 +71,11 @@ export const Journey = new Entity({
     fromId: string().required(),
     toId: string().required(),
     departure: string().required(),
+    firstClass: boolean().optional(),
+    bike: boolean().optional(),
+    loyaltyCard: string().optional(),
+    ageGroup: string().optional(),
+    deutschlandTicketDiscount: boolean().optional(),
   }),
   computeKey: ({ userId, id }) => ({
     pk: `USER#${userId}`,

@@ -2,9 +2,8 @@
 includes = ["../mise.tasks.toml"]
 
 [tasks.dev]
-alias = "s"
 description = "Start frontend dev server"
-run = "npm run dev"
+run = "npm run dev 2>&1 | tee /tmp/frontend.log"
 
 [tasks.test]
 run = "npm test"

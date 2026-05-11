@@ -90,6 +90,7 @@ export type DirectiveResolverFn<
 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = {
+  AgeGroup: Types.AgeGroup;
   Boolean: ResolverTypeWrapper<Types.Scalars['Boolean']['output']>;
   DateTime: ResolverTypeWrapper<Types.Scalars['DateTime']['output']>;
   File: ResolverTypeWrapper<Types.Scalars['File']['output']>;
@@ -99,13 +100,18 @@ export type ResolversTypes = {
   Journey: ResolverTypeWrapper<Types.Journey>;
   JourneyExpiryNotification: ResolverTypeWrapper<Types.JourneyExpiryNotification>;
   JourneyMonitor: ResolverTypeWrapper<Types.JourneyMonitor>;
+  JourneySearchOptions: Types.JourneySearchOptions;
   JourneyStaleNotification: ResolverTypeWrapper<Types.JourneyStaleNotification>;
   JourneysResult: ResolverTypeWrapper<Types.JourneysResult>;
   Location: ResolverTypeWrapper<Types.Location>;
+  LoyaltyCard: ResolverTypeWrapper<Types.LoyaltyCard>;
+  LoyaltyCardInput: Types.LoyaltyCardInput;
+  LoyaltyCardType: Types.LoyaltyCardType;
   Mutation: ResolverTypeWrapper<Record<PropertyKey, never>>;
   Notification: ResolverTypeWrapper<Notification>;
   PresignedUrl: ResolverTypeWrapper<Types.PresignedUrl>;
   PriceAlertNotification: ResolverTypeWrapper<Types.PriceAlertNotification>;
+  ProductFilter: Types.ProductFilter;
   Query: ResolverTypeWrapper<Record<PropertyKey, never>>;
   String: ResolverTypeWrapper<Types.Scalars['String']['output']>;
   User: ResolverTypeWrapper<User>;
@@ -122,13 +128,17 @@ export type ResolversParentTypes = {
   Journey: Types.Journey;
   JourneyExpiryNotification: Types.JourneyExpiryNotification;
   JourneyMonitor: Types.JourneyMonitor;
+  JourneySearchOptions: Types.JourneySearchOptions;
   JourneyStaleNotification: Types.JourneyStaleNotification;
   JourneysResult: Types.JourneysResult;
   Location: Types.Location;
+  LoyaltyCard: Types.LoyaltyCard;
+  LoyaltyCardInput: Types.LoyaltyCardInput;
   Mutation: Record<PropertyKey, never>;
   Notification: Notification;
   PresignedUrl: Types.PresignedUrl;
   PriceAlertNotification: Types.PriceAlertNotification;
+  ProductFilter: Types.ProductFilter;
   Query: Record<PropertyKey, never>;
   String: Types.Scalars['String']['output'];
   User: User;
@@ -175,11 +185,16 @@ export type JourneyMonitorResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['JourneyMonitor'] = ResolversParentTypes['JourneyMonitor'],
 > = {
+  ageGroup?: Resolver<Types.Maybe<ResolversTypes['AgeGroup']>, ParentType, ContextType>;
+  bike?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
+  deutschlandTicketDiscount?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
   expires?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  firstClass?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
   from?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<Types.Maybe<ResolversTypes['Journey']>, ParentType, ContextType>;
   limitPrice?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
+  loyaltyCard?: Resolver<Types.Maybe<ResolversTypes['LoyaltyCard']>, ParentType, ContextType>;
   to?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
 };
@@ -217,6 +232,15 @@ export type LocationResolvers<
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   name?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   type?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+};
+
+export type LoyaltyCardResolvers<
+  ContextType = GraphQLContext,
+  ParentType extends ResolversParentTypes['LoyaltyCard'] = ResolversParentTypes['LoyaltyCard'],
+> = {
+  class?: Resolver<Types.Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
+  discount?: Resolver<Types.Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
+  type?: Resolver<ResolversTypes['LoyaltyCardType'], ParentType, ContextType>;
 };
 
 export type MutationResolvers<
@@ -269,6 +293,12 @@ export type MutationResolvers<
     RequireFields<Types.MutationUpdateJourneyMonitorArgs, 'journeyId' | 'userId'>
   >;
   updateJourneyMonitors?: Resolver<Types.Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
+  updateTravelPreferences?: Resolver<
+    Types.Maybe<ResolversTypes['User']>,
+    ParentType,
+    ContextType,
+    RequireFields<Types.MutationUpdateTravelPreferencesArgs, 'userId'>
+  >;
   updateUserProfilePicture?: Resolver<
     Types.Maybe<ResolversTypes['User']>,
     ParentType,
@@ -350,6 +380,8 @@ export type UserResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['User'] = ResolversParentTypes['User'],
 > = {
+  ageGroup?: Resolver<Types.Maybe<ResolversTypes['AgeGroup']>, ParentType, ContextType>;
+  deutschlandTicketDiscount?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
   email?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   emailNotificationsEnabled?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   familyName?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
@@ -361,6 +393,7 @@ export type UserResolvers<
     ContextType,
     Partial<Types.UserJourneyMonitorsArgs>
   >;
+  loyaltyCards?: Resolver<Types.Maybe<Array<ResolversTypes['LoyaltyCard']>>, ParentType, ContextType>;
   notifications?: Resolver<
     Types.Maybe<Array<Types.Maybe<ResolversTypes['Notification']>>>,
     ParentType,
@@ -379,6 +412,7 @@ export type Resolvers<ContextType = GraphQLContext> = {
   JourneyStaleNotification?: JourneyStaleNotificationResolvers<ContextType>;
   JourneysResult?: JourneysResultResolvers<ContextType>;
   Location?: LocationResolvers<ContextType>;
+  LoyaltyCard?: LoyaltyCardResolvers<ContextType>;
   Mutation?: MutationResolvers<ContextType>;
   Notification?: NotificationResolvers<ContextType>;
   PresignedUrl?: PresignedUrlResolvers<ContextType>;

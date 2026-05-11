@@ -20,6 +20,7 @@ import { useMutation } from 'urql';
 import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
+import { JourneySearchOptions } from './SearchMask';
 
 export interface Journey {
   refreshToken: string;
@@ -41,6 +42,7 @@ export interface SearchData {
 interface Props {
   searchData: SearchData;
   searchResult: Journey[];
+  searchOptions?: JourneySearchOptions;
   onNavigateEarlier?: () => void;
   onNavigateLater?: () => void;
   navigatingDirection?: 'earlier' | 'later' | null;
@@ -51,6 +53,7 @@ const MONO_FONT = '"IBM Plex Mono", monospace';
 const SearchResult: React.FC<Props> = ({
   searchData: _searchData,
   searchResult,
+  searchOptions,
   onNavigateEarlier,
   onNavigateLater,
   navigatingDirection,
@@ -90,6 +93,7 @@ const SearchResult: React.FC<Props> = ({
       fromId: fromId,
       toId: toId,
       departure: departure,
+      options: searchOptions,
     })
       .then((result) => {
         setLoading(false);

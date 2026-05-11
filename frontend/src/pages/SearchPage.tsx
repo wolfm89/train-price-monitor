@@ -1,10 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { useQuery } from 'urql';
 import SearchMask from '../components/SearchMask';
+import { JourneySearchOptions } from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
 import { Journey, SearchData } from '../components/SearchResult';
 import { JourneySearchQuery } from '../api/journey';
+import { UserTravelPreferencesQuery } from '../api/user';
+import { AuthContext } from '../providers/AuthProvider';
 
 interface QueryVars {
   from: string;
@@ -12,15 +15,25 @@ interface QueryVars {
   departure: string;
   earlierThan?: string;
   laterThan?: string;
+  options?: JourneySearchOptions;
 }
 
 interface Props {}
 
 const SearchPage: React.FC<Props> = () => {
+  const { user } = useContext(AuthContext);
   const [searchData, setSearchData] = useState<SearchData | null>(null);
   const [queryVars, setQueryVars] = useState<QueryVars | null>(null);
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
   const [navigatingDirection, setNavigatingDirection] = useState<'earlier' | 'later' | null>(null);
+  const [searchOptions, setSearchOptions] = useState<JourneySearchOptions | undefined>(undefined);
+
+  // Fetch the user's travel preferences to pre-populate SearchMask
+  const [{ data: profileData }] = useQuery({
+    query: UserTravelPreferencesQuery,
+    variables: { id: user?.['custom:id'] },
+    pause: !user?.['custom:id'],
+  });
 
   const [{ data, fetching }] = useQuery({
     query: JourneySearchQuery,
@@ -39,9 +52,10 @@ const SearchPage: React.FC<Props> = () => {
     }
   }, [fetching]);
 
-  const handleSearch = (from: string, to: string, departure: string) => {
+  const handleSearch = (from: string, to: string, departure: string, options?: JourneySearchOptions) => {
     setSearchClicked(true);
-    setQueryVars({ from, to, departure });
+    setSearchOptions(options);
+    setQueryVars({ from, to, departure, options });
   };
 
   const handleNavigateEarlier = earlierRef
@@ -67,10 +81,16 @@ const SearchPage: React.FC<Props> = () => {
         Find a connection and add it to your watchlist.
       </Typography>
 
-      <SearchMask setSearchData={setSearchData} onSearch={handleSearch} />
+      <SearchMask
+        setSearchData={setSearchData}
+        onSearch={handleSearch}
+        initialWalletCards={profileData?.user?.loyaltyCards}
+        initialAgeGroup={profileData?.user?.ageGroup}
+        initialDeutschlandTicketDiscount={profileData?.user?.deutschlandTicketDiscount}
+      />
 
       {searchClicked &&
-        (fetching && !data ? (
+        (fetching && !navigatingDirection ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
             <CircularProgress />
           </Box>
@@ -79,6 +99,7 @@ const SearchPage: React.FC<Props> = () => {
             <SearchResult
               searchData={searchData!}
               searchResult={searchResult ?? []}
+              searchOptions={searchOptions}
               onNavigateEarlier={handleNavigateEarlier}
               onNavigateLater={handleNavigateLater}
               navigatingDirection={navigatingDirection}

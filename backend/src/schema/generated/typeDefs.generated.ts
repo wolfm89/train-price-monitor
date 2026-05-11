@@ -16,6 +16,14 @@ export type Scalars = {
   File: { input: File; output: File };
 };
 
+export enum AgeGroup {
+  Adult = 'ADULT',
+  Baby = 'BABY',
+  Child = 'CHILD',
+  Senior = 'SENIOR',
+  Youth = 'YOUTH',
+}
+
 export type Journey = {
   __typename?: 'Journey';
   arrival?: Maybe<Scalars['DateTime']['output']>;
@@ -41,13 +49,30 @@ export type JourneyExpiryNotification = Notification & {
 
 export type JourneyMonitor = {
   __typename?: 'JourneyMonitor';
+  ageGroup?: Maybe<AgeGroup>;
+  bike?: Maybe<Scalars['Boolean']['output']>;
+  deutschlandTicketDiscount?: Maybe<Scalars['Boolean']['output']>;
   expires: Scalars['DateTime']['output'];
+  firstClass?: Maybe<Scalars['Boolean']['output']>;
   from?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   journey?: Maybe<Journey>;
   limitPrice: Scalars['Float']['output'];
+  loyaltyCard?: Maybe<LoyaltyCard>;
   to?: Maybe<Scalars['String']['output']>;
   userId: Scalars['ID']['output'];
+};
+
+export type JourneySearchOptions = {
+  ageGroup?: InputMaybe<AgeGroup>;
+  bike?: InputMaybe<Scalars['Boolean']['input']>;
+  deutschlandTicketDiscount?: InputMaybe<Scalars['Boolean']['input']>;
+  firstClass?: InputMaybe<Scalars['Boolean']['input']>;
+  loyaltyCard?: InputMaybe<LoyaltyCardInput>;
+  products?: InputMaybe<ProductFilter>;
+  results?: InputMaybe<Scalars['Int']['input']>;
+  transferTime?: InputMaybe<Scalars['Int']['input']>;
+  transfers?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type JourneyStaleNotification = Notification & {
@@ -77,6 +102,30 @@ export type Location = {
   type: Scalars['String']['output'];
 };
 
+export type LoyaltyCard = {
+  __typename?: 'LoyaltyCard';
+  class?: Maybe<Scalars['Int']['output']>;
+  discount?: Maybe<Scalars['Int']['output']>;
+  type: LoyaltyCardType;
+};
+
+export type LoyaltyCardInput = {
+  class?: InputMaybe<Scalars['Int']['input']>;
+  discount?: InputMaybe<Scalars['Int']['input']>;
+  type: LoyaltyCardType;
+};
+
+export enum LoyaltyCardType {
+  AtKlimaticket = 'AT_KLIMATICKET',
+  Bahncard = 'BAHNCARD',
+  Generalabonnement = 'GENERALABONNEMENT',
+  Halbtaxabo = 'HALBTAXABO',
+  Nl_40 = 'NL_40',
+  Shcard = 'SHCARD',
+  Voordeelurenabo = 'VOORDEELURENABO',
+  Vorteilscard = 'VORTEILSCARD',
+}
+
 export type Mutation = {
   __typename?: 'Mutation';
   createUser?: Maybe<User>;
@@ -87,6 +136,7 @@ export type Mutation = {
   sendEmailNotification?: Maybe<Notification>;
   updateJourneyMonitor?: Maybe<JourneyMonitor>;
   updateJourneyMonitors?: Maybe<Scalars['Int']['output']>;
+  updateTravelPreferences?: Maybe<User>;
   updateUserProfilePicture?: Maybe<User>;
   updateUserSettings?: Maybe<User>;
 };
@@ -117,6 +167,7 @@ export type MutationMonitorJourneyArgs = {
   expires: Scalars['DateTime']['input'];
   fromId: Scalars['String']['input'];
   limitPrice: Scalars['Float']['input'];
+  options?: InputMaybe<JourneySearchOptions>;
   refreshToken: Scalars['String']['input'];
   toId: Scalars['String']['input'];
   userId: Scalars['ID']['input'];
@@ -129,6 +180,13 @@ export type MutationSendEmailNotificationArgs = {
 
 export type MutationUpdateJourneyMonitorArgs = {
   journeyId: Scalars['ID']['input'];
+  userId: Scalars['ID']['input'];
+};
+
+export type MutationUpdateTravelPreferencesArgs = {
+  ageGroup?: InputMaybe<AgeGroup>;
+  deutschlandTicketDiscount?: InputMaybe<Scalars['Boolean']['input']>;
+  loyaltyCards?: InputMaybe<Array<LoyaltyCardInput>>;
   userId: Scalars['ID']['input'];
 };
 
@@ -168,6 +226,19 @@ export type PriceAlertNotification = Notification & {
   userId: Scalars['ID']['output'];
 };
 
+export type ProductFilter = {
+  bus?: InputMaybe<Scalars['Boolean']['input']>;
+  ferry?: InputMaybe<Scalars['Boolean']['input']>;
+  national?: InputMaybe<Scalars['Boolean']['input']>;
+  nationalExpress?: InputMaybe<Scalars['Boolean']['input']>;
+  regional?: InputMaybe<Scalars['Boolean']['input']>;
+  regionalExpress?: InputMaybe<Scalars['Boolean']['input']>;
+  suburban?: InputMaybe<Scalars['Boolean']['input']>;
+  subway?: InputMaybe<Scalars['Boolean']['input']>;
+  taxi?: InputMaybe<Scalars['Boolean']['input']>;
+  tram?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
 export type Query = {
   __typename?: 'Query';
   journeys?: Maybe<JourneysResult>;
@@ -181,6 +252,7 @@ export type QueryJourneysArgs = {
   earlierThan?: InputMaybe<Scalars['String']['input']>;
   from: Scalars['String']['input'];
   laterThan?: InputMaybe<Scalars['String']['input']>;
+  options?: InputMaybe<JourneySearchOptions>;
   to: Scalars['String']['input'];
 };
 
@@ -198,12 +270,15 @@ export type QueryUserProfilePicturePresignedUrlArgs = {
 
 export type User = {
   __typename?: 'User';
+  ageGroup?: Maybe<AgeGroup>;
+  deutschlandTicketDiscount?: Maybe<Scalars['Boolean']['output']>;
   email: Scalars['String']['output'];
   emailNotificationsEnabled: Scalars['Boolean']['output'];
   familyName?: Maybe<Scalars['String']['output']>;
   givenName: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   journeyMonitors?: Maybe<Array<Maybe<JourneyMonitor>>>;
+  loyaltyCards?: Maybe<Array<LoyaltyCard>>;
   notifications?: Maybe<Array<Maybe<Notification>>>;
   profilePicture?: Maybe<Scalars['String']['output']>;
 };

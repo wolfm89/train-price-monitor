@@ -1,19 +1,78 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, TextField, Grid, Typography, Autocomplete, Paper, Box, InputAdornment } from '@mui/material';
+import {
+  Button,
+  TextField,
+  Grid,
+  Typography,
+  Autocomplete,
+  Paper,
+  Box,
+  InputAdornment,
+  Collapse,
+  ToggleButton,
+  ToggleButtonGroup,
+  Chip,
+  FormControl,
+  Select,
+  MenuItem,
+  ListSubheader,
+  Switch,
+  SelectChangeEvent,
+} from '@mui/material';
 import {
   Search as SearchIcon,
   LocationOn as LocationOnIcon,
   CalendarToday as CalendarTodayIcon,
   AccessTime as AccessTimeIcon,
+  PedalBike as BikeIcon,
+  PersonOutline as PersonIcon,
+  TuneRounded as TuneIcon,
 } from '@mui/icons-material';
 import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { LocationSearchQuery } from '../api/location';
 import { SearchData } from './SearchResult';
+import {
+  LoyaltyCardInput,
+  AGE_GROUP_OPTIONS,
+  LOYALTY_CARD_OPTIONS,
+  cardToKey,
+  keyToCard,
+  cardLabel,
+  bestWalletCard,
+} from '../utils/travelPreferences';
+
+export interface ProductFilter {
+  nationalExpress?: boolean;
+  national?: boolean;
+  regionalExpress?: boolean;
+  regional?: boolean;
+  suburban?: boolean;
+  bus?: boolean;
+  ferry?: boolean;
+  subway?: boolean;
+  tram?: boolean;
+  taxi?: boolean;
+}
+
+export interface JourneySearchOptions {
+  firstClass?: boolean;
+  products?: ProductFilter;
+  transfers?: number;
+  transferTime?: number;
+  bike?: boolean;
+  results?: number;
+  loyaltyCard?: LoyaltyCardInput;
+  ageGroup?: string;
+  deutschlandTicketDiscount?: boolean;
+}
 
 interface Props {
   setSearchData: (searchData: SearchData) => void;
-  onSearch: (from: string, to: string, departure: string) => void;
+  onSearch: (from: string, to: string, departure: string, options?: JourneySearchOptions) => void;
+  initialWalletCards?: LoyaltyCardInput[];
+  initialAgeGroup?: string;
+  initialDeutschlandTicketDiscount?: boolean;
 }
 
 interface Location {
@@ -21,11 +80,61 @@ interface Location {
   name: string;
 }
 
+const ALL_PRODUCT_KEYS: (keyof ProductFilter)[] = [
+  'nationalExpress',
+  'national',
+  'regionalExpress',
+  'regional',
+  'suburban',
+  'bus',
+  'ferry',
+  'subway',
+  'tram',
+  'taxi',
+];
+
+const PRODUCT_TOGGLES: { keys: (keyof ProductFilter)[]; label: string }[] = [
+  { keys: ['nationalExpress'], label: 'ICE' },
+  { keys: ['national'], label: 'IC/EC' },
+  { keys: ['regionalExpress', 'regional'], label: 'RE/RB' },
+  { keys: ['suburban'], label: 'S-Bahn' },
+  { keys: ['bus'], label: 'Bus' },
+  { keys: ['ferry'], label: 'Ferry' },
+  { keys: ['subway'], label: 'U-Bahn' },
+  { keys: ['tram'], label: 'Tram' },
+  { keys: ['taxi'], label: 'Taxi' },
+];
+
+const TRANSFER_OPTIONS = [
+  { value: -1, label: 'Any' },
+  { value: 0, label: 'Direct only' },
+  { value: 1, label: '1 transfer' },
+  { value: 2, label: '2 transfers' },
+  { value: 3, label: '3 transfers' },
+  { value: 5, label: '5 transfers' },
+];
+
 const fieldLabelSx = {
+  display: 'block',
   mb: 0.5,
 };
 
-const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
+function dedupLocations(items: readonly Location[]): Location[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
+const SearchMask: React.FC<Props> = ({
+  setSearchData,
+  onSearch,
+  initialWalletCards,
+  initialAgeGroup,
+  initialDeutschlandTicketDiscount,
+}) => {
   const [from, setFrom] = useState<Location | null>(null);
   const [fromInput, setFromInput] = useState<string>('');
   const [fromSuggestions, setFromSuggestions] = useState<readonly Location[]>([]);
@@ -37,6 +146,35 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
   const [departureDay, setDepartureDay] = useState<string>('');
   const [departureTime, setDepartureTime] = useState<string>('');
   const [formValid, setFormValid] = useState<boolean>(false);
+
+  // Search options state
+  const [showOptions, setShowOptions] = useState(false);
+  const [firstClass, setFirstClass] = useState(false);
+  const [enabledProducts, setEnabledProducts] = useState<Set<keyof ProductFilter>>(() => new Set(ALL_PRODUCT_KEYS));
+  const [maxTransfers, setMaxTransfers] = useState<number>(-1);
+  const [bike, setBike] = useState(false);
+
+  // Travel preference state (initialised from profile, overridable per search)
+  const [loyaltyCard, setLoyaltyCard] = useState<LoyaltyCardInput | null>(
+    initialWalletCards ? bestWalletCard(initialWalletCards) : null
+  );
+  const [walletCards, setWalletCards] = useState<LoyaltyCardInput[]>(initialWalletCards ?? []);
+  const [ageGroup, setAgeGroup] = useState<string>(initialAgeGroup ?? 'ADULT');
+  const [deutschlandTicketDiscount, setDeutschlandTicketDiscount] = useState(initialDeutschlandTicketDiscount ?? false);
+
+  // Sync when profile data arrives asynchronously
+  useEffect(() => {
+    if (initialWalletCards !== undefined) {
+      setWalletCards(initialWalletCards);
+      setLoyaltyCard(bestWalletCard(initialWalletCards));
+    }
+  }, [initialWalletCards]);
+  useEffect(() => {
+    if (initialAgeGroup !== undefined) setAgeGroup(initialAgeGroup);
+  }, [initialAgeGroup]);
+  useEffect(() => {
+    if (initialDeutschlandTicketDiscount !== undefined) setDeutschlandTicketDiscount(initialDeutschlandTicketDiscount);
+  }, [initialDeutschlandTicketDiscount]);
 
   const [{ data: fromData, fetching: fromFetching }, reexecuteFromSearchQuery] = useQuery({
     query: LocationSearchQuery,
@@ -75,7 +213,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
 
   useEffect(() => {
     if (fromData) {
-      setFromSuggestions(fromData.locations);
+      setFromSuggestions(dedupLocations(fromData.locations));
     }
   }, [fromData]);
 
@@ -89,7 +227,7 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
 
   useEffect(() => {
     if (toData) {
-      setToSuggestions(toData.locations);
+      setToSuggestions(dedupLocations(toData.locations));
     }
   }, [toData]);
 
@@ -104,6 +242,50 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
     return createDateFromDayAndTime(day, time).toISOString();
   }
 
+  const buildSearchOptions = (): JourneySearchOptions | undefined => {
+    const opts: JourneySearchOptions = {};
+
+    // Always include travel-preference fields (profile defaults, overridable per search)
+    if (loyaltyCard) {
+      opts.loyaltyCard = { type: loyaltyCard.type, discount: loyaltyCard.discount, class: loyaltyCard.class };
+    }
+    if (ageGroup && ageGroup !== 'ADULT') {
+      opts.ageGroup = ageGroup;
+    }
+    if (deutschlandTicketDiscount) {
+      opts.deutschlandTicketDiscount = true;
+    }
+
+    if (firstClass) {
+      opts.firstClass = true;
+    }
+
+    // Only include products filter when some (but not all and not zero) modes are selected
+    // Send all products with explicit booleans — db-vendo-client's
+    // formatProductsFilter uses Object.assign with defaults (all true),
+    // so only true values are kept; false values are the only way to
+    // exclude a mode.
+    const allSelected = enabledProducts.size === ALL_PRODUCT_KEYS.length;
+    const noneSelected = enabledProducts.size === 0;
+    if (!allSelected && !noneSelected) {
+      const products: ProductFilter = {};
+      for (const key of ALL_PRODUCT_KEYS) {
+        products[key] = enabledProducts.has(key);
+      }
+      opts.products = products;
+    }
+
+    if (maxTransfers >= 0) {
+      opts.transfers = maxTransfers;
+    }
+
+    if (bike) {
+      opts.bike = true;
+    }
+
+    return Object.keys(opts).length > 0 ? opts : undefined;
+  };
+
   const handleSearchClick = () => {
     setSearchData({
       departure: from?.name ?? '',
@@ -111,7 +293,12 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
       date: departureDay,
       time: departureTime,
     });
-    onSearch(from?.id ?? '', to?.id ?? '', createISODateString(departureDay.trim(), departureTime.trim()));
+    onSearch(
+      from?.id ?? '',
+      to?.id ?? '',
+      createISODateString(departureDay.trim(), departureTime.trim()),
+      buildSearchOptions()
+    );
   };
 
   React.useEffect(() => {
@@ -122,172 +309,484 @@ const SearchMask: React.FC<Props> = ({ setSearchData, onSearch }) => {
         to?.id !== '' &&
         day !== '' &&
         time !== '' &&
+        enabledProducts.size > 0 &&
         createDateFromDayAndTime(departureDay, departureTime) > new Date()
     );
-  }, [from, to, departureDay, departureTime]);
+  }, [from, to, departureDay, departureTime, enabledProducts]);
+
+  const handleProductToggle = (keys: (keyof ProductFilter)[]) => {
+    setEnabledProducts((prev) => {
+      const next = new Set(prev);
+      const allEnabled = keys.every((k) => prev.has(k));
+      for (const key of keys) {
+        if (allEnabled) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleEnableAllProducts = () => {
+    setEnabledProducts(new Set(ALL_PRODUCT_KEYS));
+  };
+
+  const handleClearAllProducts = () => {
+    setEnabledProducts(new Set());
+  };
+
+  const handleTransfersChange = (e: SelectChangeEvent<number>) => {
+    setMaxTransfers(Number(e.target.value));
+  };
+
+  const handleAgeGroupChange = (e: SelectChangeEvent) => {
+    setAgeGroup(e.target.value);
+  };
+
+  const handleDTicketToggle = (_event: React.ChangeEvent<HTMLInputElement>, checked: boolean) => {
+    setDeutschlandTicketDiscount(checked);
+  };
+
+  const handleLoyaltyCardChange = (e: SelectChangeEvent<string>) => {
+    const key = e.target.value;
+    setLoyaltyCard(key ? keyToCard(key) ?? null : null);
+  };
+
+  const optionsActive =
+    firstClass ||
+    enabledProducts.size < ALL_PRODUCT_KEYS.length ||
+    maxTransfers >= 0 ||
+    bike ||
+    loyaltyCard !== null ||
+    deutschlandTicketDiscount ||
+    ageGroup !== 'ADULT';
+
+  const cardSx = { border: 1, borderColor: 'divider', borderRadius: 3, p: 2.75 };
+  const sectionTitleSx = {
+    fontSize: 11,
+    fontWeight: 700,
+    color: 'text.secondary',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.07em',
+    mb: 2,
+  };
 
   return (
-    <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.75, mb: 2.75 }}>
-      <Grid container spacing={1.75} sx={{ mb: 1.75 }}>
-        <Grid size={{ xs: 12, sm: 6 }}>
-          <Typography variant="fieldLabel" sx={fieldLabelSx}>
-            From
-          </Typography>
-          <Autocomplete
-            id="departure"
-            value={from}
-            options={fromSuggestions ?? []}
-            filterOptions={(x) => x}
-            getOptionLabel={(option) => option?.name ?? ''}
-            includeInputInList
-            filterSelectedOptions
-            noOptionsText="No locations found"
-            loading={fromFetching}
-            size="small"
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                placeholder="Station"
-                fullWidth
-                inputProps={{
-                  ...params.inputProps,
-                  'aria-label': 'From station',
-                }}
-                slotProps={{
-                  input: {
-                    ...params.InputProps,
-                    startAdornment: (
-                      <>
-                        <InputAdornment position="start">
-                          <LocationOnIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
-                        </InputAdornment>
-                        {params.InputProps.startAdornment}
-                      </>
-                    ),
-                  },
-                }}
-              />
-            )}
-            isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
-            onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
-              setFromSuggestions(newValue ? [newValue, ...(fromSuggestions ?? [])] : fromSuggestions ?? []);
-              setFrom(newValue);
-            }}
-            onInputChange={(_event, newInputValue) => {
-              setFromInput(newInputValue);
-            }}
-          />
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.75 }}>
+      {/* Card 1: Search fields */}
+      <Paper elevation={0} sx={cardSx}>
+        <Grid container spacing={1.75} sx={{ mb: 1.75 }}>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Typography variant="fieldLabel" sx={fieldLabelSx}>
+              From
+            </Typography>
+            <Autocomplete
+              id="departure"
+              value={from}
+              options={fromSuggestions ?? []}
+              filterOptions={(x) => x}
+              getOptionLabel={(option) => option?.name ?? ''}
+              includeInputInList
+              filterSelectedOptions
+              noOptionsText="No locations found"
+              loading={fromFetching}
+              size="small"
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  placeholder="Station"
+                  fullWidth
+                  inputProps={{
+                    ...params.inputProps,
+                    'aria-label': 'From station',
+                  }}
+                  slotProps={{
+                    input: {
+                      ...params.InputProps,
+                      startAdornment: (
+                        <>
+                          <InputAdornment position="start">
+                            <LocationOnIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
+                          </InputAdornment>
+                          {params.InputProps.startAdornment}
+                        </>
+                      ),
+                    },
+                  }}
+                />
+              )}
+              isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
+              getOptionKey={(option: Location) => option.id}
+              onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
+                setFromSuggestions(
+                  newValue
+                    ? dedupLocations([newValue, ...(fromSuggestions ?? [])])
+                    : dedupLocations(fromSuggestions ?? [])
+                );
+                setFrom(newValue);
+              }}
+              onInputChange={(_event, newInputValue) => {
+                setFromInput(newInputValue);
+              }}
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Typography variant="fieldLabel" sx={fieldLabelSx}>
+              To
+            </Typography>
+            <Autocomplete
+              id="arrival"
+              value={to}
+              options={toSuggestions ?? []}
+              filterOptions={(x) => x}
+              getOptionLabel={(option) => option?.name ?? ''}
+              includeInputInList
+              filterSelectedOptions
+              noOptionsText="No locations found"
+              loading={toFetching}
+              size="small"
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  placeholder="Station"
+                  fullWidth
+                  inputProps={{
+                    ...params.inputProps,
+                    'aria-label': 'To station',
+                  }}
+                  slotProps={{
+                    input: {
+                      ...params.InputProps,
+                      startAdornment: (
+                        <>
+                          <InputAdornment position="start">
+                            <LocationOnIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
+                          </InputAdornment>
+                          {params.InputProps.startAdornment}
+                        </>
+                      ),
+                    },
+                  }}
+                />
+              )}
+              isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
+              getOptionKey={(option: Location) => option.id}
+              onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
+                setToSuggestions(
+                  newValue ? dedupLocations([newValue, ...(toSuggestions ?? [])]) : dedupLocations(toSuggestions ?? [])
+                );
+                setTo(newValue);
+              }}
+              onInputChange={(_event, newInputValue) => {
+                setToInput(newInputValue);
+              }}
+            />
+          </Grid>
         </Grid>
-        <Grid size={{ xs: 12, sm: 6 }}>
-          <Typography variant="fieldLabel" sx={fieldLabelSx}>
-            To
-          </Typography>
-          <Autocomplete
-            id="arrival"
-            value={to}
-            options={toSuggestions ?? []}
-            filterOptions={(x) => x}
-            getOptionLabel={(option) => option?.name ?? ''}
-            includeInputInList
-            filterSelectedOptions
-            noOptionsText="No locations found"
-            loading={toFetching}
-            size="small"
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                placeholder="Station"
-                fullWidth
-                inputProps={{
-                  ...params.inputProps,
-                  'aria-label': 'To station',
-                }}
-                slotProps={{
-                  input: {
-                    ...params.InputProps,
-                    startAdornment: (
-                      <>
-                        <InputAdornment position="start">
-                          <LocationOnIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
-                        </InputAdornment>
-                        {params.InputProps.startAdornment}
-                      </>
-                    ),
-                  },
-                }}
-              />
-            )}
-            isOptionEqualToValue={(option: Location, value: Location) => option?.id === value?.id}
-            onChange={(_event: React.SyntheticEvent, newValue: Location | null) => {
-              setToSuggestions(newValue ? [newValue, ...(toSuggestions ?? [])] : toSuggestions ?? []);
-              setTo(newValue);
-            }}
-            onInputChange={(_event, newInputValue) => {
-              setToInput(newInputValue);
-            }}
-          />
-        </Grid>
-      </Grid>
-      <Box
-        sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 130px auto' }, gap: 1.5, alignItems: 'end' }}
-      >
-        <Box>
-          <Typography variant="fieldLabel" sx={fieldLabelSx}>
-            Departure date
-          </Typography>
-          <TextField
-            id="date"
-            type="date"
-            value={departureDay}
-            onChange={(e) => setDepartureDay(e.target.value)}
-            fullWidth
-            size="small"
-            slotProps={{
-              htmlInput: { 'aria-label': 'Departure date' },
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <CalendarTodayIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
-        </Box>
-        <Box>
-          <Typography variant="fieldLabel" sx={fieldLabelSx}>
-            Time
-          </Typography>
-          <TextField
-            id="time"
-            type="time"
-            value={departureTime}
-            onChange={(e) => setDepartureTime(e.target.value)}
-            fullWidth
-            slotProps={{
-              htmlInput: { 'aria-label': 'Departure time' },
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <AccessTimeIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
-                  </InputAdornment>
-                ),
-              },
-            }}
-            size="small"
-          />
-        </Box>
-        <Button
-          variant="contained"
-          disabled={!formValid}
-          onClick={handleSearchClick}
-          startIcon={<SearchIcon sx={{ fontSize: '16px !important' }} />}
-          sx={{ textTransform: 'none', fontWeight: 600, height: 40, whiteSpace: 'nowrap' }}
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+            gap: 1.5,
+            alignItems: 'end',
+          }}
         >
-          Search
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 1.5 }}>
+            <Box>
+              <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                Departure date
+              </Typography>
+              <TextField
+                id="date"
+                type="date"
+                value={departureDay}
+                onChange={(e) => setDepartureDay(e.target.value)}
+                fullWidth
+                size="small"
+                slotProps={{
+                  htmlInput: { 'aria-label': 'Departure date' },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <CalendarTodayIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+            </Box>
+            <Box>
+              <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                Time
+              </Typography>
+              <TextField
+                id="time"
+                type="time"
+                value={departureTime}
+                onChange={(e) => setDepartureTime(e.target.value)}
+                fullWidth
+                slotProps={{
+                  htmlInput: { 'aria-label': 'Departure time' },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AccessTimeIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+                size="small"
+              />
+            </Box>
+          </Box>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 1.5, alignItems: 'end' }}>
+            <Box>
+              <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                Age group
+              </Typography>
+              <FormControl size="small" fullWidth>
+                <Select
+                  value={ageGroup}
+                  onChange={handleAgeGroupChange}
+                  sx={{ fontSize: 13 }}
+                  startAdornment={
+                    <InputAdornment position="start">
+                      <PersonIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
+                    </InputAdornment>
+                  }
+                >
+                  {AGE_GROUP_OPTIONS.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value} sx={{ fontSize: 13 }}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+            <Button
+              variant="contained"
+              disabled={!formValid}
+              onClick={handleSearchClick}
+              startIcon={<SearchIcon sx={{ fontSize: '16px !important' }} />}
+              sx={{ textTransform: 'none', fontWeight: 600, height: 40, whiteSpace: 'nowrap' }}
+            >
+              Search
+            </Button>
+          </Box>
+        </Box>
+      </Paper>
+
+      {/* Options toggle */}
+      <Box sx={{ mt: -1.5 }}>
+        <Button
+          size="small"
+          startIcon={<TuneIcon sx={{ fontSize: '14px !important' }} />}
+          onClick={() => setShowOptions((prev) => !prev)}
+          sx={{
+            fontSize: 12,
+            textTransform: 'none',
+            color: optionsActive ? 'primary.main' : 'text.secondary',
+            fontWeight: optionsActive ? 600 : 400,
+          }}
+        >
+          {showOptions ? 'Hide options' : 'Search options'}
+          {optionsActive && !showOptions && (
+            <Chip label="active" size="small" color="primary" sx={{ ml: 0.75, height: 18, fontSize: 10 }} />
+          )}
         </Button>
       </Box>
-    </Paper>
+
+      <Collapse in={showOptions}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.75 }}>
+          {/* Card 2: Journey Preferences + Transport Modes (side-by-side) */}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+              gap: 2.75,
+            }}
+          >
+            {/* Journey Preferences */}
+            <Paper elevation={0} sx={cardSx}>
+              <Typography sx={sectionTitleSx}>Journey Preferences</Typography>
+
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="fieldLabel" sx={{ display: 'block', mb: 1 }}>
+                  Travel class
+                </Typography>
+                <ToggleButtonGroup
+                  value={firstClass ? '1' : '2'}
+                  exclusive
+                  onChange={(_e, val) => {
+                    if (val !== null) setFirstClass(val === '1');
+                  }}
+                  size="small"
+                >
+                  <ToggleButton value="2" sx={{ fontSize: 12, textTransform: 'none', px: 2 }}>
+                    2nd class
+                  </ToggleButton>
+                  <ToggleButton value="1" sx={{ fontSize: 12, textTransform: 'none', px: 2 }}>
+                    1st class
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                  Max transfers
+                </Typography>
+                <FormControl size="small" fullWidth>
+                  <Select value={maxTransfers} onChange={handleTransfersChange} sx={{ fontSize: 13 }}>
+                    {TRANSFER_OPTIONS.map((opt) => (
+                      <MenuItem key={opt.value} value={opt.value} sx={{ fontSize: 13 }}>
+                        {opt.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Box>
+
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <BikeIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+                <Typography sx={{ fontSize: 13, fontWeight: 500, color: 'text.primary', flex: 1 }}>
+                  Bicycle space
+                </Typography>
+                <Switch checked={bike} onChange={(_e, checked) => setBike(checked)} color="secondary" size="small" />
+              </Box>
+            </Paper>
+
+            {/* Transport Modes */}
+            <Paper elevation={0} sx={cardSx}>
+              <Typography sx={sectionTitleSx}>Transport Modes</Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                <Chip
+                  label="All"
+                  size="small"
+                  variant={enabledProducts.size === ALL_PRODUCT_KEYS.length ? 'filled' : 'outlined'}
+                  color={enabledProducts.size === ALL_PRODUCT_KEYS.length ? 'primary' : 'default'}
+                  onClick={handleEnableAllProducts}
+                  sx={{ fontSize: 12, cursor: 'pointer' }}
+                />
+                <Chip
+                  label="None"
+                  size="small"
+                  variant={enabledProducts.size === 0 ? 'filled' : 'outlined'}
+                  color={enabledProducts.size === 0 ? 'primary' : 'default'}
+                  onClick={handleClearAllProducts}
+                  sx={{ fontSize: 12, cursor: 'pointer' }}
+                />
+                {PRODUCT_TOGGLES.map((p) => (
+                  <Chip
+                    key={p.keys.join(',')}
+                    label={p.label}
+                    size="small"
+                    variant={p.keys.every((k) => enabledProducts.has(k)) ? 'filled' : 'outlined'}
+                    color={p.keys.every((k) => enabledProducts.has(k)) ? 'primary' : 'default'}
+                    onClick={() => handleProductToggle(p.keys)}
+                    sx={{ fontSize: 12, cursor: 'pointer' }}
+                  />
+                ))}
+              </Box>
+            </Paper>
+          </Box>
+
+          {/* Card 3: Discounts & Pricing */}
+          <Paper elevation={0} sx={cardSx}>
+            <Typography sx={sectionTitleSx}>Discounts &amp; Pricing</Typography>
+
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                flexWrap: { xs: 'wrap', sm: 'nowrap' },
+                gap: { xs: 2, sm: 0 },
+              }}
+            >
+              {/* Discount card */}
+              <Box sx={{ flexShrink: 0 }}>
+                <Typography variant="fieldLabel" sx={{ display: 'block', mb: 0.75 }}>
+                  Discount card
+                </Typography>
+                <FormControl size="small">
+                  <Select
+                    value={loyaltyCard ? cardToKey(loyaltyCard) : ''}
+                    onChange={handleLoyaltyCardChange}
+                    displayEmpty
+                    sx={{ fontSize: 13, minWidth: 200 }}
+                  >
+                    <MenuItem value="" sx={{ fontSize: 13, color: 'text.secondary' }}>
+                      No card
+                    </MenuItem>
+                    {walletCards.length > 0 && [
+                      <ListSubheader key="wallet-header" sx={{ fontSize: 11, lineHeight: '28px' }}>
+                        My cards
+                      </ListSubheader>,
+                      ...walletCards.map((card) => (
+                        <MenuItem
+                          key={`wallet-${cardToKey(card)}`}
+                          value={cardToKey(card)}
+                          sx={{ fontSize: 13, fontWeight: 600 }}
+                        >
+                          {cardLabel(card)}
+                        </MenuItem>
+                      )),
+                      <ListSubheader key="other-header" sx={{ fontSize: 11, lineHeight: '28px' }}>
+                        Other cards
+                      </ListSubheader>,
+                      ...LOYALTY_CARD_OPTIONS.filter((opt) => !walletCards.some((wc) => cardToKey(wc) === opt.key)).map(
+                        (opt) => (
+                          <MenuItem key={opt.key} value={opt.key} sx={{ fontSize: 13 }}>
+                            {opt.label}
+                          </MenuItem>
+                        )
+                      ),
+                    ]}
+                    {walletCards.length === 0 &&
+                      LOYALTY_CARD_OPTIONS.map((opt) => (
+                        <MenuItem key={opt.key} value={opt.key} sx={{ fontSize: 13 }}>
+                          {opt.label}
+                        </MenuItem>
+                      ))}
+                  </Select>
+                </FormControl>
+              </Box>
+
+              {/* Vertical rule */}
+              <Box
+                sx={{
+                  display: { xs: 'none', sm: 'block' },
+                  alignSelf: 'stretch',
+                  width: '1px',
+                  backgroundColor: 'divider',
+                  mx: 3,
+                  flexShrink: 0,
+                }}
+              />
+
+              {/* Deutschlandticket */}
+              <Box sx={{ flexShrink: 0 }}>
+                <Typography variant="fieldLabel" sx={{ display: 'block', mb: 0.75 }}>
+                  Deutschlandticket
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Switch
+                    checked={deutschlandTicketDiscount}
+                    onChange={handleDTicketToggle}
+                    color="secondary"
+                    size="small"
+                  />
+                  <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+                    Regional costs deducted from prices
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+          </Paper>
+        </Box>
+      </Collapse>
+    </Box>
   );
 };
 
