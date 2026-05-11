@@ -24,7 +24,7 @@ const Footer: React.FC<Props> = () => {
         rel="noopener noreferrer"
         sx={{
           textDecoration: 'none',
-          color: 'text.disabled',
+          color: 'text.secondary',
           display: 'flex',
           alignItems: 'center',
           gap: 0.5,
