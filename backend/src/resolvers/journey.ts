@@ -34,16 +34,14 @@ function toPricingOptions(options?: InputMaybe<JourneySearchOptions>): PricingOp
     pricingOpts.firstClass = options.firstClass;
   }
 
-  if (options.loyaltyCards && options.loyaltyCards.length > 0) {
-    pricingOpts.loyaltyCards = options.loyaltyCards.map((card) => {
-      const loyaltyCard: LoyaltyCardData = {
-        type: card.type,
-        discount: card.discount ?? undefined,
-        class: card.class ?? undefined,
-      };
-      validateLoyaltyCard(loyaltyCard);
-      return loyaltyCard;
-    });
+  if (options.loyaltyCard) {
+    const loyaltyCard: LoyaltyCardData = {
+      type: options.loyaltyCard.type,
+      discount: options.loyaltyCard.discount ?? undefined,
+      class: options.loyaltyCard.class ?? undefined,
+    };
+    validateLoyaltyCard(loyaltyCard);
+    pricingOpts.loyaltyCard = loyaltyCard;
   }
 
   if (options.ageGroup) {
@@ -87,7 +85,8 @@ function toPricingOptions(options?: InputMaybe<JourneySearchOptions>): PricingOp
  */
 function extractPricingSnapshot(options?: InputMaybe<JourneySearchOptions>): {
   firstClass?: boolean;
-  loyaltyCards?: string;
+  bike?: boolean;
+  loyaltyCard?: string;
   ageGroup?: string;
   deutschlandTicketDiscount?: boolean;
 } {
@@ -95,7 +94,8 @@ function extractPricingSnapshot(options?: InputMaybe<JourneySearchOptions>): {
 
   const snapshot: {
     firstClass?: boolean;
-    loyaltyCards?: string;
+    bike?: boolean;
+    loyaltyCard?: string;
     ageGroup?: string;
     deutschlandTicketDiscount?: boolean;
   } = {};
@@ -104,14 +104,12 @@ function extractPricingSnapshot(options?: InputMaybe<JourneySearchOptions>): {
     snapshot.firstClass = options.firstClass;
   }
 
-  if (options.loyaltyCards && options.loyaltyCards.length > 0) {
-    snapshot.loyaltyCards = JSON.stringify(
-      options.loyaltyCards.map((card) => ({
-        type: card.type,
-        discount: card.discount ?? undefined,
-        class: card.class ?? undefined,
-      }))
-    );
+  if (options.loyaltyCard) {
+    snapshot.loyaltyCard = JSON.stringify({
+      type: options.loyaltyCard.type,
+      discount: options.loyaltyCard.discount ?? undefined,
+      class: options.loyaltyCard.class ?? undefined,
+    });
   }
 
   if (options.ageGroup) {
@@ -120,6 +118,10 @@ function extractPricingSnapshot(options?: InputMaybe<JourneySearchOptions>): {
 
   if (options.deutschlandTicketDiscount !== undefined && options.deutschlandTicketDiscount !== null) {
     snapshot.deutschlandTicketDiscount = options.deutschlandTicketDiscount;
+  }
+
+  if (options.bike !== undefined && options.bike !== null) {
+    snapshot.bike = options.bike;
   }
 
   return snapshot;

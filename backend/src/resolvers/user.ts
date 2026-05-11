@@ -37,9 +37,30 @@ if (!profileImageBucketName) {
 }
 
 /**
- * Parses stored loyaltyCards JSON string into array of LoyaltyCard.
+ * Parses stored loyaltyCard JSON string into a LoyaltyCard.
+ * Migration shim: also handles the old array format by returning the first element.
  */
-function parseLoyaltyCards(raw?: string): LoyaltyCard[] | undefined {
+function parseLoyaltyCard(raw?: string): LoyaltyCard | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as LoyaltyCardData | LoyaltyCardData[];
+    const card = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!card) return undefined;
+    return {
+      type: card.type as LoyaltyCardType,
+      discount: card.discount,
+      class: card.class,
+    };
+  } catch {
+    Logger.warn('Failed to parse stored loyaltyCard JSON', { raw });
+    return undefined;
+  }
+}
+
+/**
+ * Parses stored loyaltyCards JSON string (User wallet) into array of LoyaltyCard.
+ */
+function parseWalletLoyaltyCards(raw?: string): LoyaltyCard[] | undefined {
   if (!raw) return undefined;
   try {
     const cards = JSON.parse(raw) as LoyaltyCardData[];
@@ -57,7 +78,7 @@ function parseLoyaltyCards(raw?: string): LoyaltyCard[] | undefined {
 export const userResolvers: UserResolvers = {
   loyaltyCards: (parent) => {
     const raw = (parent as unknown as { loyaltyCards?: string }).loyaltyCards;
-    return parseLoyaltyCards(raw) ?? null;
+    return parseWalletLoyaltyCards(raw) ?? null;
   },
   ageGroup: (parent) => {
     const raw = (parent as unknown as { ageGroup?: string }).ageGroup;
@@ -148,7 +169,8 @@ export const userResolvers: UserResolvers = {
           fromId: string;
           toId: string;
           firstClass?: boolean;
-          loyaltyCards?: string;
+          bike?: boolean;
+          loyaltyCard?: string;
           ageGroup?: string;
           deutschlandTicketDiscount?: boolean;
         }) => {
@@ -174,6 +196,11 @@ export const userResolvers: UserResolvers = {
               expires: dbJourney.expires,
               from: fromStation?.name ?? undefined,
               to: toStation?.name ?? undefined,
+              firstClass: dbJourney.firstClass ?? undefined,
+              bike: dbJourney.bike ?? undefined,
+              deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,
+              ageGroup: (dbJourney.ageGroup as AgeGroup | undefined) ?? undefined,
+              loyaltyCard: parseLoyaltyCard(dbJourney.loyaltyCard) ?? undefined,
               journey: undefined,
             } as JourneyMonitor;
           }
@@ -467,7 +494,8 @@ export async function getJourneyMonitor(
     fromId: string;
     toId: string;
     firstClass?: boolean;
-    loyaltyCards?: string;
+    bike?: boolean;
+    loyaltyCard?: string;
     ageGroup?: string;
     deutschlandTicketDiscount?: boolean;
   }
@@ -481,6 +509,11 @@ export async function getJourneyMonitor(
     expires: dbJourney.expires,
     from: journey?.legs[0].origin?.name ?? undefined,
     to: journey ? journey.legs[journey.legs.length - 1].destination?.name ?? undefined : undefined,
+    firstClass: dbJourney.firstClass ?? undefined,
+    bike: dbJourney.bike ?? undefined,
+    deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,
+    ageGroup: (dbJourney.ageGroup as AgeGroup | undefined) ?? undefined,
+    loyaltyCard: parseLoyaltyCard(dbJourney.loyaltyCard) ?? undefined,
     journey: !journey
       ? undefined
       : {

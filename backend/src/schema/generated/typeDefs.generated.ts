@@ -49,11 +49,16 @@ export type JourneyExpiryNotification = Notification & {
 
 export type JourneyMonitor = {
   __typename?: 'JourneyMonitor';
+  ageGroup?: Maybe<AgeGroup>;
+  bike?: Maybe<Scalars['Boolean']['output']>;
+  deutschlandTicketDiscount?: Maybe<Scalars['Boolean']['output']>;
   expires: Scalars['DateTime']['output'];
+  firstClass?: Maybe<Scalars['Boolean']['output']>;
   from?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   journey?: Maybe<Journey>;
   limitPrice: Scalars['Float']['output'];
+  loyaltyCard?: Maybe<LoyaltyCard>;
   to?: Maybe<Scalars['String']['output']>;
   userId: Scalars['ID']['output'];
 };
@@ -63,7 +68,7 @@ export type JourneySearchOptions = {
   bike?: InputMaybe<Scalars['Boolean']['input']>;
   deutschlandTicketDiscount?: InputMaybe<Scalars['Boolean']['input']>;
   firstClass?: InputMaybe<Scalars['Boolean']['input']>;
-  loyaltyCards?: InputMaybe<Array<LoyaltyCardInput>>;
+  loyaltyCard?: InputMaybe<LoyaltyCardInput>;
   products?: InputMaybe<ProductFilter>;
   results?: InputMaybe<Scalars['Int']['input']>;
   transferTime?: InputMaybe<Scalars['Int']['input']>;

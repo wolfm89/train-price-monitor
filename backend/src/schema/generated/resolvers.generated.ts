@@ -185,11 +185,16 @@ export type JourneyMonitorResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['JourneyMonitor'] = ResolversParentTypes['JourneyMonitor'],
 > = {
+  ageGroup?: Resolver<Types.Maybe<ResolversTypes['AgeGroup']>, ParentType, ContextType>;
+  bike?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
+  deutschlandTicketDiscount?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
   expires?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
+  firstClass?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
   from?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<Types.Maybe<ResolversTypes['Journey']>, ParentType, ContextType>;
   limitPrice?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
+  loyaltyCard?: Resolver<Types.Maybe<ResolversTypes['LoyaltyCard']>, ParentType, ContextType>;
   to?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
 };

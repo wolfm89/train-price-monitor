@@ -13,7 +13,7 @@ interface SimpleStation {
 
 export interface PricingOptions {
   firstClass?: boolean;
-  loyaltyCards?: LoyaltyCardData[];
+  loyaltyCard?: LoyaltyCardData;
   ageGroup?: string;
   deutschlandTicketDiscount?: boolean;
   products?: Record<string, boolean>;
@@ -55,11 +55,8 @@ function buildHafasOptions(pricingOptions?: PricingOptions): Record<string, unkn
     opts.firstClass = pricingOptions.firstClass;
   }
 
-  if (pricingOptions.loyaltyCards && pricingOptions.loyaltyCards.length > 0) {
-    // db-vendo-client supports array of loyalty cards for multi-traveller scenarios
-    // For single traveller with multiple cards, the API uses the first card
-    const hafasCards = pricingOptions.loyaltyCards.map(toHafasLoyaltyCard);
-    opts.loyaltyCard = hafasCards.length === 1 ? hafasCards[0] : hafasCards;
+  if (pricingOptions.loyaltyCard) {
+    opts.loyaltyCard = toHafasLoyaltyCard(pricingOptions.loyaltyCard);
   }
 
   if (pricingOptions.ageGroup) {

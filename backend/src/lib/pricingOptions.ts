@@ -4,7 +4,7 @@ import { PricingOptions } from '../managers/DbHafasManager';
 
 export function loadStoredPricingOptions(dbJourney: {
   firstClass?: boolean;
-  loyaltyCards?: string;
+  loyaltyCard?: string;
   ageGroup?: string;
   deutschlandTicketDiscount?: boolean;
 }): PricingOptions | undefined {
@@ -14,11 +14,13 @@ export function loadStoredPricingOptions(dbJourney: {
     opts.firstClass = dbJourney.firstClass;
   }
 
-  if (dbJourney.loyaltyCards) {
+  if (dbJourney.loyaltyCard) {
     try {
-      opts.loyaltyCards = JSON.parse(dbJourney.loyaltyCards) as LoyaltyCardData[];
+      // Migration shim: handle old array format by taking the first element
+      const parsed = JSON.parse(dbJourney.loyaltyCard) as LoyaltyCardData | LoyaltyCardData[];
+      opts.loyaltyCard = Array.isArray(parsed) ? parsed[0] : parsed;
     } catch {
-      Logger.warn('Failed to parse stored loyaltyCards JSON for pricing', { raw: dbJourney.loyaltyCards });
+      Logger.warn('Failed to parse stored loyaltyCard JSON for pricing', { raw: dbJourney.loyaltyCard });
     }
   }
 

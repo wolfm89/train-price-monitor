@@ -54,7 +54,7 @@ input ProductFilter {
 
 input JourneySearchOptions {
   firstClass: Boolean
-  loyaltyCards: [LoyaltyCardInput!]
+  loyaltyCard: LoyaltyCardInput
   ageGroup: AgeGroup
   deutschlandTicketDiscount: Boolean
   products: ProductFilter
@@ -202,6 +202,11 @@ type JourneyMonitor {
   journey: Journey
   from: String
   to: String
+  firstClass: Boolean
+  bike: Boolean
+  deutschlandTicketDiscount: Boolean
+  ageGroup: AgeGroup
+  loyaltyCard: LoyaltyCard
 }
 
 ## Queries
