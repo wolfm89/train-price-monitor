@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { useQuery } from 'urql';
 import SearchMask from '../components/SearchMask';
+import { JourneySearchOptions } from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
 import { Journey, SearchData } from '../components/SearchResult';
 import { JourneySearchQuery } from '../api/journey';
@@ -12,6 +13,7 @@ interface QueryVars {
   departure: string;
   earlierThan?: string;
   laterThan?: string;
+  options?: JourneySearchOptions;
 }
 
 interface Props {}
@@ -21,6 +23,7 @@ const SearchPage: React.FC<Props> = () => {
   const [queryVars, setQueryVars] = useState<QueryVars | null>(null);
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
   const [navigatingDirection, setNavigatingDirection] = useState<'earlier' | 'later' | null>(null);
+  const [searchOptions, setSearchOptions] = useState<JourneySearchOptions | undefined>(undefined);
 
   const [{ data, fetching }] = useQuery({
     query: JourneySearchQuery,
@@ -39,9 +42,10 @@ const SearchPage: React.FC<Props> = () => {
     }
   }, [fetching]);
 
-  const handleSearch = (from: string, to: string, departure: string) => {
+  const handleSearch = (from: string, to: string, departure: string, options?: JourneySearchOptions) => {
     setSearchClicked(true);
-    setQueryVars({ from, to, departure });
+    setSearchOptions(options);
+    setQueryVars({ from, to, departure, options });
   };
 
   const handleNavigateEarlier = earlierRef
@@ -79,6 +83,7 @@ const SearchPage: React.FC<Props> = () => {
             <SearchResult
               searchData={searchData!}
               searchResult={searchResult ?? []}
+              searchOptions={searchOptions}
               onNavigateEarlier={handleNavigateEarlier}
               onNavigateLater={handleNavigateLater}
               navigatingDirection={navigatingDirection}

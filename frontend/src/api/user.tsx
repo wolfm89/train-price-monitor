@@ -113,3 +113,43 @@ export const UserSettingsQuery = gql`
     }
   }
 `;
+
+export const UserTravelPreferencesQuery = gql`
+  query ($id: ID!) {
+    user(id: $id) {
+      id
+      loyaltyCards {
+        type
+        discount
+        class
+      }
+      ageGroup
+      deutschlandTicketDiscount
+    }
+  }
+`;
+
+export const UpdateTravelPreferences = gql`
+  mutation (
+    $userId: ID!
+    $loyaltyCards: [LoyaltyCardInput!]
+    $ageGroup: AgeGroup
+    $deutschlandTicketDiscount: Boolean
+  ) {
+    updateTravelPreferences(
+      userId: $userId
+      loyaltyCards: $loyaltyCards
+      ageGroup: $ageGroup
+      deutschlandTicketDiscount: $deutschlandTicketDiscount
+    ) {
+      id
+      loyaltyCards {
+        type
+        discount
+        class
+      }
+      ageGroup
+      deutschlandTicketDiscount
+    }
+  }
+`;

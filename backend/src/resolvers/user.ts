@@ -18,10 +18,15 @@ import {
   JourneyStaleNotification,
   PriceAlertNotification,
   InputMaybe,
+  LoyaltyCardInput,
+  AgeGroup,
 } from '../schema/generated/typeDefs.generated';
 import { getMeans } from './journey';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { LoyaltyCardData, validateLoyaltyCard, VALID_AGE_GROUPS } from '../lib/loyaltyCards';
+import { PricingOptions } from '../managers/DbHafasManager';
+import { LoyaltyCard, LoyaltyCardType } from '../schema/generated/typeDefs.generated';
 
 dotenv.config();
 
@@ -31,7 +36,71 @@ if (!profileImageBucketName) {
   throw new Error('PROFILE_IMAGE_BUCKET_NAME is not defined in process.env');
 }
 
+/**
+ * Parses stored loyaltyCards JSON string into array of LoyaltyCard.
+ */
+function parseLoyaltyCards(raw?: string): LoyaltyCard[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const cards = JSON.parse(raw) as LoyaltyCardData[];
+    return cards.map((card) => ({
+      type: card.type as LoyaltyCardType,
+      discount: card.discount,
+      class: card.class,
+    }));
+  } catch {
+    Logger.warn('Failed to parse stored loyaltyCards JSON', { raw });
+    return undefined;
+  }
+}
+
+/**
+ * Loads stored pricing options from a journey entity's snapshotted fields.
+ */
+function loadStoredPricingOptions(dbJourney: {
+  firstClass?: boolean;
+  loyaltyCards?: string;
+  ageGroup?: string;
+  deutschlandTicketDiscount?: boolean;
+}): PricingOptions | undefined {
+  const opts: PricingOptions = {};
+
+  if (dbJourney.firstClass !== undefined) {
+    opts.firstClass = dbJourney.firstClass;
+  }
+
+  if (dbJourney.loyaltyCards) {
+    try {
+      opts.loyaltyCards = JSON.parse(dbJourney.loyaltyCards) as LoyaltyCardData[];
+    } catch {
+      Logger.warn('Failed to parse stored loyaltyCards for pricing', { raw: dbJourney.loyaltyCards });
+    }
+  }
+
+  if (dbJourney.ageGroup) {
+    opts.ageGroup = dbJourney.ageGroup;
+  }
+
+  if (dbJourney.deutschlandTicketDiscount !== undefined) {
+    opts.deutschlandTicketDiscount = dbJourney.deutschlandTicketDiscount;
+  }
+
+  return Object.keys(opts).length > 0 ? opts : undefined;
+}
+
 export const userResolvers: UserResolvers = {
+  loyaltyCards: (parent) => {
+    const raw = (parent as unknown as { loyaltyCards?: string }).loyaltyCards;
+    return parseLoyaltyCards(raw) ?? null;
+  },
+  ageGroup: (parent) => {
+    const raw = (parent as unknown as { ageGroup?: string }).ageGroup;
+    if (!raw || !VALID_AGE_GROUPS.includes(raw)) return null;
+    return raw as AgeGroup;
+  },
+  deutschlandTicketDiscount: (parent) => {
+    return (parent as unknown as { deutschlandTicketDiscount?: boolean }).deutschlandTicketDiscount ?? null;
+  },
   notifications: async (
     parent,
     args,
@@ -112,6 +181,10 @@ export const userResolvers: UserResolvers = {
           id: string;
           fromId: string;
           toId: string;
+          firstClass?: boolean;
+          loyaltyCards?: string;
+          ageGroup?: string;
+          deutschlandTicketDiscount?: boolean;
         }) => {
           try {
             return await getJourneyMonitor(context, dbJourney);
@@ -172,7 +245,6 @@ export const userProfilePicturePresignedUrlQuery: NonNullable<
   const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id }).send();
   let url: string | undefined = undefined;
   if (dbUser?.profilePicture) {
-    // get presigned url for file dbUser?.profilePicture in bucket profileImageBucketName
     url = await context.s3.getPresignedUrl(profileImageBucketName, dbUser.profilePicture);
   }
   const presignedUrl: PresignedUrl = {
@@ -191,14 +263,12 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   const filename = `${id}.${image.name.split('.').pop()}`;
 
   try {
-    // Upload file to S3 bucket
     await context.s3.upload(profileImageBucketName, filename, image);
   } catch (error) {
     Logger.error(`Failed to upload file to S3: ${error}`);
     throw error;
   }
 
-  // Delete previous image
   if (dbUserCur && dbUserCur.profilePicture && dbUserCur.profilePicture != filename) {
     Logger.info(`Deleting previous profile image for user '${id}'`);
     await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
@@ -283,6 +353,79 @@ export const updateUserSettings: NonNullable<MutationResolvers['updateUserSettin
   }
 };
 
+export const updateTravelPreferences: NonNullable<MutationResolvers['updateTravelPreferences']> = async (
+  _,
+  args: {
+    userId: string;
+    loyaltyCards?: InputMaybe<LoyaltyCardInput[]>;
+    ageGroup?: InputMaybe<AgeGroup>;
+    deutschlandTicketDiscount?: InputMaybe<boolean>;
+  },
+  context: GraphQLContext
+) => {
+  // Validate loyalty cards
+  if (args.loyaltyCards) {
+    for (const card of args.loyaltyCards) {
+      validateLoyaltyCard({
+        type: card.type,
+        discount: card.discount ?? undefined,
+        class: card.class ?? undefined,
+      });
+    }
+  }
+
+  // Validate age group
+  if (args.ageGroup && !VALID_AGE_GROUPS.includes(args.ageGroup)) {
+    throw new Error(`Invalid age group: ${args.ageGroup}. Valid values: ${VALID_AGE_GROUPS.join(', ')}`);
+  }
+
+  const updateItem: {
+    id: string;
+    loyaltyCards?: string;
+    ageGroup?: string;
+    deutschlandTicketDiscount?: boolean;
+  } = { id: args.userId };
+
+  // Store loyalty cards as JSON string, or remove if empty/null
+  if (args.loyaltyCards !== undefined) {
+    updateItem.loyaltyCards =
+      args.loyaltyCards && args.loyaltyCards.length > 0
+        ? JSON.stringify(
+            args.loyaltyCards.map((card) => ({
+              type: card.type,
+              discount: card.discount ?? undefined,
+              class: card.class ?? undefined,
+            }))
+          )
+        : undefined;
+  }
+
+  if (args.ageGroup !== undefined) {
+    updateItem.ageGroup = args.ageGroup ?? undefined;
+  }
+
+  if (args.deutschlandTicketDiscount !== undefined) {
+    updateItem.deutschlandTicketDiscount = args.deutschlandTicketDiscount ?? undefined;
+  }
+
+  try {
+    const { Attributes: dbUser } = await context.entities.User.build(UpdateItemCommand)
+      .item(updateItem)
+      .options({ returnValues: 'ALL_NEW' })
+      .send();
+
+    if (!dbUser) {
+      throw new Error('Failed to update travel preferences');
+    }
+    context.cache.invalidate([{ typename: 'User' }]);
+
+    return dbUser as unknown as User;
+  } catch (error) {
+    Logger.error(`Failed to update travel preferences for user ${args.userId}: ${error}`);
+    throw error;
+  }
+};
+
 export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   _,
   { id }: { id: string },
@@ -294,19 +437,16 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
     const { Item: dbUserCur } = await context.entities.User.build(GetItemCommand).key({ id }).send();
 
     if (dbUserCur && dbUserCur.profilePicture) {
-      // Delete profile picture from S3 bucket
       Logger.info(`Deleting profile image for user '${id}'`);
       await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
     }
 
-    // Delete database entries related to user
     const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
       .query({ partition: `USER#${id}` })
       .send();
 
     if (dbNotifications) {
-      // Delete notifications
       await Promise.all(
         dbNotifications.map(async (dbNotification: { id: string }) => {
           await context.entities.Notification.build(DeleteItemCommand)
@@ -322,7 +462,6 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
       .send();
 
     if (dbJourneys) {
-      // Delete journeys
       await Promise.all(
         dbJourneys.map(async (dbJourney: { id: string }) => {
           await context.entities.Journey.build(DeleteItemCommand).key({ userId: id, id: dbJourney.id }).send();
@@ -331,11 +470,9 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
     }
 
     if (dbUserCur && dbUserCur.email) {
-      // Delete user's email identity from SES
       context.ses.deleteEmailIdentity(dbUserCur.email);
     }
 
-    // Delete user from database
     const { Attributes: dbUser } = await context.entities.User.build(DeleteItemCommand)
       .key({ id })
       .options({ returnValues: 'ALL_OLD' })
@@ -363,9 +500,14 @@ export async function getJourneyMonitor(
     id: string;
     fromId: string;
     toId: string;
+    firstClass?: boolean;
+    loyaltyCards?: string;
+    ageGroup?: string;
+    deutschlandTicketDiscount?: boolean;
   }
 ): Promise<JourneyMonitor> {
-  const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken);
+  const storedPricingOptions = loadStoredPricingOptions(dbJourney);
+  const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken, storedPricingOptions);
   return {
     id: dbJourney.id,
     userId: dbJourney.userId,

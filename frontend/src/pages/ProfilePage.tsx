@@ -20,6 +20,7 @@ import { changePassword } from '../utils/auth';
 import { useMutation, useQuery } from 'urql';
 import { DeleteUser, UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
 import { useNavigate } from 'react-router-dom';
+import TravelPreferences from '../components/TravelPreferences';
 
 // ---------------------------------------------------------------------------
 // Style constants
@@ -338,6 +339,9 @@ const ProfilePage: React.FC = () => {
               <Switch checked={enableEmailNotifications} onChange={handleNotificationToggle} color="secondary" />
             </Box>
           </Paper>
+
+          {/* Travel Preferences */}
+          <TravelPreferences />
 
           {/* Danger Zone */}
           <Paper elevation={0} sx={{ border: 1, borderColor: 'error.main', borderRadius: 3, p: 2.5 }}>

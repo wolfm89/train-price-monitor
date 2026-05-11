@@ -99,7 +99,11 @@ export const sendEmailNotification: NonNullable<MutationResolvers['sendEmailNoti
       data = {};
     }
   }
-  const emailNotificationInfo = await NOTIFICATION_TYPES[dbNotification.type].formatEmail(context, dbUser, data);
+  const emailNotificationInfo = await NOTIFICATION_TYPES[dbNotification.type].formatEmail(
+    context,
+    dbUser as unknown as import('../schema/generated/typeDefs.generated').User,
+    data
+  );
   await context.ses.sendEmailNotification(emailNotificationInfo);
 
   // Update the notification in the database
