@@ -368,16 +368,14 @@ const SearchMask: React.FC<Props> = ({
     setDeutschlandTicketDiscount(checked);
   };
 
-  const defaultLoyaltyCardKeys = (initialLoyaltyCards ?? []).map(cardToKey).sort().join(',');
-  const currentLoyaltyCardKeys = loyaltyCards.map(cardToKey).sort().join(',');
   const optionsActive =
     firstClass ||
     enabledProducts.size < ALL_PRODUCT_KEYS.length ||
     maxTransfers >= 0 ||
     bike ||
-    currentLoyaltyCardKeys !== defaultLoyaltyCardKeys ||
-    deutschlandTicketDiscount !== (initialDeutschlandTicketDiscount ?? false) ||
-    ageGroup !== (initialAgeGroup ?? 'ADULT');
+    loyaltyCards.length > 0 ||
+    deutschlandTicketDiscount ||
+    ageGroup !== 'ADULT';
 
   const cardSx = { border: 1, borderColor: 'divider', borderRadius: 3, p: 2.75 };
   const sectionTitleSx = {
