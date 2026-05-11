@@ -18,65 +18,16 @@ import { AuthContext } from '../providers/AuthProvider';
 import { UserTravelPreferencesQuery, UpdateTravelPreferences } from '../api/user';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
+import {
+  LoyaltyCardInput,
+  AGE_GROUP_OPTIONS,
+  LOYALTY_CARD_OPTIONS,
+  cardToKey,
+  keyToCard,
+  cardLabel,
+} from '../utils/travelPreferences';
 
-interface LoyaltyCard {
-  type: string;
-  discount?: number | null;
-  class?: number | null;
-}
-
-const AGE_GROUP_OPTIONS = [
-  { value: 'BABY', label: 'Baby (0-5)' },
-  { value: 'CHILD', label: 'Child (6-14)' },
-  { value: 'YOUTH', label: 'Youth (15-26)' },
-  { value: 'ADULT', label: 'Adult' },
-  { value: 'SENIOR', label: 'Senior (65+)' },
-];
-
-interface LoyaltyCardOption {
-  key: string;
-  label: string;
-  card: LoyaltyCard;
-}
-
-const LOYALTY_CARD_OPTIONS: LoyaltyCardOption[] = [
-  { key: 'BC25_2', label: 'Bahncard 25, 2. Klasse', card: { type: 'BAHNCARD', discount: 25, class: 2 } },
-  { key: 'BC25_1', label: 'Bahncard 25, 1. Klasse', card: { type: 'BAHNCARD', discount: 25, class: 1 } },
-  { key: 'BC50_2', label: 'Bahncard 50, 2. Klasse', card: { type: 'BAHNCARD', discount: 50, class: 2 } },
-  { key: 'BC50_1', label: 'Bahncard 50, 1. Klasse', card: { type: 'BAHNCARD', discount: 50, class: 1 } },
-  { key: 'VORTEILSCARD', label: 'Vorteilscard (AT)', card: { type: 'VORTEILSCARD' } },
-  { key: 'AT_KLIMATICKET', label: 'Klimaticket (AT)', card: { type: 'AT_KLIMATICKET' } },
-  { key: 'HALBTAXABO', label: 'Halbtax (CH)', card: { type: 'HALBTAXABO' } },
-  { key: 'GA_1', label: 'General-Abonnement 1. Kl. (CH)', card: { type: 'GENERALABONNEMENT', class: 1 } },
-  { key: 'GA_2', label: 'General-Abonnement 2. Kl. (CH)', card: { type: 'GENERALABONNEMENT', class: 2 } },
-  { key: 'VOORDEELURENABO', label: 'Voordeelurenabo (NL)', card: { type: 'VOORDEELURENABO' } },
-  { key: 'NL_40', label: 'NL-40% (NL)', card: { type: 'NL_40' } },
-  { key: 'SHCARD', label: 'SH-Card', card: { type: 'SHCARD' } },
-];
-
-function cardToKey(card: LoyaltyCard): string {
-  const match = LOYALTY_CARD_OPTIONS.find(
-    (opt) =>
-      opt.card.type === card.type &&
-      (opt.card.discount ?? null) === (card.discount ?? null) &&
-      (opt.card.class ?? null) === (card.class ?? null)
-  );
-  return match?.key ?? '';
-}
-
-function keyToCard(key: string): LoyaltyCard | undefined {
-  return LOYALTY_CARD_OPTIONS.find((opt) => opt.key === key)?.card;
-}
-
-function cardLabel(card: LoyaltyCard): string {
-  const match = LOYALTY_CARD_OPTIONS.find(
-    (opt) =>
-      opt.card.type === card.type &&
-      (opt.card.discount ?? null) === (card.discount ?? null) &&
-      (opt.card.class ?? null) === (card.class ?? null)
-  );
-  return match?.label ?? card.type;
-}
+type LoyaltyCard = LoyaltyCardInput;
 
 const sectionTitleSx = {
   display: 'block',
