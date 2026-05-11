@@ -194,10 +194,10 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
       userId: args.userId,
       limitPrice: args.limitPrice,
       refreshToken: args.refreshToken,
-      expires: args.expires,
+      expires: args.expires instanceof Date ? args.expires.toISOString() : args.expires,
       fromId: args.fromId,
       toId: args.toId,
-      departure: args.departure,
+      departure: args.departure instanceof Date ? args.departure.toISOString() : args.departure,
       ...pricingSnapshot,
     })
     .send();
