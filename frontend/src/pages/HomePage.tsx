@@ -238,7 +238,7 @@ function AlertBanner({ journey, overage }: AlertBannerProps) {
               textOverflow: 'ellipsis',
             }}
           >
-            {journey.from} → {journey.to} is €{overage.toFixed(2)} over your limit
+            {journey.from ?? 'Unknown'} → {journey.to ?? 'Unknown'} is €{overage.toFixed(2)} over your limit
           </Typography>
           <Typography sx={{ fontSize: 11, color: 'primary.main', mt: 0.25 }}>
             Current price €{price.toFixed(2)} · Limit €{journey.limitPrice.toFixed(2)}
@@ -401,9 +401,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           component="img"
           src={process.env.PUBLIC_URL + '/logo-hero.webp'}
           alt="Train Price Monitor Logo"
-          width={{ xs: 150, sm: 220 }}
-          height={{ xs: 150, sm: 220 }}
-          sx={{ display: 'block', flexShrink: 0 }}
+          sx={{ display: 'block', flexShrink: 0, width: { xs: 150, sm: 220 }, height: { xs: 150, sm: 220 } }}
         />
         <Box sx={{ textAlign: { xs: 'center', sm: 'left' }, width: { xs: '100%', sm: 'auto' } }}>
           <Typography
@@ -628,7 +626,13 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
           <StatCard
             value={belowLimit.length}
             label="Below limit"
-            subtitle={belowLimit.length > 0 ? `~€${totalSavings.toFixed(0)} saved vs limits` : 'All within budget'}
+            subtitle={
+              belowLimit.length > 0
+                ? `~€${totalSavings.toFixed(0)} saved vs limits`
+                : overLimit.length > 0
+                  ? 'All exceed budget'
+                  : 'No journeys priced yet'
+            }
             variant="success"
           />
           <StatCard
