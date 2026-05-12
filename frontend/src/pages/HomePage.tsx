@@ -371,7 +371,7 @@ interface LoggedOutHeroProps {
 
 function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
   return (
-    <>
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: { xs: 'center', sm: 'flex-start' } }}>
       <Chip
         icon={<TrainIcon sx={{ fontSize: '14px !important' }} />}
         label="Deutsche Bahn price alerts"
@@ -385,19 +385,27 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           borderColor: 'secondary.main',
           letterSpacing: '0.04em',
           mb: 2,
-          display: { xs: 'none', sm: 'inline-flex' },
         }}
       />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: { sm: 5 }, mb: 4.5 }}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          alignItems: 'center',
+          gap: { xs: 2, sm: 5 },
+          mb: 4.5,
+          width: '100%',
+        }}
+      >
         <Box
           component="img"
           src={process.env.PUBLIC_URL + '/logo-hero.webp'}
           alt="Train Price Monitor Logo"
-          width={220}
-          height={220}
-          sx={{ display: { xs: 'none', sm: 'block' }, flexShrink: 0 }}
+          width={{ xs: 150, sm: 220 }}
+          height={{ xs: 150, sm: 220 }}
+          sx={{ display: 'block', flexShrink: 0 }}
         />
-        <Box>
+        <Box sx={{ textAlign: { xs: 'center', sm: 'left' }, width: { xs: '100%', sm: 'auto' } }}>
           <Typography
             variant="h1"
             sx={{
@@ -413,6 +421,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           </Typography>
           <Typography
             sx={{
+              display: { xs: 'none', sm: 'block' },
               fontSize: 14,
               color: 'text.secondary',
               lineHeight: 1.65,
@@ -423,8 +432,32 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
             Watch a journey and set your price limit. Train Price Monitor checks fares hourly and alerts you the moment
             the price rises above your threshold — so you can act before it&apos;s too late.
           </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
-            <Button variant="contained" onClick={onSignup} sx={{ textTransform: 'none', fontWeight: 600 }}>
+          <Typography
+            sx={{
+              display: { xs: 'block', sm: 'none' },
+              fontSize: 14,
+              color: 'text.secondary',
+              lineHeight: 1.65,
+              mb: 3,
+            }}
+          >
+            Set a price limit on any journey. We check fares hourly and alert you the moment a ticket exceeds your
+            threshold.
+          </Typography>
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: { xs: 'column', sm: 'row' },
+              alignItems: 'center',
+              gap: 1.25,
+              width: { xs: '100%', sm: 'auto' },
+            }}
+          >
+            <Button
+              variant="contained"
+              onClick={onSignup}
+              sx={{ textTransform: 'none', fontWeight: 600, width: { xs: '100%', sm: 'auto' } }}
+            >
               Create free account →
             </Button>
             <Button
@@ -435,6 +468,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
                 fontWeight: 500,
                 color: 'text.primary',
                 borderColor: 'divider',
+                width: { xs: '100%', sm: 'auto' },
                 '&:hover': { borderColor: 'primary.main', color: 'primary.main' },
               }}
             >
@@ -467,7 +501,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
         </Grid>
       </Grid>
       {children}
-    </>
+    </Box>
   );
 }
 

@@ -15,6 +15,7 @@ import {
 import { Search as SearchIcon, Notifications as NotificationsIcon, Train as TrainIcon } from '@mui/icons-material';
 import NotificationPopover, { Notification } from './NotificationPopover';
 import AccountMenu from './AccountMenu';
+import LoginModal from './LoginModal';
 import { AuthContext } from '../providers/AuthProvider';
 import { UserNotificationsQuery } from '../api/user';
 import { useMutation, useQuery } from 'urql';
@@ -71,6 +72,7 @@ const Header = () => {
   const [, markNotificationAsRead] = useMutation(MarkNotificationAsRead);
 
   const [notificationAnchorEl, setNotificationAnchorEl] = useState<HTMLButtonElement | null>(null);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
 
   const handleNotificationClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     setNotificationAnchorEl(event.currentTarget);
@@ -165,6 +167,11 @@ const Header = () => {
           )}
         </Link>
 
+        {!user && (
+          <Button onClick={() => setLoginModalOpen(true)} sx={navBtnSx}>
+            Log in
+          </Button>
+        )}
         {user && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
             <Button
@@ -250,6 +257,7 @@ const Header = () => {
         }}
       />
       <AccountMenu anchorEl={accountAnchorEl} onClose={handleAccountClose} />
+      <LoginModal open={loginModalOpen} onClose={() => setLoginModalOpen(false)} />
     </AppBar>
   );
 };
