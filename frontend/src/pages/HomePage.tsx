@@ -373,17 +373,16 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
   return (
     <>
       <Chip
-        icon={<TrainIcon sx={{ fontSize: '14px !important' }} />}
+        icon={<TrainIcon sx={{ fontSize: '13px !important' }} />}
         label="Deutsche Bahn price alerts"
         size="small"
         sx={{
-          bgcolor: 'secondary.light',
-          color: 'secondary.dark',
-          fontWeight: 700,
-          fontSize: 11,
-          border: 1,
-          borderColor: 'secondary.main',
-          letterSpacing: '0.04em',
+          bgcolor: 'background.paper',
+          color: 'text.secondary',
+          fontWeight: 500,
+          fontSize: 12,
+          border: '0.5px solid',
+          borderColor: 'divider',
           mb: 2,
           display: { xs: 'none', sm: 'inline-flex' },
         }}
