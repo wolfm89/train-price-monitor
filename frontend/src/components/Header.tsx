@@ -35,6 +35,7 @@ const navBtnSx = {
   textTransform: 'none' as const,
   '& .MuiButton-startIcon': {
     marginRight: { xs: 0, sm: '8px' }, // collapse icon trailing margin when no text follows on mobile
+    marginLeft: { xs: 0, sm: '-4px' }, // reset MUI's default -4px left margin on mobile so icon stays centered
   },
   '&:hover': {
     backgroundColor: 'rgba(255,255,255,0.13)',
@@ -169,7 +170,7 @@ const Header = () => {
             <Button
               component={Link}
               to="/search"
-              startIcon={<SearchIcon sx={{ fontSize: { xs: '24px', sm: '16px' } }} />}
+              startIcon={<SearchIcon />}
               sx={location.pathname === '/search' ? navBtnActiveSx : navBtnSx}
             >
               {!isScreenSmall && 'Search'}
@@ -177,7 +178,7 @@ const Header = () => {
             <Button
               component={Link}
               to="/journeys"
-              startIcon={<TrainIcon sx={{ fontSize: { xs: '24px', sm: '16px' } }} />}
+              startIcon={<TrainIcon />}
               sx={location.pathname === '/journeys' ? navBtnActiveSx : navBtnSx}
             >
               {!isScreenSmall && 'My Journeys'}
@@ -189,7 +190,7 @@ const Header = () => {
                 color: 'rgba(255,255,255,0.85)',
                 border: '1.5px solid rgba(255,255,255,0.35)',
                 borderRadius: '6px',
-                p: '5px',
+                p: { xs: '5px', sm: '6px' },
                 ml: 0.25,
                 '&:hover': {
                   color: '#fff',
@@ -203,7 +204,7 @@ const Header = () => {
                 color="error"
                 sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16 } }}
               >
-                <NotificationsIcon sx={{ fontSize: { xs: 26, sm: 18 } }} />
+                <NotificationsIcon sx={{ fontSize: 20 }} />
               </Badge>
             </IconButton>
             <IconButton aria-label="user profile" onClick={handleAccountClick} sx={{ ml: 0.5, p: 0 }}>
