@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Toolbar,
@@ -24,12 +24,13 @@ import { useNavigate } from 'react-router-dom';
 const NAV_HEIGHT = 54;
 
 const navBtnSx = {
-  color: 'rgba(255,255,255,0.8)',
-  fontSize: 14,
+  color: 'rgba(255,255,255,0.85)',
+  fontSize: 13,
   fontWeight: 500,
   borderRadius: '6px',
+  border: '1.5px solid rgba(255,255,255,0.35)',
   px: { xs: 1.25, sm: 1.5 },
-  py: 0.75,
+  py: 0.625,
   minWidth: 0, // override MUI Button default 64px min-width so icon-only buttons are compact on mobile
   textTransform: 'none' as const,
   '& .MuiButton-startIcon': {
@@ -37,6 +38,19 @@ const navBtnSx = {
   },
   '&:hover': {
     backgroundColor: 'rgba(255,255,255,0.13)',
+    borderColor: 'rgba(255,255,255,0.55)',
+    color: '#fff',
+  },
+};
+
+const navBtnActiveSx = {
+  ...navBtnSx,
+  backgroundColor: 'rgba(255,255,255,0.18)',
+  borderColor: 'rgba(255,255,255,0.55)',
+  color: '#fff',
+  '&:hover': {
+    backgroundColor: 'rgba(255,255,255,0.24)',
+    borderColor: 'rgba(255,255,255,0.7)',
     color: '#fff',
   },
 };
@@ -44,6 +58,7 @@ const navBtnSx = {
 const Header = () => {
   const theme = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl } = useContext(AuthContext);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -155,7 +170,7 @@ const Header = () => {
               component={Link}
               to="/search"
               startIcon={<SearchIcon sx={{ fontSize: { xs: '24px', sm: '16px' } }} />}
-              sx={navBtnSx}
+              sx={location.pathname === '/search' ? navBtnActiveSx : navBtnSx}
             >
               {!isScreenSmall && 'Search'}
             </Button>
@@ -163,16 +178,24 @@ const Header = () => {
               component={Link}
               to="/journeys"
               startIcon={<TrainIcon sx={{ fontSize: { xs: '24px', sm: '16px' } }} />}
-              sx={navBtnSx}
+              sx={location.pathname === '/journeys' ? navBtnActiveSx : navBtnSx}
             >
-              {!isScreenSmall && 'Journey Watchlist'}
+              {!isScreenSmall && 'My Journeys'}
             </Button>
             <IconButton
               size="small"
               onClick={handleNotificationClick}
               sx={{
-                color: 'rgba(255,255,255,0.8)',
-                '&:hover': { color: '#fff', backgroundColor: 'rgba(255,255,255,0.13)' },
+                color: 'rgba(255,255,255,0.85)',
+                border: '1.5px solid rgba(255,255,255,0.35)',
+                borderRadius: '6px',
+                p: '5px',
+                ml: 0.25,
+                '&:hover': {
+                  color: '#fff',
+                  backgroundColor: 'rgba(255,255,255,0.13)',
+                  borderColor: 'rgba(255,255,255,0.55)',
+                },
               }}
             >
               <Badge

@@ -38,6 +38,7 @@ export const theme = createTheme({
     },
     error: {
       main: '#c62828',
+      light: '#F9E0E0',
     },
     warning: {
       main: '#FEFFD3',
