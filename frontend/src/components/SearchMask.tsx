@@ -351,7 +351,7 @@ const SearchMask: React.FC<Props> = ({
 
   const handleLoyaltyCardChange = (e: SelectChangeEvent<string>) => {
     const key = e.target.value;
-    setLoyaltyCard(key ? keyToCard(key) ?? null : null);
+    setLoyaltyCard(key ? (keyToCard(key) ?? null) : null);
   };
 
   const optionsActive =
