@@ -312,7 +312,7 @@ function TicketStub({
 
   // Build options pills
   const ageGroupLabel =
-    ageGroup && ageGroup !== 'ADULT' ? AGE_GROUP_OPTIONS.find((o) => o.value === ageGroup)?.label ?? ageGroup : null;
+    ageGroup && ageGroup !== 'ADULT' ? (AGE_GROUP_OPTIONS.find((o) => o.value === ageGroup)?.label ?? ageGroup) : null;
 
   const neutralPillSx = (theme: Theme) => ({
     height: 20,

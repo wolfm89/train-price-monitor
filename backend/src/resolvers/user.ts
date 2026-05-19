@@ -508,7 +508,7 @@ export async function getJourneyMonitor(
     limitPrice: dbJourney.limitPrice,
     expires: dbJourney.expires,
     from: journey?.legs[0].origin?.name ?? undefined,
-    to: journey ? journey.legs[journey.legs.length - 1].destination?.name ?? undefined : undefined,
+    to: journey ? (journey.legs[journey.legs.length - 1].destination?.name ?? undefined) : undefined,
     firstClass: dbJourney.firstClass ?? undefined,
     bike: dbJourney.bike ?? undefined,
     deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,
