@@ -19,7 +19,7 @@
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.0.0",
     "urql": "^5.0.1",
-    "uuid": "^9.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
