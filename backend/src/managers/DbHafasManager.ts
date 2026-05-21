@@ -16,10 +16,12 @@ interface SimpleStation {
 /**
  * The dbweb /angebote/recon endpoint returns departure/arrival times as nested objects:
  *   { abfahrt: { sollzeit: "2026-05-25T18:36:00", istzeit: "..." }, ... }
- * But the db-vendo-client parser expects flat string fields:
- *   { abfahrtsZeitpunkt: "2026-05-25T18:36:00", ezAbfahrtsZeitpunkt: "...", ... }
+ * But the db-vendo-client parser expects flat string fields. It accepts either the older
+ * `abfahrtsZeitpunkt`/`ezAbfahrtsZeitpunkt` names or the newer `abgangsDatum`/`ezAbgangsDatum`
+ * names (via `||` fallback). This normalizer sets the newer names:
+ *   { abgangsDatum: "2026-05-25T18:36:00", ezAbgangsDatum: "...",
+ *     ankunftsDatum: "2026-05-25T20:10:00", ezAnkunftsDatum: "..." }
  *
- * This normalizer maps the nested format to the flat format so the parser can extract times.
  * See: https://github.com/public-transport/db-vendo-client/blob/main/parse/journey-leg.js
  */
 interface TimeFields {
@@ -145,17 +147,19 @@ const userAgent = 'https://github.com/wolfm89/train-price-monitor';
  * Wraps parseJourneyLeg and parseStopover to map nested time objects
  * (abfahrt.sollzeit / ankunft.sollzeit) to flat fields expected by the parser.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const customDbProfile: any = {
+const customDbProfile: typeof dbProfile & {
+  parseJourneyLeg: typeof originalParseJourneyLeg;
+  parseStopover: typeof originalParseStopover;
+} = {
   ...dbProfile,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  parseJourneyLeg: (ctx: any, pt: any, date: any, fallbackLocations: any) => {
-    normalizeLegTimes(pt);
+  parseJourneyLeg: (ctx, pt, date, fallbackLocations) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    normalizeLegTimes(pt as Record<string, any>);
     return originalParseJourneyLeg(ctx, pt, date, fallbackLocations);
   },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  parseStopover: (ctx: any, st: any, date: any) => {
-    normalizeStopTimes(st);
+  parseStopover: (ctx, st, date) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    normalizeStopTimes(st as Record<string, any>);
     return originalParseStopover(ctx, st, date);
   },
 };

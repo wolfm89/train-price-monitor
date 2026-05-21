@@ -142,21 +142,21 @@ export const userResolvers: UserResolvers = {
       )
     );
 
-    const notifications = notificationResults
-      .filter(
-        (
-          result
-        ): result is PromiseFulfilledResult<
-          JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification
-        > => {
-          if (result.status === 'rejected') {
-            Logger.error(`Failed to load notification: ${result.reason}`);
-            return false;
-          }
-          return true;
+    const notifications = notificationResults.flatMap(
+      (result, index): (JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification)[] => {
+        if (result.status === 'rejected') {
+          const n = filteredNotifications[index];
+          Logger.error('Failed to load notification', {
+            error: result.reason,
+            notificationId: n.id,
+            notificationType: n.type,
+            userId: n.userId,
+          });
+          return [];
         }
-      )
-      .map((result) => result.value);
+        return [result.value];
+      }
+    );
 
     sort(notifications, '-timestamp');
     const limit = args.limit ?? undefined;
@@ -526,7 +526,7 @@ export async function getJourneyMonitor(
   try {
     hafasJourney = await context.dbHafas.requeryJourney(dbJourney.refreshToken, storedPricingOptions);
   } catch (error) {
-    Logger.warn(`requeryJourney failed for journey ${dbJourney.id}, attempting recovery: ${error}`);
+    Logger.warn('requeryJourney failed, attempting recovery', { journeyId: dbJourney.id, error });
   }
 
   if (!hafasJourney) {
