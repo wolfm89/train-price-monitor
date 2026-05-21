@@ -1,5 +1,5 @@
 import dotenv from 'dotenv'; // Load environment variables from .env file
-import { Journey as HafasJourney } from 'hafas-client';
+import type { Journey as HafasJourney } from 'hafas-client';
 import { GraphQLContext } from '../context';
 import {
   GetItemCommand,
@@ -105,7 +105,7 @@ export const userResolvers: UserResolvers = {
       (n: { read?: boolean }) => args.read === undefined || n.read === args.read
     );
 
-    const notifications = await Promise.all(
+    const notificationResults = await Promise.allSettled(
       filteredNotifications.map(
         async (dbNotification: {
           id: string;
@@ -141,6 +141,22 @@ export const userResolvers: UserResolvers = {
         }
       )
     );
+
+    const notifications = notificationResults
+      .filter(
+        (
+          result
+        ): result is PromiseFulfilledResult<
+          JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification
+        > => {
+          if (result.status === 'rejected') {
+            Logger.error(`Failed to load notification: ${result.reason}`);
+            return false;
+          }
+          return true;
+        }
+      )
+      .map((result) => result.value);
 
     sort(notifications, '-timestamp');
     const limit = args.limit ?? undefined;
@@ -510,7 +526,7 @@ export async function getJourneyMonitor(
   try {
     hafasJourney = await context.dbHafas.requeryJourney(dbJourney.refreshToken, storedPricingOptions);
   } catch (error) {
-    Logger.warn(`Refresh token stale for journey ${dbJourney.id}, attempting recovery: ${error}`);
+    Logger.warn(`requeryJourney failed for journey ${dbJourney.id}, attempting recovery: ${error}`);
   }
 
   if (!hafasJourney) {
