@@ -41,7 +41,9 @@ export const theme = createTheme({
       light: '#F9E0E0',
     },
     warning: {
-      main: '#FEFFD3',
+      main: '#b76e00',
+      light: '#e9a040',
+      dark: '#7d4900',
     },
     info: {
       main: '#5b7a9e',

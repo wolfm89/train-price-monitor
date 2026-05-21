@@ -12,6 +12,11 @@ declare module 'db-vendo-client/p/db/index.js' {
   export const profile: Profile;
 }
 
+declare module 'db-vendo-client/p/dbweb/index.js' {
+  import type { Profile } from 'hafas-client';
+  export const profile: Profile;
+}
+
 declare module 'db-vendo-client/format/loyalty-cards.js' {
   export const data: {
     NONE: symbol;

@@ -1,6 +1,6 @@
 import type { HafasClient, Journey, JourneyWithRealtimeData, Journeys, Station } from 'hafas-client';
 import { createClient } from 'db-vendo-client';
-import { profile as dbProfile } from 'db-vendo-client/p/db/index.js';
+import { profile as dbProfile } from 'db-vendo-client/p/dbweb/index.js';
 import Logger from '../lib/logger';
 import { LoyaltyCardData, toHafasLoyaltyCard, toHafasAgeGroup } from '../lib/loyaltyCards';
 
