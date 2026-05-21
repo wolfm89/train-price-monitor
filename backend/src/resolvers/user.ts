@@ -1,4 +1,5 @@
 import dotenv from 'dotenv'; // Load environment variables from .env file
+import type { Journey as HafasJourney } from 'hafas-client';
 import { GraphQLContext } from '../context';
 import {
   GetItemCommand,
@@ -104,7 +105,7 @@ export const userResolvers: UserResolvers = {
       (n: { read?: boolean }) => args.read === undefined || n.read === args.read
     );
 
-    const notifications = await Promise.all(
+    const notificationResults = await Promise.allSettled(
       filteredNotifications.map(
         async (dbNotification: {
           id: string;
@@ -141,6 +142,22 @@ export const userResolvers: UserResolvers = {
       )
     );
 
+    const notifications = notificationResults.flatMap(
+      (result, index): (JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification)[] => {
+        if (result.status === 'rejected') {
+          const n = filteredNotifications[index];
+          Logger.error('Failed to load notification', {
+            error: result.reason,
+            notificationId: n.id,
+            notificationType: n.type,
+            userId: n.userId,
+          });
+          return [];
+        }
+        return [result.value];
+      }
+    );
+
     sort(notifications, '-timestamp');
     const limit = args.limit ?? undefined;
     if (limit !== undefined) {
@@ -168,6 +185,7 @@ export const userResolvers: UserResolvers = {
           id: string;
           fromId: string;
           toId: string;
+          departure: string;
           firstClass?: boolean;
           bike?: boolean;
           loyaltyCard?: string;
@@ -493,6 +511,7 @@ export async function getJourneyMonitor(
     id: string;
     fromId: string;
     toId: string;
+    departure: string;
     firstClass?: boolean;
     bike?: boolean;
     loyaltyCard?: string;
@@ -501,27 +520,76 @@ export async function getJourneyMonitor(
   }
 ): Promise<JourneyMonitor> {
   const storedPricingOptions = loadStoredPricingOptions(dbJourney);
-  const journey = await context.dbHafas.requeryJourney(dbJourney.refreshToken, storedPricingOptions);
+
+  let hafasJourney: HafasJourney | undefined;
+
+  try {
+    hafasJourney = await context.dbHafas.requeryJourney(dbJourney.refreshToken, storedPricingOptions);
+  } catch (error) {
+    Logger.warn('requeryJourney failed, attempting recovery', { journeyId: dbJourney.id, error });
+  }
+
+  if (!hafasJourney) {
+    // Recovery: re-query by stored station IDs and departure time.
+    // Uses the same matching algorithm as the SQS updateJourneyMonitor path.
+    const departure = new Date(dbJourney.departure);
+
+    try {
+      const result = await context.dbHafas.queryJourneys(dbJourney.fromId, dbJourney.toId, departure, {
+        results: 5,
+        ...storedPricingOptions,
+      });
+
+      const candidates = result.journeys?.filter(
+        (j) =>
+          j.legs[0]?.origin?.id === dbJourney.fromId && j.legs[j.legs.length - 1]?.destination?.id === dbJourney.toId
+      );
+
+      const matchingJourney = candidates?.reduce<(typeof candidates)[number] | undefined>((best, j) => {
+        const jDep = new Date(j.legs[0]?.plannedDeparture ?? j.legs[0]?.departure ?? 0).getTime();
+        const jDiff = Math.abs(jDep - departure.getTime());
+        if (!best) return j;
+        const bestDep = new Date(best.legs[0]?.plannedDeparture ?? best.legs[0]?.departure ?? 0).getTime();
+        const bestDiff = Math.abs(bestDep - departure.getTime());
+        return jDiff < bestDiff ? j : best;
+      }, undefined);
+
+      if (matchingJourney) {
+        await context.entities.Journey.build(UpdateItemCommand)
+          .item({ userId: dbJourney.userId, id: dbJourney.id, refreshToken: matchingJourney.refreshToken! })
+          .send();
+        hafasJourney = matchingJourney;
+        Logger.info(`Successfully recovered journey ${dbJourney.id} with new refresh token`);
+      } else {
+        Logger.warn(`No matching journey found during recovery for journey ${dbJourney.id}`);
+      }
+    } catch (recoveryError) {
+      Logger.error(`Journey recovery failed for ${dbJourney.id}: ${recoveryError}`);
+    }
+  }
+
+  if (!hafasJourney) {
+    throw new Error(`Could not retrieve journey data for ${dbJourney.id}`);
+  }
+
   return {
     id: dbJourney.id,
     userId: dbJourney.userId,
     limitPrice: dbJourney.limitPrice,
     expires: dbJourney.expires,
-    from: journey?.legs[0].origin?.name ?? undefined,
-    to: journey ? (journey.legs[journey.legs.length - 1].destination?.name ?? undefined) : undefined,
+    from: hafasJourney.legs[0].origin?.name ?? undefined,
+    to: hafasJourney.legs[hafasJourney.legs.length - 1].destination?.name ?? undefined,
     firstClass: dbJourney.firstClass ?? undefined,
     bike: dbJourney.bike ?? undefined,
     deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,
     ageGroup: (dbJourney.ageGroup as AgeGroup | undefined) ?? undefined,
     loyaltyCard: parseLoyaltyCard(dbJourney.loyaltyCard) ?? undefined,
-    journey: !journey
-      ? undefined
-      : {
-          refreshToken: journey.refreshToken!,
-          departure: new Date(journey.legs[0].plannedDeparture!),
-          arrival: new Date(journey.legs[journey.legs.length - 1].plannedArrival!),
-          means: getMeans(journey),
-          price: journey.price?.amount,
-        },
+    journey: {
+      refreshToken: hafasJourney.refreshToken!,
+      departure: new Date(hafasJourney.legs[0].plannedDeparture!),
+      arrival: new Date(hafasJourney.legs[hafasJourney.legs.length - 1].plannedArrival!),
+      means: getMeans(hafasJourney),
+      price: hafasJourney.price?.amount,
+    },
   };
 }

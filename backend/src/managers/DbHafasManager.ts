@@ -1,6 +1,8 @@
 import type { HafasClient, Journey, JourneyWithRealtimeData, Journeys, Station } from 'hafas-client';
 import { createClient } from 'db-vendo-client';
-import { profile as dbProfile } from 'db-vendo-client/p/db/index.js';
+import { profile as dbProfile } from 'db-vendo-client/p/dbweb/index.js';
+import { parseJourneyLeg as originalParseJourneyLeg } from 'db-vendo-client/parse/journey-leg.js';
+import { parseStopover as originalParseStopover } from 'db-vendo-client/parse/stopover.js';
 import Logger from '../lib/logger';
 import { LoyaltyCardData, toHafasLoyaltyCard, toHafasAgeGroup } from '../lib/loyaltyCards';
 
@@ -9,6 +11,51 @@ interface SimpleStation {
   id: string;
   name: string;
   weight: number;
+}
+
+/**
+ * The dbweb /angebote/recon endpoint returns departure/arrival times as nested objects:
+ *   { abfahrt: { sollzeit: "2026-05-25T18:36:00", istzeit: "..." }, ... }
+ * But the db-vendo-client parser expects flat string fields. It accepts either the older
+ * `abfahrtsZeitpunkt`/`ezAbfahrtsZeitpunkt` names or the newer `abgangsDatum`/`ezAbgangsDatum`
+ * names (via `||` fallback). This normalizer sets the newer names:
+ *   { abgangsDatum: "2026-05-25T18:36:00", ezAbgangsDatum: "...",
+ *     ankunftsDatum: "2026-05-25T20:10:00", ezAnkunftsDatum: "..." }
+ *
+ * See: https://github.com/public-transport/db-vendo-client/blob/main/parse/journey-leg.js
+ */
+interface TimeFields {
+  sollzeit?: string;
+  istzeit?: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeStopTimes(obj: Record<string, any>): void {
+  const abfahrt = obj.abfahrt as TimeFields | undefined;
+  const ankunft = obj.ankunft as TimeFields | undefined;
+
+  if (!obj.abfahrtsZeitpunkt && !obj.abgangsDatum && abfahrt?.sollzeit) {
+    obj.abgangsDatum = abfahrt.sollzeit;
+  }
+  if (!obj.ezAbfahrtsZeitpunkt && !obj.ezAbgangsDatum && abfahrt?.istzeit) {
+    obj.ezAbgangsDatum = abfahrt.istzeit;
+  }
+  if (!obj.ankunftsZeitpunkt && !obj.ankunftsDatum && ankunft?.sollzeit) {
+    obj.ankunftsDatum = ankunft.sollzeit;
+  }
+  if (!obj.ezAnkunftsZeitpunkt && !obj.ezAnkunftsDatum && ankunft?.istzeit) {
+    obj.ezAnkunftsDatum = ankunft.istzeit;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeLegTimes(pt: Record<string, any>): void {
+  normalizeStopTimes(pt);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stops = (pt.halte || pt.stops || []) as Record<string, any>[];
+  for (const stop of stops) {
+    normalizeStopTimes(stop);
+  }
 }
 
 export interface PricingOptions {
@@ -96,6 +143,28 @@ function buildHafasOptions(pricingOptions?: PricingOptions): Record<string, unkn
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
 
 /**
+ * Custom dbweb profile that normalizes /angebote/recon response times.
+ * Wraps parseJourneyLeg and parseStopover to map nested time objects
+ * (abfahrt.sollzeit / ankunft.sollzeit) to flat fields expected by the parser.
+ */
+const customDbProfile: typeof dbProfile & {
+  parseJourneyLeg: typeof originalParseJourneyLeg;
+  parseStopover: typeof originalParseStopover;
+} = {
+  ...dbProfile,
+  parseJourneyLeg: (ctx, pt, date, fallbackLocations) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    normalizeLegTimes(pt as Record<string, any>);
+    return originalParseJourneyLeg(ctx, pt, date, fallbackLocations);
+  },
+  parseStopover: (ctx, st, date) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    normalizeStopTimes(st as Record<string, any>);
+    return originalParseStopover(ctx, st, date);
+  },
+};
+
+/**
  * Manages interactions with the Hafas API for Deutsche Bahn operations.
  */
 export class DbHafasManager {
@@ -105,7 +174,7 @@ export class DbHafasManager {
    * Constructs a new DbHafasManager instance.
    */
   constructor() {
-    this.client = createClient(dbProfile, userAgent, { enrichStations: false });
+    this.client = createClient(customDbProfile, userAgent, { enrichStations: false });
   }
 
   /**
