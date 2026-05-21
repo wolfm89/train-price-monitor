@@ -1,6 +1,8 @@
 import type { HafasClient, Journey, JourneyWithRealtimeData, Journeys, Station } from 'hafas-client';
 import { createClient } from 'db-vendo-client';
 import { profile as dbProfile } from 'db-vendo-client/p/dbweb/index.js';
+import { parseJourneyLeg as originalParseJourneyLeg } from 'db-vendo-client/parse/journey-leg.js';
+import { parseStopover as originalParseStopover } from 'db-vendo-client/parse/stopover.js';
 import Logger from '../lib/logger';
 import { LoyaltyCardData, toHafasLoyaltyCard, toHafasAgeGroup } from '../lib/loyaltyCards';
 
@@ -9,6 +11,49 @@ interface SimpleStation {
   id: string;
   name: string;
   weight: number;
+}
+
+/**
+ * The dbweb /angebote/recon endpoint returns departure/arrival times as nested objects:
+ *   { abfahrt: { sollzeit: "2026-05-25T18:36:00", istzeit: "..." }, ... }
+ * But the db-vendo-client parser expects flat string fields:
+ *   { abfahrtsZeitpunkt: "2026-05-25T18:36:00", ezAbfahrtsZeitpunkt: "...", ... }
+ *
+ * This normalizer maps the nested format to the flat format so the parser can extract times.
+ * See: https://github.com/public-transport/db-vendo-client/blob/main/parse/journey-leg.js
+ */
+interface TimeFields {
+  sollzeit?: string;
+  istzeit?: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeStopTimes(obj: Record<string, any>): void {
+  const abfahrt = obj.abfahrt as TimeFields | undefined;
+  const ankunft = obj.ankunft as TimeFields | undefined;
+
+  if (!obj.abfahrtsZeitpunkt && !obj.abgangsDatum && abfahrt?.sollzeit) {
+    obj.abgangsDatum = abfahrt.sollzeit;
+  }
+  if (!obj.ezAbfahrtsZeitpunkt && !obj.ezAbgangsDatum && abfahrt?.istzeit) {
+    obj.ezAbgangsDatum = abfahrt.istzeit;
+  }
+  if (!obj.ankunftsZeitpunkt && !obj.ankunftsDatum && ankunft?.sollzeit) {
+    obj.ankunftsDatum = ankunft.sollzeit;
+  }
+  if (!obj.ezAnkunftsZeitpunkt && !obj.ezAnkunftsDatum && ankunft?.istzeit) {
+    obj.ezAnkunftsDatum = ankunft.istzeit;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeLegTimes(pt: Record<string, any>): void {
+  normalizeStopTimes(pt);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stops = (pt.halte || pt.stops || []) as Record<string, any>[];
+  for (const stop of stops) {
+    normalizeStopTimes(stop);
+  }
 }
 
 export interface PricingOptions {
@@ -96,6 +141,26 @@ function buildHafasOptions(pricingOptions?: PricingOptions): Record<string, unkn
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
 
 /**
+ * Custom dbweb profile that normalizes /angebote/recon response times.
+ * Wraps parseJourneyLeg and parseStopover to map nested time objects
+ * (abfahrt.sollzeit / ankunft.sollzeit) to flat fields expected by the parser.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const customDbProfile: any = {
+  ...dbProfile,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  parseJourneyLeg: (ctx: any, pt: any, date: any, fallbackLocations: any) => {
+    normalizeLegTimes(pt);
+    return originalParseJourneyLeg(ctx, pt, date, fallbackLocations);
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  parseStopover: (ctx: any, st: any, date: any) => {
+    normalizeStopTimes(st);
+    return originalParseStopover(ctx, st, date);
+  },
+};
+
+/**
  * Manages interactions with the Hafas API for Deutsche Bahn operations.
  */
 export class DbHafasManager {
@@ -105,7 +170,7 @@ export class DbHafasManager {
    * Constructs a new DbHafasManager instance.
    */
   constructor() {
-    this.client = createClient(dbProfile, userAgent, { enrichStations: false });
+    this.client = createClient(customDbProfile, userAgent, { enrichStations: false });
   }
 
   /**
