@@ -3,6 +3,7 @@ import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { CertificateStack } from '../lib/certificate-stack';
+import { ScraperStack } from '../lib/scraper-stack';
 
 const app = new cdk.App();
 
@@ -33,3 +34,10 @@ new InfrastructureStack(
     crossRegionReferences: true,
   }
 );
+
+new ScraperStack(app, 'ScraperStack', {
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+});

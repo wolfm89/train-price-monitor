@@ -1,0 +1,20 @@
+{
+  "t1": [
+    { "eva": "8011160", "name": "Berlin Hbf" },
+    { "eva": "8000261", "name": "München Hbf" },
+    { "eva": "8002549", "name": "Hamburg Hbf" },
+    { "eva": "8000105", "name": "Frankfurt(Main)Hbf" },
+    { "eva": "8000207", "name": "Köln Hbf" },
+    { "eva": "8000096", "name": "Stuttgart Hbf" },
+    { "eva": "8000085", "name": "Düsseldorf Hbf" }
+  ],
+  "t2": [
+    { "eva": "8010205", "name": "Leipzig Hbf" },
+    { "eva": "8000152", "name": "Hannover Hbf" },
+    { "eva": "8000284", "name": "Nürnberg Hbf" },
+    { "eva": "8000050", "name": "Bremen Hbf" },
+    { "eva": "8000244", "name": "Mannheim Hbf" },
+    { "eva": "8000080", "name": "Dortmund Hbf" },
+    { "eva": "8000191", "name": "Karlsruhe Hbf" }
+  ]
+}

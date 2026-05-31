@@ -1,0 +1,32 @@
+{
+  "name": "tpm-scraper",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "author": "",
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1045.0",
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/lib-dynamodb": "^3.1045.0",
+    "@types/aws-lambda": "^8.10.115",
+    "@types/hafas-client": "^6.3.1",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.1",
+    "@typescript-eslint/parser": "^8.57.1",
+    "esbuild": "^0.28.0",
+    "eslint": "^10.1.0",
+    "hyparquet": "^1.26.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@aws-lambda-powertools/logger": "^2.32.0",
+    "db-vendo-client": "^6.10.11",
+    "hyparquet-writer": "^0.6.0"
+  }
+}
