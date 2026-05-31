@@ -8,3 +8,17 @@ run = "npm test"
 description = "Deploy all CDK stacks to AWS"
 depends = ["//frontend:build"]
 run = "npx cdk deploy --all --require-approval never"
+
+[tasks.deploy-scraper]
+description = "Deploy ScraperStack to live AWS"
+depends = ["//scraper:build"]
+run = "npx cdk deploy ScraperStack --require-approval never"
+
+[tasks.deploy-local-scraper]
+description = "Deploy ScraperStack to local Floci (requires: docker compose up -d floci)"
+depends = ["//scraper:build"]
+run = [
+  "npx cdklocal bootstrap --app 'npx ts-node --prefer-ts-exts --transpileOnly bin/scraper-local.ts'",
+  "npx cdklocal deploy --app 'npx ts-node --prefer-ts-exts --transpileOnly bin/scraper-local.ts' ScraperStack --require-approval never",
+]
+env = { CDK_DEFAULT_ACCOUNT = "000000000000", CDK_DEFAULT_REGION = "eu-central-1", LOCALSTACK_HOSTNAME = "localhost", EDGE_PORT = "4566", JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION = "1" }

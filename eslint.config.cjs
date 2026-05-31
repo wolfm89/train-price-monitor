@@ -34,7 +34,7 @@ module.exports = [
     },
   },
   {
-    files: ['backend/**/*.{ts,tsx}'],
+    files: ['backend/**/*.{ts,tsx}', 'scraper/**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
