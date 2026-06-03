@@ -108,7 +108,6 @@ export class ScraperStack extends cdk.Stack {
     // Bundle: ../scraper/dist/hydrator/index.mjs  (ESM, pre-built by esbuild)
     // -------------------------------------------------------------------------
     const hydratorFn = new lambda.Function(this, 'ScraperHydrator', {
-      functionName: 'scraper-hydrator',
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       code: lambda.Code.fromAsset('../scraper/dist/hydrator'),
@@ -130,12 +129,11 @@ export class ScraperStack extends cdk.Stack {
     // Bundle: ../scraper/dist/compactor/index.mjs  (ESM, pre-built by esbuild)
     // -------------------------------------------------------------------------
     const compactorFn = new lambda.Function(this, 'ScraperCompactor', {
-      functionName: 'scraper-compactor',
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       code: lambda.Code.fromAsset('../scraper/dist/compactor'),
       handler: 'index.handler',
-      memorySize: 1024,
+      memorySize: 3072,
       timeout: cdk.Duration.seconds(300),
       logGroup: compactorLogGroup,
       environment: {
