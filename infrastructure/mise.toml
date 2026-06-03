@@ -4,6 +4,10 @@ includes = ["../mise.tasks.toml"]
 [tasks.test]
 run = "npm test"
 
+[tasks.clean]
+description = "Remove CDK synthesis output"
+run = "rm -rf cdk.out"
+
 [tasks.deploy]
 description = "Deploy all CDK stacks to AWS"
 depends = ["//frontend:build"]

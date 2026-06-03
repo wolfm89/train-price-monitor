@@ -49,3 +49,7 @@ depends = ["//...:typecheck"]
 [tasks.deploy]
 description = "Deploy all CDK stacks to AWS"
 depends = ["//infrastructure:deploy"]
+
+[tasks.clean]
+description = "Remove build artifacts in all modules"
+depends = ["//...:clean"]

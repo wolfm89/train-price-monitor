@@ -8,3 +8,7 @@ run = "npm run dev 2>&1 | tee /tmp/backend.log"
 [tasks.dev.env]
 LOCAL_DEV = "1"
 PORT = "4000"
+
+[tasks.codegen]
+description = "Generate GraphQL types from schema"
+run = "npm run codegen"

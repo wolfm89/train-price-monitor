@@ -1,25 +1,12 @@
-[tasks.install]
-description = "Install dependencies"
-run = "npm install"
-
-[tasks.build]
-description = "Bundle Lambda functions with esbuild"
-run = "npm run build"
-
-[tasks.typecheck]
-description = "TypeScript type check"
-run = "npm run typecheck"
-
-[tasks.lint]
-description = "ESLint"
-run = "npm run lint"
+[task_config]
+includes = ["../mise.tasks.toml"]
 
 [tasks.run-hydrator]
 description = "Invoke hydrator Lambda locally via Floci (requires: mise run //infrastructure:deploy-local-scraper)"
-run = "aws lambda invoke --function-name scraper-hydrator --invocation-type RequestResponse /tmp/scraper-hydrator-response.json && cat /tmp/scraper-hydrator-response.json"
+run = "aws lambda invoke --function-name $(aws lambda list-functions --query \"Functions[?contains(FunctionName, 'ScraperHydrator')].FunctionName\" --output text) --invocation-type RequestResponse /tmp/scraper-hydrator-response.json && cat /tmp/scraper-hydrator-response.json"
 env = { AWS_ENDPOINT_URL = "http://localhost:4566", AWS_ACCESS_KEY_ID = "test", AWS_SECRET_ACCESS_KEY = "test", AWS_DEFAULT_REGION = "eu-central-1" }
 
 [tasks.run-poller]
 description = "Invoke poller Lambda locally via Floci (requires: mise run //infrastructure:deploy-local-scraper)"
-run = "aws lambda invoke --function-name scraper-poller --invocation-type RequestResponse /tmp/scraper-poller-response.json && cat /tmp/scraper-poller-response.json"
+run = "aws lambda invoke --function-name $(aws lambda list-functions --query \"Functions[?contains(FunctionName, 'ScraperPoller')].FunctionName\" --output text) --invocation-type RequestResponse /tmp/scraper-poller-response.json && cat /tmp/scraper-poller-response.json"
 env = { AWS_ENDPOINT_URL = "http://localhost:4566", AWS_ACCESS_KEY_ID = "test", AWS_SECRET_ACCESS_KEY = "test", AWS_DEFAULT_REGION = "eu-central-1" }
