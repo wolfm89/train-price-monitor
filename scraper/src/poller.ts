@@ -218,7 +218,7 @@ export const handler = async (): Promise<void> => {
     }
 
     const departureDate = new Date(`${target.departure_date}T12:00:00Z`);
-    const observedAt = new Date();
+    const observedAt = now;
 
     try {
       // Two API calls: 2nd class and 1st class

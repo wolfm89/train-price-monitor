@@ -114,8 +114,7 @@ export const handler = async (): Promise<void> => {
   const items: Record<string, unknown>[] = [];
 
   for (const route of ROUTE_CATALOG) {
-    const isRouteSeeded = seededRoutes.has(route.id);
-    const startDay = isRouteSeeded ? LOOKAHEAD_DAYS : 1;
+    const startDay = 1;
 
     for (let d = startDay; d <= LOOKAHEAD_DAYS; d++) {
       const departureDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + d));
