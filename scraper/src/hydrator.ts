@@ -114,9 +114,9 @@ export const handler = async (): Promise<void> => {
   const items: Record<string, unknown>[] = [];
 
   for (const route of ROUTE_CATALOG) {
-    const startDay = 1;
+    const startDay = 0;
 
-    for (let d = startDay; d <= LOOKAHEAD_DAYS; d++) {
+    for (let d = startDay; d < LOOKAHEAD_DAYS; d++) {
       const departureDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + d));
       const departureDateStr = departureDate.toISOString().slice(0, 10);
 

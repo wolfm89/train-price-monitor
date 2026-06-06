@@ -1,4 +1,4 @@
-import type { HafasClient, Journey } from 'hafas-client';
+import type { HafasClient, Journey, JourneysOptions } from 'hafas-client';
 import { createClient } from 'db-vendo-client';
 import { profile as dbProfile } from 'db-vendo-client/p/dbweb/index.js';
 import { parseJourneyLeg as originalParseJourneyLeg } from 'db-vendo-client/parse/journey-leg.js';
@@ -20,10 +20,27 @@ interface TimeFields {
   istzeit?: string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeStopTimes(obj: Record<string, any>): void {
-  const abfahrt = obj.abfahrt as TimeFields | undefined;
-  const ankunft = obj.ankunft as TimeFields | undefined;
+interface NormalizableStop {
+  abfahrt?: TimeFields;
+  ankunft?: TimeFields;
+  abfahrtsZeitpunkt?: unknown;
+  abgangsDatum?: string;
+  ezAbfahrtsZeitpunkt?: unknown;
+  ezAbgangsDatum?: string;
+  ankunftsZeitpunkt?: unknown;
+  ankunftsDatum?: string;
+  ezAnkunftsZeitpunkt?: unknown;
+  ezAnkunftsDatum?: string;
+}
+
+interface NormalizableLeg extends NormalizableStop {
+  halte?: NormalizableStop[];
+  stops?: NormalizableStop[];
+}
+
+function normalizeStopTimes(obj: NormalizableStop): void {
+  const abfahrt = obj.abfahrt;
+  const ankunft = obj.ankunft;
 
   if (!obj.abfahrtsZeitpunkt && !obj.abgangsDatum && abfahrt?.sollzeit) {
     obj.abgangsDatum = abfahrt.sollzeit;
@@ -39,11 +56,9 @@ function normalizeStopTimes(obj: Record<string, any>): void {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeLegTimes(pt: Record<string, any>): void {
+function normalizeLegTimes(pt: NormalizableLeg): void {
   normalizeStopTimes(pt);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stops = (pt.halte || pt.stops || []) as Record<string, any>[];
+  const stops = pt.halte ?? pt.stops ?? [];
   for (const stop of stops) {
     normalizeStopTimes(stop);
   }
@@ -51,16 +66,12 @@ function normalizeLegTimes(pt: Record<string, any>): void {
 
 const customDbProfile = {
   ...dbProfile,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  parseJourneyLeg: (ctx: any, pt: any, date: any, fallbackLocations: any) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    normalizeLegTimes(pt as Record<string, any>);
+  parseJourneyLeg: (ctx: unknown, pt: unknown, date: unknown, fallbackLocations: unknown) => {
+    normalizeLegTimes(pt as NormalizableLeg);
     return originalParseJourneyLeg(ctx, pt, date, fallbackLocations);
   },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  parseStopover: (ctx: any, st: any, date: any) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    normalizeStopTimes(st as Record<string, any>);
+  parseStopover: (ctx: unknown, st: unknown, date: unknown) => {
+    normalizeStopTimes(st as NormalizableStop);
     return originalParseStopover(ctx, st, date);
   },
 };
@@ -97,8 +108,12 @@ export async function fetchDayJourneys(
 
   const client = getClient();
   // bestprice is a db-vendo-client extension not present in @types/hafas-client
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const opts: any = { departure: noon, bestprice: true, tickets: true, firstClass };
+  const opts: JourneysOptions & { bestprice?: boolean } = {
+    departure: noon,
+    bestprice: true,
+    tickets: true,
+    firstClass,
+  };
   const result = await client.journeys(originEva, destEva, opts);
 
   return (result.journeys ?? []) as Journey[];

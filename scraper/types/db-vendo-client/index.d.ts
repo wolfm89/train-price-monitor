@@ -8,11 +8,9 @@ declare module 'db-vendo-client/p/dbweb/index.js' {
 }
 
 declare module 'db-vendo-client/parse/journey-leg.js' {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export function parseJourneyLeg(ctx: any, pt: any, date: any, fallbackLocations: any): any;
+  export function parseJourneyLeg(ctx: unknown, pt: unknown, date: unknown, fallbackLocations: unknown): unknown;
 }
 
 declare module 'db-vendo-client/parse/stopover.js' {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export function parseStopover(ctx: any, st: any, date: any): any;
+  export function parseStopover(ctx: unknown, st: unknown, date: unknown): unknown;
 }
