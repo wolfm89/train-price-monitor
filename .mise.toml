@@ -2,7 +2,7 @@ min_version = "2024.9.5"
 experimental_monorepo_root = true
 
 [monorepo]
-config_roots = ["frontend", "backend", "infrastructure"]
+config_roots = ["frontend", "backend", "infrastructure", "scraper"]
 
 [tools]
 node = "24"
@@ -49,3 +49,7 @@ depends = ["//...:typecheck"]
 [tasks.deploy]
 description = "Deploy all CDK stacks to AWS"
 depends = ["//infrastructure:deploy"]
+
+[tasks.clean]
+description = "Remove build artifacts in all modules"
+depends = ["//...:clean"]

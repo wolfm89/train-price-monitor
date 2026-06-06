@@ -1,0 +1,17 @@
+[task_config]
+includes = ["../mise.tasks.toml"]
+
+[tasks.run-hydrator]
+description = "Invoke hydrator Lambda locally via Floci (requires: mise run //infrastructure:deploy-local-scraper)"
+run = "aws lambda invoke --function-name $(aws lambda list-functions --query \"Functions[?contains(FunctionName, 'ScraperHydrator')].FunctionName\" --output text) --invocation-type RequestResponse /tmp/scraper-hydrator-response.json && cat /tmp/scraper-hydrator-response.json"
+env = { AWS_ENDPOINT_URL = "http://localhost:4566", AWS_ACCESS_KEY_ID = "test", AWS_SECRET_ACCESS_KEY = "test", AWS_DEFAULT_REGION = "eu-central-1" }
+
+[tasks.run-poller]
+description = "Invoke poller Lambda locally via Floci (requires: mise run //infrastructure:deploy-local-scraper)"
+run = "aws lambda invoke --function-name $(aws lambda list-functions --query \"Functions[?contains(FunctionName, 'ScraperPoller')].FunctionName\" --output text) --invocation-type RequestResponse /tmp/scraper-poller-response.json && cat /tmp/scraper-poller-response.json"
+env = { AWS_ENDPOINT_URL = "http://localhost:4566", AWS_ACCESS_KEY_ID = "test", AWS_SECRET_ACCESS_KEY = "test", AWS_DEFAULT_REGION = "eu-central-1" }
+
+[tasks.run-compactor]
+description = "Invoke compactor Lambda locally via Floci (requires: mise run //infrastructure:deploy-local-scraper)"
+run = "aws lambda invoke --function-name $(aws lambda list-functions --query \"Functions[?contains(FunctionName, 'ScraperCompactor')].FunctionName\" --output text) --invocation-type RequestResponse /tmp/scraper-compactor-response.json && cat /tmp/scraper-compactor-response.json"
+env = { AWS_ENDPOINT_URL = "http://localhost:4566", AWS_ACCESS_KEY_ID = "test", AWS_SECRET_ACCESS_KEY = "test", AWS_DEFAULT_REGION = "eu-central-1" }

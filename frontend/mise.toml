@@ -7,3 +7,7 @@ run = "npm run dev 2>&1 | tee /tmp/frontend.log"
 
 [tasks.test]
 run = "npm test"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf build"

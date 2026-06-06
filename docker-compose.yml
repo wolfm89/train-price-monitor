@@ -1,5 +1,16 @@
-version: '3'
 services:
+  floci:
+    image: floci/floci:latest-compat
+    ports:
+      - '4566:4566'
+    user: root
+    environment:
+      FLOCI_HOSTNAME: floci
+      FLOCI_DEFAULT_REGION: eu-central-1
+      AWS_DEFAULT_REGION: eu-central-1
+    volumes:
+      - ${XDG_RUNTIME_DIR}/docker.sock:/var/run/docker.sock
+
   backend:
     build:
       context: backend

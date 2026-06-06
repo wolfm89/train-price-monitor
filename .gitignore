@@ -11,6 +11,7 @@ node_modules
 # builds
 frontend/build
 backend/dist
+scraper/dist
 
 # misc
 .DS_Store
@@ -39,3 +40,6 @@ stats/
 
 # playwright mcp artifacts
 .playwright-mcp/
+
+# Google Antigravity
+.antigravitycli
