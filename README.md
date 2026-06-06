@@ -24,8 +24,13 @@ Train price monitoring WebApp that sends notifications to users when prices incr
 - Monitor train ticket prices of selected journeys
 - Get notified when the ticket price of a journey exceeds a certain threshold
 - Automatic cleanup of price-alert notifications when a monitored journey expires
+- Background price scraper that collects historical fare data into Parquet on S3
 - Sign up and log in securely
 - Responsive design for mobile and desktop
+
+> The `scraper/` module is an independent serverless pipeline (Hydrator → Poller → Compactor) that
+> collects Deutsche Bahn price data. See [scraper/README.md](scraper/README.md) for architecture,
+> the Parquet schema, and local development with Floci.
 
 ## Getting Started
 
@@ -55,6 +60,8 @@ The backend can be started locally with the following steps:
 
 Alternatively, use `mise run //backend:dev` from the repository root (mise sets `LOCAL_DEV=1` automatically).
 
+For running the price scraper pipeline locally, see [scraper/README.md](scraper/README.md).
+
 ## Environment Variables
 
 | Variable                     | Module           | Description                                                              |
@@ -68,6 +75,9 @@ Alternatively, use `mise run //backend:dev` from the repository root (mise sets 
 | `CDK_APP_NAME`               | Infrastructure   | Application name (overrides CDK context)                                 |
 | `CDK_DOMAIN_NAME`            | Infrastructure   | Custom domain name for the deployment                                    |
 | `CDK_SES_FROM_EMAIL`         | Infrastructure   | Sender email injected as Lambda env var                                  |
+| `SCRAPER_TABLE_NAME`         | Scraper          | DynamoDB table for scrape schedule (injected by CDK)                     |
+| `SCRAPER_BUCKET_NAME`        | Scraper          | S3 bucket for Parquet price data (injected by CDK)                       |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | How many days ahead to seed (default: 90)                                |
 
 ## Usage
 
@@ -96,6 +106,15 @@ Backend:
 - AWS SES
 - AWS Lambda with Docker
 - AWS API Gateway
+
+Scraper:
+
+- db-vendo-client (Deutsche Bahn internal timetable API)
+- hyparquet / hyparquet-writer (Parquet read/write)
+- @aws-lambda-powertools/logger (structured logging)
+- esbuild (ESM bundling)
+- Docker Lambda (Poller only — to avoid Akamai IP blocking)
+- Floci (local AWS emulation)
 
 Infrastructure:
 

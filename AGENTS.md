@@ -1,26 +1,31 @@
-# AGENTS.md - Train Price Monitor
+# Project Overview
 
-This document provides guidance for AI agents working in this codebase.
+Train Price Monitor is a serverless web app that tracks Deutsche Bahn ticket prices and notifies
+users when a monitored journey rises above a chosen threshold. It pairs a React 19 + Material-UI
+frontend with a GraphQL Yoga backend on AWS Lambda, and a standalone scraper pipeline that records
+historical fare data to Parquet on S3. Everything is defined as code with AWS CDK v2 and orchestrated
+through a `mise` monorepo.
 
-## Project Overview
+## Repository Structure
 
-Train price monitoring webapp built with React, TypeScript, GraphQL, Docker, and AWS serverless services. The codebase is split into three modules:
+- `frontend/` – React 19 SPA (Material-UI v7, urql, Vite); pages, components, hooks, providers.
+- `backend/` – GraphQL Yoga API with a native AWS Lambda handler (API Gateway v1/v2 + SQS).
+- `scraper/` – Independent serverless pipeline collecting DB price data into Parquet on S3.
+- `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
+- `.mise.toml` / `mise.tasks.toml` – Monorepo task definitions shared across modules.
+- `eslint.config.cjs` – Shared ESLint v10 flat config.
+- `docker-compose.yml` – Local dev services (Floci AWS emulator, backend, frontend).
 
-- **frontend/** - React 19 app with Material-UI v7, urql, and Vite
-- **backend/** - GraphQL Yoga API with native AWS Lambda handler and AWS integrations
-- **infrastructure/** - AWS CDK v2 infrastructure definitions
+Each module owns a `mise.toml` whose tasks are reachable as `mise run //module:task`.
 
-## Tooling
+## Build & Development Commands
 
-This project uses **mise** for Node.js version management. Run `mise install` to set up tools.
-
-## Build/Lint/Test Commands
-
-### Frontend (Vite + React 19)
+Install tooling once with `mise install`. Per-module commands:
 
 ```bash
+# Frontend (Vite + React 19)
 cd frontend
-npm install              # Install dependencies
+npm install            # Install dependencies
 npm run dev            # Start Vite dev server (port 3000)
 npm run build          # Production build to frontend/build
 npm test               # Run Vitest tests
@@ -28,264 +33,177 @@ npm run typecheck      # TypeScript check
 npm run lint           # ESLint check
 ```
 
-### Backend
-
 ```bash
+# Backend (GraphQL Yoga)
 cd backend
 npm install            # Install dependencies
 LOCAL_DEV=1 npm run dev  # Start local HTTP server with hot reload (port 4000)
-npm run build         # Bundle with esbuild to backend/dist
-npm run codegen       # Generate GraphQL types from schema
-npm run typecheck     # TypeScript check
-npm run lint          # ESLint check
+npm run build          # Bundle with esbuild to backend/dist
+npm run codegen        # Generate GraphQL types from schema
+npm run typecheck      # TypeScript check
+npm run lint           # ESLint check
 ```
 
-> `LOCAL_DEV=1` switches the entry point from exporting a Lambda handler to starting a plain HTTP server. The mise task `mise run //backend:dev` sets this automatically.
-
-### Infrastructure (CDK)
+```bash
+# Scraper (esbuild → 3 Lambda bundles)
+cd scraper
+npm install            # Install dependencies
+npm run build          # Bundle to scraper/dist/{poller,hydrator,compactor}
+npm run typecheck      # TypeScript check
+npm run lint           # ESLint check
+```
 
 ```bash
+# Infrastructure (CDK)
 cd infrastructure
 npm install            # Install dependencies
-npm run build         # Compile TypeScript
-npm run test          # Run Jest tests
-npm run cdk deploy    # Deploy to AWS
-npm run cdk diff      # Show diff against deployed stack
-npm run typecheck     # TypeScript check
-npm run lint          # ESLint check
+npm run build          # Compile TypeScript
+npm run test           # Run Jest tests
+npm run cdk deploy     # Deploy to AWS
+npm run cdk diff       # Show diff against deployed stack
+npm run typecheck      # TypeScript check
+npm run lint           # ESLint check
 ```
-
-### Root Level (mise monorepo)
-
-This project is configured as a mise monorepo. Tasks defined in each module's `mise.toml` are accessible via `mise run //module:task`.
 
 ```bash
-npx pre-commit run --all-files       # Run all pre-commit hooks
-mise run //...:build                 # Build all modules in parallel
-mise run //...:test                  # Run tests across all modules
-mise run //...:lint                  # Lint all modules
-mise run //frontend:dev              # Start frontend dev server
-mise run //backend:dev               # Start backend local server (sets LOCAL_DEV=1)
-mise run //infrastructure:deploy     # Deploy all CDK stacks
+# Monorepo (mise) — run from any directory
+npx pre-commit run --all-files     # Run all pre-commit hooks
+mise run //...:build               # Build all modules in parallel
+mise run //...:test                # Run tests across all modules
+mise run //...:lint                # Lint all modules
+mise run //frontend:dev            # Start frontend dev server
+mise run //backend:dev             # Start backend local server (sets LOCAL_DEV=1)
+mise run //infrastructure:deploy   # Deploy all CDK stacks
 ```
 
-## Code Style Guidelines
+> `LOCAL_DEV=1` switches the backend entry point from a Lambda handler to a plain HTTP server.
+> The `mise run //backend:dev` task sets it automatically.
 
-### General
+## Code Style & Conventions
 
-- **TypeScript strict mode** enabled in all modules
-- Use `const` by default; use `let` only when reassignment is necessary
-- **No `console.log`** in any module (ESLint: `no-console: error`)
-- **Backend**: use `@aws-lambda-powertools/logger` for structured logging instead
+- **TypeScript strict mode** in all modules; explicit param/return types; prefer `interface` for
+  object shapes; use `unknown` over `any`.
+- Use `const` by default; `let` only when reassignment is needed.
+- **No `console.log`** anywhere (`no-console: error`). Backend and scraper log via
+  `@aws-lambda-powertools/logger`.
+- **Prettier**: `{ "trailingComma": "es5", "tabWidth": 2, "printWidth": 120, "useTabs": false,
+"semi": true, "singleQuote": true }`.
+- **ESLint** v10 flat config (`eslint.config.cjs`) with `@typescript-eslint` recommended rules.
+- **Imports**: external packages first (alphabetical), then internal relative paths, grouped by a
+  blank line.
+- **Naming**: Components PascalCase; hooks `useX`; utilities/API camelCase; classes/stacks PascalCase;
+  constants SCREAMING_SNAKE_CASE; files kebab-case.
+- **React**: functional components with hooks; named exports for reusable components, default exports
+  for pages; props interface named `<Component>Props`, destructured in the signature.
+- **CDK**: extend `cdk.Stack`; descriptive construct IDs; prefer L2 constructs; accept
+  `props?: cdk.StackProps`.
+- **Commits**: short imperative subject (e.g. `Add price alert threshold validation`); pre-commit
+  hooks must pass before committing.
 
-### Formatting (Prettier)
+## Architecture Notes
 
-```json
-{ "trailingComma": "es5", "tabWidth": 2, "printWidth": 120, "useTabs": false, "semi": true, "singleQuote": true }
+```mermaid
+flowchart LR
+    User --> FE[Frontend SPA<br/>React + urql]
+    FE -->|JWT| APIGW[API Gateway<br/>Cognito authorizer]
+    APIGW --> BE[Backend Lambda<br/>GraphQL Yoga]
+    BE --> Cognito
+    BE --> DDB[(DynamoDB)]
+    BE --> S3P[(S3 profile images)]
+    BE --> SQS --> BE
+    BE --> SES[SES email]
+
+    subgraph Scraper Pipeline
+        EB[EventBridge] --> Hydrator --> SchedDDB[(ScraperSchedule)]
+        EB --> Poller
+        Poller --> SchedDDB
+        Poller --> Vendo[DB Vendo API]
+        Poller --> Parquet[(S3 Parquet)]
+        EB --> Compactor --> Parquet
+    end
 ```
 
-### ESLint Configuration
+- **Frontend** authenticates via Cognito and calls the GraphQL API; the urql client attaches the JWT.
+- **Backend** is a single Lambda serving GraphQL over API Gateway and consuming SQS for journey
+  monitor updates; it reads DB journey data via `db-vendo-client` and sends email via SES.
+- **Scraper** is fully decoupled: EventBridge schedules drive the Hydrator (seed targets), Poller
+  (scrape prices), and Compactor (consolidate Parquet). See `scraper/README.md` for details.
 
-ESLint v10 uses flat config (`eslint.config.js`):
+## Testing Strategy
 
-```javascript
-export default [
-  js.configs.recommended,
-  {
-    files: ['**/*.{ts,tsx}'],
-    languageOptions: {
-      parser: tsparser,
-      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
-    },
-    plugins: { '@typescript-eslint': tseslint },
-    rules: { ...tseslint.configs.recommended.rules, 'prefer-const': 'warn', 'no-console': 'error' },
-  },
-];
-```
+- **Frontend** – Vitest (`*.test.{ts,tsx}`); run `mise run //frontend:test` (or `npm test`).
+- **Infrastructure** – Jest with ts-jest (`*.test.ts`); run `mise run //infrastructure:test`.
+  Use descriptive names, e.g. `test('SQS Queue Created')`.
+- **Scraper / Backend** – No automated test suites yet; rely on `typecheck` + `lint`.
+  > TODO: add unit coverage for scraper TTD tiering and Parquet serialization.
+- **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
+  formatting and linting on every commit.
 
-### Import Conventions
+## Security & Compliance
 
-1. External packages first (alphabetical)
-2. Internal modules (relative paths)
-3. Group imports with blank lines between
+- Never commit `.env` files or secrets; secrets are injected by CDK at deploy time.
+- API Gateway uses a Cognito authorizer — all GraphQL requests need a valid JWT (handled by the
+  frontend urql client).
+- IAM follows least privilege; the scraper grants only the table/bucket access each Lambda needs.
+- Pre-commit hooks enforce: trailing-whitespace, LF line endings, valid YAML/JSON, Prettier, ESLint.
+  Install with `pip install pre-commit && pre-commit install`.
+- Licensed under GPL-3.0.
+  > TODO: document dependency-scanning tooling (e.g. Dependabot / npm audit) if/when adopted.
 
-```typescript
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Container, Button } from '@mui/material';
+## Agent Guardrails
 
-import Header from './components/Header';
-import { authService } from './services/auth';
-```
+- Never edit generated or vendored files: `**/dist/`, `**/node_modules/`, `**/cdk.out/`,
+  GraphQL codegen output, and `package-lock.json` (change deps via `npm install`).
+- Do not commit `.env` or any credentials; do not weaken the Cognito authorizer.
+- Respect esbuild bundling rules below — wrong `--external` flags crash Lambdas at runtime.
+- Infra changes: run `npm run build` and `npm run cdk diff` before any deploy; never `cdk deploy`
+  without a human reviewing the diff.
+- Keep `no-console` clean; use the powertools logger in backend/scraper.
 
-### Naming Conventions
+**Backend esbuild bundling** (`--format=cjs`):
 
-- **Components**: PascalCase (`SearchMask.tsx`, `AlertBar.tsx`)
-- **Hooks**: camelCase with `use` prefix (`useAlert.tsx`)
-- **Utilities/API**: camelCase (`apiClient.tsx`, `journey.tsx`)
-- **Classes/Stacks**: PascalCase (`InfrastructureStack`)
-- **Variables/functions**: camelCase
-- **Constants**: SCREAMING_SNAKE_CASE
-- **Files**: kebab-case (`infrastructure-stack.ts`)
+- Do NOT externalize ESM-only packages — they cannot be `require()`d and crash Lambda with
+  `UserCodeSyntaxError` (API Gateway then returns a 502, often misreported as CORS).
+- `db-vendo-client` must be **bundled** (ESM-only).
+- `db-hafas-stations` must stay **external** (uses `import.meta.url`, loaded via dynamic `import()`).
 
-### TypeScript Guidelines
+**Scraper esbuild bundling** (`--format=esm`):
 
-- Use explicit types for function parameters and return values
-- Prefer interfaces over type aliases for object shapes
-- Use `unknown` instead of `any` when type is truly unknown
-- Enable strict null checks (`strictNullChecks: true`)
+- AWS SDK packages are externalized (provided by the Node.js 24 runtime).
+- The poller bundle needs a CJS `require()` shim banner for CJS-only transitive deps
+  (`qs` → `object-inspect` calling `require('util')`).
 
-### React Conventions
+## Extensibility Hooks
 
-- Functional components with hooks
-- Named exports for reusable components; default exports for pages
-- Prop interfaces named `<ComponentName>Props`
-- Destructure props in function signature
+Environment variables (never commit values):
 
-```typescript
-interface SearchMaskProps {
-  onSearch: (query: SearchQuery) => void;
-  isLoading: boolean;
-}
+| Variable                     | Module           | Description                                             |
+| ---------------------------- | ---------------- | ------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`  | Backend          | S3 bucket name for profile images                       |
+| `TPM_SQS_QUEUE_URL`          | Backend          | SQS queue URL for journey monitor updates               |
+| `SES_FROM_EMAIL`             | Backend (Lambda) | Sender address for SES emails (injected by CDK)         |
+| `FRONTEND_URL`               | Backend (Lambda) | Frontend base URL for notification links                |
+| `LOCAL_DEV`                  | Backend          | `1` starts an HTTP server instead of the Lambda handler |
+| `PORT`                       | Backend          | HTTP port for local dev server (default `4000`)         |
+| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend         | API Gateway base URL                                    |
+| `CDK_APP_NAME`               | Infrastructure   | Application name (overrides CDK context)                |
+| `CDK_DOMAIN_NAME`            | Infrastructure   | Custom domain name for the deployment                   |
+| `CDK_SES_FROM_EMAIL`         | Infrastructure   | Sender email injected as Lambda `SES_FROM_EMAIL`        |
+| `SCRAPER_TABLE_NAME`         | Scraper          | DynamoDB schedule table (injected by CDK)               |
+| `SCRAPER_BUCKET_NAME`        | Scraper          | S3 bucket for Parquet data (injected by CDK)            |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | Days ahead to seed (default `90`)                       |
+| `AWS_ENDPOINT_URL`           | Scraper          | Local Floci endpoint (set by mise tasks)                |
 
-export default function SearchMask({ onSearch, isLoading }: SearchMaskProps) {
-  // ...
-}
-```
+- Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
+- Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).
+- New GraphQL resolvers: edit the schema, run `npm run codegen`, then implement the resolver.
 
-### AWS CDK Conventions
+## Further Reading
 
-- Use `cdk.Stack` as base class
-- Construct IDs should be descriptive: `'Backend'`, `'CognitoAuth'`
-- Use CDK L2 constructs when available
-- Always specify `props?: cdk.StackProps` for stack constructors
-
-### Error Handling
-
-- Backend uses `@aws-lambda-powertools/logger` for structured logging
-- Use `try/catch` with specific error types
-- Frontend uses `AlertProvider` for user-facing notifications
-
-### Testing
-
-- Frontend: Vitest (`*.test.{ts,tsx}`)
-- Infrastructure: Jest with ts-jest (`*.test.ts`)
-- Write descriptive test names: `test('SQS Queue Created')`
-
-## Pre-commit Hooks
-
-Enforce: trailing whitespace, LF line endings, valid YAML/JSON, Prettier formatting, ESLint linting.
-
-Install: `pip install pre-commit && pre-commit install`
-
-## Backend esbuild Bundling Rules
-
-The backend bundles with `--format=cjs` for Lambda compatibility. Critical rules for `--external` flags:
-
-- **Do NOT externalize ESM-only packages** — they cannot be `require()`d at runtime and will crash Lambda with `UserCodeSyntaxError: Cannot use import statement outside a module`. Symptom: API Gateway returns 502 (browser misreports this as a CORS error).
-- **`db-vendo-client`** must be **bundled** (not external) — it is ESM-only.
-- **`db-hafas-stations`** must stay **external** — it uses `import.meta.url` for `.ndjson` data file resolution and is loaded via dynamic `import()`, which works from CJS context.
-
-## AWS Deployment
-
-```bash
-# Source root .env first (sets AWS_PROFILE, CDK_DOMAIN_NAME, etc.)
-source .env
-
-# Deploy all stacks — from infrastructure/ or via mise
-npx cdk deploy --all --require-approval never
-# or:
-mise run //infrastructure:deploy
-```
-
-`CDK_APP_NAME`, `CDK_DOMAIN_NAME`, and `CDK_SES_FROM_EMAIL` must be set before running `cdk deploy` (either via env vars or `-c` CDK context flags). Missing values cause a synth-time error.
-
-- Lambda runs as a Docker image — expect **~15s cold start** on first invocation after deployment.
-- If the Lambda crashes silently, check CloudWatch: log group is `/aws/lambda/InfrastructureStack-BackendGraphql*`.
-- API Gateway uses a Cognito authorizer — all GraphQL requests require a valid JWT in the `Authorization` header (handled automatically by the frontend urql client).
-
-## Environment Variables
-
-Never commit `.env` files or secrets.
-
-### Backend
-
-| Variable                    | Description                                                              |
-| --------------------------- | ------------------------------------------------------------------------ |
-| `PROFILE_IMAGE_BUCKET_NAME` | S3 bucket name for profile images                                        |
-| `TPM_SQS_QUEUE_URL`         | SQS queue URL for journey monitor updates                                |
-| `SES_FROM_EMAIL`            | Sender address for SES notification emails (injected by CDK)             |
-| `FRONTEND_URL`              | Frontend base URL for notification links (injected by CDK)               |
-| `LOCAL_DEV`                 | Set to `1` to start an HTTP server instead of exporting a Lambda handler |
-| `PORT`                      | HTTP port for local dev server (default: `4000`)                         |
-
-### Frontend
-
-| Variable                     | Description                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| `REACT_APP_GRAPHQL_ENDPOINT` | API Gateway base URL (e.g. `https://xxx.execute-api.eu-central-1.amazonaws.com/`) |
-
-### Infrastructure
-
-AWS credentials must be available via the AWS CLI. The following variables override CDK context values and must be set before `cdk deploy`:
-
-| Variable             | Description                                                    |
-| -------------------- | -------------------------------------------------------------- |
-| `CDK_APP_NAME`       | Application name                                               |
-| `CDK_DOMAIN_NAME`    | Custom domain name for the deployment                          |
-| `CDK_SES_FROM_EMAIL` | Sender email address, injected into Lambda as `SES_FROM_EMAIL` |
-
-See `.env` for example values.
-
-## Directory Structure
-
-```
-train-price-monitor/
-├── frontend/
-│   ├── src/
-│   │   ├── api/          # GraphQL API clients
-│   │   ├── components/   # Reusable UI components
-│   │   ├── hooks/        # Custom React hooks
-│   │   ├── pages/        # Page components
-│   │   ├── providers/    # React context providers
-│   │   ├── theme.ts      # Material-UI theme
-│   │   └── utils/        # Utility functions
-│   ├── vite.config.ts     # Vite configuration
-│   ├── vitest.config.ts   # Vitest configuration
-│   └── index.html         # Entry HTML
-├── backend/
-│   └── src/
-│       ├── lib/          # Shared utilities
-│       └── main.ts       # Entry point
-├── infrastructure/
-│   ├── lib/              # Stack definitions
-│   ├── test/             # CDK tests
-│   └── bin/              # CDK app entry
-├── .mise.toml            # Mise configuration
-├── .env                  # Environment variables (not committed)
-├── eslint.config.js      # ESLint v10 flat config
-└── AGENTS.md             # This file
-```
-
-## Common Tasks
-
-### Adding a new frontend component
-
-1. Create file in appropriate subdirectory under `frontend/src/`
-2. Export as named export if reusable, default if page-level
-3. Create accompanying prop interface
-4. Verify TypeScript/ESLint checks pass
-
-### Adding a new GraphQL resolver
-
-1. Add resolver to backend schema
-2. Run `npm run codegen` to update types
-3. Implement resolver in appropriate resolver file
-4. Update tests if applicable
-
-### Modifying infrastructure
-
-1. Make CDK changes in appropriate stack file
-2. Run `npm run build` to verify TypeScript compiles
-3. Run `npm run cdk diff` to preview changes
-4. Deploy with `npm run cdk deploy`
+- [scraper/README.md](scraper/README.md) – Scraper architecture, Parquet schema, local Floci dev.
+- [infrastructure/README.md](infrastructure/README.md) – CDK stacks and mise deploy tasks.
+- [README.md](README.md) – Product overview, getting started, usage.
+- `CDK_APP_NAME`, `CDK_DOMAIN_NAME`, `CDK_SES_FROM_EMAIL` must be set before `cdk deploy`
+  (env vars or `-c` context); missing values fail at synth time.
+- Backend log group: `/aws/lambda/InfrastructureStack-BackendGraphql*`.
+  Scraper log groups: `/aws/lambda/ScraperStack-Scraper*`. Docker Lambda cold start is ~15s.
