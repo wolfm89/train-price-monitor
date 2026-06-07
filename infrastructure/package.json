@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "aws-cdk-lib": "2.257.0",
-    "cloudstructs": "^0.13.2",
+    "cloudstructs": "^0.13.10",
     "constructs": "^10.6.0",
     "source-map-support": "^0.5.21"
   }
