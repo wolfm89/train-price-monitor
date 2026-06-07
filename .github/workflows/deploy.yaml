@@ -39,6 +39,14 @@ jobs:
           REACT_APP_AWS_REGION: ${{ vars.AWS_REGION }}
           REACT_APP_GRAPHQL_ENDPOINT: ${{ secrets.REACT_APP_GRAPHQL_ENDPOINT }}
 
+      - name: Install dependencies for scraper
+        working-directory: scraper
+        run: npm ci
+
+      - name: Build scraper
+        working-directory: scraper
+        run: npm run build
+
       - name: Install dependencies for infrastructure
         working-directory: infrastructure
         run: npm ci
