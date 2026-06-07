@@ -38,6 +38,11 @@
     "vite": "^8.0.11",
     "vitest": "^4.1.0"
   },
+  "overrides": {
+    "amazon-cognito-identity-js": {
+      "js-cookie": "3.0.8"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "start": "vite",
