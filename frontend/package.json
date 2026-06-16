@@ -35,7 +35,7 @@
     "eslint-visitor-keys": "^3.4.3",
     "jsdom": "^25.0.0",
     "typescript": "^5.9.3",
-    "vite": "^8.0.11",
+    "vite": "^8.0.16",
     "vitest": "^4.1.0"
   },
   "overrides": {
