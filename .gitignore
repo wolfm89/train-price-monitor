@@ -35,9 +35,6 @@ request.json
 .github/plans/
 .opencode/plans/
 
-# stats
-stats/
-
 # playwright mcp artifacts
 .playwright-mcp/
 

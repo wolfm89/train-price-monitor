@@ -1,0 +1,41 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks.install]
+description = "Create the venv and install analysis dependencies (uv)"
+dir = "{{ config_root }}"
+run = "uv sync --all-extras"
+
+[tasks.fetch]
+description = "Sync daily_*.parquet from the scraper S3 bucket into data/scraper/ (last N days or a date range)"
+dir = "{{ config_root }}"
+usage = '''
+flag "--days <days>" help="Fetch the last N days up to yesterday (mutually exclusive with --from/--to)"
+flag "--from <from>" help="Range start date YYYY-MM-DD (inclusive)"
+flag "--to <to>" help="Range end date YYYY-MM-DD (inclusive; defaults to yesterday)"
+flag "--bucket <bucket>" help="S3 bucket name (defaults to $SCRAPER_BUCKET_NAME)"
+'''
+run = "bash scripts/fetch.sh"
+
+[tasks.marts]
+description = "Build small pre-aggregated mart_*.parquet from the local raw data (performance layer)"
+dir = "{{ config_root }}"
+run = "uv run python -m tpm_stats.marts"
+
+[tasks.edit]
+description = "Open a marimo notebook in the reactive editor (default: 00_overview)"
+dir = "{{ config_root }}"
+usage = 'arg "[notebook]" help="Notebook name without extension" default="00_overview"'
+run = "uv run marimo edit notebooks/{{ usage.notebook }}.py"
+
+[tasks.app]
+description = "Run a marimo notebook as a read-only interactive app (default: 00_overview)"
+dir = "{{ config_root }}"
+usage = 'arg "[notebook]" help="Notebook name without extension" default="00_overview"'
+run = "uv run marimo run notebooks/{{ usage.notebook }}.py"
+
+[tasks.lint]
+description = "Lint & format-check the analysis code with ruff"
+dir = "{{ config_root }}"
+run = ["uv run ruff check .", "uv run ruff format --check ."]

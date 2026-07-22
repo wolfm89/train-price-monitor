@@ -1,0 +1,16 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# marimo
+__marimo__/
+.marimo.toml
+
+# Local data tiers (never commit raw parquet — can reach GBs)
+data/
+marts/
+
+# DuckDB scratch databases
+*.duckdb
+*.duckdb.wal
