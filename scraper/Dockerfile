@@ -23,16 +23,25 @@ FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS libcurl-impers
 # fingerprint doesn't match a real browser (OPS_BLOCKED), which affects
 # Node's native fetch/undici regardless of IP. curl-impersonate patches
 # libcurl to present a genuine Chrome fingerprint.
+#
+# The downloaded tarball is verified against a pinned SHA256 digest before
+# extraction (sourced from GitHub's own per-asset `digest` field for this
+# exact release, via `gh api repos/lexiforest/curl-impersonate/releases/tags/v1.5.6`).
+# HTTPS alone only guarantees transport integrity to github.com, not that the
+# release asset itself hasn't been replaced under the same tag; pinning the
+# digest here and failing the build on mismatch closes that gap and keeps the
+# build genuinely reproducible, as claimed above.
 ARG LIBCURL_IMPERSONATE_VERSION=v1.5.6
 ARG TARGETARCH
 RUN microdnf install -y tar gzip ca-certificates && microdnf clean all
 RUN case "${TARGETARCH}" in \
-      arm64) LIBCURL_ARCH=aarch64-linux-gnu ;; \
-      amd64) LIBCURL_ARCH=x86_64-linux-gnu ;; \
+      arm64) LIBCURL_ARCH=aarch64-linux-gnu; LIBCURL_SHA256=b4e4f713655616efd2be83153d9057b5961c15e34563dde09a8b6798a8b331e9 ;; \
+      amd64) LIBCURL_ARCH=x86_64-linux-gnu; LIBCURL_SHA256=f07e25084020c54d6fd5654c8d458e09b3a44c312f88e480c255399f00487b25 ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && curl -fsSL -o /tmp/libcurl-impersonate.tar.gz \
       "https://github.com/lexiforest/curl-impersonate/releases/download/${LIBCURL_IMPERSONATE_VERSION}/libcurl-impersonate-${LIBCURL_IMPERSONATE_VERSION}.${LIBCURL_ARCH}.tar.gz" \
+    && echo "${LIBCURL_SHA256}  /tmp/libcurl-impersonate.tar.gz" | sha256sum -c - \
     && mkdir -p /opt/libcurl-impersonate \
     && tar -xzf /tmp/libcurl-impersonate.tar.gz -C /opt/libcurl-impersonate \
     && cp -L /opt/libcurl-impersonate/libcurl-impersonate.so /opt/libcurl-impersonate.so \
