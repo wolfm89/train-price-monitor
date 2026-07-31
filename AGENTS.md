@@ -76,6 +76,11 @@ mise run //backend:dev             # Start backend local server (sets LOCAL_DEV=
 mise run //infrastructure:deploy   # Deploy all CDK stacks
 ```
 
+For a Coder workspace, run `mise run install` and `mise run codegen` after `mise install`.
+AWS SSO remains interactive: configure the required profile in `~/.aws/config`, run
+`aws sso login --profile "$AWS_PROFILE"`, then use `mise run env:local` to generate ignored local
+environment files from `InfrastructureStack` outputs. Do not automate or commit AWS credentials.
+
 > `LOCAL_DEV=1` switches the backend entry point from a Lambda handler to a plain HTTP server.
 > The `mise run //backend:dev` task sets it automatically.
 

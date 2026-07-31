@@ -5,7 +5,8 @@ experimental_monorepo_root = true
 config_roots = ["frontend", "backend", "infrastructure", "scraper"]
 
 [tools]
-node = "24"
+node    = "24"
+aws-cli = "2"
 
 [env]
 _.file = '.env'
@@ -16,6 +17,55 @@ AWS_REGION = "eu-central-1"
 [tasks.install]
 description = "Install dependencies for all modules"
 depends = ["//...:install"]
+
+[tasks.codegen]
+description = "Generate backend GraphQL types"
+depends = ["//backend:codegen"]
+
+[tasks."env:local"]
+description = "Generate local backend and frontend environment files from CloudFormation"
+shell = "bash -c"
+run = """
+set -euo pipefail
+
+: "${AWS_PROFILE:?Set AWS_PROFILE to an authenticated AWS profile before running this task.}"
+STACK_NAME="${STACK_NAME:-InfrastructureStack}"
+
+aws sts get-caller-identity >/dev/null
+OUTPUTS="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output json)"
+
+output_value() {
+  local key_prefix="$1"
+  jq -er --arg key_prefix "$key_prefix" \
+    '.[] | select(.OutputKey | startswith($key_prefix)) | .OutputValue' \
+    <<<"$OUTPUTS"
+}
+
+PROFILE_IMAGE_BUCKET_NAME="$(output_value BackendProfileImageBucketName)"
+TPM_SQS_QUEUE_URL="$(output_value BackendQueueUrl)"
+COGNITO_USER_POOL_ID="$(output_value CognitoAuthUserPoolId)"
+COGNITO_CLIENT_ID="$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query 'UserPoolClients[0].ClientId' --output text)"
+COGNITO_IDENTITY_POOL_ID="$(output_value CognitoAuthIdentityPoolId)"
+
+cat > backend/.env <<EOF
+AWS_PROFILE=$AWS_PROFILE
+PROFILE_IMAGE_BUCKET_NAME=$PROFILE_IMAGE_BUCKET_NAME
+TPM_SQS_QUEUE_URL=$TPM_SQS_QUEUE_URL
+EOF
+
+cat > frontend/.env <<EOF
+REACT_APP_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+REACT_APP_COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
+REACT_APP_COGNITO_IDENTITY_POOL_ID=$COGNITO_IDENTITY_POOL_ID
+REACT_APP_AWS_REGION=$AWS_REGION
+EOF
+
+cat > frontend/.env.development <<EOF
+REACT_APP_GRAPHQL_ENDPOINT=http://localhost:4000/
+EOF
+
+echo "Generated backend/.env, frontend/.env, and frontend/.env.development from $STACK_NAME"
+"""
 
 [tasks."dev:frontend"]
 description = "Start frontend dev server"
