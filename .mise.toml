@@ -5,7 +5,8 @@ experimental_monorepo_root = true
 config_roots = ["frontend", "backend", "infrastructure", "scraper"]
 
 [tools]
-node = "24"
+node    = "24"
+aws-cli = "2"
 
 [env]
 _.file = '.env'
@@ -16,6 +17,10 @@ AWS_REGION = "eu-central-1"
 [tasks.install]
 description = "Install dependencies for all modules"
 depends = ["//...:install"]
+
+[tasks."env:local"]
+description = "Generate local backend and frontend environment files from CloudFormation"
+run = "scripts/generate-local-env.sh"
 
 [tasks."dev:frontend"]
 description = "Start frontend dev server"

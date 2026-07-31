@@ -62,6 +62,28 @@ Alternatively, use `mise run //backend:dev` from the repository root (mise sets 
 
 For running the price scraper pipeline locally, see [scraper/README.md](scraper/README.md).
 
+### Coder Workspace Setup
+
+The OpenCode Coder template installs tools declared in `.mise.toml`, including Node.js and the AWS CLI.
+It does not install dependencies, authenticate with AWS, generate local environment files, or start services.
+Those actions are intentionally user-driven and persist in the workspace home volume across restarts.
+
+After creating a workspace, configure an SSO profile in `~/.aws/config` with permission to call
+`sts:GetCallerIdentity`, `cloudformation:DescribeStacks`, and `cognito-idp:ListUserPoolClients`, then run:
+
+```bash
+export AWS_PROFILE=<aws-profile>
+aws sso login --profile "$AWS_PROFILE"
+mise run install
+mise run //backend:codegen
+mise run env:local
+```
+
+`mise run env:local` verifies the selected AWS identity and reads `InfrastructureStack` CloudFormation
+outputs to generate the ignored `backend/.env`, `frontend/.env`, and `frontend/.env.development` files.
+Set `STACK_NAME` to use a different stack name. When the SSO session expires, repeat `aws sso login`.
+The output-to-environment mappings are maintained in [`scripts/generate-local-env.sh`](scripts/generate-local-env.sh).
+
 ## Environment Variables
 
 | Variable                     | Module           | Description                                                              |
