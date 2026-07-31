@@ -68,13 +68,14 @@ The OpenCode Coder template installs tools declared in `.mise.toml`, including N
 It does not install dependencies, authenticate with AWS, generate local environment files, or start services.
 Those actions are intentionally user-driven and persist in the workspace home volume across restarts.
 
-After creating a workspace, configure the `wolfgangm_AdministratorAccess` SSO profile in `~/.aws/config`, then run:
+After creating a workspace, configure an SSO profile in `~/.aws/config` with permission to call
+`sts:GetCallerIdentity`, `cloudformation:DescribeStacks`, and `cognito-idp:ListUserPoolClients`, then run:
 
 ```bash
-export AWS_PROFILE=wolfgangm_AdministratorAccess
+export AWS_PROFILE=<aws-profile>
 aws sso login --profile "$AWS_PROFILE"
 mise run install
-mise run codegen
+mise run //backend:codegen
 mise run env:local
 ```
 
