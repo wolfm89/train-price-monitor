@@ -82,6 +82,7 @@ mise run env:local
 `mise run env:local` verifies the selected AWS identity and reads `InfrastructureStack` CloudFormation
 outputs to generate the ignored `backend/.env`, `frontend/.env`, and `frontend/.env.development` files.
 Set `STACK_NAME` to use a different stack name. When the SSO session expires, repeat `aws sso login`.
+The output-to-environment mappings are maintained in [`scripts/generate-local-env.sh`](scripts/generate-local-env.sh).
 
 ## Environment Variables
 
