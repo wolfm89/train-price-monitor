@@ -54,7 +54,7 @@
     "graphql": "^16.8.1",
     "graphql-scalars": "^1.25.0",
     "graphql-yoga": "^5.18.1",
-    "morgan": "^1.10.0",
+    "morgan": "^1.11.0",
     "uuid": "^14.0.0"
   }
 }
