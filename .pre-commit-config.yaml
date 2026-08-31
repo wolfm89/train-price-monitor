@@ -15,12 +15,12 @@ repos:
         args: ['--allow-missing-credentials']
 
   - repo: https://github.com/34j/mirrors-prettier
-    rev: 'v3.8.3'
+    rev: 'v3.9.6'
     hooks:
       - id: prettier
 
   - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: 'v10.4.0'
+    rev: 'v10.9.1'
     hooks:
       - id: eslint
         args: ['--max-warnings=0', '--config', 'eslint.config.cjs']
