@@ -10,7 +10,16 @@
 # The tarball is verified against a pinned SHA256 digest before extraction
 # (sourced from GitHub's own per-asset `digest` field for this exact release).
 # ---------------------------------------------------------------------------
-FROM public.ecr.aws/lambda/nodejs:24 AS libcurl-impersonate
+ARG BUILDPLATFORM
+
+# Build stages (libcurl-impersonate, builder, deps) run on the *build*
+# machine's native platform (--platform=$BUILDPLATFORM), not the Lambda's
+# target platform. They only download/select target-arch artifacts or run
+# host code (curl, npm, codegen, esbuild), so building them natively avoids
+# requiring QEMU/binfmt cross-arch emulation. Only the final stage targets
+# the Lambda's actual architecture, and it contains no RUN steps.
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS libcurl-impersonate
 
 ARG LIBCURL_IMPERSONATE_VERSION=v1.5.6
 ARG TARGETARCH
@@ -28,7 +37,7 @@ RUN case "${TARGETARCH}" in \
     && cp -L /opt/libcurl-impersonate/libcurl-impersonate.so /opt/libcurl-impersonate.so \
     && rm /tmp/libcurl-impersonate.tar.gz
 
-FROM public.ecr.aws/lambda/nodejs:24 AS builder
+FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS builder
 WORKDIR /build
 COPY package*.json ./
 RUN npm ci
@@ -46,7 +55,7 @@ RUN npm run build
 # running koffi's own postinstall (which would try to build for the build
 # host's architecture).
 # ---------------------------------------------------------------------------
-FROM public.ecr.aws/lambda/nodejs:24 AS deps
+FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS deps
 ARG TARGETARCH
 WORKDIR /deps
 COPY package.json package-lock.json ./
