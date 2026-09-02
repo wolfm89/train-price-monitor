@@ -3,6 +3,12 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '', '');
+  // Cognito values are provided by CI as REACT_APP_* secrets and by the
+  // locally generated frontend/.env (scripts/generate-local-env.sh) as
+  // unprefixed COGNITO_* names. Support both so builds work in either place.
+  const cognitoUserPoolId = env.REACT_APP_COGNITO_USER_POOL_ID ?? env.COGNITO_USER_POOL_ID;
+  const cognitoIdentityPoolId = env.REACT_APP_COGNITO_IDENTITY_POOL_ID ?? env.COGNITO_IDENTITY_POOL_ID;
+  const cognitoClientId = env.REACT_APP_COGNITO_CLIENT_ID ?? env.COGNITO_CLIENT_ID;
   return {
     plugins: [react()],
     server: {
@@ -44,9 +50,9 @@ export default defineConfig(({ mode }) => {
     define: {
       global: 'globalThis',
       'process.env.REACT_APP_GRAPHQL_ENDPOINT': JSON.stringify(env.REACT_APP_GRAPHQL_ENDPOINT),
-      'process.env.REACT_APP_COGNITO_USER_POOL_ID': JSON.stringify(env.REACT_APP_COGNITO_USER_POOL_ID),
-      'process.env.REACT_APP_COGNITO_IDENTITY_POOL_ID': JSON.stringify(env.REACT_APP_COGNITO_IDENTITY_POOL_ID),
-      'process.env.REACT_APP_COGNITO_CLIENT_ID': JSON.stringify(env.REACT_APP_COGNITO_CLIENT_ID),
+      'process.env.REACT_APP_COGNITO_USER_POOL_ID': JSON.stringify(cognitoUserPoolId),
+      'process.env.REACT_APP_COGNITO_IDENTITY_POOL_ID': JSON.stringify(cognitoIdentityPoolId),
+      'process.env.REACT_APP_COGNITO_CLIENT_ID': JSON.stringify(cognitoClientId),
       'process.env.PUBLIC_URL': JSON.stringify(''),
     },
   };
