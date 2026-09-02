@@ -6,7 +6,7 @@
     "codegen": "graphql-codegen --config src/codegen.yml",
     "dev": "cross-env NODE_ENV=development ts-node-dev --exit-child --respawn src/main.ts",
     "start": "ts-node src/main.ts",
-    "build": "esbuild src/main.ts --bundle --minify --sourcemap --platform=node --target=es2020 --format=cjs --external:cross-fetch --external:db-hafas-stations --external:gps-distance --external:https-proxy-agent --external:luxon --external:qs --external:slugg --outfile=dist/main.js",
+    "build": "esbuild src/main.ts --bundle --minify --sourcemap --platform=node --target=es2020 --format=cjs --alias:cross-fetch=./src/net/impersonate-fetch.ts --external:db-hafas-stations --external:gps-distance --external:https-proxy-agent --external:impers --external:luxon --external:qs --external:slugg --outfile=dist/main.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/"
   },
@@ -54,6 +54,7 @@
     "graphql": "^16.8.1",
     "graphql-scalars": "^1.25.0",
     "graphql-yoga": "^5.18.1",
+    "impers": "^0.0.9",
     "morgan": "^1.10.0",
     "uuid": "^14.0.0"
   }

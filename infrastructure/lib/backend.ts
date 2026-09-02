@@ -75,7 +75,7 @@ export class Backend extends Construct {
         FRONTEND_URL: `https://${frontendDomainName}`,
         SES_FROM_EMAIL: sesFromEmail,
         NODE_OPTIONS: '--enable-source-maps',
-        DEPLOY_VERSION: 'v12',
+        DEPLOY_VERSION: 'v13',
       },
     });
 
