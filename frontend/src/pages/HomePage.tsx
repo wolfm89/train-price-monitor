@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
-import { Button, Typography, Box, CircularProgress, Chip, Paper, Grid } from '@mui/material';
+import { Button, Typography, Box, CircularProgress, Chip, Paper, Grid, useTheme } from '@mui/material';
 import {
   Train as TrainIcon,
   Visibility,
@@ -513,6 +513,7 @@ interface LoggedInDashboardProps {
 }
 
 function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps) {
+  const theme = useTheme();
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
@@ -668,12 +669,12 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
           </Grid>
           <Grid size={{ xs: 12, sm: 4 }}>
             <FeatureCard
-              icon={<NotificationsActive sx={{ fontSize: 18, color: '#A82323' }} />}
+              icon={<NotificationsActive sx={{ fontSize: 18, color: theme.palette.primary.main }} />}
               iconBg="#F9E0E0"
               title="Instant alerts"
               body="Get notified in-app and by email the moment a ticket crosses your threshold."
               statLabel={overLimit.length > 0 ? `${overLimit.length} alert active` : 'No active alerts'}
-              statColor={overLimit.length > 0 ? '#A82323' : '#6D9E51'}
+              statColor={overLimit.length > 0 ? theme.palette.primary.main : '#6D9E51'}
               statIcon={
                 overLimit.length > 0 ? (
                   <ErrorOutline sx={{ fontSize: 15 }} />
