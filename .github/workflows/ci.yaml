@@ -1,0 +1,265 @@
+name: CI/CD
+
+# One workflow for validation and deployment, so the checks that gate a pull
+# request are the same ones that gate a deploy. Previously deploying ran no
+# checks at all: a push to main went straight to build-and-deploy.
+#
+# On a pull request: the four module jobs plus an image build.
+# On a push to main: the same module jobs, then deploy.
+#
+# The image build is pull-request-only because a deploy builds and publishes
+# those images through CDK anyway. It exists because the Lambda images copy
+# pre-built bundles rather than building inside Docker (the bundles pull in
+# ../shared, which sits outside each image's build context). That coupling is
+# invisible to typecheck and lint: a missing build step surfaces only as
+# `COPY dist/main.js: not found` at image build time, which previously reached
+# main and broke the deploy.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded pull request runs are disposable; a deploy in flight is not.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run test:ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      # Regenerates the GraphQL types the resolvers are typed against, so a
+      # schema change without a matching codegen commit fails here.
+      - run: npm run codegen
+        working-directory: backend
+      - run: npm run typecheck
+        working-directory: backend
+      - run: npm run lint
+        working-directory: backend
+      - run: npm run build
+        working-directory: backend
+      - name: Verify generated GraphQL types are committed
+        run: git diff --exit-code -- src/schema/generated
+        working-directory: backend
+
+  scraper:
+    name: Scraper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: scraper/package-lock.json
+      - run: npm ci
+        working-directory: scraper
+      - run: npm run typecheck
+        working-directory: scraper
+      - run: npm run lint
+        working-directory: scraper
+      - run: npm run build
+        working-directory: scraper
+
+  infrastructure:
+    name: Infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+      - run: npm ci
+        working-directory: infrastructure
+      - run: npm run build
+        working-directory: infrastructure
+      - run: npm run lint
+        working-directory: infrastructure
+      - run: npm test
+        working-directory: infrastructure
+      # Synthesizes with placeholder context so no AWS credentials are needed;
+      # catches construct-level errors that tsc and jest do not.
+      - name: CDK synth
+        run: npx cdk synth --quiet
+        working-directory: infrastructure
+        env:
+          CDK_APP_NAME: ci
+          CDK_DOMAIN_NAME: ci.example.com
+          CDK_SES_FROM_EMAIL: ci@example.com
+          CDK_DEFAULT_ACCOUNT: '111111111111'
+          CDK_DEFAULT_REGION: eu-central-1
+
+  images:
+    name: Lambda images
+    # Only on pull requests: a deploy builds and publishes these through CDK.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      # Both images COPY a bundle built here on the host, mirroring the order
+      # the deploy job uses. Without these the docker builds below fail.
+      - name: Build backend bundle
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+      - name: Build scraper bundles
+        working-directory: scraper
+        run: |
+          npm ci
+          npm run build
+
+      - uses: docker/setup-buildx-action@v3
+
+      # linux/amd64 to match the Lambda functions: Chromium's shared libraries
+      # are installed for the target architecture.
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build scraper poller image
+        uses: docker/build-push-action@v6
+        with:
+          context: scraper
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=scraper
+          cache-to: type=gha,scope=scraper,mode=max
+
+  deploy:
+    name: Deploy
+    # Never on pull requests, and only once every module job is green.
+    if: github.event_name != 'pull_request'
+    needs: [frontend, backend, scraper, infrastructure]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Install dependencies for frontend
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          REACT_APP_COGNITO_USER_POOL_ID: ${{ secrets.REACT_APP_COGNITO_USER_POOL_ID }}
+          REACT_APP_COGNITO_CLIENT_ID: ${{ secrets.REACT_APP_COGNITO_CLIENT_ID }}
+          REACT_APP_COGNITO_IDENTITY_POOL_ID: ${{ secrets.REACT_APP_COGNITO_IDENTITY_POOL_ID }}
+          REACT_APP_AWS_REGION: ${{ vars.AWS_REGION }}
+          REACT_APP_GRAPHQL_ENDPOINT: ${{ secrets.REACT_APP_GRAPHQL_ENDPOINT }}
+
+      - name: Install dependencies for scraper
+        working-directory: scraper
+        run: npm ci
+
+      - name: Build scraper
+        working-directory: scraper
+        run: npm run build
+
+      # The backend image copies a pre-built bundle rather than building inside
+      # Docker: the bundle pulls in ../shared, which is outside the image's
+      # build context. Without this step `COPY dist/main.js` fails at deploy.
+      - name: Install dependencies for backend
+        working-directory: backend
+        run: npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install dependencies for infrastructure
+        working-directory: infrastructure
+        run: npm ci
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-external-id: ${{ secrets.AWS_ROLE_EXTERNAL_ID }}
+          role-duration-seconds: 1200
+          role-session-name: GithubWorkflow
+
+      - name: Synthesize with AWS CDK and show diff
+        working-directory: infrastructure
+        run: npm run cdk diff
+        env:
+          CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
+          CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
+          CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
+
+      - name: Deploy with AWS CDK
+        working-directory: infrastructure
+        run: npm run cdk -- --app cdk.out deploy --require-approval never --all
+        env:
+          CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
+          CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
+          CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
+
+      - name: Invalidate CloudFront cache
+        uses: badsyntax/github-action-aws-cloudfront@master
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          distribution-id: ${{ secrets.DISTRIBUTION_ID }}
+          invalidate-paths: '*'
+          default-root-object: 'index.html'
+          include-origin-prefix: false
