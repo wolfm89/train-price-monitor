@@ -47,6 +47,17 @@ jobs:
         working-directory: scraper
         run: npm run build
 
+      # The backend image copies a pre-built bundle rather than building inside
+      # Docker: the bundle pulls in ../shared, which is outside the image's
+      # build context. Without this step `COPY dist/main.js` fails at deploy.
+      - name: Install dependencies for backend
+        working-directory: backend
+        run: npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
       - name: Install dependencies for infrastructure
         working-directory: infrastructure
         run: npm ci
