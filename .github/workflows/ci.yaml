@@ -42,7 +42,14 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      # The shared eslint.config.cjs lives at the repo root and resolves its
+      # plugins from the root node_modules, so lint needs this as well as the
+      # module's own dependencies.
+      - name: Install root dependencies
+        run: npm ci
       - run: npm ci
         working-directory: frontend
       - run: npm run typecheck
@@ -63,7 +70,14 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+      # The shared eslint.config.cjs lives at the repo root and resolves its
+      # plugins from the root node_modules, so lint needs this as well as the
+      # module's own dependencies.
+      - name: Install root dependencies
+        run: npm ci
       - run: npm ci
         working-directory: backend
       # Regenerates the GraphQL types the resolvers are typed against, so a
@@ -89,7 +103,14 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-          cache-dependency-path: scraper/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            scraper/package-lock.json
+      # The shared eslint.config.cjs lives at the repo root and resolves its
+      # plugins from the root node_modules, so lint needs this as well as the
+      # module's own dependencies.
+      - name: Install root dependencies
+        run: npm ci
       - run: npm ci
         working-directory: scraper
       - run: npm run typecheck
@@ -108,7 +129,14 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-          cache-dependency-path: infrastructure/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            infrastructure/package-lock.json
+      # The shared eslint.config.cjs lives at the repo root and resolves its
+      # plugins from the root node_modules, so lint needs this as well as the
+      # module's own dependencies.
+      - name: Install root dependencies
+        run: npm ci
       - run: npm ci
         working-directory: infrastructure
       - run: npm run build
