@@ -213,14 +213,32 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
 
   context.cache.invalidate([{ typename: 'JourneyMonitor' }]);
 
-  return {
-    id: journeyMonitorId,
-    userId: args.userId,
-    limitPrice: args.limitPrice,
-    expires: args.expires,
-    unavailable: false,
-    journey: { refreshToken: args.refreshToken },
-  };
+  // Populate the snapshot the read path serves. Without this the journey has no
+  // `lastCheckedAt` until the next hourly refresh, so the watchlist would render
+  // it as "temporarily unavailable" for up to an hour after the user added it.
+  // Reusing refreshJourneyMonitor rather than deriving the snapshot from `args`
+  // keeps creation and refresh from drifting — and the mutation's own input
+  // carries no price, arrival, means or station names anyway.
+  try {
+    return await refreshJourneyMonitor(context, args.userId, journeyMonitorId);
+  } catch (error) {
+    // The journey is stored, so the next scheduled refresh will fill it in.
+    // Report it honestly as unavailable rather than claiming data we lack.
+    Logger.warn('Could not populate initial snapshot for new journey monitor', {
+      journeyId: journeyMonitorId,
+      userId: args.userId,
+      error: error instanceof Error ? error.message : error,
+    });
+
+    return {
+      id: journeyMonitorId,
+      userId: args.userId,
+      limitPrice: args.limitPrice,
+      expires: args.expires,
+      unavailable: true,
+      journey: undefined,
+    };
+  }
 };
 
 /**
