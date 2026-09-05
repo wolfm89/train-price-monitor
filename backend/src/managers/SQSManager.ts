@@ -23,11 +23,9 @@ export class SQSManager {
     await this.sqs.send(new SendMessageCommand(params));
   }
 
-  async sendUpdateJourneyMessage(userId: string, journeyId: string): Promise<void> {
-    const graphqlMutation = `mutation ($userId: ID!, $journeyId: ID!) { updateJourneyMonitor(userId: $userId, journeyId: $journeyId) { id } }`;
-    await this.sendSQSMessage(graphqlMutation, { userId, journeyId });
-  }
-
+  // Journey refreshes are no longer queued: the hourly scan refreshes them
+  // inline so the browser starts once per run instead of once per journey.
+  // The queue is now used only for notification emails.
   async sendEmailNotificationMessage(userId: string, notificationId: string) {
     const graphqlMutation = `mutation ($userId: ID!, $notificationId: ID!) { sendEmailNotification(userId: $userId, notificationId: $notificationId) { id } }`;
     await this.sendSQSMessage(graphqlMutation, { userId, notificationId });

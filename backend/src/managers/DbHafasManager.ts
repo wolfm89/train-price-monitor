@@ -143,6 +143,50 @@ function buildHafasOptions(pricingOptions?: PricingOptions): Record<string, unkn
 const userAgent = 'https://github.com/wolfm89/train-price-monitor';
 
 /**
+ * Rebuilds the /angebote/recon request so it honours the Deutschland-Ticket options.
+ *
+ * db-vendo-client's dbweb profile hardcodes `deutschlandTicketVorhanden: false`
+ * and `nurDeutschlandTicketVerbindungen: false` in `formatRefreshJourneyReq`,
+ * ignoring `opt.deutschlandTicketDiscount` — unlike `formatJourneysReq`, which
+ * passes it through. A refreshed journey is therefore priced as if the traveller
+ * had no Deutschland-Ticket, so any itinerary containing a regional leg comes
+ * back more expensive than the search that produced it (observed on
+ * Karlsruhe→Schwerin: 77.24 EUR on refresh versus 67.49 EUR in search for the
+ * identical connection, the difference being the RE leg the D-Ticket covers).
+ *
+ * That inflated price is what the watchlist shows and what price alerts compare
+ * against, so it both misreports the fare and triggers alerts that should not
+ * fire. Patch the request here rather than the price afterwards, so search and
+ * refresh ask DB the same question.
+ *
+ * See db-vendo-client/p/dbweb/journeys-req.js (formatRefreshJourneyReq).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatRefreshJourneyReqWithDeutschlandTicket(ctx: any, refreshToken: string): any {
+  const { profile, opt } = ctx;
+
+  // The polyline variant carries no pricing at all, so it needs no patching.
+  if (!opt.tickets) {
+    return (dbProfile as unknown as Record<string, (c: unknown, t: string) => unknown>).formatRefreshJourneyReq(
+      ctx,
+      refreshToken
+    );
+  }
+
+  return {
+    endpoint: profile.refreshJourneysEndpointTickets,
+    body: {
+      ctxRecon: refreshToken,
+      deutschlandTicketVorhanden: Boolean(opt.deutschlandTicketDiscount),
+      nurDeutschlandTicketVerbindungen: Boolean(opt.deutschlandTicketConnectionsOnly),
+      reservierungsKontingenteVorhanden: false,
+      ...profile.formatTravellers(ctx),
+    },
+    method: 'post',
+  };
+}
+
+/**
  * Custom dbweb profile that normalizes /angebote/recon response times.
  * Wraps parseJourneyLeg and parseStopover to map nested time objects
  * (abfahrt.sollzeit / ankunft.sollzeit) to flat fields expected by the parser.
@@ -150,8 +194,12 @@ const userAgent = 'https://github.com/wolfm89/train-price-monitor';
 const customDbProfile: typeof dbProfile & {
   parseJourneyLeg: typeof originalParseJourneyLeg;
   parseStopover: typeof originalParseStopover;
+  // Not part of hafas-client's Profile type, but db-vendo-client's profiles
+  // implement it and createClient calls it.
+  formatRefreshJourneyReq: typeof formatRefreshJourneyReqWithDeutschlandTicket;
 } = {
   ...dbProfile,
+  formatRefreshJourneyReq: formatRefreshJourneyReqWithDeutschlandTicket,
   parseJourneyLeg: (ctx, pt, date, fallbackLocations) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     normalizeLegTimes(pt as Record<string, any>);

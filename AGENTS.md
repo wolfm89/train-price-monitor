@@ -11,6 +11,10 @@ through a `mise` monorepo.
 - `frontend/` – React 19 SPA (Material-UI v7, urql, Vite); pages, components, hooks, providers.
 - `backend/` – GraphQL Yoga API with a native AWS Lambda handler (API Gateway v1/v2 + SQS).
 - `scraper/` – Independent serverless pipeline collecting DB price data into Parquet on S3.
+- `shared/` – Code shared by more than one module. Currently `browser-fetch.ts`, the
+  Chromium-backed `fetch` shim both the backend and the scraper alias `cross-fetch` to.
+  It has no `node_modules` of its own: each consuming module type-checks it via its own
+  tsconfig (`include` + a `playwright-core` `paths` entry) and bundles it with esbuild.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
 - `.mise.toml` / `mise.tasks.toml` – Monorepo task definitions shared across modules.
 - `eslint.config.cjs` – Shared ESLint v10 flat config.
@@ -130,8 +134,12 @@ flowchart LR
 ```
 
 - **Frontend** authenticates via Cognito and calls the GraphQL API; the urql client attaches the JWT.
-- **Backend** is a single Lambda serving GraphQL over API Gateway and consuming SQS for journey
-  monitor updates; it reads DB journey data via `db-vendo-client` and sends email via SES.
+- **Backend** is split into two Lambdas running the _same_ image: the API function serves
+  GraphQL over API Gateway, and a refresher function consumes SQS and the hourly EventBridge
+  schedule. Journey search needs live DB access, but the watchlist read path is served purely
+  from a DynamoDB snapshot (`cached*` / `lastCheckedAt` on the `Journey` item) that only the
+  refresher writes — so rendering the watchlist makes no network calls and a DB outage shows
+  `unavailable` instead of failing.
 - **Scraper** is fully decoupled: EventBridge schedules drive the Hydrator (seed targets), Poller
   (scrape prices), and Compactor (consolidate Parquet). See `scraper/README.md` for details.
 
@@ -166,12 +174,37 @@ flowchart LR
   without a human reviewing the diff.
 - Keep `no-console` clean; use the powertools logger in backend/scraper.
 
+**Browser-backed transport** (`shared/browser-fetch.ts`):
+
+- DB's Akamai edge rejects every non-browser TLS/HTTP2 fingerprint with `403 OPS_BLOCKED`.
+  Verified dead ends: Node fetch/undici, curl-impersonate (Chrome **and** non-Chrome targets),
+  Bun, and all three db-vendo-client profiles (`db`, `dbnav`, `dbweb`) including with an
+  Android `DBNavigator/...` User-Agent. Only a real Chromium succeeds.
+- Both the backend and the poller esbuild-`alias` `cross-fetch` to this shim, so
+  `db-vendo-client`'s request building and response parsing stay untouched.
+- `playwright-core` must stay **external** in both bundles: it resolves the Chromium build
+  from its own package directory at runtime. The images copy only
+  `chromium_headless_shell-<revision>` from the official Playwright image; that revision is
+  pinned together with the `playwright-core` version.
+- Both Lambda images are **x86_64-only**: Chromium's shared libraries are installed for the
+  target architecture, so an arm64 image would need QEMU emulation on an amd64 build host.
+- Lambda sizing is cost-driven, not latency-driven: per-call latency is network-bound
+  (~2.5 s at every size from 512–1536 MB), so extra memory buys no speedup and costs
+  strictly more. Size each function against its own peak, not the browser's: a bare browser
+  peaks at ~615 MB (and 512 MB peaked at ~508 MB of 512, so it is not safe), but the poller
+  also holds the route catalog, the AWS SDK and a batch of Parquet rows — at 768 MB it
+  peaked at 756 MB and Chromium was killed mid-run, hence 1024 MB. Chromium also needs
+  `ephemeralStorageSize` raised above the default 512 MB, because `--disable-dev-shm-usage`
+  puts its shared-memory files under `/tmp`.
+
 **Backend esbuild bundling** (`--format=cjs`):
 
 - Do NOT externalize ESM-only packages — they cannot be `require()`d and crash Lambda with
   `UserCodeSyntaxError` (API Gateway then returns a 502, often misreported as CORS).
 - `db-vendo-client` must be **bundled** (ESM-only).
 - `db-hafas-stations` must stay **external** (uses `import.meta.url`, loaded via dynamic `import()`).
+- The bundle is built on the host, not inside Docker: it pulls in `shared/`, which is outside
+  the image's build context. `mise run //infrastructure:deploy` builds it first.
 
 **Scraper esbuild bundling** (`--format=esm`):
 
@@ -183,22 +216,25 @@ flowchart LR
 
 Environment variables (never commit values):
 
-| Variable                     | Module           | Description                                             |
-| ---------------------------- | ---------------- | ------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`  | Backend          | S3 bucket name for profile images                       |
-| `TPM_SQS_QUEUE_URL`          | Backend          | SQS queue URL for journey monitor updates               |
-| `SES_FROM_EMAIL`             | Backend (Lambda) | Sender address for SES emails (injected by CDK)         |
-| `FRONTEND_URL`               | Backend (Lambda) | Frontend base URL for notification links                |
-| `LOCAL_DEV`                  | Backend          | `1` starts an HTTP server instead of the Lambda handler |
-| `PORT`                       | Backend          | HTTP port for local dev server (default `4000`)         |
-| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend         | API Gateway base URL                                    |
-| `CDK_APP_NAME`               | Infrastructure   | Application name (overrides CDK context)                |
-| `CDK_DOMAIN_NAME`            | Infrastructure   | Custom domain name for the deployment                   |
-| `CDK_SES_FROM_EMAIL`         | Infrastructure   | Sender email injected as Lambda `SES_FROM_EMAIL`        |
-| `SCRAPER_TABLE_NAME`         | Scraper          | DynamoDB schedule table (injected by CDK)               |
-| `SCRAPER_BUCKET_NAME`        | Scraper          | S3 bucket for Parquet data (injected by CDK)            |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | Days ahead to seed (default `90`)                       |
-| `AWS_ENDPOINT_URL`           | Scraper          | Local Floci endpoint (set by mise tasks)                |
+| Variable                     | Module           | Description                                               |
+| ---------------------------- | ---------------- | --------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`  | Backend          | S3 bucket name for profile images                         |
+| `TPM_SQS_QUEUE_URL`          | Backend          | SQS queue URL for journey monitor updates                 |
+| `SES_FROM_EMAIL`             | Backend (Lambda) | Sender address for SES emails (injected by CDK)           |
+| `FRONTEND_URL`               | Backend (Lambda) | Frontend base URL for notification links                  |
+| `LOCAL_DEV`                  | Backend          | `1` starts an HTTP server instead of the Lambda handler   |
+| `PORT`                       | Backend          | HTTP port for local dev server (default `4000`)           |
+| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend         | API Gateway base URL                                      |
+| `CDK_APP_NAME`               | Infrastructure   | Application name (overrides CDK context)                  |
+| `CDK_DOMAIN_NAME`            | Infrastructure   | Custom domain name for the deployment                     |
+| `CDK_SES_FROM_EMAIL`         | Infrastructure   | Sender email injected as Lambda `SES_FROM_EMAIL`          |
+| `SCRAPER_TABLE_NAME`         | Scraper          | DynamoDB schedule table (injected by CDK)                 |
+| `SCRAPER_BUCKET_NAME`        | Scraper          | S3 bucket for Parquet data (injected by CDK)              |
+| `SCRAPER_BATCH_SIZE`         | Scraper          | Targets per poller run (default `10`; 1 target = 2 calls) |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | Days ahead to seed (default `60`)                         |
+| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper          | Newest days re-seeded per nightly run (default `3`)       |
+| `HYDRATOR_FULL_SEED`         | Scraper          | `1` seeds the whole window and prunes beyond it (manual)  |
+| `AWS_ENDPOINT_URL`           | Scraper          | Local Floci endpoint (set by mise tasks)                  |
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
 - Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).

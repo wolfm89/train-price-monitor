@@ -88,6 +88,7 @@ export const UserJourneysQuery = gql`
       journeyMonitors {
         id
         limitPrice
+        unavailable
         from
         to
         firstClass

@@ -10,17 +10,17 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "./dist",
-    "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
+      "playwright-core": ["./node_modules/playwright-core/index.d.ts"],
       "db-vendo-client": ["./node_modules/hafas-client/index.d.ts"],
       "db-vendo-client/p/dbweb/index.js": ["./types/db-vendo-client/index.d.ts"],
       "db-vendo-client/parse/journey-leg.js": ["./types/db-vendo-client/index.d.ts"],
       "db-vendo-client/parse/stopover.js": ["./types/db-vendo-client/index.d.ts"]
     }
   },
-  "include": ["src/**/*", "types/**/*"],
+  "include": ["src/**/*", "types/**/*", "../shared/**/*"],
   "exclude": ["node_modules"]
 }

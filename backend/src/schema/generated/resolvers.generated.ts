@@ -196,6 +196,7 @@ export type JourneyMonitorResolvers<
   limitPrice?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
   loyaltyCard?: Resolver<Types.Maybe<ResolversTypes['LoyaltyCard']>, ParentType, ContextType>;
   to?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  unavailable?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
 };
 

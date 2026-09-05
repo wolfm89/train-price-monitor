@@ -1,9 +1,10 @@
 import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, DeleteCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 import { ROUTE_CATALOG } from './routes.js';
 import { computeTtdTier, computeNextScrapeAt } from './ttd.js';
+import { positiveIntFromEnv } from './env.js';
 
 const logger = new Logger({ serviceName: 'scraper-hydrator' });
 
@@ -12,7 +13,29 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 });
 
 const TABLE_NAME = process.env.SCRAPER_TABLE_NAME!;
-const LOOKAHEAD_DAYS = Number(process.env.HYDRATOR_LOOKAHEAD_DAYS ?? 90);
+const LOOKAHEAD_DAYS = positiveIntFromEnv('HYDRATOR_LOOKAHEAD_DAYS', 60, logger);
+
+/**
+ * How many of the furthest-out days to (re-)seed on a normal run.
+ *
+ * Only one day actually becomes newly visible per night, but seeding a small
+ * window absorbs missed or failed runs without needing a full re-seed. The
+ * previous behaviour re-seeded the entire lookahead window every night: with
+ * 140 routes x 90 days that is 12,600 conditional writes against a table
+ * provisioned at 5 WCU — about 42 minutes of write capacity, which no Lambda
+ * can complete, so the function timed out and retried nightly without ever
+ * finishing. Failed conditional writes still consume write capacity, so the
+ * 99% of writes that were no-ops were exactly what exhausted the budget.
+ */
+const SEED_WINDOW_DAYS = positiveIntFromEnv('HYDRATOR_SEED_WINDOW_DAYS', 3, logger);
+
+/**
+ * Seed the whole lookahead window instead of just the newest days, and delete
+ * rows beyond it. Intended for one-off backfills after a schema/horizon change,
+ * invoked manually — a full seed needs far more write capacity than a nightly
+ * run, so it must not be the scheduled behaviour.
+ */
+const FULL_SEED = process.env.HYDRATOR_FULL_SEED === '1';
 
 /**
  * Write all items using PutCommand with ConditionExpression to avoid overwriting existing rows.
@@ -69,53 +92,59 @@ async function writeAllItems(
   return { written, skipped, failed };
 }
 
-export const handler = async (): Promise<void> => {
-  const now = new Date();
-  logger.info('Hydrator started', { routeCount: ROUTE_CATALOG.length, lookaheadDays: LOOKAHEAD_DAYS });
+/**
+ * Delete PENDING rows whose departure lies beyond the current lookahead window.
+ *
+ * Shrinking the horizon would otherwise leave the now-out-of-range rows in
+ * place: their TTL is keyed on departure, so they would linger for months while
+ * still being returned as due and consuming the poller's scrape budget.
+ */
+async function pruneBeyondHorizon(horizonDateStr: string): Promise<number> {
+  let deleted = 0;
+  let cursor: Record<string, unknown> | undefined;
 
-  // Check which routes are already seeded for tomorrow
-  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
-
-  const CONCURRENCY = 50;
-  const seededRoutes = new Set<string>();
-
-  const routeChunks: (typeof ROUTE_CATALOG)[] = [];
-  for (let i = 0; i < ROUTE_CATALOG.length; i += CONCURRENCY) {
-    routeChunks.push(ROUTE_CATALOG.slice(i, i + CONCURRENCY));
-  }
-
-  for (const chunk of routeChunks) {
-    await Promise.all(
-      chunk.map(async (route) => {
-        try {
-          const getRes = await ddb.send(
-            new GetCommand({
-              TableName: TABLE_NAME,
-              Key: {
-                pk: `ROUTE#${route.id}#DATE#${tomorrowStr}`,
-                sk: 'SCHEDULE',
-              },
-            })
-          );
-          if (getRes.Item) {
-            seededRoutes.add(route.id);
-          }
-        } catch (err) {
-          logger.warn('Failed to probe route seeding status', { routeId: route.id, err: String(err) });
-        }
+  do {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: 'ByNextScrape',
+        KeyConditionExpression: '#status = :pending',
+        FilterExpression: 'departure_date > :horizon',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':pending': 'PENDING', ':horizon': horizonDateStr },
+        ExclusiveStartKey: cursor as Record<string, never> | undefined,
       })
     );
-  }
 
-  logger.info('Route seeding scan complete', { seededCount: seededRoutes.size });
+    for (const item of page.Items ?? []) {
+      await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: item.pk, sk: item.sk } }));
+      deleted++;
+    }
+
+    cursor = page.LastEvaluatedKey;
+  } while (cursor);
+
+  return deleted;
+}
+
+export const handler = async (): Promise<void> => {
+  const now = new Date();
+
+  // Normal runs only seed the far end of the window; everything closer was
+  // seeded by earlier runs and is being actively scraped.
+  const startDay = FULL_SEED ? 0 : Math.max(0, LOOKAHEAD_DAYS - SEED_WINDOW_DAYS);
+
+  logger.info('Hydrator started', {
+    routeCount: ROUTE_CATALOG.length,
+    lookaheadDays: LOOKAHEAD_DAYS,
+    startDay,
+    fullSeed: FULL_SEED,
+  });
 
   // Build all schedule items in memory first (no I/O)
   const items: Record<string, unknown>[] = [];
 
   for (const route of ROUTE_CATALOG) {
-    const startDay = 0;
-
     for (let d = startDay; d < LOOKAHEAD_DAYS; d++) {
       const departureDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + d));
       const departureDateStr = departureDate.toISOString().slice(0, 10);
@@ -150,4 +179,10 @@ export const handler = async (): Promise<void> => {
   const { written, skipped, failed } = await writeAllItems(items);
 
   logger.info('Hydration complete', { written, skipped, failed, totalItems: items.length });
+
+  if (FULL_SEED) {
+    const horizon = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + LOOKAHEAD_DAYS - 1));
+    const pruned = await pruneBeyondHorizon(horizon.toISOString().slice(0, 10));
+    logger.info('Pruned rows beyond lookahead horizon', { pruned, horizon: horizon.toISOString().slice(0, 10) });
+  }
 };

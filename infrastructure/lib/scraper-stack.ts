@@ -81,25 +81,59 @@ export class ScraperStack extends cdk.Stack {
     });
 
     // -------------------------------------------------------------------------
-    // Poller Lambda — runs every 1 minute, scrapes due targets
+    // Poller Lambda — runs every 15 minutes, scrapes due targets
     // Docker image: ../scraper/Dockerfile  (copies pre-built ESM bundle)
     //
-    // Must be a DockerImageFunction (not a Node.js runtime Lambda) because
-    // Akamai's IP-reputation rule blocks outbound HTTP from AWS Node.js runtime
-    // Lambda egress IPs. Docker Lambda uses different egress IPs and is not
-    // blocked. The esbuild bundle at dist/poller/index.mjs is copied into the
-    // image unchanged — no build happens inside the container.
+    // Must be a DockerImageFunction (not a Node.js runtime Lambda) because the
+    // image ships a Chromium headless shell: DB's Akamai Bot Manager rejects
+    // every non-browser TLS/HTTP2 fingerprint with `403 OPS_BLOCKED`, so the
+    // poller drives a real browser (see ../../shared/browser-fetch.ts). The
+    // esbuild bundle at dist/poller/index.mjs is copied into the image
+    // unchanged — no build happens inside the container.
+    //
+    // x86_64 rather than arm64: Chromium's shared-library dependencies are
+    // installed for the target architecture, which would need QEMU emulation to
+    // build an arm64 image on an amd64 host.
+    //
+    // Sizing is cost-driven. Chromium cannot run in the previous 256 MB, and
+    // Lambda duration cost scales with memory, so the goal is the lowest *safe*
+    // setting rather than the fastest: per-call latency is network-bound
+    // (~2.5 s at every size from 512–1536 MB), so extra memory buys no speedup.
+    //
+    // 768 MB was measured as safe for a bare browser (~615 MB peak) but is NOT
+    // enough here: the poller also holds the route catalog, the AWS SDK and a
+    // batch of Parquet rows, which pushed peak usage to 756 MB of 768 (98%) and
+    // got Chromium killed mid-run ("Target page, context or browser has been
+    // closed"). 1024 MB restores headroom.
+    //
+    // The enlarged /tmp is required, not optional: `--disable-dev-shm-usage`
+    // makes Chromium put its shared-memory files under /tmp, and the default
+    // 512 MB left it with <64 MB free.
     // -------------------------------------------------------------------------
     const pollerFn = new lambda.DockerImageFunction(this, 'ScraperPoller', {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(60),
+      architecture: lambda.Architecture.X86_64,
+      memorySize: 1024,
+      ephemeralStorageSize: cdk.Size.gibibytes(1),
+      timeout: cdk.Duration.seconds(180),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
+        // 18 targets = 36 API calls ≈ 102 s per run, measured at ~5.2 GB-s of
+        // fixed per-run overhead plus ~4.93 GB-s per target. With the
+        // 15-minute cadence below that is ~298,000 GB-s/month.
+        //
+        // This deliberately does not spend the whole free tier. The backend
+        // scales with usage while the scraper does not: every monitored journey
+        // costs ~1,368 GB-s/month to refresh hourly (all journeys share one
+        // browser start per run), and each journey search costs ~10 GB-s
+        // because it has to drive the browser. Roughly 100,000 GB-s/month is
+        // therefore left unclaimed as user headroom — about 80 additional
+        // monitored journeys — on top of the ~10,000 GB-s used by the hydrator
+        // and compactor and a 10% safety margin.
+        SCRAPER_BATCH_SIZE: '18',
       },
     });
 
@@ -113,7 +147,11 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../scraper/dist/hydrator'),
       handler: 'index.handler',
       memorySize: 128,
-      timeout: cdk.Duration.seconds(120),
+      // A normal run only seeds the newest few days (~420 conditional writes,
+      // well under a minute at 5 WCU). The generous timeout exists for the
+      // manual HYDRATOR_FULL_SEED backfill, which rewrites the whole lookahead
+      // window and is bounded by the table's write capacity rather than by CPU.
+      timeout: cdk.Duration.minutes(15),
       logGroup: hydratorLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
@@ -133,7 +171,14 @@ export class ScraperStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       code: lambda.Code.fromAsset('../scraper/dist/compactor'),
       handler: 'index.handler',
-      memorySize: 3072,
+      // The compactor holds a whole day of rows in memory before re-serializing
+      // them, so its footprint tracks scrape volume. 3072 MB was sized when the
+      // poller ran every minute (~21,600 targets/day, peaking at ~1022 MB of
+      // actual use). The browser-backed poller collects ~1,654 targets/day, so
+      // a day's partition is roughly an order of magnitude smaller. 1536 MB
+      // keeps generous headroom over that; re-check Max Memory Used after the
+      // first full-day compaction at the new volume before trimming further.
+      memorySize: 1536,
       timeout: cdk.Duration.seconds(300),
       logGroup: compactorLogGroup,
       environment: {
@@ -154,7 +199,21 @@ export class ScraperStack extends cdk.Stack {
     // EventBridge rules
     // -------------------------------------------------------------------------
     new events.Rule(this, 'PollerSchedule', {
-      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      // Every 15 minutes rather than every minute. Driving a real browser
+      // raises the memory floor from 256 MB to 1024 MB and per-call latency
+      // from ~0.5 s to ~2.5 s, making each target ~6x more expensive; at the
+      // original 1-minute cadence this function alone would cost roughly
+      // €25–35/month.
+      //
+      // Cadence and batch size are chosen together to maximise scrapes per
+      // free-tier GB-second. Each run pays ~5.2 GB-s of fixed overhead (browser
+      // launch + origin navigation), so fewer, larger runs cost less per
+      // target. 15 min x 18 yields ~1,728 scrapes/day, just above the
+      // ~1,654/day the TTD intervals demand for a 60-day horizon, so the
+      // schedule is actually met instead of permanently overdue. Going longer
+      // still would add only a few percent while pushing toward bursts large
+      // enough to risk rate limiting.
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(pollerFn)],
     });
 

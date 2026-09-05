@@ -1,6 +1,6 @@
 import { GraphQLContext } from '../context';
 import { User } from '../schema/generated/typeDefs.generated';
-import { GetItemCommand } from '../model/trainPriceMonitor';
+import { GetItemCommand, StoredJourney } from '../model/trainPriceMonitor';
 import { getJourneyMonitor } from './user';
 
 interface NotificationType {
@@ -50,22 +50,10 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   JOURNEY_EXPIRED: {
     name: 'JOURNEY_EXPIRED',
     mapAdditionalData: async (context, _userId, data) => {
-      const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
-      if (!journey) {
-        throw new Error('Could not requery journey');
-      }
-      return {
-        from: journey.legs[0].origin!.name!,
-        to: journey.legs[journey.legs.length - 1].destination!.name!,
-      };
+      return await resolveExpiredJourneyStations(context, data);
     },
     formatEmail: async (context, user, data) => {
-      const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
-      if (!journey) {
-        throw new Error('Could not requery journey');
-      }
-      const from = journey.legs[0].origin!.name!;
-      const to = journey.legs[journey.legs.length - 1].destination!.name!;
+      const { from, to } = await resolveExpiredJourneyStations(context, data);
       const subject = `Your journey from ${from} to ${to} has expired`;
       const htmlBody = `
         <p>Hi ${user.givenName},</p>
@@ -121,5 +109,54 @@ async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: str
   if (!dbJourney) {
     throw new Error(`Journey with ID ${journeyId} not found in database`);
   }
-  return getJourneyMonitor(context, dbJourney);
+  return getJourneyMonitor(dbJourney as StoredJourney);
+}
+
+/**
+ * Station names for an expired journey, cheapest source first.
+ *
+ * Expiry deletes the Journey item, so the snapshot that held `cachedFrom` /
+ * `cachedTo` is gone by the time the email is built. Both those names and the
+ * station IDs are therefore copied onto the notification when it is created:
+ *
+ *  1. the persisted names, when the journey had been refreshed successfully;
+ *  2. otherwise the station IDs, resolved against the bundled station data the
+ *     same way JOURNEY_STALE does — local, so it works with DB unreachable;
+ *  3. only failing both, a browser round-trip, which throws when DB is down and
+ *     would fail the email into the DLQ.
+ *
+ * Tier 2 matters because the cached names only exist after a successful
+ * refresh: a journey that expires before one ever succeeded stores neither name
+ * (JSON.stringify omits undefined), which would otherwise go straight to the
+ * browser.
+ */
+async function resolveExpiredJourneyStations(
+  context: GraphQLContext,
+  data: { [key: string]: unknown }
+): Promise<{ from: string; to: string }> {
+  const from = data['from'];
+  const to = data['to'];
+
+  if (typeof from === 'string' && typeof to === 'string') {
+    return { from, to };
+  }
+
+  const fromId = data['fromId'];
+  const toId = data['toId'];
+
+  if (typeof fromId === 'string' && typeof toId === 'string') {
+    const fromStation = await context.dbHafas.getStationById(fromId);
+    const toStation = await context.dbHafas.getStationById(toId);
+    return { from: fromStation?.name ?? fromId, to: toStation?.name ?? toId };
+  }
+
+  const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
+  if (!journey) {
+    throw new Error('Could not requery journey');
+  }
+
+  return {
+    from: journey.legs[0].origin!.name!,
+    to: journey.legs[journey.legs.length - 1].destination!.name!,
+  };
 }

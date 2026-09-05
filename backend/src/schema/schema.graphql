@@ -207,6 +207,7 @@ type JourneyMonitor {
   deutschlandTicketDiscount: Boolean
   ageGroup: AgeGroup
   loyaltyCard: LoyaltyCard
+  unavailable: Boolean!
 }
 
 ## Queries
