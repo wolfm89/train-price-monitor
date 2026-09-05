@@ -31,8 +31,8 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  */
 const BATCH_SIZE = Number(process.env.SCRAPER_BATCH_SIZE ?? 10);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the
- * function timeout (120 s) with enough room to finish the current target. */
-const ABORT_THRESHOLD_MS = 100_000;
+ * function timeout (180 s) with enough room to finish the current target. */
+const ABORT_THRESHOLD_MS = 150_000;
 /**
  * Sleep between targets to spread API load.
  *

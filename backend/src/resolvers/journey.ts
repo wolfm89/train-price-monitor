@@ -7,6 +7,7 @@ import {
   DeleteItemCommand,
   ScanCommand,
   QueryCommand,
+  StoredJourney,
 } from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { MutationResolvers, QueryResolvers } from '../schema/generated/resolvers.generated';
@@ -20,6 +21,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 import { PricingOptions } from '../managers/DbHafasManager';
 import { LoyaltyCardData, validateLoyaltyCard } from '../lib/loyaltyCards';
+
+/**
+ * Stop starting new journey refreshes past this point in a run, leaving headroom
+ * for the one in flight to finish before the refresher's 120 s Lambda timeout.
+ */
+const REFRESH_ABORT_THRESHOLD_MS = 90_000;
 
 /**
  * Converts GraphQL JourneySearchOptions to the internal PricingOptions format
@@ -218,40 +225,62 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
 
 /**
  * Resolves the 'updateJourneyMonitors' mutation to update all stored journeys.
+ *
+ * Journeys are refreshed inline rather than fanned out over SQS. Each SQS
+ * message became its own Lambda invocation with its own Chromium cold start,
+ * so refreshing N journeys paid the ~4 s browser startup N times; handling them
+ * in one invocation pays it once and makes the per-journey cost roughly 3x
+ * cheaper as the number of monitored journeys grows. It also removes the
+ * retry-to-DLQ path that previously accumulated poison messages whenever DB was
+ * unreachable.
  */
 export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourneyMonitors']> = async (
   _parent,
   _args,
   context: GraphQLContext
 ): Promise<number> => {
+  const startedAt = Date.now();
+
   const { Items: allJourneys } = await context.entities.TrainPriceMonitorTable.build(ScanCommand)
     .entities(context.entities.Journey)
     .send();
 
-  const numberOfJourneys = allJourneys?.length ?? 0;
+  const journeys = (allJourneys ?? []) as StoredJourney[];
 
-  Logger.info(`Found ${numberOfJourneys} journeys to update`);
+  // Oldest snapshot first, so if the run is cut short the least fresh journeys
+  // are the ones that got refreshed rather than always the same arbitrary few.
+  journeys.sort((a, b) => (a.lastCheckedAt ?? '').localeCompare(b.lastCheckedAt ?? ''));
 
-  if (allJourneys) {
-    for (const journey of allJourneys) {
-      if (new Date(journey.expires) < new Date()) {
-        Logger.info('Skipping expired journey in update scan', { journeyId: journey.id });
-        continue;
-      }
+  Logger.info(`Found ${journeys.length} journeys to update`);
 
-      try {
-        await context.sqs.sendUpdateJourneyMessage(journey.userId, journey.id);
-      } catch (error) {
-        Logger.error('Failed to send update message for journey', {
-          journeyId: journey.id,
-          userId: journey.userId,
-          error: error instanceof Error ? error.message : error,
-        });
-      }
+  let refreshed = 0;
+
+  for (const journey of journeys) {
+    // Leave room to finish the journey in flight before the Lambda timeout.
+    // Anything skipped is simply picked up by the next scheduled run.
+    if (Date.now() - startedAt > REFRESH_ABORT_THRESHOLD_MS) {
+      Logger.warn('Approaching timeout, deferring remaining journeys to the next run', {
+        remaining: journeys.length - refreshed,
+      });
+      break;
+    }
+
+    try {
+      // Expired journeys are refreshed too, not skipped: refreshJourneyMonitor
+      // is what deletes them and notifies the user, so skipping them here left
+      // them stored forever.
+      await refreshJourneyMonitor(context, journey.userId, journey.id);
+      refreshed++;
+    } catch (error) {
+      Logger.error('Failed to refresh journey', {
+        journeyId: journey.id,
+        userId: journey.userId,
+        error: error instanceof Error ? error.message : error,
+      });
     }
   }
 
-  return numberOfJourneys;
+  return journeys.length;
 };
 
 /**
@@ -259,16 +288,22 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
  * Loads stored pricing options from the Journey entity and passes them to
  * requeryJourney for correct discounted price calculation.
  */
-export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyMonitor']> = async (
-  _parent,
-  args,
-  context: GraphQLContext
-): Promise<JourneyMonitor> => {
-  Logger.addPersistentLogAttributes({ userId: args.userId, journeyId: args.journeyId });
+/**
+ * Refreshes a single stored journey: re-queries DB, writes the price snapshot
+ * the read path serves, and raises expiry/stale/price-alert notifications.
+ *
+ * Extracted from the `updateJourneyMonitor` mutation so the hourly scan can
+ * call it directly instead of fanning out one SQS message (and therefore one
+ * browser cold start) per journey.
+ */
+async function refreshJourneyMonitor(
+  context: GraphQLContext,
+  userId: string,
+  journeyId: string
+): Promise<JourneyMonitor> {
+  Logger.addPersistentLogAttributes({ userId: userId, journeyId: journeyId });
 
-  const dbJourney = await context.entities.Journey.build(GetItemCommand)
-    .key({ userId: args.userId, id: args.journeyId })
-    .send();
+  const dbJourney = await context.entities.Journey.build(GetItemCommand).key({ userId: userId, id: journeyId }).send();
 
   if (!dbJourney.Item) {
     throw new Error('Journey not found in database');
@@ -289,7 +324,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   if (new Date(dbJourney.Item.expires) < new Date()) {
     Logger.info(`Journey has expired`);
 
-    await context.entities.Journey.build(DeleteItemCommand).key({ userId: args.userId, id: args.journeyId }).send();
+    await context.entities.Journey.build(DeleteItemCommand).key({ userId: userId, id: journeyId }).send();
     context.cache.invalidate([{ typename: 'JourneyMonitor' }]);
     Logger.info(`Deleted journey from database`);
 
@@ -297,7 +332,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     await context.entities.Notification.build(PutItemCommand)
       .item({
         id: notificationId,
-        userId: args.userId,
+        userId: userId,
         type: NOTIFICATION_TYPES.JOURNEY_EXPIRED.name,
         read: false,
         sent: false,
@@ -307,9 +342,9 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
 
-    await deletePriceAlertNotificationsForJourney(context, args.userId, args.journeyId);
+    await deletePriceAlertNotificationsForJourney(context, userId, journeyId);
 
-    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
+    await sendNotificationEmailIfEnabled(context, userId, notificationId);
 
     return journeyMonitor;
   }
@@ -319,7 +354,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   // watchlist keeps showing the current price while an alert is still pending.
   const existingNotifications = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
-    .query({ partition: `USER#${args.userId}`, range: { beginsWith: 'NOTIFICATION#' } })
+    .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
     .send();
 
   const notificationsArray = existingNotifications?.Items ?? [];
@@ -327,7 +362,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     notificationsArray.some((item: { data?: string; type?: string }) => {
       if (item.type !== type || !item.data) return false;
       try {
-        return JSON.parse(item.data).journeyId === args.journeyId;
+        return JSON.parse(item.data).journeyId === journeyId;
       } catch {
         return false;
       }
@@ -340,7 +375,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken, storedPricingOptions);
   } catch (error) {
     Logger.error('Error requerying journey', {
-      journeyId: args.journeyId,
+      journeyId: journeyId,
       error: error instanceof Error ? error.message : error,
     });
     throw error;
@@ -348,14 +383,14 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
   if (!journey) {
     // Token is stale — attempt recovery using stored station IDs and departure
-    Logger.warn('Refresh token stale, attempting recovery', { journeyId: args.journeyId });
+    Logger.warn('Refresh token stale, attempting recovery', { journeyId: journeyId });
 
     const fromStationId = dbJourney.Item.fromId as string | undefined;
     const toStationId = dbJourney.Item.toId as string | undefined;
     const storedDeparture = dbJourney.Item.departure as string | undefined;
 
     if (!fromStationId || !toStationId || !storedDeparture) {
-      Logger.warn('Missing station IDs or departure for recovery, skipping', { journeyId: args.journeyId });
+      Logger.warn('Missing station IDs or departure for recovery, skipping', { journeyId: journeyId });
     } else {
       const departure = new Date(storedDeparture);
 
@@ -379,14 +414,14 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
         if (matchingJourney) {
           await context.entities.Journey.build(UpdateItemCommand)
-            .item({ userId: args.userId, id: args.journeyId, refreshToken: matchingJourney.refreshToken! })
+            .item({ userId: userId, id: journeyId, refreshToken: matchingJourney.refreshToken! })
             .send();
           journey = matchingJourney;
-          Logger.info('Successfully recovered journey with new token', { journeyId: args.journeyId });
+          Logger.info('Successfully recovered journey with new token', { journeyId: journeyId });
         }
       } catch (recoveryError) {
         Logger.error('Journey recovery failed', {
-          journeyId: args.journeyId,
+          journeyId: journeyId,
           error: recoveryError instanceof Error ? recoveryError.message : recoveryError,
         });
       }
@@ -394,7 +429,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   }
 
   if (!journey) {
-    Logger.warn('Journey recovery failed completely, creating notification', { journeyId: args.journeyId });
+    Logger.warn('Journey recovery failed completely, creating notification', { journeyId: journeyId });
 
     const hasExistingStaleNotification = hasNotificationForJourney(NOTIFICATION_TYPES.JOURNEY_STALE.name);
 
@@ -407,13 +442,13 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     await context.entities.Notification.build(PutItemCommand)
       .item({
         id: notificationId,
-        userId: args.userId,
+        userId: userId,
         type: NOTIFICATION_TYPES.JOURNEY_STALE.name,
         read: false,
         sent: false,
         timestamp: new Date().toISOString(),
         data: JSON.stringify({
-          journeyId: args.journeyId,
+          journeyId: journeyId,
           fromId: dbJourney.Item.fromId,
           toId: dbJourney.Item.toId,
         }),
@@ -421,7 +456,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
 
-    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
+    await sendNotificationEmailIfEnabled(context, userId, notificationId);
 
     return journeyMonitor;
   }
@@ -434,8 +469,8 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
   await context.entities.Journey.build(UpdateItemCommand)
     .item({
-      userId: args.userId,
-      id: args.journeyId,
+      userId: userId,
+      id: journeyId,
       refreshToken: journey.refreshToken ?? dbJourney.Item.refreshToken,
       cachedPrice: journey.price?.amount,
       cachedDeparture: cachedDeparture ? new Date(cachedDeparture).toISOString() : undefined,
@@ -475,17 +510,17 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     await context.entities.Notification.build(PutItemCommand)
       .item({
         id: notificationId,
-        userId: args.userId,
+        userId: userId,
         type: NOTIFICATION_TYPES.PRICE_ALERT.name,
         read: false,
         sent: false,
         timestamp: new Date().toISOString(),
-        data: JSON.stringify({ journeyId: args.journeyId }),
+        data: JSON.stringify({ journeyId: journeyId }),
       })
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
 
-    await sendNotificationEmailIfEnabled(context, args.userId, notificationId);
+    await sendNotificationEmailIfEnabled(context, userId, notificationId);
 
     Logger.info(`Sent notification for journey`);
   } else {
@@ -493,7 +528,16 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   }
 
   return journeyMonitor;
-};
+}
+
+/**
+ * Resolves the 'updateJourneyMonitor' mutation to update a specific journey.
+ */
+export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyMonitor']> = async (
+  _parent,
+  args,
+  context: GraphQLContext
+): Promise<JourneyMonitor> => refreshJourneyMonitor(context, args.userId, args.journeyId);
 
 async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, userId: string, journeyId: string) {
   const { Items: priceAlertNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)

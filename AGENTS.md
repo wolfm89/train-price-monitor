@@ -227,7 +227,9 @@ Environment variables (never commit values):
 | `SCRAPER_TABLE_NAME`         | Scraper          | DynamoDB schedule table (injected by CDK)                 |
 | `SCRAPER_BUCKET_NAME`        | Scraper          | S3 bucket for Parquet data (injected by CDK)              |
 | `SCRAPER_BATCH_SIZE`         | Scraper          | Targets per poller run (default `10`; 1 target = 2 calls) |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | Days ahead to seed (default `90`)                         |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | Days ahead to seed (default `60`)                         |
+| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper          | Newest days re-seeded per nightly run (default `3`)       |
+| `HYDRATOR_FULL_SEED`         | Scraper          | `1` seeds the whole window and prunes beyond it (manual)  |
 | `AWS_ENDPOINT_URL`           | Scraper          | Local Floci endpoint (set by mise tasks)                  |
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.

@@ -115,15 +115,15 @@ export class ScraperStack extends cdk.Stack {
       architecture: lambda.Architecture.X86_64,
       memorySize: 1024,
       ephemeralStorageSize: cdk.Size.gibibytes(1),
-      timeout: cdk.Duration.seconds(120),
+      timeout: cdk.Duration.seconds(180),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
-        // 10 targets = 20 API calls ≈ 55 s per run, measured at ~5.2 GB-s of
+        // 18 targets = 36 API calls ≈ 102 s per run, measured at ~5.2 GB-s of
         // fixed per-run overhead plus ~4.93 GB-s per target. With the
-        // 10-minute cadence below that is ~239,000 GB-s/month.
+        // 15-minute cadence below that is ~298,000 GB-s/month.
         //
         // This deliberately does not spend the whole free tier. The backend
         // scales with usage while the scraper does not: every monitored journey
@@ -132,7 +132,7 @@ export class ScraperStack extends cdk.Stack {
         // 100,000 GB-s/month is therefore left unclaimed as user headroom —
         // about 20 additional monitored journeys — on top of the ~10,000 GB-s
         // used by the hydrator and compactor and a 10% safety margin.
-        SCRAPER_BATCH_SIZE: '10',
+        SCRAPER_BATCH_SIZE: '18',
       },
     });
 
@@ -146,7 +146,11 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../scraper/dist/hydrator'),
       handler: 'index.handler',
       memorySize: 128,
-      timeout: cdk.Duration.seconds(120),
+      // A normal run only seeds the newest few days (~420 conditional writes,
+      // well under a minute at 5 WCU). The generous timeout exists for the
+      // manual HYDRATOR_FULL_SEED backfill, which rewrites the whole lookahead
+      // window and is bounded by the table's write capacity rather than by CPU.
+      timeout: cdk.Duration.minutes(15),
       logGroup: hydratorLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
@@ -166,7 +170,14 @@ export class ScraperStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       code: lambda.Code.fromAsset('../scraper/dist/compactor'),
       handler: 'index.handler',
-      memorySize: 3072,
+      // The compactor holds a whole day of rows in memory before re-serializing
+      // them, so its footprint tracks scrape volume. 3072 MB was sized when the
+      // poller ran every minute (~21,600 targets/day, peaking at ~1022 MB of
+      // actual use). The browser-backed poller collects ~1,654 targets/day, so
+      // a day's partition is roughly an order of magnitude smaller. 1536 MB
+      // keeps generous headroom over that; re-check Max Memory Used after the
+      // first full-day compaction at the new volume before trimming further.
+      memorySize: 1536,
       timeout: cdk.Duration.seconds(300),
       logGroup: compactorLogGroup,
       environment: {
@@ -196,12 +207,15 @@ export class ScraperStack extends cdk.Stack {
       // Cadence and batch size are chosen together to maximise scrapes per
       // free-tier GB-second. Each run pays ~5.2 GB-s of fixed overhead (browser
       // launch + origin navigation), so fewer, larger runs are cheaper per
-      // target, so the cadence is stretched from 1 minute to 10. Going longer
-      // still would add only a few percent more (the overhead is already
-      // amortized over 10 targets) while pushing toward bursts large enough to
-      // risk rate limiting and hour-stale scheduling, so 10 minutes is the
-      // practical optimum.
-      schedule: events.Schedule.rate(cdk.Duration.minutes(10)),
+      // target, so the cadence is stretched from 1 minute to 15. Cadence and
+      // batch size are chosen together: each run pays ~5.2 GB-s of fixed
+      // overhead (browser launch + origin navigation), so fewer, larger runs
+      // cost less per target. 15 min x 18 yields ~1,728 scrapes/day, which is
+      // just above the ~1,654/day the TTD intervals demand for a 60-day
+      // horizon, so the schedule is actually met instead of permanently
+      // overdue. Going longer still would add only a few percent while pushing
+      // toward bursts large enough to risk rate limiting.
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(pollerFn)],
     });
 
