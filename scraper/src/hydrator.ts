@@ -66,8 +66,10 @@ async function writeAllItems(
             })
           );
           return 'written';
-        } catch (err: any) {
-          if (err.name === 'ConditionalCheckFailedException') {
+        } catch (err) {
+          // A failed condition means the row was already seeded, which is the
+          // normal case for every day except the newest.
+          if (err instanceof Error && err.name === 'ConditionalCheckFailedException') {
             return 'skipped';
           }
           throw err;
