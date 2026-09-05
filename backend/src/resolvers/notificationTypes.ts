@@ -113,16 +113,22 @@ async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: str
 }
 
 /**
- * Station names for an expired journey.
+ * Station names for an expired journey, cheapest source first.
  *
  * Expiry deletes the Journey item, so the snapshot that held `cachedFrom` /
- * `cachedTo` is gone by the time the email is built. Those names are therefore
- * copied into the notification itself when it is created, and used here.
+ * `cachedTo` is gone by the time the email is built. Both those names and the
+ * station IDs are therefore copied onto the notification when it is created:
  *
- * The refreshToken lookup remains as a fallback for notifications created
- * before that change. It costs a browser round-trip and throws when DB is
- * unreachable, which would fail the email and eventually route it to the DLQ —
- * so it is only reached for those older notifications.
+ *  1. the persisted names, when the journey had been refreshed successfully;
+ *  2. otherwise the station IDs, resolved against the bundled station data the
+ *     same way JOURNEY_STALE does — local, so it works with DB unreachable;
+ *  3. only failing both, a browser round-trip, which throws when DB is down and
+ *     would fail the email into the DLQ.
+ *
+ * Tier 2 matters because the cached names only exist after a successful
+ * refresh: a journey that expires before one ever succeeded stores neither name
+ * (JSON.stringify omits undefined), which would otherwise go straight to the
+ * browser.
  */
 async function resolveExpiredJourneyStations(
   context: GraphQLContext,
@@ -133,6 +139,15 @@ async function resolveExpiredJourneyStations(
 
   if (typeof from === 'string' && typeof to === 'string') {
     return { from, to };
+  }
+
+  const fromId = data['fromId'];
+  const toId = data['toId'];
+
+  if (typeof fromId === 'string' && typeof toId === 'string') {
+    const fromStation = await context.dbHafas.getStationById(fromId);
+    const toStation = await context.dbHafas.getStationById(toId);
+    return { from: fromStation?.name ?? fromId, to: toStation?.name ?? toId };
   }
 
   const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);

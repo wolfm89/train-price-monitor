@@ -364,14 +364,23 @@ async function refreshJourneyMonitor(
         read: false,
         sent: false,
         timestamp: new Date().toISOString(),
-        // Persist the station names from the snapshot. The Journey item — and
-        // with it `cachedFrom`/`cachedTo` — was just deleted above, so without
-        // these the email formatter has to drive the browser to re-derive two
-        // strings it already had, and fails outright when DB is unreachable.
+        // Persist everything the email needs. The Journey item — and with it
+        // `cachedFrom`/`cachedTo` — was just deleted above, so without this the
+        // formatter has to drive the browser to re-derive two strings it
+        // already had, and fails outright when DB is unreachable.
+        //
+        // The station IDs are carried as well because the cached names are only
+        // populated after a successful refresh: a journey that expires before
+        // one ever succeeded would otherwise store neither (JSON.stringify
+        // omits undefined values) and fall through to the browser. The IDs are
+        // required on the entity, so they are always available, and resolve
+        // against the local station cache.
         data: JSON.stringify({
           refreshToken: dbJourney.Item.refreshToken,
           from: dbJourney.Item.cachedFrom,
           to: dbJourney.Item.cachedTo,
+          fromId: dbJourney.Item.fromId,
+          toId: dbJourney.Item.toId,
         }),
       })
       .send();
