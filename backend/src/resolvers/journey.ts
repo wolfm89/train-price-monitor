@@ -19,6 +19,7 @@ import {
 } from '../schema/generated/typeDefs.generated';
 import { v4 as uuidv4 } from 'uuid';
 import { NOTIFICATION_TYPES } from './notificationTypes';
+import { getJourneyMonitor } from './user';
 import { PricingOptions } from '../managers/DbHafasManager';
 import { LoyaltyCardData, validateLoyaltyCard } from '../lib/loyaltyCards';
 
@@ -363,7 +364,15 @@ async function refreshJourneyMonitor(
         read: false,
         sent: false,
         timestamp: new Date().toISOString(),
-        data: JSON.stringify({ refreshToken: dbJourney.Item.refreshToken }),
+        // Persist the station names from the snapshot. The Journey item — and
+        // with it `cachedFrom`/`cachedTo` — was just deleted above, so without
+        // these the email formatter has to drive the browser to re-derive two
+        // strings it already had, and fails outright when DB is unreachable.
+        data: JSON.stringify({
+          refreshToken: dbJourney.Item.refreshToken,
+          from: dbJourney.Item.cachedFrom,
+          to: dbJourney.Item.cachedTo,
+        }),
       })
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
@@ -372,7 +381,10 @@ async function refreshJourneyMonitor(
 
     await sendNotificationEmailIfEnabled(context, userId, notificationId);
 
-    return journeyMonitor;
+    // The journey no longer exists, so report it as having no data rather than
+    // returning the stub, whose `journey` holds only a refreshToken and would
+    // serialize every other field as null while claiming to be available.
+    return { ...journeyMonitor, unavailable: true, journey: undefined };
   }
 
   // Existing notifications gate only the *creation* of new ones. The price
@@ -461,7 +473,12 @@ async function refreshJourneyMonitor(
 
     if (hasExistingStaleNotification) {
       Logger.info('JOURNEY_STALE notification already exists for journey, skipping');
-      return journeyMonitor;
+      // Serve the stored snapshot rather than the stub: a previous run may have
+      // captured valid data that is merely stale, and getJourneyMonitor derives
+      // `unavailable` with the same rule as the read path, so a journey that has
+      // never been fetched is reported honestly instead of as available-with-
+      // null-fields.
+      return getJourneyMonitor(dbJourney.Item as StoredJourney);
     }
 
     const notificationId = uuidv4();
@@ -484,7 +501,9 @@ async function refreshJourneyMonitor(
 
     await sendNotificationEmailIfEnabled(context, userId, notificationId);
 
-    return journeyMonitor;
+    // As above: return the stored snapshot so the result matches what the
+    // watchlist will show, instead of a stub with only a refreshToken.
+    return getJourneyMonitor(dbJourney.Item as StoredJourney);
   }
   // Persist the snapshot that the read path serves. This is the only place DB
   // journey data enters DynamoDB, so the watchlist never needs a live lookup.

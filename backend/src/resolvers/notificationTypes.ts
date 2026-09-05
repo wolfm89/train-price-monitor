@@ -50,22 +50,10 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   JOURNEY_EXPIRED: {
     name: 'JOURNEY_EXPIRED',
     mapAdditionalData: async (context, _userId, data) => {
-      const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
-      if (!journey) {
-        throw new Error('Could not requery journey');
-      }
-      return {
-        from: journey.legs[0].origin!.name!,
-        to: journey.legs[journey.legs.length - 1].destination!.name!,
-      };
+      return await resolveExpiredJourneyStations(context, data);
     },
     formatEmail: async (context, user, data) => {
-      const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
-      if (!journey) {
-        throw new Error('Could not requery journey');
-      }
-      const from = journey.legs[0].origin!.name!;
-      const to = journey.legs[journey.legs.length - 1].destination!.name!;
+      const { from, to } = await resolveExpiredJourneyStations(context, data);
       const subject = `Your journey from ${from} to ${to} has expired`;
       const htmlBody = `
         <p>Hi ${user.givenName},</p>
@@ -122,4 +110,38 @@ async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: str
     throw new Error(`Journey with ID ${journeyId} not found in database`);
   }
   return getJourneyMonitor(dbJourney as StoredJourney);
+}
+
+/**
+ * Station names for an expired journey.
+ *
+ * Expiry deletes the Journey item, so the snapshot that held `cachedFrom` /
+ * `cachedTo` is gone by the time the email is built. Those names are therefore
+ * copied into the notification itself when it is created, and used here.
+ *
+ * The refreshToken lookup remains as a fallback for notifications created
+ * before that change. It costs a browser round-trip and throws when DB is
+ * unreachable, which would fail the email and eventually route it to the DLQ —
+ * so it is only reached for those older notifications.
+ */
+async function resolveExpiredJourneyStations(
+  context: GraphQLContext,
+  data: { [key: string]: unknown }
+): Promise<{ from: string; to: string }> {
+  const from = data['from'];
+  const to = data['to'];
+
+  if (typeof from === 'string' && typeof to === 'string') {
+    return { from, to };
+  }
+
+  const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
+  if (!journey) {
+    throw new Error('Could not requery journey');
+  }
+
+  return {
+    from: journey.legs[0].origin!.name!,
+    to: journey.legs[journey.legs.length - 1].destination!.name!,
+  };
 }
