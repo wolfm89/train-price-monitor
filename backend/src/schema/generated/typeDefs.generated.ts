@@ -60,6 +60,7 @@ export type JourneyMonitor = {
   limitPrice: Scalars['Float']['output'];
   loyaltyCard?: Maybe<LoyaltyCard>;
   to?: Maybe<Scalars['String']['output']>;
+  unavailable: Scalars['Boolean']['output'];
   userId: Scalars['ID']['output'];
 };
 

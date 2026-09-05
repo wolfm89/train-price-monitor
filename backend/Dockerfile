@@ -1,78 +1,62 @@
 # ---------------------------------------------------------------------------
-# libcurl-impersonate — curl-impersonate's patched libcurl shared library.
+# Backend image: AWS Lambda Node.js 24 base + Chromium headless shell.
 #
-# Since 2026-07-13, int.bahn.de's Akamai Bot Manager blocks every request
-# whose TLS/HTTP2 fingerprint doesn't match a real browser (403 OPS_BLOCKED),
-# which affects Node's native fetch/undici regardless of IP. curl-impersonate
-# patches libcurl to present a genuine Chrome fingerprint; `impers` loads this
-# .so via FFI (koffi) at runtime. See src/net/impersonate-fetch.ts.
+# The application bundle is built on the host (`npm run build`) rather than
+# inside this image, because the browser transport it bundles lives in
+# ../shared and is therefore outside this Dockerfile's build context. This
+# matches the scraper image and keeps the build free of toolchains.
 #
-# The tarball is verified against a pinned SHA256 digest before extraction
-# (sourced from GitHub's own per-asset `digest` field for this exact release).
+# See ../shared/browser-fetch.ts for why a real browser is required: DB's
+# Akamai Bot Manager rejects every non-browser TLS/HTTP2 fingerprint with
+# `403 OPS_BLOCKED`. Journey search still needs live DB access, so Chromium
+# ships here as well as in the refresher; the watchlist read path is served
+# from the DynamoDB snapshot and performs no network calls.
+#
+# Only the `chromium_headless_shell` build is copied (~260 MB) rather than the
+# full `chromium` build (~390 MB): `chromium.launch({ headless: true })`
+# selects the headless shell, so the full browser would be dead weight.
+#
+# The image is x86_64-only. Chromium's shared-library dependencies must be
+# installed for the *target* architecture, which would require QEMU/binfmt
+# emulation to build an arm64 image on an amd64 host.
 # ---------------------------------------------------------------------------
+
+# CHROMIUM_REVISION is the browser build that playwright-core resolves at
+# runtime; it is tied to PLAYWRIGHT_VERSION. Both are pinned together, and the
+# COPY below fails loudly if the revision ever stops matching.
+ARG PLAYWRIGHT_VERSION=1.63.0
+ARG CHROMIUM_REVISION=1243
 ARG BUILDPLATFORM
 
-# Build stages (libcurl-impersonate, builder, deps) run on the *build*
-# machine's native platform (--platform=$BUILDPLATFORM), not the Lambda's
-# target platform. They only download/select target-arch artifacts or run
-# host code (curl, npm, codegen, esbuild), so building them natively avoids
-# requiring QEMU/binfmt cross-arch emulation. Only the final stage targets
-# the Lambda's actual architecture, and it contains no RUN steps.
-# ---------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS libcurl-impersonate
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble AS browser
 
-ARG LIBCURL_IMPERSONATE_VERSION=v1.5.6
-ARG TARGETARCH
-RUN microdnf install -y tar gzip ca-certificates && microdnf clean all
-RUN case "${TARGETARCH}" in \
-      arm64) LIBCURL_ARCH=aarch64-linux-gnu; LIBCURL_SHA256=b4e4f713655616efd2be83153d9057b5961c15e34563dde09a8b6798a8b331e9 ;; \
-      amd64) LIBCURL_ARCH=x86_64-linux-gnu; LIBCURL_SHA256=f07e25084020c54d6fd5654c8d458e09b3a44c312f88e480c255399f00487b25 ;; \
-      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && curl -fsSL -o /tmp/libcurl-impersonate.tar.gz \
-      "https://github.com/lexiforest/curl-impersonate/releases/download/${LIBCURL_IMPERSONATE_VERSION}/libcurl-impersonate-${LIBCURL_IMPERSONATE_VERSION}.${LIBCURL_ARCH}.tar.gz" \
-    && echo "${LIBCURL_SHA256}  /tmp/libcurl-impersonate.tar.gz" | sha256sum -c - \
-    && mkdir -p /opt/libcurl-impersonate \
-    && tar -xzf /tmp/libcurl-impersonate.tar.gz -C /opt/libcurl-impersonate \
-    && cp -L /opt/libcurl-impersonate/libcurl-impersonate.so /opt/libcurl-impersonate.so \
-    && rm /tmp/libcurl-impersonate.tar.gz
-
-FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS builder
-WORKDIR /build
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run codegen
-RUN npm run build
-
-# ---------------------------------------------------------------------------
-# deps — production node_modules selected for the Lambda's target
-# architecture. `impers`/`koffi` (used by src/net/impersonate-fetch.ts) are
-# native bindings that cannot be esbuild-bundled; they must be present in
-# node_modules at runtime. koffi ships its platform-specific addon as a
-# separate optional dependency (@koromix/koffi-linux-*), so
-# --cpu/--os/--libc --ignore-scripts picks the right prebuilt package without
-# running koffi's own postinstall (which would try to build for the build
-# host's architecture).
-# ---------------------------------------------------------------------------
+# Only packages left external by the esbuild bundle are actually loaded at
+# runtime, but installing the full production set straight from the lockfile
+# keeps versions pinned and reproducible. This stage is architecture-agnostic
+# (no native builds), so it runs natively on the build host.
 FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS deps
-ARG TARGETARCH
 WORKDIR /deps
 COPY package.json package-lock.json ./
-RUN case "${TARGETARCH}" in \
-      arm64) NPM_CPU=arm64 ;; \
-      amd64) NPM_CPU=x64 ;; \
-      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && npm ci --omit=dev --ignore-scripts --cpu="${NPM_CPU}" --os=linux --libc=glibc
+RUN npm ci --omit=dev --ignore-scripts
 
 FROM public.ecr.aws/lambda/nodejs:24
-WORKDIR ${LAMBDA_TASK_ROOT}
-COPY --from=builder /build/dist/* ./
-COPY --from=builder /build/src/schema ./src/schema
-COPY --from=deps /deps/node_modules ./node_modules
-COPY --from=libcurl-impersonate /opt/libcurl-impersonate.so /opt/lib/libcurl-impersonate.so
+ARG CHROMIUM_REVISION
 
-ENV LIBCURL_IMPERSONATE_PATH=/opt/lib/libcurl-impersonate.so
+# Shared libraries Chromium links against that are absent from the Lambda base.
+RUN dnf install -y \
+      alsa-lib atk at-spi2-atk at-spi2-core cups-libs libdrm libX11 libXcomposite \
+      libXdamage libXext libXfixes libXrandr libxcb libxkbcommon mesa-libgbm nspr nss pango \
+    && dnf clean all
 
-CMD [ "main.handler" ]
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY --from=browser /ms-playwright/chromium_headless_shell-${CHROMIUM_REVISION} \
+                    /ms-playwright/chromium_headless_shell-${CHROMIUM_REVISION}
+
+COPY --from=deps /deps/node_modules ${LAMBDA_TASK_ROOT}/node_modules
+
+# Pre-built CJS bundle (produced by 'npm run build' in backend/).
+COPY dist/main.js ${LAMBDA_TASK_ROOT}/
+# main.ts reads the SDL at startup, relative to the task root.
+COPY src/schema/schema.graphql ${LAMBDA_TASK_ROOT}/src/schema/schema.graphql
+
+CMD ["main.handler"]

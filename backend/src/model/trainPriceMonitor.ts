@@ -76,12 +76,51 @@ export const Journey = new Entity({
     loyaltyCard: string().optional(),
     ageGroup: string().optional(),
     deutschlandTicketDiscount: boolean().optional(),
+    // Snapshot of the last successful DB lookup. The read path (watchlist)
+    // serves these fields instead of querying DB, so rendering the watchlist
+    // costs no network calls and keeps working while DB is unreachable.
+    // Written by the refresher; absence of `lastCheckedAt` means "never
+    // successfully fetched", which the API reports as `unavailable`.
+    cachedPrice: number().optional(),
+    cachedDeparture: string().optional(),
+    cachedArrival: string().optional(),
+    cachedMeans: string().optional(),
+    cachedFrom: string().optional(),
+    cachedTo: string().optional(),
+    lastCheckedAt: string().optional(),
   }),
   computeKey: ({ userId, id }) => ({
     pk: `USER#${userId}`,
     sk: `JOURNEY#${id}`,
   }),
 });
+
+/**
+ * Shape of a stored `Journey` item as read back from DynamoDB, including the
+ * cached snapshot written by the refresher.
+ */
+export interface StoredJourney {
+  userId: string;
+  id: string;
+  limitPrice: number;
+  refreshToken: string;
+  expires: string;
+  fromId: string;
+  toId: string;
+  departure: string;
+  firstClass?: boolean;
+  bike?: boolean;
+  loyaltyCard?: string;
+  ageGroup?: string;
+  deutschlandTicketDiscount?: boolean;
+  cachedPrice?: number;
+  cachedDeparture?: string;
+  cachedArrival?: string;
+  cachedMeans?: string;
+  cachedFrom?: string;
+  cachedTo?: string;
+  lastCheckedAt?: string;
+}
 
 export {
   TrainPriceMonitorTable,

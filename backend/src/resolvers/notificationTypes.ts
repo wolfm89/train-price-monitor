@@ -1,6 +1,6 @@
 import { GraphQLContext } from '../context';
 import { User } from '../schema/generated/typeDefs.generated';
-import { GetItemCommand } from '../model/trainPriceMonitor';
+import { GetItemCommand, StoredJourney } from '../model/trainPriceMonitor';
 import { getJourneyMonitor } from './user';
 
 interface NotificationType {
@@ -121,5 +121,5 @@ async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: str
   if (!dbJourney) {
     throw new Error(`Journey with ID ${journeyId} not found in database`);
   }
-  return getJourneyMonitor(context, dbJourney);
+  return getJourneyMonitor(dbJourney as StoredJourney);
 }

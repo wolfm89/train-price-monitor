@@ -20,12 +20,30 @@ const s3 = new S3Client(process.env.AWS_ENDPOINT_URL ? { forcePathStyle: true } 
 const TABLE_NAME = process.env.SCRAPER_TABLE_NAME!;
 const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
 
-/** Max targets per invocation. Each target = 2 API calls. */
-const BATCH_SIZE = 15;
-/** Abort if elapsed exceeds this many milliseconds. */
-const ABORT_THRESHOLD_MS = 50_000;
-/** Sleep between targets to spread API load. */
-const INTER_TARGET_SLEEP_MS = 1_500;
+/**
+ * Max targets per invocation. Each target = 2 API calls.
+ *
+ * Tunable via env so the cadence/batch trade-off can be adjusted against the
+ * Lambda free tier without a code change. Routing requests through a real
+ * browser (see ../../shared/browser-fetch.ts) costs ~2.5 s per API call
+ * instead of ~0.5 s, and needs 768 MB instead of 256 MB, so the sustainable
+ * batch is much smaller than it was for the raw-HTTP transport.
+ */
+const BATCH_SIZE = Number(process.env.SCRAPER_BATCH_SIZE ?? 10);
+/** Abort if elapsed exceeds this many milliseconds. Must stay below the
+ * function timeout (120 s) with enough room to finish the current target. */
+const ABORT_THRESHOLD_MS = 100_000;
+/**
+ * Sleep between targets to spread API load.
+ *
+ * Zero because the browser transport already self-throttles: a single API call
+ * now takes ~2.5 s end to end, which is *more* spacing than the ~2.0 s the old
+ * raw-HTTP path achieved with a 1.5 s sleep between ~0.5 s calls. Keeping the
+ * sleep would add pure billed idle time (~29% of each run) for no extra
+ * pacing. Verified against the live API: 20 back-to-back browser requests all
+ * returned 201 with no rate limiting.
+ */
+const INTER_TARGET_SLEEP_MS = 0;
 
 const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 

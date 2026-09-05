@@ -50,12 +50,13 @@ export class Backend extends Construct {
     // Create DLQ for failed messages
     const dlq = new sqs.Queue(this, 'TrainPriceMonitorDLQ', {
       retentionPeriod: cdk.Duration.days(14),
-      visibilityTimeout: cdk.Duration.seconds(60),
+      visibilityTimeout: cdk.Duration.seconds(180),
     });
 
-    // Create SQS queue with DLQ
+    // The visibility timeout must be at least the consuming function's timeout,
+    // otherwise SQS re-delivers a message that is still being processed.
     const queue = new sqs.Queue(this, 'TrainPriceMonitorQueue', {
-      visibilityTimeout: cdk.Duration.seconds(60),
+      visibilityTimeout: cdk.Duration.seconds(180),
       deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
     });
 
@@ -64,33 +65,66 @@ export class Backend extends Construct {
       retention: logs.RetentionDays.TWO_WEEKS,
     });
 
+    const commonEnvironment = {
+      PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
+      TPM_SQS_QUEUE_URL: queue.queueUrl,
+      FRONTEND_URL: `https://${frontendDomainName}`,
+      SES_FROM_EMAIL: sesFromEmail,
+      NODE_OPTIONS: '--enable-source-maps',
+      DEPLOY_VERSION: 'v14',
+    };
+
+    // Both functions run the same image. DB blocks non-browser TLS
+    // fingerprints, so the bundled Chromium is needed by journey search (API)
+    // as well as by the hourly refresh; only sizing and triggers differ.
+    // 1536 MB is the measured sweet spot for browser cold starts on Lambda
+    // (~3.6 s, versus ~5.7 s at 1024 MB for near-identical GB-seconds), and
+    // Chromium needs the enlarged /tmp for its profile directory.
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
+      architecture: lambda.Architecture.X86_64,
       logGroup: apiLogGroup,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 512,
-      environment: {
-        PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
-        TPM_SQS_QUEUE_URL: queue.queueUrl,
-        FRONTEND_URL: `https://${frontendDomainName}`,
-        SES_FROM_EMAIL: sesFromEmail,
-        NODE_OPTIONS: '--enable-source-maps',
-        DEPLOY_VERSION: 'v13',
-      },
+      // API Gateway REST APIs cut the integration off at 29 s, so a longer
+      // Lambda timeout would only burn duration after the client is gone.
+      timeout: cdk.Duration.seconds(29),
+      memorySize: 1536,
+      ephemeralStorageSize: cdk.Size.gibibytes(1),
+      environment: commonEnvironment,
+    });
+
+    const refresherLogGroup = new logs.LogGroup(this, 'RefresherLambdaLogs', {
+      retention: logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // Scheduled/queued work is isolated from the API so a slow refresh cannot
+    // consume API concurrency, and so it can run past API Gateway's 29 s cap.
+    // Nobody waits on it, so it is sized for cost rather than latency: the DB
+    // round-trip is network-bound (~2.5 s regardless of memory), and 768 MB is
+    // the lowest setting that leaves Chromium safe headroom (~615 MB peak).
+    const refresherFunction = new lambda.DockerImageFunction(this, 'RefresherLambda', {
+      code: lambda.DockerImageCode.fromImageAsset('../backend'),
+      architecture: lambda.Architecture.X86_64,
+      logGroup: refresherLogGroup,
+      timeout: cdk.Duration.seconds(120),
+      memorySize: 768,
+      ephemeralStorageSize: cdk.Size.gibibytes(1),
+      environment: commonEnvironment,
     });
 
     // Add necessary IAM permissions
     profileImageBucket.grantReadWrite(lambdaFunction);
     tables.forEach((table: dynamodb.Table) => {
       table.grantReadWriteData(lambdaFunction);
+      table.grantReadWriteData(refresherFunction);
     });
 
     const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,
     });
 
-    lambdaFunction.addEventSource(new sources.SqsEventSource(queue, { batchSize: 1 }));
+    refresherFunction.addEventSource(new sources.SqsEventSource(queue, { batchSize: 1 }));
     queue.grantSendMessages(lambdaFunction);
+    queue.grantSendMessages(refresherFunction);
 
     // Create EventBridge rule
     const rule = new events.Rule(this, 'UpdateJourneysRule', {
@@ -139,13 +173,14 @@ export class Backend extends Construct {
 
     // AWS SES email identity must exist in the account for the configured ses_from_email
 
-    // Allow Lambda function to send emails and create email identities
-    lambdaFunction.addToRolePolicy(
-      new cdk.aws_iam.PolicyStatement({
-        actions: ['ses:SendEmail', 'ses:CreateEmailIdentity'],
-        resources: ['*'],
-      })
-    );
+    // Allow Lambda functions to send emails and create email identities. The
+    // refresher needs this too: it consumes the notification-email messages.
+    const sesPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ['ses:SendEmail', 'ses:CreateEmailIdentity'],
+      resources: ['*'],
+    });
+    lambdaFunction.addToRolePolicy(sesPolicy);
+    refresherFunction.addToRolePolicy(sesPolicy);
 
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: api.url,

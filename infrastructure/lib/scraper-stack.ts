@@ -81,25 +81,58 @@ export class ScraperStack extends cdk.Stack {
     });
 
     // -------------------------------------------------------------------------
-    // Poller Lambda — runs every 1 minute, scrapes due targets
+    // Poller Lambda — runs every 6 minutes, scrapes due targets
     // Docker image: ../scraper/Dockerfile  (copies pre-built ESM bundle)
     //
-    // Must be a DockerImageFunction (not a Node.js runtime Lambda) because
-    // Akamai's IP-reputation rule blocks outbound HTTP from AWS Node.js runtime
-    // Lambda egress IPs. Docker Lambda uses different egress IPs and is not
-    // blocked. The esbuild bundle at dist/poller/index.mjs is copied into the
-    // image unchanged — no build happens inside the container.
+    // Must be a DockerImageFunction (not a Node.js runtime Lambda) because the
+    // image ships a Chromium headless shell: DB's Akamai Bot Manager rejects
+    // every non-browser TLS/HTTP2 fingerprint with `403 OPS_BLOCKED`, so the
+    // poller drives a real browser (see ../../shared/browser-fetch.ts). The
+    // esbuild bundle at dist/poller/index.mjs is copied into the image
+    // unchanged — no build happens inside the container.
+    //
+    // x86_64 rather than arm64: Chromium's shared-library dependencies are
+    // installed for the target architecture, which would need QEMU emulation to
+    // build an arm64 image on an amd64 host.
+    //
+    // Sizing is cost-driven. Chromium cannot run in the previous 256 MB, and
+    // Lambda duration cost scales with memory, so the goal is the lowest *safe*
+    // setting rather than the fastest: per-call latency is network-bound
+    // (~2.5 s at every size from 512–1536 MB), so extra memory buys no speedup.
+    //
+    // 768 MB was measured as safe for a bare browser (~615 MB peak) but is NOT
+    // enough here: the poller also holds the route catalog, the AWS SDK and a
+    // batch of Parquet rows, which pushed peak usage to 756 MB of 768 (98%) and
+    // got Chromium killed mid-run ("Target page, context or browser has been
+    // closed"). 1024 MB restores headroom.
+    //
+    // The enlarged /tmp is required, not optional: `--disable-dev-shm-usage`
+    // makes Chromium put its shared-memory files under /tmp, and the default
+    // 512 MB left it with <64 MB free.
     // -------------------------------------------------------------------------
     const pollerFn = new lambda.DockerImageFunction(this, 'ScraperPoller', {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(60),
+      architecture: lambda.Architecture.X86_64,
+      memorySize: 1024,
+      ephemeralStorageSize: cdk.Size.gibibytes(1),
+      timeout: cdk.Duration.seconds(120),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
+        // 10 targets = 20 API calls ≈ 55 s per run, measured at ~5.2 GB-s of
+        // fixed per-run overhead plus ~4.93 GB-s per target. With the
+        // 10-minute cadence below that is ~239,000 GB-s/month.
+        //
+        // This deliberately does not spend the whole free tier. The backend
+        // scales with usage while the scraper does not: every monitored journey
+        // costs ~4,380 GB-s/month to refresh hourly, and each journey search
+        // costs ~10 GB-s because it has to drive the browser. Roughly
+        // 100,000 GB-s/month is therefore left unclaimed as user headroom —
+        // about 20 additional monitored journeys — on top of the ~10,000 GB-s
+        // used by the hydrator and compactor and a 10% safety margin.
+        SCRAPER_BATCH_SIZE: '10',
       },
     });
 
@@ -154,7 +187,21 @@ export class ScraperStack extends cdk.Stack {
     // EventBridge rules
     // -------------------------------------------------------------------------
     new events.Rule(this, 'PollerSchedule', {
-      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      // Every 10 minutes rather than every minute. Driving a real browser
+      // raises the memory floor from 256 MB to 1024 MB and per-call latency
+      // from ~0.5 s to ~2.5 s, making each target ~6x more expensive; at the
+      // original 1-minute cadence this function alone would cost roughly
+      // €25–35/month.
+      //
+      // Cadence and batch size are chosen together to maximise scrapes per
+      // free-tier GB-second. Each run pays ~5.2 GB-s of fixed overhead (browser
+      // launch + origin navigation), so fewer, larger runs are cheaper per
+      // target, so the cadence is stretched from 1 minute to 10. Going longer
+      // still would add only a few percent more (the overhead is already
+      // amortized over 10 targets) while pushing toward bursts large enough to
+      // risk rate limiting and hour-stale scheduling, so 10 minutes is the
+      // practical optimum.
+      schedule: events.Schedule.rate(cdk.Duration.minutes(10)),
       targets: [new targets.LambdaFunction(pollerFn)],
     });
 

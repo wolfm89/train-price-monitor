@@ -211,6 +211,7 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
     userId: args.userId,
     limitPrice: args.limitPrice,
     expires: args.expires,
+    unavailable: false,
     journey: { refreshToken: args.refreshToken },
   };
 };
@@ -278,6 +279,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     userId: dbJourney.Item.userId,
     limitPrice: dbJourney.Item.limitPrice,
     expires: dbJourney.Item.expires,
+    unavailable: false,
     journey: { refreshToken: dbJourney.Item.refreshToken },
   };
 
@@ -312,26 +314,24 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
     return journeyMonitor;
   }
 
-  // Check if notification already exists (PRICE_ALERT or JOURNEY_STALE for this journey)
+  // Existing notifications gate only the *creation* of new ones. The price
+  // snapshot further down is refreshed on every run regardless, so the
+  // watchlist keeps showing the current price while an alert is still pending.
   const existingNotifications = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
     .query({ partition: `USER#${args.userId}`, range: { beginsWith: 'NOTIFICATION#' } })
     .send();
 
   const notificationsArray = existingNotifications?.Items ?? [];
-  if (
+  const hasNotificationForJourney = (type: string): boolean =>
     notificationsArray.some((item: { data?: string; type?: string }) => {
-      if (item.type !== NOTIFICATION_TYPES.PRICE_ALERT.name || !item.data) return false;
+      if (item.type !== type || !item.data) return false;
       try {
         return JSON.parse(item.data).journeyId === args.journeyId;
       } catch {
         return false;
       }
-    })
-  ) {
-    Logger.info(`PRICE_ALERT notification already exists for journey`);
-    return journeyMonitor;
-  }
+    });
 
   // Get new price for journey — now with stored pricing options
   let journey: HafasJourney | undefined;
@@ -396,14 +396,7 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   if (!journey) {
     Logger.warn('Journey recovery failed completely, creating notification', { journeyId: args.journeyId });
 
-    const hasExistingStaleNotification = notificationsArray.some((item: { data?: string; type?: string }) => {
-      if (item.type !== NOTIFICATION_TYPES.JOURNEY_STALE.name || !item.data) return false;
-      try {
-        return JSON.parse(item.data).journeyId === args.journeyId;
-      } catch {
-        return false;
-      }
-    });
+    const hasExistingStaleNotification = hasNotificationForJourney(NOTIFICATION_TYPES.JOURNEY_STALE.name);
 
     if (hasExistingStaleNotification) {
       Logger.info('JOURNEY_STALE notification already exists for journey, skipping');
@@ -432,12 +425,51 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
 
     return journeyMonitor;
   }
+  // Persist the snapshot that the read path serves. This is the only place DB
+  // journey data enters DynamoDB, so the watchlist never needs a live lookup.
+  const firstLeg = journey.legs[0];
+  const lastLeg = journey.legs[journey.legs.length - 1];
+  const cachedDeparture = firstLeg.plannedDeparture ?? firstLeg.departure;
+  const cachedArrival = lastLeg.plannedArrival ?? lastLeg.arrival;
+
+  await context.entities.Journey.build(UpdateItemCommand)
+    .item({
+      userId: args.userId,
+      id: args.journeyId,
+      refreshToken: journey.refreshToken ?? dbJourney.Item.refreshToken,
+      cachedPrice: journey.price?.amount,
+      cachedDeparture: cachedDeparture ? new Date(cachedDeparture).toISOString() : undefined,
+      cachedArrival: cachedArrival ? new Date(cachedArrival).toISOString() : undefined,
+      cachedMeans: JSON.stringify(getMeans(journey)),
+      cachedFrom: firstLeg.origin?.name,
+      cachedTo: lastLeg.destination?.name,
+      lastCheckedAt: new Date().toISOString(),
+    })
+    .send();
+  context.cache.invalidate([{ typename: 'JourneyMonitor' }]);
+
+  journeyMonitor.unavailable = false;
+  journeyMonitor.from = firstLeg.origin?.name ?? undefined;
+  journeyMonitor.to = lastLeg.destination?.name ?? undefined;
+  journeyMonitor.journey = {
+    refreshToken: journey.refreshToken ?? dbJourney.Item.refreshToken,
+    departure: cachedDeparture ? new Date(cachedDeparture) : undefined,
+    arrival: cachedArrival ? new Date(cachedArrival) : undefined,
+    means: getMeans(journey),
+    price: journey.price?.amount,
+  };
+
   const newPrice = journey.price?.amount;
 
   if (!newPrice) {
     Logger.info(`No price found for journey`);
   } else if (newPrice >= dbJourney.Item.limitPrice) {
     Logger.info(`New price ${newPrice} for journey is higher than limit price ${dbJourney.Item.limitPrice}`);
+
+    if (hasNotificationForJourney(NOTIFICATION_TYPES.PRICE_ALERT.name)) {
+      Logger.info(`PRICE_ALERT notification already exists for journey, skipping`);
+      return journeyMonitor;
+    }
 
     const notificationId = uuidv4();
     await context.entities.Notification.build(PutItemCommand)
@@ -530,6 +562,7 @@ export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyM
     userId: dbJourney.Item.userId,
     limitPrice: dbJourney.Item.limitPrice,
     expires: dbJourney.Item.expires,
+    unavailable: false,
     journey: { refreshToken: dbJourney.Item.refreshToken },
   };
 

@@ -16,6 +16,7 @@ import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/tr
 export interface Journey {
   id: string;
   limitPrice: number;
+  unavailable: boolean;
   from?: string | null;
   to?: string | null;
   firstClass?: boolean | null;
@@ -236,9 +237,10 @@ function TimeBlock({ label, date, time, disabled = false, align = 'left' }: Time
 
 interface TimesRowProps {
   journey: Journey['journey'];
+  unavailable: boolean;
 }
 
-function TimesRow({ journey }: TimesRowProps) {
+function TimesRow({ journey, unavailable }: TimesRowProps) {
   const rowSx = { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mt: 1.5 };
 
   if (journey === null) {
@@ -247,7 +249,7 @@ function TimesRow({ journey }: TimesRowProps) {
         <TimeBlock label="Departure" date={'\u2014'} time="--:--" disabled />
         <Chip
           icon={<WarningAmberIcon sx={{ fontSize: '14px !important' }} />}
-          label="No longer tracked"
+          label={unavailable ? 'Temporarily unavailable' : 'No longer tracked'}
           size="small"
           color="warning"
           variant="outlined"
@@ -446,7 +448,11 @@ function TicketStub({
 
 // ---------------------------------------------------------------------------
 
-function NoTrackBanner() {
+interface NoTrackBannerProps {
+  unavailable: boolean;
+}
+
+function NoTrackBanner({ unavailable }: NoTrackBannerProps) {
   return (
     <Box
       sx={(theme) => ({
@@ -463,8 +469,9 @@ function NoTrackBanner() {
     >
       <WarningAmberIcon sx={{ fontSize: 16, color: 'warning.main', mt: '1px', flexShrink: 0 }} />
       <Typography variant="body2" sx={{ color: 'warning.dark' }}>
-        This journey can no longer be tracked &mdash; it may have been cancelled or rescheduled. You can safely remove
-        it from your watchlist.
+        {unavailable
+          ? 'Journey data is temporarily unavailable from Deutsche Bahn. Tracking will resume automatically once the service responds.'
+          : 'This journey can no longer be tracked — it may have been cancelled or rescheduled. You can safely remove it from your watchlist.'}
       </Typography>
     </Box>
   );
@@ -482,8 +489,19 @@ export interface JourneyTicketProps {
 }
 
 export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMenu = true }: JourneyTicketProps) {
-  const { id, limitPrice, from, to, journey, firstClass, bike, deutschlandTicketDiscount, ageGroup, loyaltyCard } =
-    monitor;
+  const {
+    id,
+    limitPrice,
+    from,
+    to,
+    journey,
+    unavailable,
+    firstClass,
+    bike,
+    deutschlandTicketDiscount,
+    ageGroup,
+    loyaltyCard,
+  } = monitor;
 
   return (
     <Box sx={{ position: 'relative' }}>
@@ -511,7 +529,7 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMen
           )}
 
           <RouteHeader from={from} to={to} />
-          <TimesRow journey={journey} />
+          <TimesRow journey={journey} unavailable={unavailable} />
         </Box>
 
         <PerforationDivider />
@@ -528,7 +546,7 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMen
             loyaltyCard={loyaltyCard}
           />
         ) : (
-          <NoTrackBanner />
+          <NoTrackBanner unavailable={unavailable} />
         )}
       </Paper>
     </Box>

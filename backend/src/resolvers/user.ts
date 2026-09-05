@@ -1,5 +1,4 @@
 import dotenv from 'dotenv'; // Load environment variables from .env file
-import type { Journey as HafasJourney } from 'hafas-client';
 import { GraphQLContext } from '../context';
 import {
   GetItemCommand,
@@ -7,6 +6,7 @@ import {
   UpdateItemCommand,
   DeleteItemCommand,
   QueryCommand,
+  StoredJourney,
 } from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
@@ -22,12 +22,10 @@ import {
   LoyaltyCardInput,
   AgeGroup,
 } from '../schema/generated/typeDefs.generated';
-import { getMeans } from './journey';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { LoyaltyCardData, validateLoyaltyCard, VALID_AGE_GROUPS } from '../lib/loyaltyCards';
 import { LoyaltyCard, LoyaltyCardType } from '../schema/generated/typeDefs.generated';
-import { loadStoredPricingOptions } from '../lib/pricingOptions';
 
 dotenv.config();
 
@@ -175,60 +173,8 @@ export const userResolvers: UserResolvers = {
     if (!dbJourneys) {
       return [];
     }
-    const journeyResults = await Promise.allSettled(
-      dbJourneys.map(
-        async (dbJourney: {
-          expires: string;
-          limitPrice: number;
-          refreshToken: string;
-          userId: string;
-          id: string;
-          fromId: string;
-          toId: string;
-          departure: string;
-          firstClass?: boolean;
-          bike?: boolean;
-          loyaltyCard?: string;
-          ageGroup?: string;
-          deutschlandTicketDiscount?: boolean;
-        }) => {
-          try {
-            return await getJourneyMonitor(context, dbJourney);
-          } catch (error) {
-            Logger.error(`Failed to refresh journey ${dbJourney.id}: ${error}`);
-            let fromStation, toStation;
-            try {
-              fromStation = await context.dbHafas.getStationById(dbJourney.fromId);
-            } catch {
-              // ignore station lookup failure
-            }
-            try {
-              toStation = await context.dbHafas.getStationById(dbJourney.toId);
-            } catch {
-              // ignore station lookup failure
-            }
-            return {
-              id: dbJourney.id,
-              userId: dbJourney.userId,
-              limitPrice: dbJourney.limitPrice,
-              expires: dbJourney.expires,
-              from: fromStation?.name ?? undefined,
-              to: toStation?.name ?? undefined,
-              firstClass: dbJourney.firstClass ?? undefined,
-              bike: dbJourney.bike ?? undefined,
-              deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,
-              ageGroup: (dbJourney.ageGroup as AgeGroup | undefined) ?? undefined,
-              loyaltyCard: parseLoyaltyCard(dbJourney.loyaltyCard) ?? undefined,
-              journey: undefined,
-            } as JourneyMonitor;
-          }
-        }
-      )
-    );
 
-    const journeys: JourneyMonitor[] = journeyResults
-      .filter((result): result is PromiseFulfilledResult<JourneyMonitor> => result.status === 'fulfilled')
-      .map((result) => result.value);
+    const journeys: JourneyMonitor[] = (dbJourneys as StoredJourney[]).map(getJourneyMonitor);
     journeys.sort(
       (a: JourneyMonitor, b: JourneyMonitor) =>
         (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
@@ -501,95 +447,48 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   }
 };
 
-export async function getJourneyMonitor(
-  context: GraphQLContext,
-  dbJourney: {
-    expires: string;
-    limitPrice: number;
-    refreshToken: string;
-    userId: string;
-    id: string;
-    fromId: string;
-    toId: string;
-    departure: string;
-    firstClass?: boolean;
-    bike?: boolean;
-    loyaltyCard?: string;
-    ageGroup?: string;
-    deutschlandTicketDiscount?: boolean;
-  }
-): Promise<JourneyMonitor> {
-  const storedPricingOptions = loadStoredPricingOptions(dbJourney);
-
-  let hafasJourney: HafasJourney | undefined;
-
-  try {
-    hafasJourney = await context.dbHafas.requeryJourney(dbJourney.refreshToken, storedPricingOptions);
-  } catch (error) {
-    Logger.warn('requeryJourney failed, attempting recovery', { journeyId: dbJourney.id, error });
-  }
-
-  if (!hafasJourney) {
-    // Recovery: re-query by stored station IDs and departure time.
-    // Uses the same matching algorithm as the SQS updateJourneyMonitor path.
-    const departure = new Date(dbJourney.departure);
-
-    try {
-      const result = await context.dbHafas.queryJourneys(dbJourney.fromId, dbJourney.toId, departure, {
-        results: 5,
-        ...storedPricingOptions,
-      });
-
-      const candidates = result.journeys?.filter(
-        (j) =>
-          j.legs[0]?.origin?.id === dbJourney.fromId && j.legs[j.legs.length - 1]?.destination?.id === dbJourney.toId
-      );
-
-      const matchingJourney = candidates?.reduce<(typeof candidates)[number] | undefined>((best, j) => {
-        const jDep = new Date(j.legs[0]?.plannedDeparture ?? j.legs[0]?.departure ?? 0).getTime();
-        const jDiff = Math.abs(jDep - departure.getTime());
-        if (!best) return j;
-        const bestDep = new Date(best.legs[0]?.plannedDeparture ?? best.legs[0]?.departure ?? 0).getTime();
-        const bestDiff = Math.abs(bestDep - departure.getTime());
-        return jDiff < bestDiff ? j : best;
-      }, undefined);
-
-      if (matchingJourney) {
-        await context.entities.Journey.build(UpdateItemCommand)
-          .item({ userId: dbJourney.userId, id: dbJourney.id, refreshToken: matchingJourney.refreshToken! })
-          .send();
-        hafasJourney = matchingJourney;
-        Logger.info(`Successfully recovered journey ${dbJourney.id} with new refresh token`);
-      } else {
-        Logger.warn(`No matching journey found during recovery for journey ${dbJourney.id}`);
-      }
-    } catch (recoveryError) {
-      Logger.error(`Journey recovery failed for ${dbJourney.id}: ${recoveryError}`);
-    }
-  }
-
-  if (!hafasJourney) {
-    throw new Error(`Could not retrieve journey data for ${dbJourney.id}`);
-  }
+/**
+ * Builds the API representation of a stored journey from its cached snapshot.
+ *
+ * This is the read path, so it deliberately performs no network I/O: DB is
+ * only ever contacted by the refresher, which writes the snapshot. A journey
+ * that has never been fetched successfully (no `lastCheckedAt`) is reported as
+ * `unavailable` rather than failing the whole watchlist query.
+ */
+export function getJourneyMonitor(dbJourney: StoredJourney): JourneyMonitor {
+  const hasSnapshot = Boolean(dbJourney.lastCheckedAt && dbJourney.cachedDeparture && dbJourney.cachedArrival);
 
   return {
     id: dbJourney.id,
     userId: dbJourney.userId,
     limitPrice: dbJourney.limitPrice,
     expires: dbJourney.expires,
-    from: hafasJourney.legs[0].origin?.name ?? undefined,
-    to: hafasJourney.legs[hafasJourney.legs.length - 1].destination?.name ?? undefined,
+    from: dbJourney.cachedFrom ?? undefined,
+    to: dbJourney.cachedTo ?? undefined,
     firstClass: dbJourney.firstClass ?? undefined,
     bike: dbJourney.bike ?? undefined,
     deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,
     ageGroup: (dbJourney.ageGroup as AgeGroup | undefined) ?? undefined,
     loyaltyCard: parseLoyaltyCard(dbJourney.loyaltyCard) ?? undefined,
-    journey: {
-      refreshToken: hafasJourney.refreshToken!,
-      departure: new Date(hafasJourney.legs[0].plannedDeparture!),
-      arrival: new Date(hafasJourney.legs[hafasJourney.legs.length - 1].plannedArrival!),
-      means: getMeans(hafasJourney),
-      price: hafasJourney.price?.amount,
-    },
+    unavailable: !hasSnapshot,
+    journey: hasSnapshot
+      ? {
+          refreshToken: dbJourney.refreshToken,
+          departure: new Date(dbJourney.cachedDeparture!),
+          arrival: new Date(dbJourney.cachedArrival!),
+          means: parseCachedMeans(dbJourney.cachedMeans),
+          price: dbJourney.cachedPrice ?? undefined,
+        }
+      : undefined,
   };
+}
+
+function parseCachedMeans(cachedMeans?: string): string[] {
+  if (!cachedMeans) return [];
+  try {
+    const parsed: unknown = JSON.parse(cachedMeans);
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+  } catch {
+    return [];
+  }
 }
