@@ -81,7 +81,7 @@ export class ScraperStack extends cdk.Stack {
     });
 
     // -------------------------------------------------------------------------
-    // Poller Lambda — runs every 6 minutes, scrapes due targets
+    // Poller Lambda — runs every 15 minutes, scrapes due targets
     // Docker image: ../scraper/Dockerfile  (copies pre-built ESM bundle)
     //
     // Must be a DockerImageFunction (not a Node.js runtime Lambda) because the
@@ -127,11 +127,12 @@ export class ScraperStack extends cdk.Stack {
         //
         // This deliberately does not spend the whole free tier. The backend
         // scales with usage while the scraper does not: every monitored journey
-        // costs ~4,380 GB-s/month to refresh hourly, and each journey search
-        // costs ~10 GB-s because it has to drive the browser. Roughly
-        // 100,000 GB-s/month is therefore left unclaimed as user headroom —
-        // about 20 additional monitored journeys — on top of the ~10,000 GB-s
-        // used by the hydrator and compactor and a 10% safety margin.
+        // costs ~1,368 GB-s/month to refresh hourly (all journeys share one
+        // browser start per run), and each journey search costs ~10 GB-s
+        // because it has to drive the browser. Roughly 100,000 GB-s/month is
+        // therefore left unclaimed as user headroom — about 80 additional
+        // monitored journeys — on top of the ~10,000 GB-s used by the hydrator
+        // and compactor and a 10% safety margin.
         SCRAPER_BATCH_SIZE: '18',
       },
     });
@@ -198,7 +199,7 @@ export class ScraperStack extends cdk.Stack {
     // EventBridge rules
     // -------------------------------------------------------------------------
     new events.Rule(this, 'PollerSchedule', {
-      // Every 10 minutes rather than every minute. Driving a real browser
+      // Every 15 minutes rather than every minute. Driving a real browser
       // raises the memory floor from 256 MB to 1024 MB and per-call latency
       // from ~0.5 s to ~2.5 s, making each target ~6x more expensive; at the
       // original 1-minute cadence this function alone would cost roughly
@@ -206,15 +207,12 @@ export class ScraperStack extends cdk.Stack {
       //
       // Cadence and batch size are chosen together to maximise scrapes per
       // free-tier GB-second. Each run pays ~5.2 GB-s of fixed overhead (browser
-      // launch + origin navigation), so fewer, larger runs are cheaper per
-      // target, so the cadence is stretched from 1 minute to 15. Cadence and
-      // batch size are chosen together: each run pays ~5.2 GB-s of fixed
-      // overhead (browser launch + origin navigation), so fewer, larger runs
-      // cost less per target. 15 min x 18 yields ~1,728 scrapes/day, which is
-      // just above the ~1,654/day the TTD intervals demand for a 60-day
-      // horizon, so the schedule is actually met instead of permanently
-      // overdue. Going longer still would add only a few percent while pushing
-      // toward bursts large enough to risk rate limiting.
+      // launch + origin navigation), so fewer, larger runs cost less per
+      // target. 15 min x 18 yields ~1,728 scrapes/day, just above the
+      // ~1,654/day the TTD intervals demand for a 60-day horizon, so the
+      // schedule is actually met instead of permanently overdue. Going longer
+      // still would add only a few percent while pushing toward bursts large
+      // enough to risk rate limiting.
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(pollerFn)],
     });

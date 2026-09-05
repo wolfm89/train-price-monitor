@@ -271,17 +271,22 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
 
   Logger.info(`Found ${journeys.length} journeys to update`);
 
+  let attempted = 0;
   let refreshed = 0;
 
   for (const journey of journeys) {
     // Leave room to finish the journey in flight before the Lambda timeout.
     // Anything skipped is simply picked up by the next scheduled run.
     if (Date.now() - startedAt > REFRESH_ABORT_THRESHOLD_MS) {
+      // Counts attempts, not successes: a journey that threw was still
+      // processed and is not waiting for the next run.
       Logger.warn('Approaching timeout, deferring remaining journeys to the next run', {
-        remaining: journeys.length - refreshed,
+        remaining: journeys.length - attempted,
       });
       break;
     }
+
+    attempted++;
 
     try {
       // Expired journeys are refreshed too, not skipped: refreshJourneyMonitor
@@ -298,7 +303,10 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
     }
   }
 
-  return journeys.length;
+  // The number actually refreshed, not the number found: a run can stop early
+  // on the timeout guard above, and individual journeys can fail without
+  // aborting the rest.
+  return refreshed;
 };
 
 /**

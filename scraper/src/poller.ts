@@ -7,6 +7,7 @@ import type { Journey, Leg } from 'hafas-client';
 import { type ScheduleItem, type ParquetRow, type TtdTier } from './types.js';
 import { rowsToParquet } from './parquet.js';
 import { computeTtdTier, computeNextScrapeAt } from './ttd.js';
+import { positiveIntFromEnv } from './env.js';
 import { fetchDayJourneys } from './client.js';
 import { ROUTE_CATALOG } from './routes.js';
 
@@ -26,10 +27,10 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * Tunable via env so the cadence/batch trade-off can be adjusted against the
  * Lambda free tier without a code change. Routing requests through a real
  * browser (see ../../shared/browser-fetch.ts) costs ~2.5 s per API call
- * instead of ~0.5 s, and needs 768 MB instead of 256 MB, so the sustainable
+ * instead of ~0.5 s, and needs 1024 MB instead of 256 MB, so the sustainable
  * batch is much smaller than it was for the raw-HTTP transport.
  */
-const BATCH_SIZE = Number(process.env.SCRAPER_BATCH_SIZE ?? 10);
+const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 10, logger);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the
  * function timeout (180 s) with enough room to finish the current target. */
 const ABORT_THRESHOLD_MS = 150_000;

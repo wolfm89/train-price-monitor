@@ -190,8 +190,12 @@ flowchart LR
   target architecture, so an arm64 image would need QEMU emulation on an amd64 build host.
 - Lambda sizing is cost-driven, not latency-driven: per-call latency is network-bound
   (~2.5 s at every size from 512–1536 MB), so extra memory buys no speedup and costs
-  strictly more. 768 MB is the floor that keeps safe headroom (~615 MB peak); 512 MB peaked
-  at ~508 MB of 512.
+  strictly more. Size each function against its own peak, not the browser's: a bare browser
+  peaks at ~615 MB (and 512 MB peaked at ~508 MB of 512, so it is not safe), but the poller
+  also holds the route catalog, the AWS SDK and a batch of Parquet rows — at 768 MB it
+  peaked at 756 MB and Chromium was killed mid-run, hence 1024 MB. Chromium also needs
+  `ephemeralStorageSize` raised above the default 512 MB, because `--disable-dev-shm-usage`
+  puts its shared-memory files under `/tmp`.
 
 **Backend esbuild bundling** (`--format=cjs`):
 
