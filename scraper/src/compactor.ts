@@ -109,7 +109,7 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
       expectedRowCount += Number(metadata.num_rows);
 
       // Parse rows
-      const parsedData = await parquetReadObjects({ file: fileBuffer as any });
+      const parsedData = await parquetReadObjects({ file: fileBuffer });
 
       for (const r of parsedData) {
         allRows.push({

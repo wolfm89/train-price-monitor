@@ -10,7 +10,6 @@ import {
   aws_events_targets as targets,
   aws_sqs as sqs,
   aws_lambda_event_sources as sources,
-  aws_ses as ses,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
