@@ -13,6 +13,37 @@ dotenv.config();
 
 const cache = createInMemoryCache();
 
+/**
+ * Starts establishing the upstream DB session as soon as an execution environment
+ * exists, rather than waiting for the first request that needs DB.
+ *
+ * A vendor browser session lives in the environment and costs ~10-15 s to build
+ * (plus the same again when the vendor hands out a blocked one), which is more
+ * than the API Gateway 29 s allowance can absorb on top of a search. Warming here
+ * means the environment that served the page load is already connecting while the
+ * user picks stations, so their search usually finds a session ready.
+ *
+ * Fire-and-forget on purpose: it must never delay the response that triggered it,
+ * and a failure is reported by whichever request actually needs the session.
+ * Skipped when the transport is not remote (local development, where the DB call
+ * would be rejected anyway).
+ */
+function prewarmDbSession(): void {
+  if (!process.env.BROWSER_WS_ENDPOINT && !process.env.BROWSER_WS_ENDPOINT_PARAM) return;
+
+  void (async () => {
+    try {
+      const prewarmContext = (await createContext(cache, {})) as GraphQLContext;
+      await prewarmContext.dbHafas.warmUp();
+      logger.info('Prewarmed DB session during environment init');
+    } catch (error) {
+      logger.warn('Prewarm failed', { error: error instanceof Error ? error.message : String(error) });
+    }
+  })();
+}
+
+prewarmDbSession();
+
 const typeDefs = readFileSync('src/schema/schema.graphql', 'utf8');
 const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
   typeDefs,

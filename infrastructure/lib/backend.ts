@@ -96,7 +96,14 @@ export class Backend extends Construct {
       // non-API invocations; a slow API request is still cut off by the gateway.
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
-      environment: commonEnvironment,
+      environment: {
+        ...commonEnvironment,
+        // User-facing searches must fail fast rather than hit API Gateway's 29 s
+        // cap: a blocked vendor session costs ~15 s to replace, and the shim only
+        // starts a retry it can finish inside this budget. Rendered as a clean
+        // "try again" error at ~15 s instead of a 504 at 29 s.
+        BROWSER_RETRY_BUDGET_MS: '18000',
+      },
     });
 
     const refresherLogGroup = new logs.LogGroup(this, 'RefresherLambdaLogs', {

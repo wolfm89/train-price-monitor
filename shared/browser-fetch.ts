@@ -128,6 +128,21 @@ function retryBudgetMs(): number {
   return envNumber('BROWSER_RETRY_BUDGET_MS', 20_000);
 }
 
+/**
+ * What one retry costs: a fresh vendor session (~10–15 s). The budget check below
+ * is predictive so a retry is never started that cannot finish inside the
+ * caller's budget — overrunning it used to turn a clean error into an API Gateway
+ * 504 after 29 s, which is worse for the user than a fast, retryable error.
+ */
+function retryCostMs(): number {
+  return envNumber('BROWSER_RETRY_COST_MS', 15_000);
+}
+
+/** True when another attempt can still complete inside the caller's budget. */
+function canAffordRetry(startedAt: number): boolean {
+  return Date.now() - startedAt + retryCostMs() < retryBudgetMs();
+}
+
 // Only retry when the browser is remote: relaunching the local Chromium three
 // times would be slow and cannot help (the local environment is blocked).
 let remoteSession = false;
@@ -439,7 +454,7 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
       );
 
       const blocked = response.status === 403 && /OPS_BLOCKED/.test(response.bodyText);
-      if (remoteSession && blocked && attempt < fetchAttempts() && Date.now() - startedAt < retryBudgetMs()) {
+      if (remoteSession && blocked && attempt < fetchAttempts() && canAffordRetry(startedAt)) {
         // Replace the blocked session once (shared with any concurrent caller),
         // then retry on the new one. A fresh session means a fresh egress IP; the
         // zero-byte warm-up keeps that cheap in traffic, and the budget above
@@ -452,7 +467,7 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
     } catch (error) {
       // A concurrent renewal closes this browser, so a failure here may simply
       // mean the session changed underneath us: retry rather than surfacing it.
-      if (remoteSession && sessionGeneration !== generation && attempt < fetchAttempts()) {
+      if (remoteSession && sessionGeneration !== generation && attempt < fetchAttempts() && canAffordRetry(startedAt)) {
         continue;
       }
 
