@@ -203,6 +203,13 @@ flowchart LR
   all-or-nothing per vendor session (a blocked session fails every request, a good one succeeds
   for all), so a retry must open a _new_ session, which costs ~8–10 s. The budget bounds how
   long a caller waits; the API Lambda keeps it low to stay inside API Gateway's 29 s cap.
+- **Keep-warm rule** (`KeepWarmRule`, every 3 minutes): a vendor session lives inside the Lambda
+  execution environment, so both die with it. Measured: 168/168 hourly refresher invocations were
+  cold, and 12 of 83 API invocations over 14 days — i.e. the first search of essentially every
+  visit. The scheduled invocation runs a real (cheap) journeys query and keeps one environment and
+  its session alive, so user searches hit a warm session (~2 s instead of ~20-35 s). This is why
+  the GraphQL Lambda's timeout is 60 s: the keep-warm path may have to build a session plus a
+  retry, while API Gateway still cuts user requests at 29 s.
 - `playwright-core` must stay **external** in both bundles (it is the CDP client). The images no
   longer ship a browser at all — that removed the Chromium layer, `PLAYWRIGHT_BROWSERS_PATH`,
   the enlarged `/tmp`, and the x86_64-only constraint.

@@ -89,9 +89,12 @@ export class Backend extends Construct {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
       logGroup: apiLogGroup,
-      // API Gateway REST APIs cut the integration off at 29 s, so a longer
-      // Lambda timeout would only burn duration after the client is gone.
-      timeout: cdk.Duration.seconds(29),
+      // API Gateway REST cuts the integration off at 29 s, but the function is
+      // also the target of the keep-warm rule, and that invocation has to be able
+      // to establish a fresh vendor browser session plus a retry — measured at
+      // ~35 s from cold. The extra headroom therefore only ever applies to
+      // non-API invocations; a slow API request is still cut off by the gateway.
+      timeout: cdk.Duration.seconds(60),
       memorySize: 512,
       environment: commonEnvironment,
     });
@@ -140,6 +143,25 @@ export class Backend extends Construct {
     // Create EventBridge rule
     const rule = new events.Rule(this, 'UpdateJourneysRule', {
       schedule: events.Schedule.expression('rate(1 hour)'),
+    });
+
+    // Keeps one execution environment — and therefore one vendor browser
+    // session — alive off the request path.
+    //
+    // The session lives inside the environment and costs ~8-10 s to establish,
+    // plus ~10 s more when the vendor hands out a blocked one (roughly a third of
+    // sessions). That is exactly the cost the first search after any quiet period
+    // would otherwise pay: measured over 7 days, 168/168 hourly refresher
+    // invocations were cold, and 12 of 83 API invocations over 14 days were cold
+    // — i.e. the start of essentially every visit. Three minutes is comfortably
+    // inside Lambda's environment-reuse window.
+    new events.Rule(this, 'KeepWarmRule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(3)),
+      targets: [
+        new targets.LambdaFunction(lambdaFunction, {
+          event: events.RuleTargetInput.fromObject({ source: 'keep-warm' }),
+        }),
+      ],
     });
 
     // Add SQS queue as a target for the EventBridge rule

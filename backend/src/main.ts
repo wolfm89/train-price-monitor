@@ -56,11 +56,16 @@ const yoga = createYoga({
   ],
 });
 
-function isSQSEvent(event: APIGatewayProxyEventV2 | SQSEvent): event is SQSEvent {
-  return 'Records' in event && (event as SQSEvent).Records?.[0]?.eventSource === 'aws:sqs';
+function isSQSEvent(event: unknown): event is SQSEvent {
+  return (
+    typeof event === 'object' &&
+    event !== null &&
+    'Records' in event &&
+    (event as SQSEvent).Records?.[0]?.eventSource === 'aws:sqs'
+  );
 }
 
-function isAPIGatewayEvent(event: APIGatewayProxyEventV2 | SQSEvent): boolean {
+function isAPIGatewayEvent(event: unknown): event is APIGatewayProxyEventV2 {
   const e = event as APIGatewayProxyEventV2;
   // Check for v2 format (requestContext.http)
   if (e.requestContext?.http) return true;
@@ -72,7 +77,7 @@ function isAPIGatewayEvent(event: APIGatewayProxyEventV2 | SQSEvent): boolean {
 }
 
 function extractHttpContext(
-  event: APIGatewayProxyEventV2 | SQSEvent
+  event: APIGatewayProxyEventV2
 ): { method: string; path: string; queryString: string } | null {
   const e = event as APIGatewayProxyEventV2;
   // Try v2 format first
@@ -112,16 +117,46 @@ interface LambdaResponse {
   body: string;
 }
 
-export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context: Context): Promise<LambdaResponse> => {
+/**
+ * EventBridge keep-warm payload (see the KeepWarmRule in infrastructure/lib/backend.ts).
+ *
+ * A Lambda execution environment holds the vendor browser session, and both die
+ * with the environment. Since this app is idle most of the time, that made the
+ * *first* search after any quiet period pay ~10-20 s of session setup. A
+ * scheduled invocation every few minutes keeps one environment — and therefore
+ * one session — alive, off the request path.
+ */
+interface KeepWarmEvent {
+  source: 'keep-warm';
+}
+
+function isKeepWarmEvent(event: unknown): event is KeepWarmEvent {
+  return typeof event === 'object' && event !== null && (event as KeepWarmEvent).source === 'keep-warm';
+}
+
+export const handler = async (
+  event: APIGatewayProxyEventV2 | SQSEvent | KeepWarmEvent,
+  context: Context
+): Promise<LambdaResponse> => {
   if (process.env.AWS_EXECUTION_ENV) {
     logger.addContext(context);
   }
 
   logger.info('Lambda invoked', {
     eventSource: isSQSEvent(event) ? event.Records?.[0]?.eventSource : undefined,
-    httpMethod: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.method : undefined,
-    path: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.path : undefined,
+    keepWarm: isKeepWarmEvent(event),
+    httpMethod: isAPIGatewayEvent(event) ? event.requestContext?.http?.method : undefined,
+    path: isAPIGatewayEvent(event) ? event.requestContext?.http?.path : undefined,
   });
+
+  if (isKeepWarmEvent(event)) {
+    // Deliberately not swallowed: a failure here means the session is unusable
+    // after the shim's own retries, which is worth surfacing as an error metric
+    // rather than hiding. The next invocation repairs it either way.
+    const warmContext = (await createContext(cache, {})) as GraphQLContext;
+    await warmContext.dbHafas.warmUp();
+    return { statusCode: 200, body: '' };
+  }
 
   if (isSQSEvent(event)) {
     const body = event.Records[0]?.body || '{}';
