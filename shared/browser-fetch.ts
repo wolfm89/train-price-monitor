@@ -58,6 +58,17 @@ interface Session {
 const sessions: Session[] = [];
 
 /**
+ * Set by the journey worker's backoff: keeps the keeper from creating sessions
+ * during a vendor episode while still letting it ping the ones it has.
+ */
+let sessionCreationSuspended = false;
+
+/** Suspends (or allows) automatic session creation. */
+export function suspendSessionCreation(suspended: boolean): void {
+  sessionCreationSuspended = suspended;
+}
+
+/**
  * How many vendor sessions to keep ready. Two is enough to survive a blocked
  * session without paying for a new one, and few enough that a keep-warm ping
  * every two minutes can hold both inside the vendor's five-minute idle window.
@@ -419,7 +430,12 @@ function closeSession(session: Session): void {
  */
 function pickSession(): Session {
   const usable = usableSessions();
-  if (usable.length === 0) return createSession();
+  if (usable.length === 0) {
+    if (sessionCreationSuspended) {
+      throw new Error('No vendor session available (session creation suspended)');
+    }
+    return createSession();
+  }
 
   return usable.reduce((oldest, candidate) => (candidate.lastUsedAt < oldest.lastUsedAt ? candidate : oldest));
 }
@@ -441,7 +457,7 @@ export async function warmSessionPool(): Promise<{ ready: number; created: boole
 
   let created = false;
 
-  if (usableSessions().length < sessionPoolSize()) {
+  if (!sessionCreationSuspended && usableSessions().length < sessionPoolSize()) {
     // Bounded on purpose: one session per call, so a keep-warm invocation cannot
     // hold the worker's single slot for minutes while it digs out of a bad stretch.
     await createSession().browserPromise;

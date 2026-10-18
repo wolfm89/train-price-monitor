@@ -238,10 +238,11 @@ flowchart LR
   fails over to its sibling in ~1 s instead of paying 11-22 s for a new one.
   Sessions are rotated once they pass `BROWSER_SESSION_MAX_AGE_MS` (default 50
   minutes), before the vendor's 60-minute cap.
-  **Backoff:** a failed keep-alive (or a failed search) pauses the keeper for 4, 8,
-  then 16 minutes. Measured on 2026-10-18, retrying every ping during a vendor
-  episode produced 29 session attempts in 22 minutes with 27 failures and simply
-  kept the episode going; any successful DB work resets the pause.
+  **Backoff:** a failed keep-alive (or a failed search) pauses session _creation_ for
+  2, 4, then 8 minutes; pings continue, so sessions that do work stay inside the
+  idle window. Measured on 2026-10-18, retrying every ping during a vendor episode
+  produced 29 session attempts in 22 minutes with 27 failures and simply kept the
+  episode going; any successful DB work resets the pause.
 - `playwright-core` must stay **external** in both bundles (it is the CDP client). The images no
   longer ship a browser at all — that removed the Chromium layer, `PLAYWRIGHT_BROWSERS_PATH`,
   the enlarged `/tmp`, and the x86_64-only constraint.

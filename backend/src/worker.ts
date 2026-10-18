@@ -1,5 +1,5 @@
 import { createInMemoryCache } from '@graphql-yoga/plugin-response-cache';
-import { warmSessionPool } from '../../shared/browser-fetch';
+import { suspendSessionCreation, warmSessionPool } from '../../shared/browser-fetch';
 import { createContext } from './context';
 import type { GraphQLContext } from './context';
 import Logger from './lib/logger';
@@ -32,8 +32,8 @@ const KEEPALIVE_RETRY_BUDGET_MS = process.env.BROWSER_KEEPALIVE_BUDGET_MS ?? '45
  * a session only when one is actually needed. Any successful DB work — including a
  * user's search — means the vendor is healthy again and resets this.
  */
-const BACKOFF_BASE_MS = 4 * 60_000;
-const BACKOFF_MAX_MS = 16 * 60_000;
+const BACKOFF_BASE_MS = 2 * 60_000;
+const BACKOFF_MAX_MS = 8 * 60_000;
 
 let consecutiveFailures = 0;
 let pausedUntil = 0;
@@ -73,30 +73,38 @@ export const handler = async (job: JourneyWorkerJob): Promise<unknown> => {
   Logger.info('Journey worker invoked', { job: job.job });
 
   if (job.job === 'keepAlive') {
-    if (Date.now() < pausedUntil) {
-      Logger.info('Skipping keep-alive during backoff', { remainingMs: pausedUntil - Date.now() });
-      return { ok: true, backedOff: true };
-    }
+    // Backoff pauses *creation*, not the ping: the sessions that do work must stay
+    // inside the vendor's five-minute idle window, otherwise a recovered vendor
+    // still finds an empty pool. Creating during a bad stretch is what amplifies it
+    // — measured: 29 attempts in 22 minutes, 27 failures, and it only ended when the
+    // churn stopped.
+    const backedOff = Date.now() < pausedUntil;
+    suspendSessionCreation(backedOff);
 
     try {
-      // One session setup at most (11-22 s measured) before any validation, so a
-      // keep-warm invocation cannot hold the worker's single slot for minutes while
-      // it digs out of a bad stretch.
-      const { created } = await warmSessionPool();
+      // At most one session setup (11-22 s measured) — never a second inside the
+      // same ping, so the worker's single slot is never held for minutes.
+      const { ready, created } = await warmSessionPool();
 
-      // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
-      // through the session (measured — a CDP-only ping three minutes after the last
-      // request did not keep it open). It also *validates* whichever session is least
-      // recently used — which is the one just created, since a fresh session sorts
-      // first. Skipping this was a mistake: an unvalidated spare is then picked by
-      // the next search, and a blocked one costs that search another 11-22 s.
-      await context.dbHafas.warmUp();
+      if (ready > 0) {
+        // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
+        // through the session (measured — a CDP-only ping three minutes after the
+        // last request did not keep it open). It also *validates* whichever session
+        // is least recently used — the one just created, since a fresh session sorts
+        // first. Skipping this leaves an unvalidated spare that the next search then
+        // has to test, which measured 12 s searches.
+        await context.dbHafas.warmUp();
+      }
 
       noteSuccess();
-      return { ok: true, created };
+      return { ok: true, created, backedOff };
     } catch (error) {
       noteFailure();
       throw error;
+    } finally {
+      // The flag is module state in a single-slot environment; a search must never
+      // inherit it.
+      suspendSessionCreation(false);
     }
   }
 
