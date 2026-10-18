@@ -97,6 +97,38 @@ const RETRY_BUDGET_MS = Number(process.env.BROWSER_RETRY_BUDGET_MS ?? 20_000);
 // times would be slow and cannot help (the local environment is blocked).
 let remoteSession = false;
 
+// db-vendo-client issues requests concurrently (the poller asks for 1st and 2nd
+// class at the same time) while this module owns one page and one vendor session.
+//
+// A retry has to replace that session, which means closing the browser — and that
+// aborts whatever else is still in flight. Doing it per request made a blocked
+// session catastrophic (every queued request paid its own ~10 s session setup,
+// and concurrent ones died with "Target page, context or browser has been
+// closed"). Instead, a blocked session is replaced ONCE: the first caller that
+// sees it performs the renewal and bumps `sessionGeneration`; everyone else
+// notices the generation changed and retries on the new session.
+let sessionGeneration = 0;
+let sessionRenewal: Promise<void> | null = null;
+
+/**
+ * Replaces the vendor session, at most once per generation.
+ *
+ * Concurrent callers all await the same renewal, so a blocked session costs one
+ * setup rather than one per in-flight request.
+ */
+async function renewSession(failedGeneration: number): Promise<void> {
+  // Somebody else already replaced it.
+  if (sessionGeneration !== failedGeneration) return;
+
+  if (!sessionRenewal) {
+    sessionRenewal = resetBrowser().finally(() => {
+      sessionRenewal = null;
+    });
+  }
+
+  await sessionRenewal;
+}
+
 interface FetchInit {
   method?: string;
   headers?: Record<string, string>;
@@ -326,16 +358,28 @@ async function resetBrowser(): Promise<void> {
   navigationPromise = null;
   currentOrigin = null;
 
+  // Bumping the generation invalidates in-flight requests: their page/browser is
+  // about to close, and without this they would report a spurious
+  // "Target page, context or browser has been closed" instead of retrying.
+  sessionGeneration += 1;
+
   if (previous) {
     await previous.then((browser) => browser.close()).catch(() => undefined);
   }
 }
 
-export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
+export function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
+  return fetchSerialized(url, init);
+}
+
+async function fetchSerialized(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
   const target = new URL(url);
   const startedAt = Date.now();
 
   for (let attempt = 1; ; attempt++) {
+    // Captured so a concurrent renewal can be detected: if the session changed
+    // while this request was running, the failure is ours to retry, not to report.
+    const generation = sessionGeneration;
     try {
       const page = await getPage(target.origin);
       const response = await page.evaluate(
@@ -358,20 +402,25 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
 
       const blocked = response.status === 403 && /OPS_BLOCKED/.test(response.bodyText);
       if (remoteSession && blocked && attempt < FETCH_ATTEMPTS && Date.now() - startedAt < RETRY_BUDGET_MS) {
-        // A new CDP session means a new egress IP, and the zero-byte warm-up
-        // makes that cheap in traffic — but not in time, so the budget above
+        // Replace the blocked session once (shared with any concurrent caller),
+        // then retry on the new one. A fresh session means a fresh egress IP; the
+        // zero-byte warm-up keeps that cheap in traffic, and the budget above
         // caps how long a caller can be kept waiting.
-        await resetBrowser();
+        await renewSession(generation);
         continue;
       }
 
       return new FetchCompatibleResponse(response.status, response.statusText, response.bodyText, response.headers);
     } catch (error) {
-      // Only tear down when Chromium is actually gone. Resetting on *any* error
-      // would close the browser while a concurrent request is still using it,
-      // turning one failure into a cascade that fails every later call in this
-      // execution environment. A crashed browser, by contrast, would poison
-      // every later call unless it is replaced.
+      // A concurrent renewal closes this browser, so a failure here may simply
+      // mean the session changed underneath us: retry rather than surfacing it.
+      if (remoteSession && sessionGeneration !== generation && attempt < FETCH_ATTEMPTS) {
+        continue;
+      }
+
+      // Otherwise only tear down when the browser is actually gone. Resetting on
+      // *any* error would close the browser while a concurrent request is still
+      // using it, turning one failure into a cascade.
       const browser = await browserPromise?.catch(() => null);
       if (!browser || !browser.isConnected()) {
         await resetBrowser();
