@@ -255,6 +255,12 @@ export class Backend extends Construct {
       value: api.url,
     });
 
+    // Read by the deploy job to warm the worker after an update; avoids granting
+    // the CI role lambda:ListFunctions just to discover the generated name.
+    new cdk.CfnOutput(this, 'JourneyWorkerFunctionName', {
+      value: journeyWorkerFunction.functionName,
+    });
+
     tables.forEach((table: dynamodb.Table) => {
       let tableName = table.tableName.toLowerCase();
       tableName = tableName.charAt(0).toUpperCase() + tableName.slice(1);
