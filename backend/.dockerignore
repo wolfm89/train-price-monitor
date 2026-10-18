@@ -1,6 +1,7 @@
-# The image only needs the pre-built bundle (dist/main.js) and the SDL copied by
-# the Dockerfile. Excluding the rest keeps the build context — and therefore the
-# CDK asset tarball that is uploaded to S3 on deploy — free of local files.
+# The image only needs the pre-built bundles (dist/main.js, dist/worker.js) and
+# the SDL copied by the Dockerfile. Excluding the rest keeps the build context —
+# and therefore the CDK asset tarball that is uploaded to S3 on deploy — free of
+# local files.
 node_modules
 
 # Never ship local environment files: backend/.env is written by

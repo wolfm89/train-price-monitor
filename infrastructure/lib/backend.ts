@@ -77,32 +77,54 @@ export class Backend extends Construct {
       BROWSER_WS_ENDPOINT_PARAM: scrapingBrowserParamName(this),
     };
 
-    // Both functions run the same image. DB's bot protection rejects requests
-    // from non-consumer hosts (a browser running in a Lambda container is
-    // refused no matter how genuine it is), so both reach DB through a managed
-    // unblocking browser. Only sizing and triggers differ.
+    // All three functions run the same image. DB's bot protection rejects
+    // requests from non-consumer hosts (a browser running in a Lambda container
+    // is refused no matter how genuine it is), so all of them reach DB through a
+    // managed unblocking browser. Only sizing and triggers differ.
     //
-    // Memory is now sized for the fetch/parse workload rather than for Chromium
-    // (which used to need 1536 MB and an enlarged /tmp). The browser lives at the
-    // vendor, so the peak here is the bundle plus the station index.
+    // Journey searches run in the worker, not the API function: a vendor browser
+    // session costs 11-22 s to provision and expires after five minutes without
+    // traffic, so a session in an arbitrary execution environment is worthless —
+    // the next request lands somewhere else. Reserved concurrency 1 makes the
+    // environment — and therefore the session — deterministic without paying for
+    // provisioned concurrency, and the keep-warm rule below keeps it validated.
+    // It has no API Gateway route; only the API function reaches it.
+    const journeyWorkerLogGroup = new logs.LogGroup(this, 'JourneyWorkerLogs', {
+      retention: logs.RetentionDays.TWO_WEEKS,
+    });
+
+    const journeyWorkerFunction = new lambda.DockerImageFunction(this, 'JourneyWorkerLambda', {
+      code: lambda.DockerImageCode.fromImageAsset('../backend', { cmd: ['worker.handler'] }),
+      architecture: lambda.Architecture.X86_64,
+      logGroup: journeyWorkerLogGroup,
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
+      reservedConcurrentExecutions: 1,
+      environment: {
+        ...commonEnvironment,
+        // No API Gateway in front of this function, so the budget can cover a
+        // fresh session (11-22 s) plus one replacement when the vendor hands out
+        // a blocked one. The API function waits at most 24 s for the result, but
+        // a retry that outlives that wait still leaves a good session behind for
+        // the next request.
+        BROWSER_RETRY_BUDGET_MS: '30000',
+      },
+    });
+
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
       logGroup: apiLogGroup,
-      // API Gateway REST cuts the integration off at 29 s, but the function is
-      // also the target of the keep-warm rule, and that invocation has to be able
-      // to establish a fresh vendor browser session plus a retry — measured at
-      // ~35 s from cold. The extra headroom therefore only ever applies to
-      // non-API invocations; a slow API request is still cut off by the gateway.
+      // API Gateway REST cuts the integration off at 29 s. The function itself
+      // never does DB work (it delegates to the journey worker), so this is
+      // headroom for GraphQL processing only.
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
       environment: {
         ...commonEnvironment,
-        // User-facing searches must fail fast rather than hit API Gateway's 29 s
-        // cap: a blocked vendor session costs ~15 s to replace, and the shim only
-        // starts a retry it can finish inside this budget. Rendered as a clean
-        // "try again" error at ~15 s instead of a 504 at 29 s.
-        BROWSER_RETRY_BUDGET_MS: '18000',
+        // Present only here: the refresher runs the same resolver code without it
+        // and keeps calling DB directly (see backend/src/lib/journeyWorker.ts).
+        JOURNEY_WORKER_FUNCTION: journeyWorkerFunction.functionName,
       },
     });
 
@@ -136,8 +158,15 @@ export class Backend extends Construct {
       table.grantReadWriteData(refresherFunction);
     });
     // Journey search and the hourly refresh both reach DB through the vendor, so
-    // both need the endpoint parameter.
-    grantScrapingBrowserEndpointRead(this, 'ScrapingBrowserEndpoint', [lambdaFunction, refresherFunction]);
+    // all three functions need the endpoint parameter.
+    grantScrapingBrowserEndpointRead(this, 'ScrapingBrowserEndpoint', [
+      lambdaFunction,
+      refresherFunction,
+      journeyWorkerFunction,
+    ]);
+
+    // The API delegates every DB call to the worker.
+    journeyWorkerFunction.grantInvoke(lambdaFunction);
 
     const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,
@@ -152,21 +181,16 @@ export class Backend extends Construct {
       schedule: events.Schedule.expression('rate(1 hour)'),
     });
 
-    // Keeps one execution environment — and therefore one vendor browser
-    // session — alive off the request path.
-    //
-    // The session lives inside the environment and costs ~8-10 s to establish,
-    // plus ~10 s more when the vendor hands out a blocked one (roughly a third of
-    // sessions). That is exactly the cost the first search after any quiet period
-    // would otherwise pay: measured over 7 days, 168/168 hourly refresher
-    // invocations were cold, and 12 of 83 API invocations over 14 days were cold
-    // — i.e. the start of essentially every visit. Three minutes is comfortably
-    // inside Lambda's environment-reuse window.
+    // Keeps the worker's environment — and therefore its vendor browser session —
+    // alive, and rotates the session before the vendor's 60-minute cap. The vendor
+    // drops a session after five minutes without traffic, so three minutes is
+    // comfortably inside that window, and a real DB query (rather than a CDP ping)
+    // is what resets the timer.
     new events.Rule(this, 'KeepWarmRule', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(3)),
       targets: [
-        new targets.LambdaFunction(lambdaFunction, {
-          event: events.RuleTargetInput.fromObject({ source: 'keep-warm' }),
+        new targets.LambdaFunction(journeyWorkerFunction, {
+          event: events.RuleTargetInput.fromObject({ job: 'keepAlive' }),
         }),
       ],
     });

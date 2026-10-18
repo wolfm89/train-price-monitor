@@ -41,6 +41,11 @@ let pagePromise: Promise<Page> | null = null;
 let navigationPromise: Promise<void> | null = null;
 let currentOrigin: string | null = null;
 
+// When the current vendor session was created (0 = none). The vendor caps a
+// session at 60 minutes, so it is replaced while still alive rather than dropped
+// mid-request — see sessionMaxAgeMs().
+let sessionStartedAt = 0;
+
 const NAVIGATION_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
@@ -129,13 +134,14 @@ function retryBudgetMs(): number {
 }
 
 /**
- * What one retry costs: a fresh vendor session (~10–15 s). The budget check below
- * is predictive so a retry is never started that cannot finish inside the
+ * What one retry costs: a fresh vendor session. Measured at ~11 s per connect
+ * (four samples, sequential and parallel; occasionally 22 s). The budget check
+ * below is predictive so a retry is never started that cannot finish inside the
  * caller's budget — overrunning it used to turn a clean error into an API Gateway
  * 504 after 29 s, which is worse for the user than a fast, retryable error.
  */
 function retryCostMs(): number {
-  return envNumber('BROWSER_RETRY_COST_MS', 15_000);
+  return envNumber('BROWSER_RETRY_COST_MS', 12_000);
 }
 
 /** True when another attempt can still complete inside the caller's budget. */
@@ -146,6 +152,15 @@ function canAffordRetry(startedAt: number): boolean {
 /** How long to wait for the vendor to hand over a browser before giving up. */
 function connectTimeoutMs(): number {
   return envNumber('BROWSER_CONNECT_TIMEOUT_MS', 20_000);
+}
+
+/**
+ * When to replace a remote session. The vendor's documented maximum session
+ * length is 60 minutes; rotating below that keeps the replacement off the
+ * request path, because the keep-warm rule pings every few minutes.
+ */
+function sessionMaxAgeMs(): number {
+  return envNumber('BROWSER_SESSION_MAX_AGE_MS', 50 * 60_000);
 }
 
 // Only retry when the browser is remote: relaunching the local Chromium three
@@ -342,7 +357,9 @@ async function launchBrowser(): Promise<Browser> {
     // The vendor provisions a browser in ~11 s (measured four times, sequential and
     // parallel). Playwright's 30 s default outlives both the caller's retry budget
     // and API Gateway's 29 s allowance, so a stalled connect must fail sooner.
-    return await chromium.connectOverCDP(endpoint, { timeout: connectTimeoutMs() });
+    const browser = await chromium.connectOverCDP(endpoint, { timeout: connectTimeoutMs() });
+    sessionStartedAt = Date.now();
+    return browser;
   }
 
   return await chromium.launch({
@@ -354,7 +371,14 @@ async function launchBrowser(): Promise<Browser> {
   });
 }
 
-function getBrowser(): Promise<Browser> {
+async function getBrowser(): Promise<Browser> {
+  // Rotate a remote session that is approaching the vendor's 60-minute cap.
+  // resetBrowser() clears the cached promises synchronously, so the replacement
+  // starts right away while the old browser is closed in the background.
+  if (browserPromise && sessionStartedAt && Date.now() - sessionStartedAt > sessionMaxAgeMs()) {
+    void resetBrowser();
+  }
+
   if (!browserPromise) {
     browserPromise = launchBrowser().catch((error: unknown) => {
       browserPromise = null;
@@ -431,6 +455,7 @@ async function resetBrowser(): Promise<void> {
   pagePromise = null;
   navigationPromise = null;
   currentOrigin = null;
+  sessionStartedAt = 0;
 
   // Bumping the generation invalidates in-flight requests: their page/browser is
   // about to close, and without this they would report a spurious

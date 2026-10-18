@@ -201,8 +201,9 @@ flowchart LR
   fitting and blowing the vendor's free tier — do not change it casually.
 - **Retry is per session** (`BROWSER_MAX_ATTEMPTS`, `BROWSER_RETRY_BUDGET_MS`): DB's block is
   all-or-nothing per vendor session (a blocked session fails every request, a good one succeeds
-  for all), so a retry must open a _new_ session, which costs ~8–10 s. The budget bounds how
-  long a caller waits; the API Lambda keeps it low to stay inside API Gateway's 29 s cap.
+  for all), so a retry must open a _new_ session, which costs **11–22 s** (measured; parallel
+  connects are no faster). The shim only starts a retry it can finish inside the budget
+  (`BROWSER_RETRY_COST_MS`), so a caller gets a clean error instead of a gateway timeout.
 - **Credential handling.** The CDP endpoint (which embeds the vendor zone password) lives in an SSM
   **SecureString** that CI writes from the repository secret `SCRAPING_BROWSER_URL`. The functions are
   given only the parameter _name_ (`BROWSER_WS_ENDPOINT_PARAM`) and read the value at runtime, so it
@@ -216,18 +217,27 @@ flowchart LR
   **Rotation:** update the repo secret and re-run the deploy job (or run
   `aws ssm put-parameter --overwrite` yourself). No code change, no function redeploy, and running
   environments converge within the TTL.
-- **Keep-warm rule** (`KeepWarmRule`, every 3 minutes): a vendor session lives inside the Lambda
-  execution environment, so both die with it. Measured: 168/168 hourly refresher invocations were
-  cold, and 12 of 83 API invocations over 14 days — i.e. the first search of essentially every
-  visit. The scheduled invocation runs a real (cheap) journeys query and keeps one environment and
-  its session alive, so user searches hit a warm session (~2 s instead of ~20-35 s). This is why
-  the GraphQL Lambda's timeout is 60 s: the keep-warm path may have to build a session plus a
-  retry, while API Gateway still cuts user requests at 29 s.
+- **Journey worker** (`JourneyWorkerLambda`, reserved concurrency 1): the vendor drops a session
+  after **5 minutes without traffic** and caps one at **60 minutes** (documented), and provisioning
+  costs **11–22 s** (measured). Any request landing in an environment without a session therefore
+  pays that cost — which is what made searches take 18–25 s. DB work for the API runs in its own
+  function with reserved concurrency 1, which makes the environment — and the session — deterministic
+  without paying for provisioned concurrency: there is exactly one place a search can run. The API
+  function invokes it synchronously (`JOURNEY_WORKER_FUNCTION`); the same resolver code runs in the
+  refresher without that variable and keeps calling DB directly, because its long, non-interactive
+  runs must not occupy the single worker slot.
+- **Keep-warm rule** (`KeepWarmRule`, every 3 minutes): targets the worker with `{job:'keepAlive'}`,
+  which runs a real DB query — a CDP-only ping does **not** reset the vendor's idle timer (measured)
+  — so the worker's session stays validated. The shim rotates the session once it is older than
+  `BROWSER_SESSION_MAX_AGE_MS` (default 50 minutes), before the vendor's cap. A blocked session is
+  replaced within the retry budget; while the vendor hands out blocked sessions (35–65 % depending
+  on the hour), the next ping repairs it.
 - `playwright-core` must stay **external** in both bundles (it is the CDP client). The images no
   longer ship a browser at all — that removed the Chromium layer, `PLAYWRIGHT_BROWSERS_PATH`,
   the enlarged `/tmp`, and the x86_64-only constraint.
 - Lambda sizing: without a browser the peaks are small (bundle + station index). Backend
-  functions are 512 MB, the poller 512 MB with a 300 s timeout (remote calls are ~1–8 s each,
+  functions are 512 MB; the journey worker is 512 MB with a 60 s timeout and reserved
+  concurrency 1; the poller 512 MB with a 300 s timeout (remote calls are ~1–8 s each,
   and `ABORT_THRESHOLD_MS` in the poller is kept just below the function timeout).
 - `@aws-sdk/client-ssm` is **external** in the backend bundle (it is a production dependency, so
   it is present in the image) and external in the scraper bundle (provided by the Node.js 24
@@ -247,6 +257,9 @@ flowchart LR
   500 KB) — it is regenerated before typecheck and build.
 - The bundle is built on the host, not inside Docker: it pulls in `shared/`, which is outside
   the image's build context. `mise run //infrastructure:deploy` builds it first.
+- One esbuild invocation produces **two bundles** from the same flags: `dist/main.js` (API + SQS,
+  `main.handler`) and `dist/worker.js` (journey worker, `worker.handler`). Both are copied into
+  the image; the worker function selects its command via the CDK image config.
 
 **Scraper esbuild bundling** (`--format=esm`):
 
@@ -258,33 +271,37 @@ flowchart LR
 
 Environment variables (never commit values):
 
-| Variable                     | Module            | Description                                                      |
-| ---------------------------- | ----------------- | ---------------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                |
-| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                        |
-| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                  |
-| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL for notification links                         |
-| `LOCAL_DEV`                  | Backend           | `1` starts an HTTP server instead of the Lambda handler          |
-| `PORT`                       | Backend           | HTTP port for local dev server (default `4000`)                  |
-| `BROWSER_WS_ENDPOINT`        | Backend + Scraper | Vendor CDP endpoint, literal (local dev; wins over `_PARAM`)     |
-| `BROWSER_WS_ENDPOINT_PARAM`  | Backend + Scraper | SSM SecureString name holding the CDP endpoint (injected by CDK) |
-| `BROWSER_ENDPOINT_TTL_MS`    | Backend + Scraper | How long a resolved endpoint is cached (default 15 min)          |
-| `BROWSER_WARMUP`             | Backend + Scraper | `fulfill` (default, 0 billed bytes) or `load` the real page      |
-| `BROWSER_MAX_ATTEMPTS`       | Backend + Scraper | Attempts per request before failing (default `3`)                |
-| `BROWSER_RETRY_BUDGET_MS`    | Backend + Scraper | Wall-clock budget for retries (default `20000`)                  |
-| `BROWSER_PROXY`              | Backend + Scraper | Proxy for the local-Chromium fallback (debugging)                |
-| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway base URL                                             |
-| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                         |
-| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                            |
-| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                 |
-| `CDK_SCRAPING_BROWSER_PARAM` | Infrastructure    | SSM SecureString name for the vendor CDP endpoint                |
-| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                        |
-| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                     |
-| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`; 1 target = 2 calls)        |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | Days ahead to seed (default `60`)                                |
-| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper           | Newest days re-seeded per nightly run (default `3`)              |
-| `HYDRATOR_FULL_SEED`         | Scraper           | `1` seeds the whole window and prunes beyond it (manual)         |
-| `AWS_ENDPOINT_URL`           | Scraper           | Local Floci endpoint (set by mise tasks)                         |
+| Variable                     | Module            | Description                                                                            |
+| ---------------------------- | ----------------- | -------------------------------------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                                      |
+| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                                              |
+| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                                        |
+| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL for notification links                                               |
+| `LOCAL_DEV`                  | Backend           | `1` starts an HTTP server instead of the Lambda handler                                |
+| `PORT`                       | Backend           | HTTP port for local dev server (default `4000`)                                        |
+| `BROWSER_WS_ENDPOINT`        | Backend + Scraper | Vendor CDP endpoint, literal (local dev; wins over `_PARAM`)                           |
+| `BROWSER_WS_ENDPOINT_PARAM`  | Backend + Scraper | SSM SecureString name holding the CDP endpoint (injected by CDK)                       |
+| `BROWSER_ENDPOINT_TTL_MS`    | Backend + Scraper | How long a resolved endpoint is cached (default 15 min)                                |
+| `BROWSER_WARMUP`             | Backend + Scraper | `fulfill` (default, 0 billed bytes) or `load` the real page                            |
+| `BROWSER_MAX_ATTEMPTS`       | Backend + Scraper | Attempts per request before failing (default `3`)                                      |
+| `BROWSER_RETRY_BUDGET_MS`    | Backend + Scraper | Wall-clock budget for retries (default `20000`)                                        |
+| `BROWSER_RETRY_COST_MS`      | Backend + Scraper | Cost of one retry, used to decide if it fits the budget (default `12000`)              |
+| `BROWSER_CONNECT_TIMEOUT_MS` | Backend + Scraper | Fail a stalled vendor connect (default `20000`)                                        |
+| `BROWSER_SESSION_MAX_AGE_MS` | Backend + Scraper | Rotate a vendor session before the 60 min cap (default 50 min)                         |
+| `JOURNEY_WORKER_FUNCTION`    | Backend (API)     | Journey worker name (injected by CDK); unset in the refresher, which calls DB directly |
+| `BROWSER_PROXY`              | Backend + Scraper | Proxy for the local-Chromium fallback (debugging)                                      |
+| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway base URL                                                                   |
+| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                                               |
+| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                                                  |
+| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                                       |
+| `CDK_SCRAPING_BROWSER_PARAM` | Infrastructure    | SSM SecureString name for the vendor CDP endpoint                                      |
+| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                                              |
+| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                                           |
+| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`; 1 target = 2 calls)                              |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | Days ahead to seed (default `60`)                                                      |
+| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper           | Newest days re-seeded per nightly run (default `3`)                                    |
+| `HYDRATOR_FULL_SEED`         | Scraper           | `1` seeds the whole window and prunes beyond it (manual)                               |
+| `AWS_ENDPOINT_URL`           | Scraper           | Local Floci endpoint (set by mise tasks)                                               |
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
 - Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).
