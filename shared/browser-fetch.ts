@@ -36,48 +36,15 @@ import type { Browser, Page } from 'playwright-core';
 // class at the same time), so every cached promise below is assigned
 // synchronously — awaiting before assignment would let a second caller see a
 // null field and start a duplicate browser/page/navigation.
-//
-// Sessions are kept in a small pool rather than one at a time. DB decides its
-// block when a vendor session is created and applies it to everything that
-// session does, and in a bad stretch ~50 % of sessions come back blocked: with a
-// sibling already connected, a request that lands on a blocked session fails
-// over in ~1 s instead of paying 11-22 s for a new one.
-interface Session {
-  browserPromise: Promise<Browser>;
-  pagePromise: Promise<Page> | null;
-  navigationPromise: Promise<void> | null;
-  currentOrigin: string | null;
-  /** When the vendor handed this session over (0 while it is still connecting). */
-  startedAt: number;
-  /** Last time a request used it; the least recently used session is picked next. */
-  lastUsedAt: number;
-  /** Set when it served a blocked response or died; it is closed and never reused. */
-  unusable: boolean;
-}
+let browserPromise: Promise<Browser> | null = null;
+let pagePromise: Promise<Page> | null = null;
+let navigationPromise: Promise<void> | null = null;
+let currentOrigin: string | null = null;
 
-const sessions: Session[] = [];
-
-/**
- * Set by the journey worker's backoff: keeps the keeper from creating sessions
- * during a vendor episode while still letting it ping the ones it has.
- */
-let sessionCreationSuspended = false;
-
-/** Suspends (or allows) automatic session creation. */
-export function suspendSessionCreation(suspended: boolean): void {
-  sessionCreationSuspended = suspended;
-}
-
-/**
- * How many vendor sessions to keep ready. A blocked session never recovers
- * (measured: four attempts over three minutes, all refused), so a retry must run
- * on a different session — and an already-connected sibling costs ~1 s instead of
- * the 11-22 s a new setup takes. Three sessions put the chance of all of them
- * being refused at roughly one in eight during a bad stretch.
- */
-function sessionPoolSize(): number {
-  return envNumber('BROWSER_SESSION_POOL_SIZE', 3);
-}
+// When the current vendor session was created (0 = none). The vendor caps a
+// session at 60 minutes, so it is replaced while still alive rather than dropped
+// mid-request — see sessionMaxAgeMs().
+let sessionStartedAt = 0;
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 
@@ -208,6 +175,38 @@ function sessionMaxAgeMs(): number {
 // Only retry when the browser is remote: relaunching the local Chromium three
 // times would be slow and cannot help (the local environment is blocked).
 let remoteSession = false;
+
+// db-vendo-client issues requests concurrently (the poller asks for 1st and 2nd
+// class at the same time) while this module owns one page and one vendor session.
+//
+// A retry has to replace that session, which means closing the browser — and that
+// aborts whatever else is still in flight. Doing it per request made a blocked
+// session catastrophic (every queued request paid its own ~10 s session setup,
+// and concurrent ones died with "Target page, context or browser has been
+// closed"). Instead, a blocked session is replaced ONCE: the first caller that
+// sees it performs the renewal and bumps `sessionGeneration`; everyone else
+// notices the generation changed and retries on the new session.
+let sessionGeneration = 0;
+let sessionRenewal: Promise<void> | null = null;
+
+/**
+ * Replaces the vendor session, at most once per generation.
+ *
+ * Concurrent callers all await the same renewal, so a blocked session costs one
+ * setup rather than one per in-flight request.
+ */
+async function renewSession(failedGeneration: number): Promise<void> {
+  // Somebody else already replaced it.
+  if (sessionGeneration !== failedGeneration) return;
+
+  if (!sessionRenewal) {
+    sessionRenewal = resetBrowser().finally(() => {
+      sessionRenewal = null;
+    });
+  }
+
+  await sessionRenewal;
+}
 
 interface FetchInit {
   method?: string;
@@ -367,7 +366,9 @@ async function launchBrowser(): Promise<Browser> {
     // The vendor provisions a browser in ~11 s (measured four times, sequential and
     // parallel). Playwright's 30 s default outlives both the caller's retry budget
     // and API Gateway's 29 s allowance, so a stalled connect must fail sooner.
-    return await chromium.connectOverCDP(endpoint, { timeout: connectTimeoutMs() });
+    const browser = await chromium.connectOverCDP(endpoint, { timeout: connectTimeoutMs() });
+    sessionStartedAt = Date.now();
+    return browser;
   }
 
   return await chromium.launch({
@@ -379,104 +380,27 @@ async function launchBrowser(): Promise<Browser> {
   });
 }
 
-function createSession(): Session {
-  const session: Session = {
-    // Assigned synchronously below: callers race for this promise, so there must
-    // never be a moment where the session exists without one.
-    browserPromise: undefined as unknown as Promise<Browser>,
-    pagePromise: null,
-    navigationPromise: null,
-    currentOrigin: null,
-    startedAt: 0,
-    lastUsedAt: 0,
-    unusable: false,
-  };
+async function getBrowser(): Promise<Browser> {
+  // Rotate a remote session that is approaching the vendor's 60-minute cap.
+  // resetBrowser() clears the cached promises synchronously, so the replacement
+  // starts right away while the old browser is closed in the background.
+  if (browserPromise && sessionStartedAt && Date.now() - sessionStartedAt > sessionMaxAgeMs()) {
+    void resetBrowser();
+  }
 
-  session.browserPromise = launchBrowser()
-    .then((browser) => {
-      session.startedAt = Date.now();
-      return browser;
-    })
-    .catch((error: unknown) => {
-      session.unusable = true;
-
-      const index = sessions.indexOf(session);
-      if (index >= 0) sessions.splice(index, 1);
-
+  if (!browserPromise) {
+    browserPromise = launchBrowser().catch((error: unknown) => {
+      browserPromise = null;
       throw error;
     });
-
-  sessions.push(session);
-  return session;
-}
-
-function usableSessions(): Session[] {
-  return sessions.filter((session) => !session.unusable);
-}
-
-/** Retires a session: never picked again, closed in the background. */
-function closeSession(session: Session): void {
-  session.unusable = true;
-
-  const index = sessions.indexOf(session);
-  if (index >= 0) sessions.splice(index, 1);
-
-  void session.browserPromise.then((browser) => browser.close()).catch(() => undefined);
-}
-
-/**
- * Least recently used usable session, creating one when none is left.
- *
- * Least-recently-used rather than "any", so every session in the pool keeps being
- * exercised and a spare is not quietly dropped by the vendor's idle timeout.
- */
-function pickSession(): Session {
-  const usable = usableSessions();
-  if (usable.length === 0) {
-    if (sessionCreationSuspended) {
-      throw new Error('No vendor session available (session creation suspended)');
-    }
-    return createSession();
   }
-
-  // Least recently used, so every session in the pool keeps being exercised and a
-  // spare is not quietly dropped by the vendor's idle timeout.
-  return usable.reduce((oldest, candidate) => (candidate.lastUsedAt < oldest.lastUsedAt ? candidate : oldest));
+  return browserPromise;
 }
 
-/**
- * Rounds the session out to the pool size, retiring any session that is past the
- * vendor's 60-minute cap, and creates at most one replacement.
- *
- * For the keep-warm path only: creating a session costs 11-22 s, and a user
- * request must never wait for the pool to be refilled — it picks what is already
- * there and fails over between sessions instead.
- */
-export async function warmSessionPool(): Promise<{ ready: number; created: boolean }> {
-  for (const session of usableSessions()) {
-    if (session.startedAt && Date.now() - session.startedAt > sessionMaxAgeMs()) {
-      closeSession(session);
-    }
-  }
-
-  let created = false;
-
-  const missing = sessionCreationSuspended ? 0 : sessionPoolSize() - usableSessions().length;
-  if (missing > 0) {
-    // All of them at once: connects are independent (the vendor allows concurrent
-    // browsers), so filling a three-session pool costs the same wall clock as one
-    // setup (~11-22 s measured) instead of three rounds of it.
-    await Promise.all(Array.from({ length: missing }, () => createSession().browserPromise));
-    created = true;
-  }
-
-  return { ready: usableSessions().length, created };
-}
-
-async function getPage(session: Session, origin: string): Promise<Page> {
-  if (!session.pagePromise) {
-    session.pagePromise = (async () => {
-      const browser = await session.browserPromise;
+async function getPage(origin: string): Promise<Page> {
+  if (!pagePromise) {
+    pagePromise = (async () => {
+      const browser = await getBrowser();
       const context = await browser.newContext();
 
       // Serve the origin's document locally. Nothing traverses the vendor's
@@ -494,35 +418,35 @@ async function getPage(session: Session, origin: string): Promise<Page> {
 
       return await context.newPage();
     })().catch((error: unknown) => {
-      session.pagePromise = null;
+      pagePromise = null;
       throw error;
     });
   }
 
-  const page = await session.pagePromise;
+  const page = await pagePromise;
 
   // Concurrent callers share a single navigation instead of each issuing their
   // own goto() against the same page.
-  if (session.currentOrigin !== origin) {
-    if (!session.navigationPromise) {
-      session.navigationPromise = page
+  if (currentOrigin !== origin) {
+    if (!navigationPromise) {
+      navigationPromise = page
         .goto(origin, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs() })
         .then(() => {
-          session.currentOrigin = origin;
+          currentOrigin = origin;
         })
         .catch(async (error: unknown) => {
           // A navigation that cannot complete means this browser is unusable —
-          // observed: a timeout on a *locally fulfilled* page when the vendor's node
-          // hung. Retire the session so the caller's retry picks its sibling instead
+          // observed: a 30 s timeout on a *locally fulfilled* page when the vendor's
+          // node hung. Drop the session so the caller's retry reconnects, instead
           // of every later request paying the same timeout.
-          closeSession(session);
+          await resetBrowser();
           throw error;
         })
         .finally(() => {
-          session.navigationPromise = null;
+          navigationPromise = null;
         });
     }
-    await session.navigationPromise;
+    await navigationPromise;
   }
 
   return page;
@@ -541,6 +465,133 @@ function isClosedError(error: unknown): boolean {
   return /has been closed|Target closed|Browser closed|Connection closed/i.test(message);
 }
 
+/** Drops the cached browser/page so the next call starts from a clean state. */
+async function resetBrowser(): Promise<void> {
+  const previous = browserPromise;
+  browserPromise = null;
+  pagePromise = null;
+  navigationPromise = null;
+  currentOrigin = null;
+  sessionStartedAt = 0;
+
+  // Bumping the generation invalidates in-flight requests: their page/browser is
+  // about to close, and without this they would report a spurious
+  // "Target page, context or browser has been closed" instead of retrying.
+  sessionGeneration += 1;
+
+  if (previous) {
+    await previous.then((browser) => browser.close()).catch(() => undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Decodo (ex-Smartproxy) Web Data API.
+//
+// When configured, requests are executed by Decodo's /scrape endpoint instead of a
+// CDP session: they run a managed browser on their own residential pool, so there
+// is no session to provision, keep warm, rotate or fail over from. Measured on
+// 2026-10-19: a DB journey search returned five connections with fares in 5.8 s on
+// the first attempt, while a plain HTTP request through the same provider's proxy
+// was refused (403 OPS_BLOCKED) — the browser and the residential pool are both
+// required, and only Decodo supplies them.
+// ---------------------------------------------------------------------------
+const DECODO_SCRAPE_URL = 'https://data.decodo.com/v1/scrape';
+
+let decodoKeyCache: { value: string; expiresAt: number } | null = null;
+let decodoKeyRequest: Promise<string | null> | null = null;
+
+/**
+ * Resolves the Decodo API key: a literal for local development, otherwise the SSM
+ * SecureString named by DECODO_API_KEY_PARAM (written by CI from a repo secret).
+ * Cached like the CDP endpoint, so a rotated key takes effect within the TTL.
+ */
+async function resolveDecodoKey(): Promise<string | null> {
+  const literal = process.env.DECODO_API_KEY;
+  if (literal) return literal;
+
+  const parameterName = process.env.DECODO_API_KEY_PARAM;
+  if (!parameterName) return null;
+
+  if (decodoKeyCache && Date.now() < decodoKeyCache.expiresAt) return decodoKeyCache.value;
+
+  if (!decodoKeyRequest) {
+    decodoKeyRequest = (async (): Promise<string | null> => {
+      const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+      const result = await new SSMClient({}).send(
+        new GetParameterCommand({ Name: parameterName, WithDecryption: true })
+      );
+      const value = result.Parameter?.Value;
+      if (!value) throw new Error(`SSM parameter ${parameterName} is empty`);
+      decodoKeyCache = { value, expiresAt: Date.now() + endpointTtlMs() };
+      return value;
+    })().finally(() => {
+      decodoKeyRequest = null;
+    });
+  }
+
+  return decodoKeyRequest;
+}
+
+/**
+ * Executes one request through Decodo and returns the target's response.
+ *
+ * A 403 from DB is retried once: the provider picks the egress per request, so a
+ * refusal says nothing about the next attempt.
+ */
+async function decodoFetch(
+  key: string,
+  url: string,
+  init: FetchInit,
+  startedAt: number
+): Promise<FetchCompatibleResponse> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(init.headers ?? {})) {
+    // Hop-by-hop headers describe our connection to Decodo, not the request to DB.
+    if (/^(host|content-length|connection|accept-encoding|content-encoding)$/i.test(name)) continue;
+    headers[name] = value;
+  }
+
+  for (let attempt = 1; ; attempt++) {
+    const body = JSON.stringify({
+      url,
+      http_method: (init.method ?? 'GET').toUpperCase(),
+      proxy_pool: 'premium',
+      headers,
+      force_headers: true,
+      ...(init.body ? { payload: Buffer.from(init.body).toString('base64') } : {}),
+    });
+
+    const response = await globalThis.fetch(DECODO_SCRAPE_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body,
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      return new FetchCompatibleResponse(response.status, response.statusText, text, []);
+    }
+
+    const envelope = JSON.parse(text) as {
+      results?: Array<{ content?: string; status_code?: number; headers?: Record<string, string> }>;
+    };
+    const result = envelope.results?.[0];
+    if (!result) throw new Error('Decodo returned no result');
+
+    const status = result.status_code ?? 200;
+    const bodyText = result.content ?? '';
+    const blocked = status === 403 && /OPS_BLOCKED/.test(bodyText);
+
+    if (blocked && attempt < fetchAttempts() && canAffordRetry(startedAt)) continue;
+
+    return new FetchCompatibleResponse(status, '', bodyText, Object.entries(result.headers ?? {}));
+  }
+}
+
 export function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
   return fetchSerialized(url, init);
 }
@@ -549,13 +600,16 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
   const target = new URL(url);
   const startedAt = Date.now();
 
+  // Decodo executes the request itself when configured — no session, no browser.
+  const decodoKey = await resolveDecodoKey();
+  if (decodoKey) return decodoFetch(decodoKey, url, init, startedAt);
+
   for (let attempt = 1; ; attempt++) {
-    const session = pickSession();
-
+    // Captured so a concurrent renewal can be detected: if the session changed
+    // while this request was running, the failure is ours to retry, not to report.
+    const generation = sessionGeneration;
     try {
-      const page = await getPage(session, target.origin);
-      session.lastUsedAt = Date.now();
-
+      const page = await getPage(target.origin);
       const response = await page.evaluate(
         async ({ path, method, headers, body }: BrowserFetchRequest): Promise<BrowserFetchResponse> => {
           const result = await window.fetch(path, { method, headers, body });
@@ -575,47 +629,49 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
       );
 
       const blocked = response.status === 403 && /OPS_BLOCKED/.test(response.bodyText);
-
-      // A blocked session never recovers — measured: four attempts over three
-      // minutes, all refused — so retire it and let the retry run on a sibling.
-      if (remoteSession && blocked) closeSession(session);
-
       if (remoteSession && blocked && attempt < fetchAttempts() && canAffordRetry(startedAt)) {
+        // Replace the blocked session once (shared with any concurrent caller),
+        // then retry on the new one. A fresh session means a fresh egress IP; the
+        // zero-byte warm-up keeps that cheap in traffic, and the budget above
+        // caps how long a caller can be kept waiting.
+        await renewSession(generation);
         continue;
       }
 
       return new FetchCompatibleResponse(response.status, response.statusText, response.bodyText, response.headers);
     } catch (error) {
-      // The vendor closes sessions on its own schedule (idle timeout, node
-      // rotation), a sibling may have been retired while this request was in
-      // flight, and a hung node shows up as a navigation timeout. All of them mean
-      // this session is gone: retire it and retry on whatever is left.
-      const sessionGone = session.unusable || isClosedError(error) || !(await isConnected(session));
-      if (sessionGone) closeSession(session);
-
-      if (remoteSession && sessionGone && attempt < fetchAttempts() && canAffordRetry(startedAt)) {
+      // A concurrent renewal closes this browser, so a failure here may simply
+      // mean the session changed underneath us: retry rather than surfacing it.
+      // The vendor also closes sessions on its own schedule, which cannot show up
+      // as a generation change — so a dead browser or a "closed" error is retried
+      // on a fresh session too, instead of burning the caller's attempt.
+      const browser = await browserPromise?.catch(() => null);
+      const sessionGone = !browser || !browser.isConnected() || isClosedError(error);
+      if (
+        remoteSession &&
+        (sessionGeneration !== generation || sessionGone) &&
+        attempt < fetchAttempts() &&
+        canAffordRetry(startedAt)
+      ) {
+        if (sessionGone && sessionGeneration === generation) {
+          await resetBrowser();
+        }
         continue;
       }
 
+      // Otherwise only tear down when the browser is actually gone. Resetting on
+      // *any* error would close the browser while a concurrent request is still
+      // using it, turning one failure into a cascade.
+      if (sessionGone) {
+        await resetBrowser();
+      }
       throw error;
     }
   }
 }
 
-async function isConnected(session: Session): Promise<boolean> {
-  const browser = await session.browserPromise.catch(() => null);
-  return !!browser && browser.isConnected();
-}
-
-/** Closes every session — used by tests and by a deliberate reset. */
 export async function closeBrowser(): Promise<void> {
-  const closing = sessions.map((session) => {
-    session.unusable = true;
-    return session.browserPromise.then((browser) => browser.close()).catch(() => undefined);
-  });
-
-  sessions.length = 0;
-  await Promise.all(closing);
+  await resetBrowser();
 }
 
 export { FetchCompatibleRequest as Request };

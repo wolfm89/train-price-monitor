@@ -261,14 +261,3 @@ type Location {
 extend type Query {
   locations(query: String!): [Location]
 }
-
-# Warm-up
-
-extend type Mutation {
-  """
-  Establishes and validates the upstream DB session so the next journey search is
-  fast. Returns false when it could not be warmed (best effort — the search path
-  retries on its own).
-  """
-  warmSearch: Boolean!
-}

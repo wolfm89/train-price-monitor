@@ -32,11 +32,9 @@ FROM public.ecr.aws/lambda/nodejs:24
 
 COPY --from=deps /deps/node_modules ${LAMBDA_TASK_ROOT}/node_modules
 
-# Pre-built CJS bundles (produced by 'npm run build' in backend/): the GraphQL
-# API/SQS handler and the journey worker, which runs the same image with
-# reserved concurrency 1. The station index for autocomplete is bundled into both
-# (backend/scripts/build-station-index.mjs).
-COPY dist/main.js dist/worker.js ${LAMBDA_TASK_ROOT}/
+# Pre-built CJS bundle (produced by 'npm run build' in backend/). The station
+# index for autocomplete is bundled into it (backend/scripts/build-station-index.mjs).
+COPY dist/main.js ${LAMBDA_TASK_ROOT}/
 # main.ts reads the SDL at startup, relative to the task root.
 COPY src/schema/schema.graphql ${LAMBDA_TASK_ROOT}/src/schema/schema.graphql
 

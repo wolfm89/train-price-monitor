@@ -39,12 +39,6 @@ export const JourneySearchQuery = gql`
  * used to be paid by the user's first search. Picking stations and a date takes
  * longer than that, so the setup happens while they fill in the form.
  */
-export const WarmSearch = gql`
-  mutation {
-    warmSearch
-  }
-`;
-
 export const MonitorJourney = gql`
   mutation (
     $userId: ID!

@@ -305,6 +305,28 @@ jobs:
             --query Version --output text)"
           echo "Wrote ${PARAM} (version ${VERSION})"
 
+      - name: Sync Decodo API key to SSM
+        env:
+          DECODO_API_KEY: ${{ secrets.DECODO_API_KEY }}
+          DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+        run: |
+          set -euo pipefail
+          PARAM="${DECODO_API_KEY_PARAM:-/train-price-monitor/decodo-api-key}"
+          if [[ -z "${DECODO_API_KEY}" ]]; then
+            echo "::warning::DECODO_API_KEY is not set; leaving ${PARAM} untouched. Journey search will fail until it exists."
+            exit 0
+          fi
+          # Rotating the key is just: update the repo secret and re-run this job;
+          # running functions pick it up within BROWSER_ENDPOINT_TTL_MS. Only the
+          # parameter version is printed, never the value.
+          VERSION="$(aws ssm put-parameter \
+            --name "$PARAM" \
+            --type SecureString \
+            --value "$DECODO_API_KEY" \
+            --overwrite \
+            --query Version --output text)"
+          echo "Wrote ${PARAM} (version ${VERSION})"
+
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
         run: npm run cdk diff
@@ -322,35 +344,6 @@ jobs:
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
-
-      # A fresh deployment starts the journey worker with an empty session pool, so
-      # the first search pays 11-22 s for a setup — or fails outright when the vendor
-      # is handing out blocked sessions. Fill the pool here, off the request path, and
-      # let the deploy finish only once the worker can reach DB. A failure is a
-      # warning, not an error: the vendor's session lottery is not ours to fail on.
-      - name: Warm the journey worker
-        run: |
-          FUNCTION=InfrastructureStack-JourneyWorker
-          if [ -z "$FUNCTION" ]; then
-            echo "journey worker not found"
-            exit 1
-          fi
-
-          for attempt in 1 2 3 4 5 6; do
-            aws lambda invoke \
-              --function-name "$FUNCTION" \
-              --cli-binary-format raw-in-base64-out \
-              --payload '{"job":"keepAlive"}' \
-              /tmp/warm.json >/dev/null
-            if ! grep -q '"errorType"' /tmp/warm.json; then
-              echo "journey worker warm after ${attempt} attempt(s)"
-              exit 0
-            fi
-            echo "warm-up attempt ${attempt} failed, retrying"
-            sleep 20
-          done
-
-          echo "::warning::journey worker did not warm up; searches will establish a session on demand"
 
       - name: Invalidate CloudFront cache
         uses: badsyntax/github-action-aws-cloudfront@master

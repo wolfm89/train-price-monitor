@@ -21,7 +21,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { NOTIFICATION_TYPES } from './notificationTypes';
 import { getJourneyMonitor } from './user';
 import { PricingOptions } from '../managers/DbHafasManager';
-import { queryJourneys, refreshJourney, warmUp } from '../lib/journeyWorker';
 import { LoyaltyCardData, validateLoyaltyCard } from '../lib/loyaltyCards';
 
 /**
@@ -148,7 +147,7 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
 ): Promise<JourneysResult> => {
   const pricingOpts = toPricingOptions(args.options);
 
-  const result = await queryJourneys(context, args.from, args.to, args.departure, {
+  const result = await context.dbHafas.queryJourneys(args.from, args.to, args.departure, {
     earlierThan: args.earlierThan ?? undefined,
     laterThan: args.laterThan ?? undefined,
     results: args.options?.results ?? undefined,
@@ -179,34 +178,6 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
     earlierRef: result.earlierRef ?? null,
     laterRef: result.laterRef ?? null,
   };
-};
-
-/**
- * Warms the upstream DB session before a user searches.
- *
- * A vendor browser session costs 11-22 s to provision and expires after five
- * minutes without traffic, so it cannot live in the request path. It lives in the
- * journey worker instead (reserved concurrency 1), kept alive by the keep-warm
- * rule every three minutes. This mutation covers the remaining case — a freshly
- * deployed or recycled worker — and is queued rather than awaited, because the
- * worker is single-slot and the user is still filling in the form.
- *
- * Best effort by design: a failure here must not surface as an error, because the
- * search path establishes a session on its own if this did not finish in time.
- */
-export const warmSearch: NonNullable<MutationResolvers['warmSearch']> = async (
-  _parent,
-  _args,
-  context: GraphQLContext
-): Promise<boolean> => {
-  try {
-    await warmUp(context);
-    Logger.info('Queued DB session warm-up');
-    return true;
-  } catch (error) {
-    Logger.warn('Warm-up failed', { error: error instanceof Error ? error.message : String(error) });
-    return false;
-  }
 };
 
 /**
@@ -448,7 +419,7 @@ async function refreshJourneyMonitor(
   let journey: HafasJourney | undefined;
 
   try {
-    journey = await refreshJourney(context, dbJourney.Item.refreshToken, storedPricingOptions);
+    journey = await context.dbHafas.requeryJourney(dbJourney.Item.refreshToken, storedPricingOptions);
   } catch (error) {
     Logger.error('Error requerying journey', {
       journeyId: journeyId,
@@ -471,7 +442,7 @@ async function refreshJourneyMonitor(
       const departure = new Date(storedDeparture);
 
       try {
-        const result = await queryJourneys(context, fromStationId, toStationId, departure, {
+        const result = await context.dbHafas.queryJourneys(fromStationId, toStationId, departure, {
           results: 5,
           ...storedPricingOptions,
         });

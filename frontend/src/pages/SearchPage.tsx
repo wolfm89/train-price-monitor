@@ -5,10 +5,9 @@ import SearchMask from '../components/SearchMask';
 import { JourneySearchOptions } from '../components/SearchMask';
 import SearchResult from '../components/SearchResult';
 import { Journey, SearchData } from '../components/SearchResult';
-import { JourneySearchQuery, WarmSearch } from '../api/journey';
+import { JourneySearchQuery } from '../api/journey';
 import { UserTravelPreferencesQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
-import { client } from '../utils/apiClient';
 
 interface QueryVars {
   from: string;
@@ -35,16 +34,6 @@ const SearchPage: React.FC<Props> = () => {
     variables: { id: user?.['custom:id'] },
     pause: !user?.['custom:id'],
   });
-
-  // Warm the upstream DB session as soon as the page opens (see WarmSearch).
-  // Fire and forget: the outcome needs no UI, and failures are retried by the
-  // search itself.
-  useEffect(() => {
-    client
-      .mutation(WarmSearch, {})
-      .toPromise()
-      .catch(() => undefined);
-  }, []);
 
   const [{ data, fetching, error }, reexecuteSearch] = useQuery({
     query: JourneySearchQuery,

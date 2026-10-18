@@ -312,7 +312,6 @@ export type MutationResolvers<
     ContextType,
     RequireFields<Types.MutationUpdateUserSettingsArgs, 'emailNotificationsEnabled' | 'id'>
   >;
-  warmSearch?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
 };
 
 export type NotificationResolvers<

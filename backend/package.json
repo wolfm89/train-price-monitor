@@ -6,7 +6,7 @@
     "codegen": "graphql-codegen --config src/codegen.yml",
     "dev": "cross-env NODE_ENV=development ts-node-dev --exit-child --respawn src/main.ts",
     "start": "ts-node src/main.ts",
-    "build": "npm run codegen && esbuild src/main.ts src/worker.ts --bundle --minify --sourcemap --platform=node --target=es2020 --format=cjs --alias:cross-fetch=../shared/browser-fetch.ts --external:gps-distance --external:https-proxy-agent --external:luxon --external:playwright-core --external:@aws-sdk/client-ssm --external:@aws-sdk/client-lambda --external:qs --external:slugg --outdir=dist",
+    "build": "npm run codegen && esbuild src/main.ts --bundle --minify --sourcemap --platform=node --target=es2020 --format=cjs --alias:cross-fetch=../shared/browser-fetch.ts --external:gps-distance --external:https-proxy-agent --external:luxon --external:playwright-core --external:@aws-sdk/client-ssm --external:qs --external:slugg --outfile=dist/main.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "stations": "node scripts/build-station-index.mjs",
@@ -40,7 +40,6 @@
   "dependencies": {
     "@aws-lambda-powertools/logger": "^2.32.0",
     "@aws-sdk/client-dynamodb": "^3.1045.0",
-    "@aws-sdk/client-lambda": "^3.1152.0",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/client-sesv2": "^3.1045.0",
     "@aws-sdk/client-sqs": "^3.1045.0",
