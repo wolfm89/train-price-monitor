@@ -143,6 +143,11 @@ function canAffordRetry(startedAt: number): boolean {
   return Date.now() - startedAt + retryCostMs() < retryBudgetMs();
 }
 
+/** How long to wait for the vendor to hand over a browser before giving up. */
+function connectTimeoutMs(): number {
+  return envNumber('BROWSER_CONNECT_TIMEOUT_MS', 20_000);
+}
+
 // Only retry when the browser is remote: relaunching the local Chromium three
 // times would be slow and cannot help (the local environment is blocked).
 let remoteSession = false;
@@ -334,7 +339,10 @@ async function launchBrowser(): Promise<Browser> {
   // same-origin fetch, response mapping) is identical to the local case.
   if (endpoint) {
     remoteSession = true;
-    return await chromium.connectOverCDP(endpoint);
+    // The vendor provisions a browser in ~11 s (measured four times, sequential and
+    // parallel). Playwright's 30 s default outlives both the caller's retry budget
+    // and API Gateway's 29 s allowance, so a stalled connect must fail sooner.
+    return await chromium.connectOverCDP(endpoint, { timeout: connectTimeoutMs() });
   }
 
   return await chromium.launch({
