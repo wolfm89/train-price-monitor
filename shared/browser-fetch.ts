@@ -403,6 +403,19 @@ async function getPage(origin: string): Promise<Page> {
   return page;
 }
 
+/**
+ * True for Playwright's "the thing you were talking to is gone" errors.
+ *
+ * The vendor closes sessions on its own schedule (idle timeout, node rotation),
+ * which from here looks exactly like a concurrent renewal — except it cannot bump
+ * the generation. Measured on the live poller: ~20 % of targets died on
+ * "Target page, context or browser has been closed" without being retried.
+ */
+function isClosedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /has been closed|Target closed|Browser closed|Connection closed/i.test(message);
+}
+
 /** Drops the cached browser/page so the next call starts from a clean state. */
 async function resetBrowser(): Promise<void> {
   const previous = browserPromise;
@@ -467,15 +480,27 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
     } catch (error) {
       // A concurrent renewal closes this browser, so a failure here may simply
       // mean the session changed underneath us: retry rather than surfacing it.
-      if (remoteSession && sessionGeneration !== generation && attempt < fetchAttempts() && canAffordRetry(startedAt)) {
+      // The vendor also closes sessions on its own schedule, which cannot show up
+      // as a generation change — so a dead browser or a "closed" error is retried
+      // on a fresh session too, instead of burning the caller's attempt.
+      const browser = await browserPromise?.catch(() => null);
+      const sessionGone = !browser || !browser.isConnected() || isClosedError(error);
+      if (
+        remoteSession &&
+        (sessionGeneration !== generation || sessionGone) &&
+        attempt < fetchAttempts() &&
+        canAffordRetry(startedAt)
+      ) {
+        if (sessionGone && sessionGeneration === generation) {
+          await resetBrowser();
+        }
         continue;
       }
 
       // Otherwise only tear down when the browser is actually gone. Resetting on
       // *any* error would close the browser while a concurrent request is still
       // using it, turning one failure into a cascade.
-      const browser = await browserPromise?.catch(() => null);
-      if (!browser || !browser.isConnected()) {
+      if (sessionGone) {
         await resetBrowser();
       }
       throw error;
