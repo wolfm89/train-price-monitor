@@ -193,24 +193,47 @@ const SearchResult: React.FC<Props> = ({
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
             </Box>
 
-            {/* Duration — sm+ only */}
-            <Chip
-              label={formatDuration(result.departure, result.arrival)}
-              size="small"
-              variant="outlined"
-              sx={{ fontSize: 11, fontWeight: 500, height: 24, display: { xs: 'none', sm: 'flex' } }}
-            />
+            {/* Duration + means — sm+ only.
+                Fixed width on purpose: this is what keeps the route-line icon in
+                a stable column. Its position used to depend on how wide the
+                duration chip and the (variable) list of transport means were, so
+                an ICE+walk+ICE row pushed the icon left of a single-train row. */}
+            <Box
+              sx={{
+                display: { xs: 'none', sm: 'flex' },
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                gap: 1.75,
+                width: 240,
+                flexShrink: 0,
+              }}
+            >
+              <Chip
+                label={formatDuration(result.departure, result.arrival)}
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: 11, fontWeight: 500, height: 24, flexShrink: 0 }}
+              />
 
-            {/* Means — sm+ only */}
-            <Box sx={{ display: { xs: 'none', sm: 'flex' }, gap: 0.5, flexWrap: 'wrap', minWidth: 70 }}>
-              {result.means.map((mean: string, i: number) => (
-                <Chip
-                  key={i}
-                  label={mean === 'walk' ? '\u{1F6B6}' : mean}
-                  size="small"
-                  sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
-                />
-              ))}
+              <Box
+                sx={{
+                  display: 'flex',
+                  flex: 1,
+                  justifyContent: 'flex-end',
+                  gap: 0.5,
+                  flexWrap: 'wrap',
+                  minWidth: 0,
+                }}
+              >
+                {result.means.map((mean: string, i: number) => (
+                  <Chip
+                    key={i}
+                    label={mean === 'walk' ? '\u{1F6B6}' : mean}
+                    size="small"
+                    sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
+                  />
+                ))}
+              </Box>
             </Box>
 
             {/* xs middle: Duration + Means — xs only; flex:1 lets it grow, items wrap internally */}
