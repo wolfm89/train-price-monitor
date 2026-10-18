@@ -15,6 +15,7 @@ import {
   updateJourneyMonitors,
   updateJourneyMonitor,
   deleteJourneyMonitor,
+  warmSearch,
 } from './journey';
 import { locationsQuery } from './location';
 import { markNotificationAsRead, sendEmailNotification, notificationResolvers } from './notification';
@@ -46,6 +47,7 @@ const resolvers: ResolversWithScalars = {
     deleteJourneyMonitor: deleteJourneyMonitor,
     markNotificationAsRead: markNotificationAsRead,
     sendEmailNotification: sendEmailNotification,
+    warmSearch: warmSearch,
   },
 };
 

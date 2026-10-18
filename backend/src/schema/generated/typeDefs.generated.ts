@@ -140,6 +140,12 @@ export type Mutation = {
   updateTravelPreferences?: Maybe<User>;
   updateUserProfilePicture?: Maybe<User>;
   updateUserSettings?: Maybe<User>;
+  /**
+   * Establishes and validates the upstream DB session so the next journey search is
+   * fast. Returns false when it could not be warmed (best effort — the search path
+   * retries on its own).
+   */
+  warmSearch: Scalars['Boolean']['output'];
 };
 
 export type MutationCreateUserArgs = {

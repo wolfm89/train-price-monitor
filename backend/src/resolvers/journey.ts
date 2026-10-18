@@ -181,6 +181,34 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
 };
 
 /**
+ * Establishes and validates the upstream DB session before a user searches.
+ *
+ * A vendor browser session lives inside a Lambda execution environment and costs
+ * ~8-10 s to establish, plus another ~10 s when the vendor hands out a blocked
+ * one (measured at 35-50 % of sessions). Paying that on the search request is
+ * what made the first search of a visit take ~15 s, so the search page asks for
+ * this as soon as it opens: picking stations and a date absorbs the setup while
+ * the user is looking at the form.
+ *
+ * Best effort by design — a failure here must not surface as an error, because
+ * the search path retries on its own.
+ */
+export const warmSearch: NonNullable<MutationResolvers['warmSearch']> = async (
+  _parent,
+  _args,
+  context: GraphQLContext
+): Promise<boolean> => {
+  try {
+    await context.dbHafas.warmUp();
+    Logger.info('Warmed up DB session');
+    return true;
+  } catch (error) {
+    Logger.warn('Warm-up failed', { error: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
+};
+
+/**
  * Resolves the 'monitorJourney' mutation to add a new journey monitor for a user.
  * Snapshots pricing-relevant options onto the Journey entity so background
  * refreshes use the correct discount/class/age context.
