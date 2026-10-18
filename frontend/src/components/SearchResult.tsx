@@ -263,10 +263,15 @@ const SearchResult: React.FC<Props> = ({
               ))}
             </Box>
 
-            {/* Price + Watch — fixed right column: stacked vertically on xs, inline on sm+ */}
+            {/* Price + Watch — fixed right column: stacked vertically on xs, inline on sm+.
+                minWidth on sm+ is what completes the icon alignment: a row without a
+                price has no Watch button, so its right column used to be ~85px
+                narrower, the flex:1 route line grew, and its centred icon drifted
+                43px to the right of every other row. */}
             <Box
               sx={{
                 flexShrink: 0,
+                minWidth: { xs: 'auto', sm: 153 },
                 display: 'flex',
                 flexDirection: { xs: 'column', sm: 'row' },
                 alignItems: { xs: 'flex-end', sm: 'center' },
