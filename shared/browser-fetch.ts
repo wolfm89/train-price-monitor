@@ -61,37 +61,72 @@ const NAVIGATION_TIMEOUT_MS = 30_000;
 // Neither set => legacy behaviour (local headless Chromium), which is what
 // local development uses.
 // ---------------------------------------------------------------------------
-const REMOTE_CDP_ENDPOINT = process.env.BROWSER_WS_ENDPOINT;
+// Configuration is read lazily, per use, rather than captured at module load.
+// Module bodies run before `dotenv.config()` in local development (imports are
+// hoisted), so reading them eagerly would miss backend/.env and silently fall
+// back to the local Chromium — which DB blocks — instead of the vendor browser.
+// In Lambda the platform sets these before the module loads, so this is purely a
+// local-development correctness fix; the lookups are trivial.
+function envNumber(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && process.env[name] !== undefined ? value : fallback;
+}
 
-// Production keeps the endpoint (which embeds the vendor zone password) in an
-// SSM SecureString, written by CI from a repository secret, and passes only the
-// parameter *name* to the function. The value is fetched once per execution
-// environment and cached. `BROWSER_WS_ENDPOINT` (a literal) wins when present so
-// local development needs no AWS access.
-const REMOTE_CDP_PARAM = process.env.BROWSER_WS_ENDPOINT_PARAM;
-const PROXY_URL = process.env.BROWSER_PROXY;
+/**
+ * The vendor CDP endpoint (a literal) wins when present, so local development
+ * needs no AWS access. In production the endpoint lives in an SSM SecureString,
+ * written by CI from a repository secret, and only the parameter *name* is
+ * configured — see resolveRemoteEndpoint().
+ */
+function remoteEndpointLiteral(): string | undefined {
+  return process.env.BROWSER_WS_ENDPOINT;
+}
 
-// How long a resolved SSM value is reused. Deliberately finite: the keep-warm
-// rule can keep an execution environment alive for weeks, so a value cached "for
-// the life of the environment" would never pick up a rotated credential.
-const ENDPOINT_TTL_MS = Number(process.env.BROWSER_ENDPOINT_TTL_MS ?? 15 * 60_000);
+function remoteEndpointParam(): string | undefined {
+  return process.env.BROWSER_WS_ENDPOINT_PARAM;
+}
 
-// Warm-up strategy. The remote vendor bills per MB that traverses its proxy, and
-// the only meaningful traffic left is the warm-up page load (~200 KiB–1.2 MB per
-// session). Fulfilling the document from the client gives the page a real
-// `https://int.bahn.de` origin — all we need to issue a same-origin fetch — while
-// costing zero billed traffic. Set BROWSER_WARMUP=load to load the real page.
-const WARMUP_MODE = process.env.BROWSER_WARMUP ?? 'fulfill';
+function proxyUrl(): string | undefined {
+  return process.env.BROWSER_PROXY;
+}
 
-// DB's edge intermittently rejects a well-formed request with `403 OPS_BLOCKED`,
-// tied to the vendor's rotating exit IP. A fresh session usually succeeds, and a
-// zero-byte warm-up makes retrying cheap, so retry a few times.
-const FETCH_ATTEMPTS = Number(process.env.BROWSER_MAX_ATTEMPTS ?? 3);
+/**
+ * How long a resolved SSM value is reused. Deliberately finite: the keep-warm
+ * rule can keep an execution environment alive for weeks, so a value cached "for
+ * the life of the environment" would never pick up a rotated credential.
+ */
+function endpointTtlMs(): number {
+  return envNumber('BROWSER_ENDPOINT_TTL_MS', 15 * 60_000);
+}
 
-// Each retry pays a full remote-session setup (~8–10 s), so an unbounded retry
-// loop can outlive the caller's timeout (API Gateway caps the GraphQL Lambda at
-// 29 s). Stop retrying once this much wall-clock time has been spent.
-const RETRY_BUDGET_MS = Number(process.env.BROWSER_RETRY_BUDGET_MS ?? 20_000);
+/**
+ * Warm-up strategy. The vendor bills per MB that traverses its proxy, and the
+ * only meaningful traffic left is the warm-up page load (~200 KiB–1.2 MB per
+ * session). Fulfilling the document from the client gives the page a real
+ * `https://int.bahn.de` origin — all we need to issue a same-origin fetch — while
+ * costing zero billed traffic. Set BROWSER_WARMUP=load to load the real page.
+ */
+function warmupMode(): string {
+  return process.env.BROWSER_WARMUP ?? 'fulfill';
+}
+
+/**
+ * DB's edge intermittently rejects a well-formed request with `403 OPS_BLOCKED`,
+ * tied to the vendor's rotating exit IP. A fresh session usually succeeds, and a
+ * zero-byte warm-up makes retrying cheap, so retry a few times.
+ */
+function fetchAttempts(): number {
+  return envNumber('BROWSER_MAX_ATTEMPTS', 3);
+}
+
+/**
+ * Each retry pays a full remote-session setup (~8–10 s), so an unbounded retry
+ * loop can outlive the caller's timeout (API Gateway caps the GraphQL Lambda at
+ * 29 s). Stop retrying once this much wall-clock time has been spent.
+ */
+function retryBudgetMs(): number {
+  return envNumber('BROWSER_RETRY_BUDGET_MS', 20_000);
+}
 
 // Only retry when the browser is remote: relaunching the local Chromium three
 // times would be slow and cannot help (the local environment is blocked).
@@ -240,12 +275,15 @@ let remoteEndpointCache: { value: string; expiresAt: number } | null = null;
  * The secret lives in an SSM SecureString that CI writes from a repository
  * secret, so it never reaches CloudFormation, a template or the function's
  * environment — only the parameter *name* is configured. Values are cached with
- * a TTL (see ENDPOINT_TTL_MS) and concurrent callers share one request, so a cold
+ * a TTL (see endpointTtlMs) and concurrent callers share one request, so a cold
  * start performs at most one GetParameter call.
  */
 function resolveRemoteEndpoint(): Promise<string | null> {
-  if (REMOTE_CDP_ENDPOINT) return Promise.resolve(REMOTE_CDP_ENDPOINT);
-  if (!REMOTE_CDP_PARAM) return Promise.resolve(null);
+  const literal = remoteEndpointLiteral();
+  if (literal) return Promise.resolve(literal);
+
+  const parameterName = remoteEndpointParam();
+  if (!parameterName) return Promise.resolve(null);
 
   if (remoteEndpointCache && Date.now() < remoteEndpointCache.expiresAt) {
     return Promise.resolve(remoteEndpointCache.value);
@@ -255,11 +293,11 @@ function resolveRemoteEndpoint(): Promise<string | null> {
     remoteEndpointRequest = (async (): Promise<string | null> => {
       const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
       const result = await new SSMClient({}).send(
-        new GetParameterCommand({ Name: REMOTE_CDP_PARAM, WithDecryption: true })
+        new GetParameterCommand({ Name: parameterName, WithDecryption: true })
       );
       const value = result.Parameter?.Value;
-      if (!value) throw new Error(`SSM parameter ${REMOTE_CDP_PARAM} is empty`);
-      remoteEndpointCache = { value, expiresAt: Date.now() + ENDPOINT_TTL_MS };
+      if (!value) throw new Error(`SSM parameter ${parameterName} is empty`);
+      remoteEndpointCache = { value, expiresAt: Date.now() + endpointTtlMs() };
       return value;
     })().finally(() => {
       // Cleared on failure too, so a transient SSM error is retried next time
@@ -289,7 +327,7 @@ async function launchBrowser(): Promise<Browser> {
     // Lambda runs unprivileged with a small /dev/shm; --single-process keeps
     // the memory footprint (and cold start) down for a one-page workload.
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--single-process'],
-    ...(PROXY_URL ? { proxy: parseProxyConfig(PROXY_URL) } : {}),
+    ...(proxyUrl() ? { proxy: parseProxyConfig(proxyUrl()!) } : {}),
   });
 }
 
@@ -312,7 +350,7 @@ async function getPage(origin: string): Promise<Page> {
       // Serve the origin's document locally. Nothing traverses the vendor's
       // proxy, so the warm-up is free, but the page still has the real origin
       // the subsequent same-origin fetch needs.
-      if (WARMUP_MODE === 'fulfill') {
+      if (warmupMode() === 'fulfill') {
         await context.route(`${origin}/`, (route) =>
           route.fulfill({
             status: 200,
@@ -401,7 +439,7 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
       );
 
       const blocked = response.status === 403 && /OPS_BLOCKED/.test(response.bodyText);
-      if (remoteSession && blocked && attempt < FETCH_ATTEMPTS && Date.now() - startedAt < RETRY_BUDGET_MS) {
+      if (remoteSession && blocked && attempt < fetchAttempts() && Date.now() - startedAt < retryBudgetMs()) {
         // Replace the blocked session once (shared with any concurrent caller),
         // then retry on the new one. A fresh session means a fresh egress IP; the
         // zero-byte warm-up keeps that cheap in traffic, and the budget above
@@ -414,7 +452,7 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
     } catch (error) {
       // A concurrent renewal closes this browser, so a failure here may simply
       // mean the session changed underneath us: retry rather than surfacing it.
-      if (remoteSession && sessionGeneration !== generation && attempt < FETCH_ATTEMPTS) {
+      if (remoteSession && sessionGeneration !== generation && attempt < fetchAttempts()) {
         continue;
       }
 
