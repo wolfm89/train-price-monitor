@@ -6,10 +6,12 @@ import Logger from './logger';
 import type { JourneyWorkerJob } from './journeyWorkerProtocol';
 
 /**
- * How long the API waits for the worker. API Gateway cuts the user off at 29 s,
- * so this leaves headroom for the response to travel back.
+ * Total time the API will wait for the worker, retries included. API Gateway cuts
+ * a user off at 29 s (the measured failure mode was a search waiting 29.4 s for a
+ * worker that was busy repairing a session), so the whole client is bounded — a
+ * late answer is worthless and a gateway timeout is worse than a clean error.
  */
-const INVOKE_TIMEOUT_MS = 24_000;
+const INVOKE_DEADLINE_MS = 25_000;
 
 /**
  * Retry delays for a throttled invoke. The worker runs one invocation at a time
@@ -96,14 +98,17 @@ async function invokeWorker<T>(job: JourneyWorkerJob): Promise<T> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= THROTTLE_RETRY_DELAYS_MS.length; attempt++) {
+    const remaining = INVOKE_DEADLINE_MS - (Date.now() - startedAt);
+    if (remaining <= 0) break;
+
     try {
-      return await invokeOnce<T>(job);
+      return await invokeOnce<T>(job, remaining);
     } catch (error) {
       lastError = error;
 
       const throttled = error instanceof Error && error.name === 'TooManyRequestsException';
       const delay = THROTTLE_RETRY_DELAYS_MS[attempt];
-      if (!throttled || delay === undefined || Date.now() - startedAt + delay > INVOKE_TIMEOUT_MS) {
+      if (!throttled || delay === undefined || Date.now() - startedAt + delay >= INVOKE_DEADLINE_MS) {
         break;
       }
 
@@ -115,9 +120,9 @@ async function invokeWorker<T>(job: JourneyWorkerJob): Promise<T> {
   throw lastError;
 }
 
-async function invokeOnce<T>(job: JourneyWorkerJob): Promise<T> {
+async function invokeOnce<T>(job: JourneyWorkerJob, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), INVOKE_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await client.send(

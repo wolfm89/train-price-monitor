@@ -1,4 +1,5 @@
 import { createInMemoryCache } from '@graphql-yoga/plugin-response-cache';
+import { warmSessionPool } from '../../shared/browser-fetch';
 import { createContext } from './context';
 import type { GraphQLContext } from './context';
 import Logger from './lib/logger';
@@ -44,11 +45,18 @@ export const handler = async (job: JourneyWorkerJob): Promise<unknown> => {
   Logger.info('Journey worker invoked', { job: job.job });
 
   if (job.job === 'keepAlive') {
+    // One session setup at most (11-22 s measured). A keep-warm invocation must not
+    // hold the worker's single slot for minutes while it digs out of a blocked
+    // stretch: a user search colliding with it is throttled, and the API's wait is
+    // bounded. Creating the replacement here is what keeps the *next* search off
+    // that path.
+    await warmSessionPool();
+
     // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
     // through the session (measured — a CDP-only ping three minutes after the last
-    // request did not keep it open). warmUp() also creates the session when there
-    // is none, replaces one the vendor hands out blocked, and rotates a session
-    // that is approaching the 60-minute cap.
+    // request did not keep it open). It also serves as the validation of whichever
+    // session was least recently used, retiring it if the vendor handed out a
+    // blocked one.
     await context.dbHafas.warmUp();
     return { ok: true };
   }

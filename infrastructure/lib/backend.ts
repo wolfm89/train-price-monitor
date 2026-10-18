@@ -182,13 +182,15 @@ export class Backend extends Construct {
       schedule: events.Schedule.expression('rate(1 hour)'),
     });
 
-    // Keeps the worker's environment — and therefore its vendor browser session —
-    // alive, and rotates the session before the vendor's 60-minute cap. The vendor
-    // drops a session after five minutes without traffic, so three minutes is
-    // comfortably inside that window, and a real DB query (rather than a CDP ping)
-    // is what resets the timer.
+    // Keeps the worker's sessions — and therefore its usefulness — alive, and
+    // rotates them before the vendor's 60-minute cap.
+    //
+    // Two minutes, not three: the pool holds two sessions and the vendor drops one
+    // after five minutes without traffic, so each session has to be touched inside
+    // that window (alternating pings = every four minutes). A real DB query, not a
+    // CDP ping, is what resets the timer — measured, a CDP-only ping does not.
     new events.Rule(this, 'KeepWarmRule', {
-      schedule: events.Schedule.rate(cdk.Duration.minutes(3)),
+      schedule: events.Schedule.rate(cdk.Duration.minutes(2)),
       targets: [
         new targets.LambdaFunction(journeyWorkerFunction, {
           event: events.RuleTargetInput.fromObject({ job: 'keepAlive' }),

@@ -201,8 +201,9 @@ flowchart LR
   fitting and blowing the vendor's free tier — do not change it casually.
 - **Retry is per session** (`BROWSER_MAX_ATTEMPTS`, `BROWSER_RETRY_BUDGET_MS`): DB's block is
   all-or-nothing per vendor session (a blocked session fails every request, a good one succeeds
-  for all), so a retry must open a _new_ session, which costs **11–22 s** (measured; parallel
-  connects are no faster). The shim only starts a retry it can finish inside the budget
+  for all), so a blocked session is retired and the retry runs on another one — a sibling out of
+  the pool (below) in ~1 s, or a new session at **11–22 s** (measured; parallel connects are no
+  faster) when the pool is empty. The shim only starts a retry it can finish inside the budget
   (`BROWSER_RETRY_COST_MS`), so a caller gets a clean error instead of a gateway timeout.
 - **Credential handling.** The CDP endpoint (which embeds the vendor zone password) lives in an SSM
   **SecureString** that CI writes from the repository secret `SCRAPING_BROWSER_URL`. The functions are
@@ -226,12 +227,16 @@ flowchart LR
   function invokes it synchronously (`JOURNEY_WORKER_FUNCTION`); the same resolver code runs in the
   refresher without that variable and keeps calling DB directly, because its long, non-interactive
   runs must not occupy the single worker slot.
-- **Keep-warm rule** (`KeepWarmRule`, every 3 minutes): targets the worker with `{job:'keepAlive'}`,
-  which runs a real DB query — a CDP-only ping does **not** reset the vendor's idle timer (measured)
-  — so the worker's session stays validated. The shim rotates the session once it is older than
-  `BROWSER_SESSION_MAX_AGE_MS` (default 50 minutes), before the vendor's cap. A blocked session is
-  replaced within the retry budget; while the vendor hands out blocked sessions (35–65 % depending
-  on the hour), the next ping repairs it.
+- **Keep-warm rule** (`KeepWarmRule`, every 2 minutes): targets the worker with
+  `{job:'keepAlive'}`, which tops the session pool up (at most one new session per
+  ping) and runs a real DB query — a CDP-only ping does **not** reset the vendor's
+  idle timer (measured), and the query is what validates whichever session is least
+  recently used. The shim keeps `BROWSER_SESSION_POOL_SIZE` (default 2) sessions and
+  picks the least recently used one, so both stay inside the vendor's five-minute
+  idle window: a blocked session is retired and the request fails over to its
+  sibling in ~1 s instead of paying 11-22 s for a new one. Sessions are rotated once
+  they pass `BROWSER_SESSION_MAX_AGE_MS` (default 50 minutes), before the vendor's
+  60-minute cap.
 - `playwright-core` must stay **external** in both bundles (it is the CDP client). The images no
   longer ship a browser at all — that removed the Chromium layer, `PLAYWRIGHT_BROWSERS_PATH`,
   the enlarged `/tmp`, and the x86_64-only constraint.
@@ -289,6 +294,7 @@ Environment variables (never commit values):
 | `BROWSER_RETRY_COST_MS`       | Backend + Scraper | Cost of one retry, used to decide if it fits the budget (default `12000`)                     |
 | `BROWSER_CONNECT_TIMEOUT_MS`  | Backend + Scraper | Fail a stalled vendor connect (default `20000`)                                               |
 | `BROWSER_SESSION_MAX_AGE_MS`  | Backend + Scraper | Rotate a vendor session before the 60 min cap (default 50 min)                                |
+| `BROWSER_SESSION_POOL_SIZE`   | Backend + Scraper | Sessions kept ready for failover (default `2`; the worker keeps them warm)                    |
 | `JOURNEY_WORKER_FUNCTION`     | Backend (API)     | Journey worker name (injected by CDK); unset in the refresher, which calls DB directly        |
 | `BROWSER_PROXY`               | Backend + Scraper | Proxy for the local-Chromium fallback (debugging)                                             |
 | `REACT_APP_GRAPHQL_ENDPOINT`  | Frontend          | API Gateway base URL                                                                          |
