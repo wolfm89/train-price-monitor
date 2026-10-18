@@ -11,6 +11,9 @@ const app = new cdk.App();
 if (process.env.CDK_APP_NAME) app.node.setContext('app_name', process.env.CDK_APP_NAME);
 if (process.env.CDK_DOMAIN_NAME) app.node.setContext('domain_name', process.env.CDK_DOMAIN_NAME);
 if (process.env.CDK_SES_FROM_EMAIL) app.node.setContext('ses_from_email', process.env.CDK_SES_FROM_EMAIL);
+// Name of the SSM SecureString holding the vendor CDP endpoint (non-secret).
+if (process.env.CDK_SCRAPING_BROWSER_PARAM)
+  app.node.setContext('scraping_browser_param', process.env.CDK_SCRAPING_BROWSER_PARAM);
 
 const certificateStack = new CertificateStack(app, 'CertificateStack', {
   env: {

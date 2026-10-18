@@ -1,30 +1,22 @@
 # ---------------------------------------------------------------------------
-# Poller image: AWS Lambda Node.js 24 base + Chromium headless shell.
+# Poller image: AWS Lambda Node.js 24 + the pre-built poller bundle.
 #
-# See ../shared/browser-fetch.ts for why a real browser is required: DB's
-# Akamai Bot Manager rejects every non-browser TLS/HTTP2 fingerprint with
-# `403 OPS_BLOCKED`. As of 2026-09 this also defeats curl-impersonate, so the
-# poller drives a genuine Chromium instead.
+# There is deliberately NO browser in this image. Until 2026-10-13 the poller
+# shipped Chromium (headless shell) and scraped DB from a page it controlled;
+# DB's bot protection then stopped allowing non-consumer *hosts*, so a browser in
+# a Lambda container is refused no matter how genuine it is. The browser now runs
+# at a managed unblocking-browser vendor and the shared shim attaches to it over
+# CDP using BROWSER_WS_ENDPOINT[_PARAM]. See ../shared/browser-fetch.ts and
+# AGENTS.md for the evidence.
 #
-# Only the `chromium_headless_shell` build is copied (~260 MB) rather than the
-# full `chromium` build (~390 MB): `chromium.launch({ headless: true })`
-# selects the headless shell, so the full browser would be dead weight.
+# That removed the Playwright browser download and the Chromium shared-library
+# layer. playwright-core stays: it is the CDP client. Note this image copies only
+# playwright-core from the dependency stage — everything else the bundle needs is
+# bundled, including @aws-sdk/client-ssm (see scripts/build.mjs).
 #
-# The image is x86_64-only. Chromium's shared-library dependencies must be
-# installed for the *target* architecture, which would require QEMU/binfmt
-# emulation to build an arm64 image on an amd64 host. Lambda's arm64 discount
-# is not worth that build-time fragility here, since these functions run
-# comfortably inside the free tier either way.
+# The bundle is built on the host (`npm run build`) because it bundles ../shared,
+# which is outside this Dockerfile's build context.
 # ---------------------------------------------------------------------------
-
-# CHROMIUM_REVISION is the browser build that playwright-core resolves at
-# runtime; it is tied to PLAYWRIGHT_VERSION. Both are pinned together, and the
-# COPY below fails loudly if the revision ever stops matching.
-ARG PLAYWRIGHT_VERSION=1.63.0
-ARG CHROMIUM_REVISION=1243
-ARG BUILDPLATFORM
-
-FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble AS browser
 
 # playwright-core is pure JavaScript, so this stage is architecture-agnostic
 # and can run natively on the build host.
@@ -34,17 +26,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
 FROM public.ecr.aws/lambda/nodejs:24
-ARG CHROMIUM_REVISION
-
-# Shared libraries Chromium links against that are absent from the Lambda base.
-RUN dnf install -y \
-      alsa-lib atk at-spi2-atk at-spi2-core cups-libs libdrm libX11 libXcomposite \
-      libXdamage libXext libXfixes libXrandr libxcb libxkbcommon mesa-libgbm nspr nss pango \
-    && dnf clean all
-
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-COPY --from=browser /ms-playwright/chromium_headless_shell-${CHROMIUM_REVISION} \
-                    /ms-playwright/chromium_headless_shell-${CHROMIUM_REVISION}
 
 COPY --from=deps /deps/node_modules/playwright-core ${LAMBDA_TASK_ROOT}/node_modules/playwright-core
 

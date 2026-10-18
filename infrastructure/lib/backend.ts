@@ -12,6 +12,7 @@ import {
   aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
+import { grantScrapingBrowserEndpointRead, scrapingBrowserParamName } from './scraping-browser';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
@@ -71,14 +72,19 @@ export class Backend extends Construct {
       SES_FROM_EMAIL: sesFromEmail,
       NODE_OPTIONS: '--enable-source-maps',
       DEPLOY_VERSION: 'v14',
+      // Name of the SSM SecureString holding the vendor CDP endpoint; the value
+      // itself is never in the template (see scraping-browser.ts).
+      BROWSER_WS_ENDPOINT_PARAM: scrapingBrowserParamName(this),
     };
 
-    // Both functions run the same image. DB blocks non-browser TLS
-    // fingerprints, so the bundled Chromium is needed by journey search (API)
-    // as well as by the hourly refresh; only sizing and triggers differ.
-    // 1536 MB is the measured sweet spot for browser cold starts on Lambda
-    // (~3.6 s, versus ~5.7 s at 1024 MB for near-identical GB-seconds), and
-    // Chromium needs the enlarged /tmp for its profile directory.
+    // Both functions run the same image. DB's bot protection rejects requests
+    // from non-consumer hosts (a browser running in a Lambda container is
+    // refused no matter how genuine it is), so both reach DB through a managed
+    // unblocking browser. Only sizing and triggers differ.
+    //
+    // Memory is now sized for the fetch/parse workload rather than for Chromium
+    // (which used to need 1536 MB and an enlarged /tmp). The browser lives at the
+    // vendor, so the peak here is the bundle plus the station index.
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
@@ -86,8 +92,7 @@ export class Backend extends Construct {
       // API Gateway REST APIs cut the integration off at 29 s, so a longer
       // Lambda timeout would only burn duration after the client is gone.
       timeout: cdk.Duration.seconds(29),
-      memorySize: 1536,
-      ephemeralStorageSize: cdk.Size.gibibytes(1),
+      memorySize: 512,
       environment: commonEnvironment,
     });
 
@@ -97,17 +102,21 @@ export class Backend extends Construct {
 
     // Scheduled/queued work is isolated from the API so a slow refresh cannot
     // consume API concurrency, and so it can run past API Gateway's 29 s cap.
-    // Nobody waits on it, so it is sized for cost rather than latency: the DB
-    // round-trip is network-bound (~2.5 s regardless of memory), and 768 MB is
-    // the lowest setting that leaves Chromium safe headroom (~615 MB peak).
+    // Nobody waits on it, so it is sized for cost rather than latency, and it is
+    // given a more generous retry budget: a blocked vendor session is replaced by
+    // paying another session setup (~8-10 s), which is worth it here.
     const refresherFunction = new lambda.DockerImageFunction(this, 'RefresherLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
       logGroup: refresherLogGroup,
       timeout: cdk.Duration.seconds(120),
-      memorySize: 768,
-      ephemeralStorageSize: cdk.Size.gibibytes(1),
-      environment: commonEnvironment,
+      memorySize: 512,
+      environment: {
+        ...commonEnvironment,
+        // Each retry costs a full remote-session setup, so allow a few within the
+        // 120 s timeout instead of the tighter default used by the API path.
+        BROWSER_RETRY_BUDGET_MS: '60000',
+      },
     });
 
     // Add necessary IAM permissions
@@ -116,6 +125,9 @@ export class Backend extends Construct {
       table.grantReadWriteData(lambdaFunction);
       table.grantReadWriteData(refresherFunction);
     });
+    // Journey search and the hourly refresh both reach DB through the vendor, so
+    // both need the endpoint parameter.
+    grantScrapingBrowserEndpointRead(this, 'ScrapingBrowserEndpoint', [lambdaFunction, refresherFunction]);
 
     const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,

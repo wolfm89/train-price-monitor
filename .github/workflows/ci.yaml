@@ -277,6 +277,24 @@ jobs:
           role-duration-seconds: 1200
           role-session-name: GithubWorkflow
 
+      # The vendor CDP endpoint (which embeds the zone password) is never in a
+      # CDK template: CI writes it to an SSM SecureString and the functions read
+      # it at runtime via BROWSER_WS_ENDPOINT_PARAM. Secrets are not available in
+      # `if:` expressions, so the emptiness check happens in the shell.
+      - name: Sync scraping-browser endpoint to SSM
+        env:
+          SCRAPING_BROWSER_URL: ${{ secrets.SCRAPING_BROWSER_URL }}
+          SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
+        run: |
+          set -euo pipefail
+          PARAM="${SCRAPING_BROWSER_PARAM:-/train-price-monitor/scraping-browser-url}"
+          if [[ -z "${SCRAPING_BROWSER_URL}" ]]; then
+            echo "::warning::SCRAPING_BROWSER_URL is not set; leaving ${PARAM} untouched. Journey search will fail until it exists."
+            exit 0
+          fi
+          aws ssm put-parameter --name "$PARAM" --type SecureString --value "$SCRAPING_BROWSER_URL" --overwrite
+          echo "Wrote ${PARAM}"
+
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
         run: npm run cdk diff
@@ -284,6 +302,7 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
+          CDK_SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
@@ -292,6 +311,7 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
+          CDK_SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
 
       - name: Invalidate CloudFront cache
         uses: badsyntax/github-action-aws-cloudfront@master

@@ -176,33 +176,55 @@ flowchart LR
 
 **Browser-backed transport** (`shared/browser-fetch.ts`):
 
-- DB's Akamai edge rejects every non-browser TLS/HTTP2 fingerprint with `403 OPS_BLOCKED`.
-  Verified dead ends: Node fetch/undici, curl-impersonate (Chrome **and** non-Chrome targets),
-  Bun, and all three db-vendo-client profiles (`db`, `dbnav`, `dbweb`) including with an
-  Android `DBNavigator/...` User-Agent. Only a real Chromium succeeds.
-- Both the backend and the poller esbuild-`alias` `cross-fetch` to this shim, so
+- **2026-09:** DB's Akamai edge started rejecting every non-browser TLS/HTTP2 fingerprint with
+  `403 OPS_BLOCKED`. Verified dead ends: Node fetch/undici, curl-impersonate (Chrome and
+  non-Chrome targets), Bun, and all three db-vendo-client profiles, including with an Android
+  `DBNavigator/...` User-Agent. Only a real Chromium worked, so both Lambdas shipped a headless
+  shell and issued requests from a page on the DB origin.
+- **2026-10-13:** that stopped working too. DB now rejects requests from non-consumer **hosts**:
+  a headless Linux container is refused even when a genuine browser makes the request, and even
+  with no automation (CDP) attached at all. Measured with real Google Chrome 155, Chromium,
+  Firefox, patchright, Camoufox, headless _and_ headful, and a browser driven over no protocol
+  at all — every one got `403 OPS_BLOCKED`; a Windows/macOS consumer browser on the _same_
+  network, and the same request scripted from it, are still allowed. So the decision is about the
+  client environment — not the IP and not automation. Sending the traffic through a consumer
+  **proxy** did not help (the block is above TCP), and injecting a validated `_abck` cookie from
+  a real browser did not transfer.
+- Therefore the browser no longer runs in the Lambda. It runs at a managed unblocking-browser
+  vendor and the shim attaches over CDP: `BROWSER_WS_ENDPOINT` (literal) or
+  `BROWSER_WS_ENDPOINT_PARAM` (SSM SecureString name, read once per execution environment).
+  Both the backend and the poller esbuild-`alias` `cross-fetch` to this shim, so
   `db-vendo-client`'s request building and response parsing stay untouched.
-- `playwright-core` must stay **external** in both bundles: it resolves the Chromium build
-  from its own package directory at runtime. The images copy only
-  `chromium_headless_shell-<revision>` from the official Playwright image; that revision is
-  pinned together with the `playwright-core` version.
-- Both Lambda images are **x86_64-only**: Chromium's shared libraries are installed for the
-  target architecture, so an arm64 image would need QEMU emulation on an amd64 build host.
-- Lambda sizing is cost-driven, not latency-driven: per-call latency is network-bound
-  (~2.5 s at every size from 512–1536 MB), so extra memory buys no speedup and costs
-  strictly more. Size each function against its own peak, not the browser's: a bare browser
-  peaks at ~615 MB (and 512 MB peaked at ~508 MB of 512, so it is not safe), but the poller
-  also holds the route catalog, the AWS SDK and a batch of Parquet rows — at 768 MB it
-  peaked at 756 MB and Chromium was killed mid-run, hence 1024 MB. Chromium also needs
-  `ephemeralStorageSize` raised above the default 512 MB, because `--disable-dev-shm-usage`
-  puts its shared-memory files under `/tmp`.
+- **Warm-up is fulfilled client-side** (`BROWSER_WARMUP`, default `fulfill`): the page gets a
+  real `https://int.bahn.de` origin without any request traversing the vendor proxy. Measured
+  0 KiB versus ~200 KiB–1.2 MB per session for a real page load. This is the difference between
+  fitting and blowing the vendor's free tier — do not change it casually.
+- **Retry is per session** (`BROWSER_MAX_ATTEMPTS`, `BROWSER_RETRY_BUDGET_MS`): DB's block is
+  all-or-nothing per vendor session (a blocked session fails every request, a good one succeeds
+  for all), so a retry must open a _new_ session, which costs ~8–10 s. The budget bounds how
+  long a caller waits; the API Lambda keeps it low to stay inside API Gateway's 29 s cap.
+- `playwright-core` must stay **external** in both bundles (it is the CDP client). The images no
+  longer ship a browser at all — that removed the Chromium layer, `PLAYWRIGHT_BROWSERS_PATH`,
+  the enlarged `/tmp`, and the x86_64-only constraint.
+- Lambda sizing: without a browser the peaks are small (bundle + station index). Backend
+  functions are 512 MB, the poller 512 MB with a 300 s timeout (remote calls are ~1–8 s each,
+  and `ABORT_THRESHOLD_MS` in the poller is kept just below the function timeout).
+- `@aws-sdk/client-ssm` is **external** in the backend bundle (it is a production dependency, so
+  it is present in the image) and external in the scraper bundle (provided by the Node.js 24
+  runtime, like the other SDK clients). The shared shim resolves it lazily, so local development
+  never touches SSM.
 
 **Backend esbuild bundling** (`--format=cjs`):
 
 - Do NOT externalize ESM-only packages — they cannot be `require()`d and crash Lambda with
   `UserCodeSyntaxError` (API Gateway then returns a 502, often misreported as CORS).
 - `db-vendo-client` must be **bundled** (ESM-only).
-- `db-hafas-stations` must stay **external** (uses `import.meta.url`, loaded via dynamic `import()`).
+- The station index for autocomplete is **generated and bundled**: `backend/src/stations/stations.json`
+  comes from `db-hafas-stations` via `npm run stations` (wired into `pretypecheck`/`prebuild`), and the
+  package itself is a devDependency that never ships. Reading the package at runtime cost ~1.1 s on the
+  first `locations` call per cold environment and added 133 MB to the image; the generated index parses
+  in ~20 ms and is 0.67 MiB. The output is **not committed** (the pre-commit hook rejects files over
+  500 KB) — it is regenerated before typecheck and build.
 - The bundle is built on the host, not inside Docker: it pulls in `shared/`, which is outside
   the image's build context. `mise run //infrastructure:deploy` builds it first.
 
@@ -216,25 +238,32 @@ flowchart LR
 
 Environment variables (never commit values):
 
-| Variable                     | Module           | Description                                               |
-| ---------------------------- | ---------------- | --------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`  | Backend          | S3 bucket name for profile images                         |
-| `TPM_SQS_QUEUE_URL`          | Backend          | SQS queue URL for journey monitor updates                 |
-| `SES_FROM_EMAIL`             | Backend (Lambda) | Sender address for SES emails (injected by CDK)           |
-| `FRONTEND_URL`               | Backend (Lambda) | Frontend base URL for notification links                  |
-| `LOCAL_DEV`                  | Backend          | `1` starts an HTTP server instead of the Lambda handler   |
-| `PORT`                       | Backend          | HTTP port for local dev server (default `4000`)           |
-| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend         | API Gateway base URL                                      |
-| `CDK_APP_NAME`               | Infrastructure   | Application name (overrides CDK context)                  |
-| `CDK_DOMAIN_NAME`            | Infrastructure   | Custom domain name for the deployment                     |
-| `CDK_SES_FROM_EMAIL`         | Infrastructure   | Sender email injected as Lambda `SES_FROM_EMAIL`          |
-| `SCRAPER_TABLE_NAME`         | Scraper          | DynamoDB schedule table (injected by CDK)                 |
-| `SCRAPER_BUCKET_NAME`        | Scraper          | S3 bucket for Parquet data (injected by CDK)              |
-| `SCRAPER_BATCH_SIZE`         | Scraper          | Targets per poller run (default `10`; 1 target = 2 calls) |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper          | Days ahead to seed (default `60`)                         |
-| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper          | Newest days re-seeded per nightly run (default `3`)       |
-| `HYDRATOR_FULL_SEED`         | Scraper          | `1` seeds the whole window and prunes beyond it (manual)  |
-| `AWS_ENDPOINT_URL`           | Scraper          | Local Floci endpoint (set by mise tasks)                  |
+| Variable                     | Module            | Description                                                      |
+| ---------------------------- | ----------------- | ---------------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                |
+| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                        |
+| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                  |
+| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL for notification links                         |
+| `LOCAL_DEV`                  | Backend           | `1` starts an HTTP server instead of the Lambda handler          |
+| `PORT`                       | Backend           | HTTP port for local dev server (default `4000`)                  |
+| `BROWSER_WS_ENDPOINT`        | Backend + Scraper | Vendor CDP endpoint, literal (local dev; wins over `_PARAM`)     |
+| `BROWSER_WS_ENDPOINT_PARAM`  | Backend + Scraper | SSM SecureString name holding the CDP endpoint (injected by CDK) |
+| `BROWSER_WARMUP`             | Backend + Scraper | `fulfill` (default, 0 billed bytes) or `load` the real page      |
+| `BROWSER_MAX_ATTEMPTS`       | Backend + Scraper | Attempts per request before failing (default `3`)                |
+| `BROWSER_RETRY_BUDGET_MS`    | Backend + Scraper | Wall-clock budget for retries (default `20000`)                  |
+| `BROWSER_PROXY`              | Backend + Scraper | Proxy for the local-Chromium fallback (debugging)                |
+| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway base URL                                             |
+| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                         |
+| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                            |
+| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                 |
+| `CDK_SCRAPING_BROWSER_PARAM` | Infrastructure    | SSM SecureString name for the vendor CDP endpoint                |
+| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                        |
+| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                     |
+| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`; 1 target = 2 calls)        |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | Days ahead to seed (default `60`)                                |
+| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper           | Newest days re-seeded per nightly run (default `3`)              |
+| `HYDRATOR_FULL_SEED`         | Scraper           | `1` seeds the whole window and prunes beyond it (manual)         |
+| `AWS_ENDPOINT_URL`           | Scraper           | Local Floci endpoint (set by mise tasks)                         |
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
 - Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).

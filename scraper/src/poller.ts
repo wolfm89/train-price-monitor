@@ -24,16 +24,18 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
 /**
  * Max targets per invocation. Each target = 2 API calls.
  *
- * Tunable via env so the cadence/batch trade-off can be adjusted against the
- * Lambda free tier without a code change. Routing requests through a real
- * browser (see ../../shared/browser-fetch.ts) costs ~2.5 s per API call
- * instead of ~0.5 s, and needs 1024 MB instead of 256 MB, so the sustainable
- * batch is much smaller than it was for the raw-HTTP transport.
+ * Tunable via env so the cadence/batch trade-off can be adjusted without a code
+ * change. DB is reached through a managed remote browser (see
+ * ../../shared/browser-fetch.ts), which costs ~1-8 s per API call plus a ~10 s
+ * session setup once per invocation, so the sustainable batch is much smaller
+ * than it was for the raw-HTTP transport.
  */
 const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 10, logger);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the
- * function timeout (180 s) with enough room to finish the current target. */
-const ABORT_THRESHOLD_MS = 150_000;
+ * function timeout (300 s) with enough room to finish the current target.
+ * Increased from 150 s when DB access moved to a managed remote browser, whose
+ * per-call latency (~1-8 s) is higher than the old in-process Chromium. */
+const ABORT_THRESHOLD_MS = 270_000;
 /**
  * Sleep between targets to spread API load.
  *

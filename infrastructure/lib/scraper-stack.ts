@@ -9,6 +9,8 @@ import {
   aws_logs as logs,
 } from 'aws-cdk-lib';
 
+import { grantScrapingBrowserEndpointRead, scrapingBrowserParamName } from './scraping-browser';
+
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
   bucketName?: string;
@@ -113,29 +115,35 @@ export class ScraperStack extends cdk.Stack {
     const pollerFn = new lambda.DockerImageFunction(this, 'ScraperPoller', {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
-      memorySize: 1024,
-      ephemeralStorageSize: cdk.Size.gibibytes(1),
-      timeout: cdk.Duration.seconds(180),
+      memorySize: 512,
+      // 300 s, not 180 s: DB is now reached through a remote browser whose
+      // per-call latency is ~1-8 s (session setup adds ~10 s once per
+      // environment), so a 36-call batch needs more headroom than the old
+      // in-process Chromium did. ABORT_THRESHOLD_MS in scraper/src/poller.ts is
+      // deliberately just below this.
+      timeout: cdk.Duration.seconds(300),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
-        // 18 targets = 36 API calls ≈ 102 s per run, measured at ~5.2 GB-s of
-        // fixed per-run overhead plus ~4.93 GB-s per target. With the
-        // 15-minute cadence below that is ~298,000 GB-s/month.
-        //
-        // This deliberately does not spend the whole free tier. The backend
-        // scales with usage while the scraper does not: every monitored journey
-        // costs ~1,368 GB-s/month to refresh hourly (all journeys share one
-        // browser start per run), and each journey search costs ~10 GB-s
-        // because it has to drive the browser. Roughly 100,000 GB-s/month is
-        // therefore left unclaimed as user headroom — about 80 additional
-        // monitored journeys — on top of the ~10,000 GB-s used by the hydrator
-        // and compactor and a 10% safety margin.
+        // 18 targets = 36 API calls per run. Cost is no longer GB-seconds of a
+        // bundled browser but traffic through the vendor (the poller is the only
+        // sizable consumer of it), so the batch stays at 18 to keep the 15-minute
+        // cadence able to meet the TTD intervals. See AGENTS.md.
         SCRAPER_BATCH_SIZE: '18',
+        // Each retry replaces a blocked vendor session (~10 s), so allow several
+        // within the 300 s timeout instead of the tighter API-path default.
+        BROWSER_RETRY_BUDGET_MS: '240000',
+        // Name of the SSM SecureString holding the vendor CDP endpoint; the value
+        // itself is never in the template (see scraping-browser.ts).
+        BROWSER_WS_ENDPOINT_PARAM: scrapingBrowserParamName(this),
       },
     });
+
+    // The poller is the one component that reaches DB in bulk, so it needs the
+    // vendor endpoint parameter.
+    grantScrapingBrowserEndpointRead(this, 'ScrapingBrowserEndpoint', [pollerFn]);
 
     // -------------------------------------------------------------------------
     // Hydrator Lambda — runs nightly at 02:00 UTC, seeds schedule rows

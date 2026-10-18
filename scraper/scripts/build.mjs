@@ -1,10 +1,12 @@
 import * as esbuild from 'esbuild';
 import { fileURLToPath } from 'url';
 
-// These packages are provided by the Lambda Node.js 24 runtime and must not
-// be bundled. Externalizing them keeps the bundle small and avoids version
-// conflicts with the runtime-supplied SDK.
-const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3'];
+// These packages are provided by the Lambda Node.js 24 runtime (they live in
+// /var/runtime/node_modules inside the image) and must not be bundled.
+// Externalizing them keeps the bundle small and avoids version conflicts with
+// the runtime-supplied SDK. @aws-sdk/client-ssm is used by the shared browser
+// shim to resolve the vendor endpoint from SSM.
+const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3', '@aws-sdk/client-ssm'];
 
 // playwright-core (used only by the poller via the shared browser transport)
 // resolves the Chromium build from its own package directory at runtime, so it
