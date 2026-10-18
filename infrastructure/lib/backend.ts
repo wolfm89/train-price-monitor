@@ -107,8 +107,10 @@ export class Backend extends Construct {
         // would hold the single worker slot and throttle every other search.
         BROWSER_RETRY_BUDGET_MS: '25000',
         // The keeper has nobody waiting on it and must end up with a *good*
-        // session, so it may spend most of its 60 s timeout trying.
-        BROWSER_KEEPALIVE_BUDGET_MS: '45000',
+        // session, but a search colliding with it waits: 30 s covers one setup
+        // (~11-22 s) plus a quick failover, and the backoff in worker.ts stops it
+        // from repeating during a bad vendor stretch.
+        BROWSER_KEEPALIVE_BUDGET_MS: '30000',
       },
     });
 

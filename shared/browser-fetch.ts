@@ -432,20 +432,23 @@ function pickSession(): Session {
  * request must never wait for the pool to be refilled — it picks what is already
  * there and fails over between sessions instead.
  */
-export async function warmSessionPool(): Promise<number> {
+export async function warmSessionPool(): Promise<{ ready: number; created: boolean }> {
   for (const session of usableSessions()) {
     if (session.startedAt && Date.now() - session.startedAt > sessionMaxAgeMs()) {
       closeSession(session);
     }
   }
 
+  let created = false;
+
   if (usableSessions().length < sessionPoolSize()) {
     // Bounded on purpose: one session per call, so a keep-warm invocation cannot
     // hold the worker's single slot for minutes while it digs out of a bad stretch.
     await createSession().browserPromise;
+    created = true;
   }
 
-  return usableSessions().length;
+  return { ready: usableSessions().length, created };
 }
 
 async function getPage(session: Session, origin: string): Promise<Page> {

@@ -46,7 +46,7 @@ const SearchPage: React.FC<Props> = () => {
       .catch(() => undefined);
   }, []);
 
-  const [{ data, fetching, error }] = useQuery({
+  const [{ data, fetching, error }, reexecuteSearch] = useQuery({
     query: JourneySearchQuery,
     variables: queryVars ?? { from: '', to: '', departure: '' },
     pause: !queryVars,
@@ -66,7 +66,22 @@ const SearchPage: React.FC<Props> = () => {
   const handleSearch = (from: string, to: string, departure: string, options?: JourneySearchOptions) => {
     setSearchClicked(true);
     setSearchOptions(options);
+
+    // Pressing Search again after a failure submits identical values, and urql does
+    // not re-run a query whose variables are unchanged — the button then looked dead
+    // until the form was edited. Re-execute explicitly in that case.
+    const repeated =
+      queryVars !== null &&
+      queryVars.from === from &&
+      queryVars.to === to &&
+      queryVars.departure === departure &&
+      JSON.stringify(queryVars.options ?? null) === JSON.stringify(options ?? null);
+
     setQueryVars({ from, to, departure, options });
+
+    if (repeated) {
+      reexecuteSearch({ requestPolicy: 'network-only' });
+    }
   };
 
   const handleNavigateEarlier = earlierRef

@@ -23,6 +23,34 @@ const SEARCH_RETRY_BUDGET_MS = process.env.BROWSER_RETRY_BUDGET_MS ?? '25000';
 const KEEPALIVE_RETRY_BUDGET_MS = process.env.BROWSER_KEEPALIVE_BUDGET_MS ?? '45000';
 
 /**
+ * Backoff for the keep-alive, so the worker stops amplifying a vendor episode.
+ *
+ * Every new session is another 11-22 s of churn, and measured on 2026-10-18 it did
+ * not help: 29 session attempts in 22 minutes, 27 of them failed, and the episode
+ * ended only once the churn stopped. After a failure the keeper therefore stays
+ * quiet for a while and leaves the worker's single slot to searches, which create
+ * a session only when one is actually needed. Any successful DB work — including a
+ * user's search — means the vendor is healthy again and resets this.
+ */
+const BACKOFF_BASE_MS = 4 * 60_000;
+const BACKOFF_MAX_MS = 16 * 60_000;
+
+let consecutiveFailures = 0;
+let pausedUntil = 0;
+
+function noteSuccess(): void {
+  consecutiveFailures = 0;
+  pausedUntil = 0;
+}
+
+function noteFailure(): void {
+  consecutiveFailures += 1;
+  const backoffMs = Math.min(BACKOFF_BASE_MS * 2 ** (consecutiveFailures - 1), BACKOFF_MAX_MS);
+  pausedUntil = Date.now() + backoffMs;
+  Logger.warn('Backing off session setup', { consecutiveFailures, backoffMs });
+}
+
+/**
  * DB worker for journey searches.
  *
  * Deployed with reserved concurrency 1, no API Gateway route and no triggers
@@ -45,26 +73,53 @@ export const handler = async (job: JourneyWorkerJob): Promise<unknown> => {
   Logger.info('Journey worker invoked', { job: job.job });
 
   if (job.job === 'keepAlive') {
-    // One session setup at most (11-22 s measured). A keep-warm invocation must not
-    // hold the worker's single slot for minutes while it digs out of a blocked
-    // stretch: a user search colliding with it is throttled, and the API's wait is
-    // bounded. Creating the replacement here is what keeps the *next* search off
-    // that path.
-    await warmSessionPool();
+    if (Date.now() < pausedUntil) {
+      Logger.info('Skipping keep-alive during backoff', { remainingMs: pausedUntil - Date.now() });
+      return { ok: true, backedOff: true };
+    }
 
-    // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
-    // through the session (measured — a CDP-only ping three minutes after the last
-    // request did not keep it open). It also serves as the validation of whichever
-    // session was least recently used, retiring it if the vendor handed out a
-    // blocked one.
-    await context.dbHafas.warmUp();
-    return { ok: true };
+    try {
+      // One session setup at most (11-22 s measured). A keep-warm invocation must
+      // not hold the worker's single slot for minutes while it digs out of a blocked
+      // stretch: a user search colliding with it is throttled, and the API's wait is
+      // bounded. Creating the replacement here is what keeps the *next* search off
+      // that path.
+      const { created } = await warmSessionPool();
+
+      if (!created) {
+        // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
+        // through the session (measured — a CDP-only ping three minutes after the
+        // last request did not keep it open). It also validates whichever session was
+        // least recently used, retiring it if the vendor handed out a blocked one.
+        //
+        // Skipped right after a setup on purpose: validating the new session would
+        // cost another 11-22 s replacement when it comes back blocked, which is the
+        // churn this is meant to avoid — the next request validates it cheaply.
+        await context.dbHafas.warmUp();
+      }
+
+      noteSuccess();
+      return { ok: true, created };
+    } catch (error) {
+      noteFailure();
+      throw error;
+    }
   }
 
-  if (job.job === 'journey') {
-    const journey = await context.dbHafas.requeryJourney(job.refreshToken, job.pricingOptions);
-    return journey ?? null;
-  }
+  try {
+    if (job.job === 'journey') {
+      const journey = await context.dbHafas.requeryJourney(job.refreshToken, job.pricingOptions);
+      noteSuccess();
+      return journey ?? null;
+    }
 
-  return context.dbHafas.queryJourneys(job.from, job.to, new Date(job.departure), job.options);
+    const result = await context.dbHafas.queryJourneys(job.from, job.to, new Date(job.departure), job.options);
+    noteSuccess();
+    return result;
+  } catch (error) {
+    // A failed search means the vendor handed out another blocked session (or the
+    // browser hung), so the keeper should back off too instead of piling on.
+    noteFailure();
+    throw error;
+  }
 };
