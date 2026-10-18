@@ -233,9 +233,12 @@ flowchart LR
   idle timer (measured), and the query is what validates whichever session is least
   recently used — including one the same ping just created, so a search never picks
   up an unvalidated spare. The shim keeps `BROWSER_SESSION_POOL_SIZE`
-  (default 2) sessions and picks the least recently used one, so both stay inside
+  (default 3) sessions and picks the least recently used one, so both stay inside
   the vendor's five-minute idle window: a blocked session is retired and the request
   fails over to its sibling in ~1 s instead of paying 11-22 s for a new one.
+  The block is one-way — measured, a refused session stayed refused across four
+  attempts over three minutes, while a working one can be refused later — so a
+  refused session is always replaced and the pool is the only way to survive it.
   Sessions are rotated once they pass `BROWSER_SESSION_MAX_AGE_MS` (default 50
   minutes), before the vendor's 60-minute cap.
   **Backoff:** a failed keep-alive (or a failed search) pauses session _creation_ for

@@ -82,22 +82,26 @@ export const handler = async (job: JourneyWorkerJob): Promise<unknown> => {
     suspendSessionCreation(backedOff);
 
     try {
-      // At most one session setup (11-22 s measured) — never a second inside the
+      // At most one round of setups (11-22 s measured), never a second inside the
       // same ping, so the worker's single slot is never held for minutes.
       const { ready, created } = await warmSessionPool();
 
       if (ready > 0) {
         // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
         // through the session (measured — a CDP-only ping three minutes after the
-        // last request did not keep it open). It also *validates* whichever session
-        // is least recently used — the one just created, since a fresh session sorts
-        // first. Skipping this leaves an unvalidated spare that the next search then
-        // has to test, which measured 12 s searches.
+        // last request did not keep it open).
         await context.dbHafas.warmUp();
+
+        // With three sessions in the pool, two requests per two-minute ping keep
+        // every one of them inside the vendor's five-minute idle window.
+        if (!created) await context.dbHafas.warmUp();
+
+        noteSuccess();
+        return { ok: true, created, backedOff };
       }
 
-      noteSuccess();
-      return { ok: true, created, backedOff };
+      // Pool empty while backed off: nothing to ping, and nothing to learn.
+      return { ok: true, created: false, backedOff };
     } catch (error) {
       noteFailure();
       throw error;

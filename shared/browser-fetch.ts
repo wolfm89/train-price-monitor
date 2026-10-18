@@ -69,12 +69,14 @@ export function suspendSessionCreation(suspended: boolean): void {
 }
 
 /**
- * How many vendor sessions to keep ready. Two is enough to survive a blocked
- * session without paying for a new one, and few enough that a keep-warm ping
- * every two minutes can hold both inside the vendor's five-minute idle window.
+ * How many vendor sessions to keep ready. A blocked session never recovers
+ * (measured: four attempts over three minutes, all refused), so a retry must run
+ * on a different session — and an already-connected sibling costs ~1 s instead of
+ * the 11-22 s a new setup takes. Three sessions put the chance of all of them
+ * being refused at roughly one in eight during a bad stretch.
  */
 function sessionPoolSize(): number {
-  return envNumber('BROWSER_SESSION_POOL_SIZE', 2);
+  return envNumber('BROWSER_SESSION_POOL_SIZE', 3);
 }
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -437,6 +439,8 @@ function pickSession(): Session {
     return createSession();
   }
 
+  // Least recently used, so every session in the pool keeps being exercised and a
+  // spare is not quietly dropped by the vendor's idle timeout.
   return usable.reduce((oldest, candidate) => (candidate.lastUsedAt < oldest.lastUsedAt ? candidate : oldest));
 }
 
@@ -457,10 +461,12 @@ export async function warmSessionPool(): Promise<{ ready: number; created: boole
 
   let created = false;
 
-  if (!sessionCreationSuspended && usableSessions().length < sessionPoolSize()) {
-    // Bounded on purpose: one session per call, so a keep-warm invocation cannot
-    // hold the worker's single slot for minutes while it digs out of a bad stretch.
-    await createSession().browserPromise;
+  const missing = sessionCreationSuspended ? 0 : sessionPoolSize() - usableSessions().length;
+  if (missing > 0) {
+    // All of them at once: connects are independent (the vendor allows concurrent
+    // browsers), so filling a three-session pool costs the same wall clock as one
+    // setup (~11-22 s measured) instead of three rounds of it.
+    await Promise.all(Array.from({ length: missing }, () => createSession().browserPromise));
     created = true;
   }
 
@@ -570,8 +576,8 @@ async function fetchSerialized(url: string, init: FetchInit = {}): Promise<Fetch
 
       const blocked = response.status === 403 && /OPS_BLOCKED/.test(response.bodyText);
 
-      // DB's block applies to everything a session does, so retire it either way:
-      // the retry then picks a sibling instead of paying for this one again.
+      // A blocked session never recovers — measured: four attempts over three
+      // minutes, all refused — so retire it and let the retry run on a sibling.
       if (remoteSession && blocked) closeSession(session);
 
       if (remoteSession && blocked && attempt < fetchAttempts() && canAffordRetry(startedAt)) {
