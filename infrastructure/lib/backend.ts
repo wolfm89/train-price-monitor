@@ -97,6 +97,10 @@ export class Backend extends Construct {
       code: lambda.DockerImageCode.fromImageAsset('../backend', { cmd: ['worker.handler'] }),
       architecture: lambda.Architecture.X86_64,
       logGroup: journeyWorkerLogGroup,
+      // Deterministic name: the deploy job warms the worker right after `cdk deploy`,
+      // and the CI role is allowed neither lambda:ListFunctions nor
+      // cloudformation:DescribeStacks, so it must not have to look the name up.
+      functionName: `${cdk.Stack.of(this).stackName}-JourneyWorker`,
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
       reservedConcurrentExecutions: 1,

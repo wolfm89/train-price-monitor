@@ -330,10 +330,7 @@ jobs:
       # warning, not an error: the vendor's session lottery is not ours to fail on.
       - name: Warm the journey worker
         run: |
-          FUNCTION=$(aws cloudformation describe-stacks \
-            --stack-name InfrastructureStack \
-            --query "Stacks[0].Outputs[?OutputKey=='JourneyWorkerFunctionName'].OutputValue" \
-            --output text)
+          FUNCTION=InfrastructureStack-JourneyWorker
           if [ -z "$FUNCTION" ]; then
             echo "journey worker not found"
             exit 1
