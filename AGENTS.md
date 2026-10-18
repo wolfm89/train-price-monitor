@@ -231,8 +231,8 @@ flowchart LR
   `{job:'keepAlive'}`, which tops the session pool up (at most one new session per
   ping) and runs a real DB query — a CDP-only ping does **not** reset the vendor's
   idle timer (measured), and the query is what validates whichever session is least
-  recently used. A ping that just created a session skips the query, so one
-  invocation never pays two setups. The shim keeps `BROWSER_SESSION_POOL_SIZE`
+  recently used — including one the same ping just created, so a search never picks
+  up an unvalidated spare. The shim keeps `BROWSER_SESSION_POOL_SIZE`
   (default 2) sessions and picks the least recently used one, so both stay inside
   the vendor's five-minute idle window: a blocked session is retired and the request
   fails over to its sibling in ~1 s instead of paying 11-22 s for a new one.

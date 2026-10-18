@@ -79,24 +79,18 @@ export const handler = async (job: JourneyWorkerJob): Promise<unknown> => {
     }
 
     try {
-      // One session setup at most (11-22 s measured). A keep-warm invocation must
-      // not hold the worker's single slot for minutes while it digs out of a blocked
-      // stretch: a user search colliding with it is throttled, and the API's wait is
-      // bounded. Creating the replacement here is what keeps the *next* search off
-      // that path.
+      // One session setup at most (11-22 s measured) before any validation, so a
+      // keep-warm invocation cannot hold the worker's single slot for minutes while
+      // it digs out of a bad stretch.
       const { created } = await warmSessionPool();
 
-      if (!created) {
-        // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
-        // through the session (measured — a CDP-only ping three minutes after the
-        // last request did not keep it open). It also validates whichever session was
-        // least recently used, retiring it if the vendor handed out a blocked one.
-        //
-        // Skipped right after a setup on purpose: validating the new session would
-        // cost another 11-22 s replacement when it comes back blocked, which is the
-        // churn this is meant to avoid — the next request validates it cheaply.
-        await context.dbHafas.warmUp();
-      }
+      // A real DB request, not a CDP ping: the vendor's idle timer counts traffic
+      // through the session (measured — a CDP-only ping three minutes after the last
+      // request did not keep it open). It also *validates* whichever session is least
+      // recently used — which is the one just created, since a fresh session sorts
+      // first. Skipping this was a mistake: an unvalidated spare is then picked by
+      // the next search, and a blocked one costs that search another 11-22 s.
+      await context.dbHafas.warmUp();
 
       noteSuccess();
       return { ok: true, created };
