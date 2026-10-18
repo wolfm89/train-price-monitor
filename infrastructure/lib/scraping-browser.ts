@@ -1,5 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import { aws_iam as iam, aws_ssm as ssm } from 'aws-cdk-lib';
+import { aws_iam as iam } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
 /**
@@ -22,10 +22,15 @@ export function scrapingBrowserParamName(scope: Construct): string {
  * Grants the given functions read access to the endpoint parameter and returns
  * its name, so callers can pass it as `BROWSER_WS_ENDPOINT_PARAM`.
  *
- * Two permissions are needed: `ssm:GetParameter` for the parameter itself, and
- * `kms:Decrypt` for the key the SecureString was encrypted with. With no explicit
- * key that is the AWS-managed `alias/aws/ssm`, whose policy allows use but still
- * requires the caller's IAM policy to permit decryption.
+ * Least privilege: exactly the one API the shim calls, on exactly this parameter.
+ * CDK's `grantRead` would also add `ssm:DescribeParameters`, `GetParameters` and
+ * `GetParameterHistory`, none of which the runtime uses.
+ *
+ * No `kms:Decrypt` is required: the parameter is encrypted with the AWS-managed
+ * `aws/ssm` key, whose policy already allows decryption for every principal in
+ * the account (see "Setting up Parameter Store" in the Systems Manager docs). If
+ * it is ever moved to a customer-managed key, add `kms:Decrypt` on that key's
+ * ARN — a key alias ARN is not a valid KMS resource.
  */
 export function grantScrapingBrowserEndpointRead(
   scope: Construct,
@@ -33,29 +38,21 @@ export function grantScrapingBrowserEndpointRead(
   functions: cdk.aws_lambda.IFunction[]
 ): string {
   const parameterName = scrapingBrowserParamName(scope);
-  const stack = cdk.Stack.of(scope);
 
-  // fromSecureStringParameterAttributes records a reference only: there is no
-  // synth-time lookup, so the secret never has to be readable by whoever runs
-  // `cdk synth` (and nothing about the value reaches the template).
-  const parameter = ssm.StringParameter.fromSecureStringParameterAttributes(scope, id, { parameterName });
-
-  // Reading a SecureString needs `ssm:GetParameter` *and* `kms:Decrypt` on the key
-  // it was encrypted with. With no explicit key that is the AWS-managed
-  // `alias/aws/ssm`. The grant is written straight onto the function roles (an
-  // imported alias cannot contribute a key policy) and scoped to that alias, so
-  // moving the parameter to a customer-managed key fails loudly with AccessDenied
-  // rather than silently needing a wider policy.
-  const decryptStatement = new iam.PolicyStatement({
-    sid: 'DecryptScrapingBrowserEndpoint',
-    actions: ['kms:Decrypt'],
-    resources: [stack.formatArn({ service: 'kms', resource: 'alias', resourceName: 'aws/ssm' })],
+  const statement = new iam.PolicyStatement({
+    sid: `${id}Read`,
+    actions: ['ssm:GetParameter'],
+    resources: [
+      cdk.Stack.of(scope).formatArn({
+        service: 'ssm',
+        resource: 'parameter',
+        // Parameter ARNs carry the name without its leading slash.
+        resourceName: parameterName.replace(/^\//, ''),
+      }),
+    ],
   });
 
-  for (const fn of functions) {
-    parameter.grantRead(fn);
-    fn.addToRolePolicy(decryptStatement);
-  }
+  for (const fn of functions) fn.addToRolePolicy(statement);
 
   return parameterName;
 }

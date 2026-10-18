@@ -203,6 +203,19 @@ flowchart LR
   all-or-nothing per vendor session (a blocked session fails every request, a good one succeeds
   for all), so a retry must open a _new_ session, which costs ~8–10 s. The budget bounds how
   long a caller waits; the API Lambda keeps it low to stay inside API Gateway's 29 s cap.
+- **Credential handling.** The CDP endpoint (which embeds the vendor zone password) lives in an SSM
+  **SecureString** that CI writes from the repository secret `SCRAPING_BROWSER_URL`. The functions are
+  given only the parameter _name_ (`BROWSER_WS_ENDPOINT_PARAM`) and read the value at runtime, so it
+  never appears in a CloudFormation template, in `cdk diff` output, or in a function's environment.
+  The value is cached for `BROWSER_ENDPOINT_TTL_MS` (default 15 min) — finite on purpose, because the
+  keep-warm rule can keep an execution environment alive for weeks and a rotated credential must
+  still take effect. IAM grants exactly `ssm:GetParameter` on that one parameter; no `kms:Decrypt` is
+  needed with the AWS-managed `aws/ssm` key (its policy already permits decryption account-wide), and
+  a customer-managed key would need a grant on the **key ARN** — an alias ARN is not a valid KMS
+  resource.
+  **Rotation:** update the repo secret and re-run the deploy job (or run
+  `aws ssm put-parameter --overwrite` yourself). No code change, no function redeploy, and running
+  environments converge within the TTL.
 - **Keep-warm rule** (`KeepWarmRule`, every 3 minutes): a vendor session lives inside the Lambda
   execution environment, so both die with it. Measured: 168/168 hourly refresher invocations were
   cold, and 12 of 83 API invocations over 14 days — i.e. the first search of essentially every
@@ -255,6 +268,7 @@ Environment variables (never commit values):
 | `PORT`                       | Backend           | HTTP port for local dev server (default `4000`)                  |
 | `BROWSER_WS_ENDPOINT`        | Backend + Scraper | Vendor CDP endpoint, literal (local dev; wins over `_PARAM`)     |
 | `BROWSER_WS_ENDPOINT_PARAM`  | Backend + Scraper | SSM SecureString name holding the CDP endpoint (injected by CDK) |
+| `BROWSER_ENDPOINT_TTL_MS`    | Backend + Scraper | How long a resolved endpoint is cached (default 15 min)          |
 | `BROWSER_WARMUP`             | Backend + Scraper | `fulfill` (default, 0 billed bytes) or `load` the real page      |
 | `BROWSER_MAX_ATTEMPTS`       | Backend + Scraper | Attempts per request before failing (default `3`)                |
 | `BROWSER_RETRY_BUDGET_MS`    | Backend + Scraper | Wall-clock budget for retries (default `20000`)                  |

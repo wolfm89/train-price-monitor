@@ -71,6 +71,11 @@ const REMOTE_CDP_ENDPOINT = process.env.BROWSER_WS_ENDPOINT;
 const REMOTE_CDP_PARAM = process.env.BROWSER_WS_ENDPOINT_PARAM;
 const PROXY_URL = process.env.BROWSER_PROXY;
 
+// How long a resolved SSM value is reused. Deliberately finite: the keep-warm
+// rule can keep an execution environment alive for weeks, so a value cached "for
+// the life of the environment" would never pick up a rotated credential.
+const ENDPOINT_TTL_MS = Number(process.env.BROWSER_ENDPOINT_TTL_MS ?? 15 * 60_000);
+
 // Warm-up strategy. The remote vendor bills per MB that traverses its proxy, and
 // the only meaningful traffic left is the warm-up page load (~200 KiB–1.2 MB per
 // session). Fulfilling the document from the client gives the page a real
@@ -194,33 +199,44 @@ function parseProxyConfig(raw: string): ProxyConfig {
   };
 }
 
-let remoteEndpointPromise: Promise<string | null> | null = null;
+let remoteEndpointRequest: Promise<string | null> | null = null;
+let remoteEndpointCache: { value: string; expiresAt: number } | null = null;
 
 /**
- * Resolves the remote CDP endpoint. Cached per execution environment so the SSM
- * read happens at most once per cold start, and only when the function is
- * actually asked to fetch something.
+ * Resolves the vendor CDP endpoint from SSM.
+ *
+ * The secret lives in an SSM SecureString that CI writes from a repository
+ * secret, so it never reaches CloudFormation, a template or the function's
+ * environment — only the parameter *name* is configured. Values are cached with
+ * a TTL (see ENDPOINT_TTL_MS) and concurrent callers share one request, so a cold
+ * start performs at most one GetParameter call.
  */
 function resolveRemoteEndpoint(): Promise<string | null> {
   if (REMOTE_CDP_ENDPOINT) return Promise.resolve(REMOTE_CDP_ENDPOINT);
   if (!REMOTE_CDP_PARAM) return Promise.resolve(null);
 
-  if (!remoteEndpointPromise) {
-    remoteEndpointPromise = (async (): Promise<string | null> => {
+  if (remoteEndpointCache && Date.now() < remoteEndpointCache.expiresAt) {
+    return Promise.resolve(remoteEndpointCache.value);
+  }
+
+  if (!remoteEndpointRequest) {
+    remoteEndpointRequest = (async (): Promise<string | null> => {
       const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
       const result = await new SSMClient({}).send(
         new GetParameterCommand({ Name: REMOTE_CDP_PARAM, WithDecryption: true })
       );
       const value = result.Parameter?.Value;
       if (!value) throw new Error(`SSM parameter ${REMOTE_CDP_PARAM} is empty`);
+      remoteEndpointCache = { value, expiresAt: Date.now() + ENDPOINT_TTL_MS };
       return value;
-    })().catch((error: unknown) => {
-      remoteEndpointPromise = null;
-      throw error;
+    })().finally(() => {
+      // Cleared on failure too, so a transient SSM error is retried next time
+      // rather than cached as a permanent failure.
+      remoteEndpointRequest = null;
     });
   }
 
-  return remoteEndpointPromise;
+  return remoteEndpointRequest;
 }
 
 async function launchBrowser(): Promise<Browser> {

@@ -292,8 +292,18 @@ jobs:
             echo "::warning::SCRAPING_BROWSER_URL is not set; leaving ${PARAM} untouched. Journey search will fail until it exists."
             exit 0
           fi
-          aws ssm put-parameter --name "$PARAM" --type SecureString --value "$SCRAPING_BROWSER_URL" --overwrite
-          echo "Wrote ${PARAM}"
+          # Rotating the vendor credential is therefore just: update the repo
+          # secret and re-run this job — no code change, and running functions
+          # pick the new value up within BROWSER_ENDPOINT_TTL_MS. Only the
+          # parameter version is printed, never the value.
+          VERSION="$(aws ssm put-parameter \
+            --name "$PARAM" \
+            --type SecureString \
+            --description "Managed unblocking-browser CDP endpoint (written by CI from the SCRAPING_BROWSER_URL secret)" \
+            --value "$SCRAPING_BROWSER_URL" \
+            --overwrite \
+            --query Version --output text)"
+          echo "Wrote ${PARAM} (version ${VERSION})"
 
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
