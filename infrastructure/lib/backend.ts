@@ -102,12 +102,13 @@ export class Backend extends Construct {
       reservedConcurrentExecutions: 1,
       environment: {
         ...commonEnvironment,
-        // No API Gateway in front of this function, so the budget can cover a
-        // fresh session (11-22 s) plus one replacement when the vendor hands out
-        // a blocked one. The API function waits at most 24 s for the result, but
-        // a retry that outlives that wait still leaves a good session behind for
-        // the next request.
-        BROWSER_RETRY_BUDGET_MS: '30000',
+        // Search budget: the API function waits at most 24 s for a result, so a
+        // search must not spend longer than that replacing a blocked session — it
+        // would hold the single worker slot and throttle every other search.
+        BROWSER_RETRY_BUDGET_MS: '25000',
+        // The keeper has nobody waiting on it and must end up with a *good*
+        // session, so it may spend most of its 60 s timeout trying.
+        BROWSER_KEEPALIVE_BUDGET_MS: '45000',
       },
     });
 

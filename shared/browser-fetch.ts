@@ -48,6 +48,15 @@ let sessionStartedAt = 0;
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 
+/**
+ * A fulfilled warm-up answers locally, so a navigation that needs the full 30 s is
+ * already dead; a real page load (`BROWSER_WARMUP=load`) genuinely can take ~17 s.
+ * Failing faster keeps a hung vendor node from eating the whole caller budget.
+ */
+function navigationTimeoutMs(): number {
+  return warmupMode() === 'load' ? NAVIGATION_TIMEOUT_MS : 10_000;
+}
+
 // ---------------------------------------------------------------------------
 // Egress. A genuine Chromium is necessary but no longer sufficient: as of
 // 2026-10 DB's bot protection rejects requests from non-consumer hosts (the
@@ -421,9 +430,17 @@ async function getPage(origin: string): Promise<Page> {
   if (currentOrigin !== origin) {
     if (!navigationPromise) {
       navigationPromise = page
-        .goto(origin, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS })
+        .goto(origin, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs() })
         .then(() => {
           currentOrigin = origin;
+        })
+        .catch(async (error: unknown) => {
+          // A navigation that cannot complete means this browser is unusable —
+          // observed: a 30 s timeout on a *locally fulfilled* page when the vendor's
+          // node hung. Drop the session so the caller's retry reconnects, instead
+          // of every later request paying the same timeout.
+          await resetBrowser();
+          throw error;
         })
         .finally(() => {
           navigationPromise = null;

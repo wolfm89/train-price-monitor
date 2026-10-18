@@ -7,6 +7,21 @@ import type { JourneyWorkerJob } from './lib/journeyWorkerProtocol';
 const cache = createInMemoryCache();
 
 /**
+ * The keeper and a search play different games, so they get different budgets.
+ *
+ * The keeper must end up holding a *good* session and nobody is waiting on it: it
+ * may spend several session setups (each 11-22 s, measured) inside its 60 s
+ * timeout, and it must not stop at a blocked session — that is what repairs the
+ * worker after the vendor hands one out.
+ *
+ * A search has to answer inside the API function's 24 s wait, and while a long
+ * budget would still leave a good session behind, it would hold the worker's
+ * single slot for that whole time, throttling every other search.
+ */
+const SEARCH_RETRY_BUDGET_MS = process.env.BROWSER_RETRY_BUDGET_MS ?? '25000';
+const KEEPALIVE_RETRY_BUDGET_MS = process.env.BROWSER_KEEPALIVE_BUDGET_MS ?? '45000';
+
+/**
  * DB worker for journey searches.
  *
  * Deployed with reserved concurrency 1, no API Gateway route and no triggers
@@ -21,6 +36,10 @@ const cache = createInMemoryCache();
  * for the wiring.
  */
 export const handler = async (job: JourneyWorkerJob): Promise<unknown> => {
+  // Read per use by the shim, so setting it here scopes the budget to this
+  // invocation — see SEARCH_RETRY_BUDGET_MS above.
+  process.env.BROWSER_RETRY_BUDGET_MS = job.job === 'keepAlive' ? KEEPALIVE_RETRY_BUDGET_MS : SEARCH_RETRY_BUDGET_MS;
+
   const context = (await createContext(cache, {})) as GraphQLContext;
   Logger.info('Journey worker invoked', { job: job.job });
 
