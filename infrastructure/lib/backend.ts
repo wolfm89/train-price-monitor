@@ -16,6 +16,7 @@ import {
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
 import { decodoApiKeyParamName, grantDecodoApiKeyRead } from './decodo';
+import { AppDashboard } from './dashboards';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
@@ -284,38 +285,10 @@ export class Backend extends Construct {
       if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
     }
 
-    new cloudwatch.Dashboard(this, 'BackendDashboard', {
-      dashboardName: 'TrainPriceMonitor-Backend',
-      widgets: [
-        [
-          new cloudwatch.GraphWidget({
-            title: 'Search errors / throttles',
-            left: [searchErrors.metric, searchThrottled.metric],
-            width: 12,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Search served by Decodo fallback',
-            left: [searchFallback.metric],
-            width: 12,
-          }),
-        ],
-        [
-          new cloudwatch.GraphWidget({
-            title: 'Search latency (p50 / p90 / p99)',
-            left: [
-              lambdaFunction.metricDuration({ statistic: 'p50', period: cdk.Duration.minutes(5) }),
-              lambdaFunction.metricDuration({ statistic: 'p90', period: cdk.Duration.minutes(5) }),
-              lambdaFunction.metricDuration({ statistic: 'p99', period: cdk.Duration.minutes(5) }),
-            ],
-            width: 12,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Refresher errors',
-            left: [refresherErrors.metric],
-            width: 12,
-          }),
-        ],
-      ],
+    new AppDashboard(this, 'AppDashboard', {
+      api,
+      queue,
+      alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
     });
   }
 }

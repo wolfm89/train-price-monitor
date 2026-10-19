@@ -73,7 +73,7 @@ describe('ScraperStack', () => {
     const metricNames = Object.values(template.findResources('AWS::Logs::MetricFilter')).map(
       (filter) => filter.Properties.MetricTransformations[0].MetricName
     );
-    expect(metricNames.sort()).toEqual(['PollerDirectOk', 'PollerRunMs', 'PollerThrottled']);
+    expect(metricNames.sort()).toEqual(['PollerDirectOk', 'PollerRunMs', 'PollerTargetsScraped', 'PollerThrottled']);
   });
 
   test('pausing the scraper disables the alarm actions', () => {

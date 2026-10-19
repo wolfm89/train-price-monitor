@@ -11,6 +11,7 @@ import {
   aws_logs as logs,
   aws_sns as sns,
 } from 'aws-cdk-lib';
+import { ScraperDashboard } from './dashboards';
 
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
@@ -71,7 +72,6 @@ export class ScraperStack extends cdk.Stack {
         },
       ],
     });
-
     // -------------------------------------------------------------------------
     // Shared Lambda log groups (retain 2 weeks)
     // -------------------------------------------------------------------------
@@ -249,6 +249,17 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '$.elapsedMs',
     });
 
+    // One metric per scraped target (the transport counters are per DB call, and
+    // there are two calls per target). Used by the dashboard and within the free
+    // custom-metric allowance.
+    new logs.MetricFilter(this, 'PollerTargetsFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Target scraped'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerTargetsScraped',
+      metricValue: '1',
+    });
+
     const directOk = new cloudwatch.Metric({
       namespace: 'TrainPriceMonitor',
       metricName: 'PollerDirectOk',
@@ -328,39 +339,11 @@ export class ScraperStack extends cdk.Stack {
       if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
     }
 
-    new cloudwatch.Dashboard(this, 'ScraperDashboard', {
-      dashboardName: 'TrainPriceMonitor-Scraper',
-      widgets: [
-        [
-          new cloudwatch.GraphWidget({
-            title: 'Poller invocations',
-            left: [pollerFn.metricInvocations({ period: cdk.Duration.minutes(15), statistic: 'Sum' })],
-            width: 8,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Targets with prices (sum of direct calls)',
-            left: [directOk],
-            width: 8,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Calls throttled by DB',
-            left: [throttled],
-            width: 8,
-          }),
-        ],
-        [
-          new cloudwatch.GraphWidget({
-            title: 'Run duration (max, aborts at 210 s)',
-            left: [runMs],
-            width: 12,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'Poller errors',
-            left: [pollerFn.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' })],
-            width: 12,
-          }),
-        ],
-      ],
+    new ScraperDashboard(this, 'ScraperDashboard', {
+      pollerFunction: pollerFn,
+      hydratorFunction: hydratorFn,
+      compactorFunction: compactorFn,
+      alarms: [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow],
     });
 
     // -------------------------------------------------------------------------
