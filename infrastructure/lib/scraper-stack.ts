@@ -23,7 +23,9 @@ export class ScraperStack extends cdk.Stack {
     // -------------------------------------------------------------------------
     // DynamoDB table: ScraperSchedule
     // PK: ROUTE#{route_id}#DATE#{YYYY-MM-DD}, SK: SCHEDULE
-    // GSI ByNextScrape: PK=status, SK=next_scrape_at
+    // GSI ByDue: PK=status, SK=due_key (`<tier rank>#<next_scrape_at>`), which the
+    // poller reads one tier at a time (NEAR, MID, FAR) so a capacity shortfall
+    // costs the far end of the horizon rather than next week's departures.
     // -------------------------------------------------------------------------
     const table = new dynamodb.Table(this, 'ScraperSchedule', {
       tableName: 'ScraperSchedule',
@@ -37,9 +39,9 @@ export class ScraperStack extends cdk.Stack {
     });
 
     table.addGlobalSecondaryIndex({
-      indexName: 'ByNextScrape',
+      indexName: 'ByDue',
       partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'next_scrape_at', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'due_key', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
       readCapacity: 5,
       writeCapacity: 5,
@@ -99,18 +101,19 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
       memorySize: 512,
-      // A 12-target batch is ~24 paced calls (~70 s). ABORT_THRESHOLD_MS in
-      // scraper/src/poller.ts (150 s) is deliberately below this.
-      timeout: cdk.Duration.seconds(180),
+      // A 18-target batch is ~36 paced calls. ABORT_THRESHOLD_MS in
+      // scraper/src/poller.ts (210 s) is deliberately below this.
+      timeout: cdk.Duration.seconds(240),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
-        // 12 targets = 24 API calls per run: a deliberately small start. Raise it
-        // only while the transport stats in the "Poller finished" log stay clean
-        // (no throttled calls, breaker never opened). See AGENTS.md.
-        SCRAPER_BATCH_SIZE: '12',
+        // 18 targets = 36 API calls per run, which is just above the ~1,654
+        // scrapes/day the TTD intervals need for the 60-day horizon, so the
+        // backlog drains and the schedule is actually met. Raise it only while the
+        // transport stats in the "Poller finished" log stay clean.
+        SCRAPER_BATCH_SIZE: '18',
         // Spacing and concurrency of DB calls (see shared/db-fetch.ts). Measured:
         // 6 parallel calls were fine, a 60-call burst got the IP throttled for
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
@@ -190,9 +193,9 @@ export class ScraperStack extends cdk.Stack {
 
     new events.Rule(this, 'PollerSchedule', {
       enabled: !scraperPaused,
-      // Every 15 minutes with a small batch: ~1,150 scrapes/day (see ttd.ts).
-      // Bigger or more frequent bursts risk getting the Lambda's egress IP
-      // throttled by DB.
+      // Every 15 minutes with a small batch: ~1,728 scrapes/day, just above what
+      // the TTD intervals demand. Bigger or more frequent bursts risk getting the
+      // Lambda's egress IP throttled by DB.
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(pollerFn)],
     });

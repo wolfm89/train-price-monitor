@@ -36,8 +36,9 @@ describe('ScraperStack', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
+      Timeout: 240,
       Environment: {
-        Variables: Match.objectLike({ SCRAPER_BATCH_SIZE: '12', DB_MIN_GAP_MS: '2500', DB_MAX_IN_FLIGHT: '2' }),
+        Variables: Match.objectLike({ SCRAPER_BATCH_SIZE: '18', DB_MIN_GAP_MS: '2500', DB_MAX_IN_FLIGHT: '2' }),
       },
     });
     const poller = Object.values(template.findResources('AWS::Lambda::Function')).find(
@@ -45,5 +46,24 @@ describe('ScraperStack', () => {
     );
     const variables = Object.keys(poller?.Properties.Environment.Variables ?? {});
     expect(variables.some((name) => name.startsWith('DECODO') || name.startsWith('BROWSER'))).toBe(false);
+  });
+
+  test('Schedule table exposes the ByDue index and nothing reads next_scrape_at', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: [
+        Match.objectLike({
+          IndexName: 'ByDue',
+          KeySchema: [
+            { AttributeName: 'status', KeyType: 'HASH' },
+            { AttributeName: 'due_key', KeyType: 'RANGE' },
+          ],
+        }),
+      ],
+    });
+    const indexes = Object.values(template.findResources('AWS::DynamoDB::Table')).flatMap((table) =>
+      (table.Properties.GlobalSecondaryIndexes ?? []).map((index: { IndexName: string }) => index.IndexName)
+    );
+    expect(indexes).toEqual(['ByDue']);
   });
 });

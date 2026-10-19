@@ -33,14 +33,16 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 
 ### Poller (`src/poller.ts`)
 
-- Runs every 1 minute.
-- Queries the DynamoDB GSI (`ByNextScrape`) for up to 15 overdue targets.
+- Runs every 15 minutes with a batch of 18 targets (36 DB calls).
+- Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 18
+  overdue targets, so near departures are served first when capacity is short.
+- Deletes targets whose departure day has passed instead of scraping them.
 - Makes two API calls per target to the DB Vendo bestprice endpoint (1st and 2nd class).
 - Extracts journey data (price, duration, transfers, load factor) and writes Parquet to S3.
 - Reschedules each target based on its updated TTD tier after a successful scrape.
-- Handles rate limits (429) with a 5-minute retry backoff.
-- Must run as a **Docker Lambda** (not Node.js runtime) because Akamai blocks outbound HTTP from
-  AWS Node.js runtime Lambda egress IPs.
+- Handles rate limits (429) with a 5-minute retry backoff, and ends the batch on `DbThrottledError`.
+- Must run as a **Docker Lambda** (not Node.js runtime) because the native `impit` client has to be
+  present next to the bundle, and because the transport is pinned to the measured-safe pacing.
 
 ### Compactor (`src/compactor.ts`)
 

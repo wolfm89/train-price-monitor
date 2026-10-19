@@ -9,6 +9,7 @@ export interface ScheduleItem {
   dest_eva: string;
   status: 'PENDING';
   next_scrape_at: string; // ISO 8601 UTC
+  due_key: string; // `<tier rank>#<next_scrape_at>`; sort key of the ByDue index
   last_scraped_at?: string; // ISO 8601 UTC
   ttd_tier: TtdTier;
   scrape_count: number;

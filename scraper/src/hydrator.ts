@@ -3,7 +3,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, DeleteCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 import { ROUTE_CATALOG } from './routes.js';
-import { computeTtdTier, computeNextScrapeAt } from './ttd.js';
+import { computeTtdTier, computeNextScrapeAt, dueKey } from './ttd.js';
 import { positiveIntFromEnv } from './env.js';
 
 const logger = new Logger({ serviceName: 'scraper-hydrator' });
@@ -109,7 +109,7 @@ async function pruneBeyondHorizon(horizonDateStr: string): Promise<number> {
     const page = await ddb.send(
       new QueryCommand({
         TableName: TABLE_NAME,
-        IndexName: 'ByNextScrape',
+        IndexName: 'ByDue',
         KeyConditionExpression: '#status = :pending',
         FilterExpression: 'departure_date > :horizon',
         ExpressionAttributeNames: { '#status': 'status' },
@@ -168,6 +168,7 @@ export const handler = async (): Promise<void> => {
         dest_eva: route.destEva,
         status: 'PENDING',
         next_scrape_at: nextScrapeAt.toISOString(),
+        due_key: dueKey(tier, nextScrapeAt),
         ttd_tier: tier,
         scrape_count: 0,
         created_at: now.toISOString(),

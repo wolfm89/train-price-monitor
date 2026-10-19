@@ -3,11 +3,11 @@ import { type TtdTier } from './types.js';
 // Scrape intervals are capacity-derived, not aspirational.
 //
 // DB tolerates only a modest request rate per egress IP (bursts are throttled for
-// minutes), and the poller spaces its calls accordingly: a 12-target batch every
-// 15 minutes is ~1,150 scrapes/day. The intervals below demand ~1,654 scrapes/day
-// for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met to about
-// 70 % and the NEAR tier is always served first. Raising SCRAPER_BATCH_SIZE moves
-// that toward 100 % — but only as far as the measured rate limit allows.
+// minutes), and the poller spaces its calls accordingly: an 18-target batch every
+// 15 minutes is ~1,728 scrapes/day, just above the ~1,654/day these intervals
+// demand for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met
+// and the backlog drains. The poller serves NEAR first (see `dueKey`), so if
+// capacity ever falls short it is the far end of the horizon that slips.
 //
 // The previous 4h/12h/24h tiers implied ~20,900 scrapes/day across the catalog —
 // 12x more than achievable — so every row was permanently overdue and next_scrape_at
@@ -44,4 +44,29 @@ export function computeTtdTier(departureDateStr: string, now: Date): TtdTier {
 export function computeNextScrapeAt(tier: TtdTier, now: Date): Date {
   const jitter = (Math.random() * 2 - 1) * JITTER_MS[tier];
   return new Date(now.getTime() + INTERVAL_MS[tier] + jitter);
+}
+
+/**
+ * Ordering rank for the `ByDue` index. Lower is served first, so a shortfall in
+ * poller capacity costs the far end of the horizon rather than the near end:
+ * NEAR targets are the ones a user is about to book.
+ */
+const TIER_RANK: Record<TtdTier, number> = { NEAR: 0, MID: 1, FAR: 2 };
+
+/**
+ * Sort key of the `ByDue` index: `<tier rank>#<next scrape at>`. The rank prefix
+ * makes the index read in priority order; the timestamp inside each rank makes it
+ * a plain due-time range query (`BETWEEN '<rank>#' AND '<rank>#<now>'`).
+ */
+export function dueKey(tier: TtdTier, nextScrapeAt: Date | string): string {
+  const plain = typeof nextScrapeAt === 'string' ? nextScrapeAt : nextScrapeAt.toISOString();
+  return `${TIER_RANK[tier]}#${plain}`;
+}
+
+/** Tier ranks in the order the poller queries them. */
+export const TIER_QUERY_ORDER: TtdTier[] = ['NEAR', 'MID', 'FAR'];
+
+/** Rank of a tier, for building `due_key`. */
+export function tierRank(tier: TtdTier): number {
+  return TIER_RANK[tier];
 }

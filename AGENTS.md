@@ -196,8 +196,14 @@ flowchart LR
 - **Pacing.** DB throttles an egress IP that bursts: 6 parallel calls were fine, 60 at concurrency 6
   got the IP a `429` for minutes, 24 calls one at a time with 2.5 s gaps all passed. The module spaces
   request starts (`DB_MIN_GAP_MS`) and caps in-flight requests (`DB_MAX_IN_FLIGHT`). The poller runs
-  at 2.5 s / 2 in flight with a batch of 12 targets (24 calls, ~70 s), every 15 minutes. Raise
+  at 2.5 s / 2 in flight with a batch of 18 targets (36 calls), every 15 minutes — ~1,728 scrapes a
+  day, just above the ~1,654 the TTD intervals need, so the backlog drains. Raise
   `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log stay clean.
+- **Priority.** The schedule table's index is `ByDue` (`status` + `due_key`, where `due_key` is
+  `<tier rank>#<next_scrape_at>`). The poller queries it once per tier in order NEAR → MID → FAR, so
+  when capacity falls short it is the far end of the horizon that slips, not next week's trips.
+  Targets whose departure day has passed are deleted instead of scraped — DB returns no prices for
+  them and they would only consume the batch.
 - **Circuit breaker.** After `DB_BREAKER_THRESHOLD` consecutive failed requests the environment stops
   calling DB for `DB_BREAKER_COOLDOWN_MS`: hammering a throttled IP only extends the ban. With a Decodo
   key configured the request falls back to Decodo; without one it throws `DbThrottledError`, and the
