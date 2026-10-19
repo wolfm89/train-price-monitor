@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
+import { AlertingStack } from '../lib/alerting';
 import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { CertificateStack } from '../lib/certificate-stack';
 import { ScraperStack } from '../lib/scraper-stack';
@@ -24,6 +25,15 @@ const certificateStack = new CertificateStack(app, 'CertificateStack', {
   },
   crossRegionReferences: true,
 });
+
+// Created first: both other stacks reference its alert topic.
+const alertingStack = new AlertingStack(app, 'AlertingStack', {
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+});
+
 new InfrastructureStack(
   app,
   'InfrastructureStack',
@@ -37,6 +47,7 @@ new InfrastructureStack(
       region: process.env.CDK_DEFAULT_REGION,
     },
     crossRegionReferences: true,
+    alertTopicArn: alertingStack.topic.topicArn,
   }
 );
 
@@ -45,4 +56,5 @@ new ScraperStack(app, 'ScraperStack', {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
   },
+  alertTopicArn: alertingStack.topic.topicArn,
 });

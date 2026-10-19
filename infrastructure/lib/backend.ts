@@ -2,12 +2,15 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
   aws_apigateway as apigateway,
+  aws_cloudwatch as cloudwatch,
+  aws_cloudwatch_actions as cloudwatch_actions,
   aws_lambda as lambda,
   aws_dynamodb as dynamodb,
   aws_s3 as s3,
   aws_logs as logs,
   aws_events as events,
   aws_events_targets as targets,
+  aws_sns as sns,
   aws_sqs as sqs,
   aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
@@ -17,7 +20,14 @@ import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
 export class Backend extends Construct {
-  constructor(scope: Construct, id: string, userPool: UserPool, frontendDomainName: string, sesFromEmail: string) {
+  constructor(
+    scope: Construct,
+    id: string,
+    userPool: UserPool,
+    frontendDomainName: string,
+    sesFromEmail: string,
+    alertTopic?: sns.ITopic
+  ) {
     super(scope, id);
 
     // Create DynamoDB tables
@@ -210,6 +220,103 @@ export class Backend extends Construct {
 
     new cdk.CfnOutput(this, 'QueueUrl', {
       value: queue.queueUrl,
+    });
+
+    // -------------------------------------------------------------------------
+    // Alarms and dashboard (CloudWatch free tier: 9 alarms, 4 custom metrics)
+    // -------------------------------------------------------------------------
+
+    // The transport logs a `transport` object on every GraphQL response; a
+    // non-zero `fallbackOk` means DB refused the direct path and Decodo served
+    // the request instead — the user-facing path is degraded even though the
+    // request succeeded.
+    new logs.MetricFilter(this, 'SearchFallbackFilter', {
+      logGroup: apiLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL response'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'SearchFallbackOk',
+      metricValue: '$.transport.fallbackOk',
+      defaultValue: 0,
+    });
+
+    const searchErrors = new cloudwatch.Alarm(this, 'SearchErrors', {
+      alarmDescription: 'The GraphQL API returned errors (search is failing for the user).',
+      metric: lambdaFunction.metricErrors({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 2,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    const searchFallback = new cloudwatch.Alarm(this, 'SearchUsingDecodoFallback', {
+      alarmDescription: 'Journey search is falling back to Decodo: DB is refusing the direct transport.',
+      metric: new cloudwatch.Metric({
+        namespace: 'TrainPriceMonitor',
+        metricName: 'SearchFallbackOk',
+        period: cdk.Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 0,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    const refresherErrors = new cloudwatch.Alarm(this, 'RefresherErrors', {
+      alarmDescription: 'The hourly watchlist refresh failed (journeys stay stale and alerts are late).',
+      metric: refresherFunction.metricErrors({ period: cdk.Duration.hours(1), statistic: 'Sum' }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 2,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    const searchThrottled = new cloudwatch.Alarm(this, 'SearchThrottled', {
+      alarmDescription: 'The GraphQL API is being throttled (concurrency limit reached).',
+      metric: lambdaFunction.metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
+      threshold: 0,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // CloudWatch publishes to SNS through a dedicated action object.
+    for (const alarm of [searchErrors, searchFallback, refresherErrors, searchThrottled]) {
+      if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
+    }
+
+    new cloudwatch.Dashboard(this, 'BackendDashboard', {
+      dashboardName: 'TrainPriceMonitor-Backend',
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Search errors / throttles',
+            left: [searchErrors.metric, searchThrottled.metric],
+            width: 12,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Search served by Decodo fallback',
+            left: [searchFallback.metric],
+            width: 12,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Search latency (p50 / p90 / p99)',
+            left: [
+              lambdaFunction.metricDuration({ statistic: 'p50', period: cdk.Duration.minutes(5) }),
+              lambdaFunction.metricDuration({ statistic: 'p90', period: cdk.Duration.minutes(5) }),
+              lambdaFunction.metricDuration({ statistic: 'p99', period: cdk.Duration.minutes(5) }),
+            ],
+            width: 12,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Refresher errors',
+            left: [refresherErrors.metric],
+            width: 12,
+          }),
+        ],
+      ],
     });
   }
 }

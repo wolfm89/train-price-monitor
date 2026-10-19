@@ -66,4 +66,19 @@ describe('ScraperStack', () => {
     );
     expect(indexes).toEqual(['ByDue']);
   });
+
+  test('creates the five poller alarms and their log metrics', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 5);
+    const metricNames = Object.values(template.findResources('AWS::Logs::MetricFilter')).map(
+      (filter) => filter.Properties.MetricTransformations[0].MetricName
+    );
+    expect(metricNames.sort()).toEqual(['PollerDirectOk', 'PollerRunMs', 'PollerThrottled']);
+  });
+
+  test('pausing the scraper disables the alarm actions', () => {
+    const template = synth({ scraper_paused: '1' });
+    const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'));
+    expect(alarms.every((alarm) => alarm.Properties.ActionsEnabled === false)).toBe(true);
+  });
 });

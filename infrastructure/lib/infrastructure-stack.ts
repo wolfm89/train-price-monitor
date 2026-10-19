@@ -6,8 +6,13 @@ import { CognitoAuth } from './cognito-auth';
 import { Backend } from './backend';
 import { Frontend, FrontendProps } from './frontend';
 
+interface InfrastructureStackProps extends cdk.StackProps {
+  /** ARN of the alert topic (owned by AlertingStack). */
+  alertTopicArn?: string;
+}
+
 export class InfrastructureStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, frontendProps: FrontendProps, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, frontendProps: FrontendProps, props?: InfrastructureStackProps) {
     super(scope, id, props);
 
     const sesFromEmail = this.node.tryGetContext('ses_from_email');
@@ -17,8 +22,12 @@ export class InfrastructureStack extends cdk.Stack {
       );
     }
 
+    const alertTopic = props?.alertTopicArn
+      ? cdk.aws_sns.Topic.fromTopicArn(this, 'AlertTopic', props.alertTopicArn)
+      : undefined;
+
     const cognitoAuth = new CognitoAuth(this, 'CognitoAuth');
-    new Backend(this, 'Backend', cognitoAuth.userPool, frontendProps.domainName, sesFromEmail);
+    new Backend(this, 'Backend', cognitoAuth.userPool, frontendProps.domainName, sesFromEmail, alertTopic);
     new Frontend(this, 'Frontend', frontendProps);
     // Runs daily rather than weekly: every deploy adds a new asset image to the
     // CDK bootstrap ECR repository. ToolkitCleaner only removes images

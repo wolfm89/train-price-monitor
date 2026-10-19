@@ -227,7 +227,32 @@ flowchart LR
   backend bundle (present in the image) and provided by the Node.js 24 runtime for the scraper; the
   transport imports it lazily, so local development never touches SSM.
 - **Pause switch.** `CDK_SCRAPER_PAUSED=1` (repo variable) disables the poller and hydrator schedules
-  in CDK; unlike a manual console change it survives deploys.
+  in CDK; unlike a manual console change it survives deploys. It also disables the alarm actions of
+  the poller alarms, so a deliberate pause never pages anyone.
+
+**Monitoring** (`infrastructure/lib/alerting.ts`, alarms in `backend.ts` and `scraper-stack.ts`):
+
+- **One alert topic** (`TrainPriceMonitorAlerts`, in `AlertingStack`) receives every CloudWatch alarm
+  state change. A small Lambda (`PushoverForwarder`) forwards them to Pushover: ALARM at high
+  priority with the siren sound (bypasses quiet hours), recovery at normal priority, with a link to
+  the alarm in the console. SNS cannot deliver to Pushover directly — it requires an HTTPS endpoint
+  that answers its `SubscriptionConfirmation` handshake.
+- **Credentials** live in two SSM SecureStrings (`/train-price-monitor/pushover-token`,
+  `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
+  and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
+- **Nine alarms** — the CloudWatch free tier allows 10 alarm metrics, 10 custom metrics and 3
+  dashboards; we use 9, 4 and 2. Four custom metrics come from log filters on the existing log
+  lines (`PollerDirectOk`, `PollerThrottled`, `PollerRunMs` from "Poller finished",
+  `SearchFallbackOk` from "GraphQL response"), so no application code emits metrics.
+  - Scraper: `PollerNotRunning` (0 invocations for 45 min, missing data treated as breaching),
+    `PollerErrors`, `PollerThrottledByDb` (early warning that DB is throttling the fingerprint),
+    `PollerNoPrices` (no direct success for 45 min), `PollerRunTooSlow` (>190 s of the 210 s abort).
+  - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users),
+    `RefresherErrors`, `SearchThrottled`.
+- **Dashboards**: `TrainPriceMonitor-Scraper` and `TrainPriceMonitor-Backend`.
+- **Do not add a tenth alarm or a fifth custom metric** without accepting cost ($0.10 and $0.30 per
+  month respectively), and do not use metric-math, Metrics Insights or anomaly-detection bands in
+  alarms — those are billed differently from the free alarm metrics.
 
 **Backend esbuild bundling** (`--format=cjs`):
 
@@ -278,6 +303,10 @@ Environment variables (never commit values):
 | `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                             |
 | `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                  |
 | `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo key                          |
+| `PUSHOVER_API_TOKEN`         | Infrastructure    | Pushover application token (repo secret; CI writes the SSM param) |
+| `PUSHOVER_USER_KEY`          | Infrastructure    | Pushover user key (repo secret; CI writes the SSM param)          |
+| `PUSHOVER_TOKEN_PARAM`       | Alerting Lambda   | SSM parameter name for the Pushover app token (injected by CDK)   |
+| `PUSHOVER_USER_PARAM`        | Alerting Lambda   | SSM parameter name for the Pushover user key (injected by CDK)    |
 | `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the poller and hydrator schedules                    |
 | `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                         |
 | `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                      |

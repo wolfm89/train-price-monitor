@@ -1,12 +1,15 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
+  aws_cloudwatch as cloudwatch,
+  aws_cloudwatch_actions as cloudwatch_actions,
   aws_dynamodb as dynamodb,
   aws_s3 as s3,
   aws_lambda as lambda,
   aws_events as events,
   aws_events_targets as targets,
   aws_logs as logs,
+  aws_sns as sns,
 } from 'aws-cdk-lib';
 
 interface ScraperStackProps extends cdk.StackProps {
@@ -14,6 +17,8 @@ interface ScraperStackProps extends cdk.StackProps {
   bucketName?: string;
   /** Override the hydrator lookahead window (useful locally; undefined → 90 days in prod). */
   hydratorLookaheadDays?: number;
+  /** ARN of the alert topic (owned by AlertingStack). */
+  alertTopicArn?: string;
 }
 
 export class ScraperStack extends cdk.Stack {
@@ -211,6 +216,154 @@ export class ScraperStack extends cdk.Stack {
       // 03:00 UTC daily
       schedule: events.Schedule.cron({ minute: '0', hour: '3' }),
       targets: [new targets.LambdaFunction(compactorFn)],
+    });
+
+    // -------------------------------------------------------------------------
+    // Alarms and dashboard (CloudWatch free tier: 9 alarms, 4 custom metrics)
+    // -------------------------------------------------------------------------
+    const alertTopic = props?.alertTopicArn
+      ? sns.Topic.fromTopicArn(this, 'AlertTopic', props.alertTopicArn)
+      : undefined;
+
+    // The poller logs one "Poller finished" line per run with the transport
+    // counters; these filters turn them into metrics without any extra code.
+    const directOkFilter = new logs.MetricFilter(this, 'PollerDirectOkFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerDirectOk',
+      metricValue: '$.transport.directOk',
+      defaultValue: 0,
+    });
+    const throttledFilter = new logs.MetricFilter(this, 'PollerThrottledFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerThrottled',
+      metricValue: '$.transport.directThrottled',
+      defaultValue: 0,
+    });
+    const runMsFilter = new logs.MetricFilter(this, 'PollerRunMsFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerRunMs',
+      metricValue: '$.elapsedMs',
+      defaultValue: 0,
+    });
+
+    const directOk = new cloudwatch.Metric({
+      namespace: 'TrainPriceMonitor',
+      metricName: 'PollerDirectOk',
+      period: cdk.Duration.minutes(15),
+      statistic: 'Sum',
+    });
+    const throttled = new cloudwatch.Metric({
+      namespace: 'TrainPriceMonitor',
+      metricName: 'PollerThrottled',
+      period: cdk.Duration.minutes(15),
+      statistic: 'Sum',
+    });
+    const runMs = new cloudwatch.Metric({
+      namespace: 'TrainPriceMonitor',
+      metricName: 'PollerRunMs',
+      period: cdk.Duration.minutes(15),
+      statistic: 'Maximum',
+    });
+
+    // A deliberate pause must not page anyone: the pause switch disables the
+    // actions of the poller alarms (they still record state in the console).
+    const actionsEnabled = !scraperPaused;
+
+    const notRunning = new cloudwatch.Alarm(this, 'PollerNotRunning', {
+      alarmDescription: 'The poller has not run for 45 minutes: schedule disabled or function broken.',
+      metric: pollerFn.metricInvocations({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 3,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+      actionsEnabled,
+    });
+
+    const pollerErrors = new cloudwatch.Alarm(this, 'PollerErrors', {
+      alarmDescription: 'The poller returned errors.',
+      metric: pollerFn.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 2,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      actionsEnabled,
+    });
+
+    const dbThrottling = new cloudwatch.Alarm(this, 'PollerThrottledByDb', {
+      alarmDescription: 'DB is throttling the poller transport (early warning before the fingerprint is blocked).',
+      metric: throttled,
+      threshold: 0,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      actionsEnabled,
+    });
+
+    const noPrices = new cloudwatch.Alarm(this, 'PollerNoPrices', {
+      alarmDescription: 'No target has returned prices for 45 minutes: DB is refusing every request.',
+      metric: directOk,
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 3,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      actionsEnabled,
+    });
+
+    const runTooSlow = new cloudwatch.Alarm(this, 'PollerRunTooSlow', {
+      alarmDescription: 'A poller run is approaching the abort threshold (pacing or latency problem).',
+      metric: runMs,
+      threshold: 190_000,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      actionsEnabled,
+    });
+
+    for (const alarm of [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow]) {
+      if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
+    }
+
+    new cloudwatch.Dashboard(this, 'ScraperDashboard', {
+      dashboardName: 'TrainPriceMonitor-Scraper',
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Poller invocations',
+            left: [pollerFn.metricInvocations({ period: cdk.Duration.minutes(15), statistic: 'Sum' })],
+            width: 8,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Targets with prices (sum of direct calls)',
+            left: [directOk],
+            width: 8,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Calls throttled by DB',
+            left: [throttled],
+            width: 8,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Run duration (max, aborts at 210 s)',
+            left: [runMs],
+            width: 12,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Poller errors',
+            left: [pollerFn.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' })],
+            width: 12,
+          }),
+        ],
+      ],
     });
 
     // -------------------------------------------------------------------------
