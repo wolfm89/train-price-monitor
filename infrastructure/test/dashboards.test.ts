@@ -1,11 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import {
-  aws_apigateway as apigateway,
-  aws_cloudwatch as cloudwatch,
-  aws_lambda as lambda,
-  aws_sqs as sqs,
-} from 'aws-cdk-lib';
+import { aws_apigateway as apigateway, aws_cloudwatch as cloudwatch, aws_lambda as lambda } from 'aws-cdk-lib';
 import { appWidgets, scraperWidgets } from '../lib/dashboards';
 
 function synth(): Template {
@@ -34,7 +29,7 @@ function synth(): Template {
   new cdk.aws_cloudwatch.Dashboard(stack, 'BackendDashboard', {
     dashboardName: 'TrainPriceMonitor-App',
     start: '-PT48H',
-    widgets: appWidgets({ api, queue: new sqs.Queue(stack, 'Queue'), alarms: [alarm] }),
+    widgets: appWidgets({ api, refresherFunction: fn, alarms: [alarm] }),
   });
 
   return Template.fromStack(stack);
@@ -82,7 +77,7 @@ describe('Dashboards', () => {
       'Latency p90 (48 h)',
       'Decodo fallbacks (48 h)',
       'Requests and errors',
-      'Watchlist refresh queue',
+      'Hourly watchlist refresh',
       'Alarms',
     ]) {
       expect(app).toContain(title);

@@ -249,7 +249,13 @@ flowchart LR
     `PollerNoPrices` (no direct success for 45 min), `PollerRunTooSlow` (>190 s of the 210 s abort).
   - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users),
     `RefresherErrors`, `SearchThrottled`.
-- **Dashboards**: `TrainPriceMonitor-Scraper` and `TrainPriceMonitor-Backend`.
+- **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`):
+  `TrainPriceMonitor-Scraper` (four stat tiles — scrapes, DB-throttled calls, slowest run,
+  pipeline errors — plus throughput/pace and its five alarms) and `TrainPriceMonitor-App`
+  (four stat tiles — requests, 5xx, p90 latency, Decodo fallbacks — plus requests/errors,
+  latency, hourly refresh and its four alarms). Stat tiles aggregate over the visible range.
+  The refresh widget shows the refresher's hourly invocations/errors, not the SQS queue:
+  the queue is consumed in under a second, so it reads ~always zero.
 - **Do not add a tenth alarm or a fifth custom metric** without accepting cost ($0.10 and $0.30 per
   month respectively), and do not use metric-math, Metrics Insights or anomaly-detection bands in
   alarms — those are billed differently from the free alarm metrics.

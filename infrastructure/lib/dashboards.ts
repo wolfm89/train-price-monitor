@@ -1,10 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import {
-  aws_apigateway as apigateway,
-  aws_cloudwatch as cloudwatch,
-  aws_lambda as lambda,
-  aws_sqs as sqs,
-} from 'aws-cdk-lib';
+import { aws_apigateway as apigateway, aws_cloudwatch as cloudwatch, aws_lambda as lambda } from 'aws-cdk-lib';
 
 /**
  * Dashboard defaults: 48 hours, which covers two nightly compactions and a full
@@ -27,7 +22,7 @@ const TITLE = {
   serverErrors: '5xx errors',
   latency: 'Latency p90',
   fallbacks: 'Decodo fallbacks',
-  queue: 'Watchlist refresh queue',
+  refresh: 'Hourly watchlist refresh',
   alarms: 'Alarms',
 };
 
@@ -105,7 +100,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
 
 export interface AppDashboardProps {
   api: apigateway.RestApi;
-  queue: sqs.IQueue;
+  refresherFunction: lambda.IFunction;
   alarms: cloudwatch.IAlarm[];
 }
 
@@ -121,13 +116,21 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   const latencyP90 = props.api.metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' });
   const fallbacks = metric('TrainPriceMonitor', 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum');
 
-  const visible = props.queue.metricApproximateNumberOfMessagesVisible({
-    period: cdk.Duration.minutes(5),
-    statistic: 'Maximum',
+  // The queue itself is useless as an indicator: EventBridge drops one message
+  // per hour and the refresher consumes it in well under a second, so a 5-minute
+  // sample is ~always zero. The refresher's own invocations show the same hourly
+  // pulse and also reveal failures.
+  const refreshRuns = props.refresherFunction.metricInvocations({
+    period: cdk.Duration.hours(1),
+    statistic: 'Sum',
   });
-  const oldestAge = props.queue.metricApproximateAgeOfOldestMessage({
-    period: cdk.Duration.minutes(5),
-    statistic: 'Maximum',
+  const refreshErrors = props.refresherFunction.metricErrors({
+    period: cdk.Duration.hours(1),
+    statistic: 'Sum',
+  });
+  const refreshDuration = props.refresherFunction.metricDuration({
+    period: cdk.Duration.hours(1),
+    statistic: 'p90',
   });
 
   return [
@@ -155,11 +158,11 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: TITLE.queue,
-        left: [visible],
-        right: [oldestAge],
-        leftYAxis: { min: 0, label: 'messages' },
-        rightYAxis: { min: 0, label: 'age (s)' },
+        title: TITLE.refresh,
+        left: [refreshRuns, refreshErrors],
+        right: [refreshDuration],
+        leftYAxis: { min: 0, label: 'runs / errors' },
+        rightYAxis: { min: 0, label: 'p90 (ms)' },
         width: HALF,
         height: 5,
       }),

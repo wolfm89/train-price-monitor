@@ -292,7 +292,7 @@ export class Backend extends Construct {
       start: DASHBOARD_START,
       widgets: appWidgets({
         api,
-        queue,
+        refresherFunction,
         alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
       }),
     });
