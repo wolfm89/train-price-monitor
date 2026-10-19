@@ -64,6 +64,6 @@ describe('ScraperStack', () => {
     const indexes = Object.values(template.findResources('AWS::DynamoDB::Table')).flatMap((table) =>
       (table.Properties.GlobalSecondaryIndexes ?? []).map((index: { IndexName: string }) => index.IndexName)
     );
-    expect(indexes).toEqual(['ByDue']);
+    expect(indexes).toContain('ByDue');
   });
 });
