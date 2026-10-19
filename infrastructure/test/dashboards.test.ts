@@ -6,7 +6,7 @@ import {
   aws_lambda as lambda,
   aws_sqs as sqs,
 } from 'aws-cdk-lib';
-import { AppDashboard, ScraperDashboard } from '../lib/dashboards';
+import { appWidgets, scraperWidgets } from '../lib/dashboards';
 
 function synth(): Template {
   const app = new cdk.App();
@@ -23,19 +23,18 @@ function synth(): Template {
     evaluationPeriods: 1,
   });
 
-  new ScraperDashboard(stack, 'Scraper', {
-    pollerFunction: fn,
-    hydratorFunction: fn,
-    compactorFunction: fn,
-    alarms: [alarm],
+  new cdk.aws_cloudwatch.Dashboard(stack, 'ScraperDashboard', {
+    dashboardName: 'TrainPriceMonitor-Scraper',
+    start: '-PT48H',
+    widgets: scraperWidgets({ pollerFunction: fn, hydratorFunction: fn, compactorFunction: fn, alarms: [alarm] }),
   });
   const api = new apigateway.RestApi(stack, 'Api', { deployOptions: { stageName: 'prod' } });
   api.root.addMethod('GET', new apigateway.MockIntegration());
 
-  new AppDashboard(stack, 'App', {
-    api,
-    queue: new sqs.Queue(stack, 'Queue'),
-    alarms: [alarm],
+  new cdk.aws_cloudwatch.Dashboard(stack, 'BackendDashboard', {
+    dashboardName: 'TrainPriceMonitor-App',
+    start: '-PT48H',
+    widgets: appWidgets({ api, queue: new sqs.Queue(stack, 'Queue'), alarms: [alarm] }),
   });
 
   return Template.fromStack(stack);

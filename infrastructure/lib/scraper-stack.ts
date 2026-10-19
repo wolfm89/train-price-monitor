@@ -11,7 +11,7 @@ import {
   aws_logs as logs,
   aws_sns as sns,
 } from 'aws-cdk-lib';
-import { ScraperDashboard } from './dashboards';
+import { DASHBOARD_START, scraperWidgets } from './dashboards';
 
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
@@ -339,11 +339,18 @@ export class ScraperStack extends cdk.Stack {
       if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
     }
 
-    new ScraperDashboard(this, 'ScraperDashboard', {
-      pollerFunction: pollerFn,
-      hydratorFunction: hydratorFn,
-      compactorFunction: compactorFn,
-      alarms: [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow],
+    // The construct id is kept from the previous dashboard implementation so
+    // CloudFormation updates this resource instead of creating a second one with
+    // the same name.
+    new cloudwatch.Dashboard(this, 'ScraperDashboard', {
+      dashboardName: 'TrainPriceMonitor-Scraper',
+      start: DASHBOARD_START,
+      widgets: scraperWidgets({
+        pollerFunction: pollerFn,
+        hydratorFunction: hydratorFn,
+        compactorFunction: compactorFn,
+        alarms: [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow],
+      }),
     });
 
     // -------------------------------------------------------------------------

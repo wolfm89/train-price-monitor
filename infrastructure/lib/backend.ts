@@ -16,7 +16,7 @@ import {
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
 import { decodoApiKeyParamName, grantDecodoApiKeyRead } from './decodo';
-import { AppDashboard } from './dashboards';
+import { DASHBOARD_START, appWidgets } from './dashboards';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
@@ -285,10 +285,16 @@ export class Backend extends Construct {
       if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
     }
 
-    new AppDashboard(this, 'AppDashboard', {
-      api,
-      queue,
-      alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
+    // Keeps the previous dashboard's construct id so CloudFormation replaces the
+    // resource in place; only the displayed name changes (Backend -> App).
+    new cloudwatch.Dashboard(this, 'BackendDashboard', {
+      dashboardName: 'TrainPriceMonitor-App',
+      start: DASHBOARD_START,
+      widgets: appWidgets({
+        api,
+        queue,
+        alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
+      }),
     });
   }
 }
