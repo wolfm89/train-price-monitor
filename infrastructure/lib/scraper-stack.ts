@@ -233,7 +233,6 @@ export class ScraperStack extends cdk.Stack {
       metricNamespace: 'TrainPriceMonitor',
       metricName: 'PollerDirectOk',
       metricValue: '$.transport.directOk',
-      defaultValue: 0,
     });
     new logs.MetricFilter(this, 'PollerThrottledFilter', {
       logGroup: pollerLogGroup,
@@ -241,7 +240,6 @@ export class ScraperStack extends cdk.Stack {
       metricNamespace: 'TrainPriceMonitor',
       metricName: 'PollerThrottled',
       metricValue: '$.transport.directThrottled',
-      defaultValue: 0,
     });
     new logs.MetricFilter(this, 'PollerRunMsFilter', {
       logGroup: pollerLogGroup,
@@ -249,7 +247,6 @@ export class ScraperStack extends cdk.Stack {
       metricNamespace: 'TrainPriceMonitor',
       metricName: 'PollerRunMs',
       metricValue: '$.elapsedMs',
-      defaultValue: 0,
     });
 
     const directOk = new cloudwatch.Metric({

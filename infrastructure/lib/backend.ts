@@ -236,7 +236,6 @@ export class Backend extends Construct {
       metricNamespace: 'TrainPriceMonitor',
       metricName: 'SearchFallbackOk',
       metricValue: '$.transport.fallbackOk',
-      defaultValue: 0,
     });
 
     const searchErrors = new cloudwatch.Alarm(this, 'SearchErrors', {
