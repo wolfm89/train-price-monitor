@@ -47,18 +47,6 @@ export class ScraperStack extends cdk.Stack {
       writeCapacity: 5,
     });
 
-    // Temporary: DynamoDB refuses to create and delete a GSI in one update, so
-    // the migration to ByDue runs in two deploys. This index is unused and is
-    // removed by the follow-up.
-    table.addGlobalSecondaryIndex({
-      indexName: 'ByNextScrape',
-      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'next_scrape_at', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
-      readCapacity: 5,
-      writeCapacity: 5,
-    });
-
     // -------------------------------------------------------------------------
     // S3 bucket for Parquet price data
     // -------------------------------------------------------------------------
