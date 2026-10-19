@@ -3,11 +3,11 @@ import { type TtdTier } from './types.js';
 // Scrape intervals are capacity-derived, not aspirational.
 //
 // DB tolerates only a modest request rate per egress IP (bursts are throttled for
-// minutes), and the poller spaces its calls accordingly: an 18-target batch every
-// 15 minutes is ~1,728 scrapes/day, just above the ~1,654/day these intervals
-// demand for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met
-// and the backlog drains. The poller serves NEAR first (see `dueKey`), so if
-// capacity ever falls short it is the far end of the horizon that slips.
+// minutes), and the poller spaces its calls accordingly: a 22-target batch every
+// 15 minutes is ~2,112 scrapes/day, above the ~1,654/day these intervals demand
+// for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met and the
+// backlog drains in about a week. The poller serves NEAR first (see `dueKey`), so
+// if capacity ever falls short it is the far end of the horizon that slips.
 //
 // The previous 4h/12h/24h tiers implied ~20,900 scrapes/day across the catalog —
 // 12x more than achievable — so every row was permanently overdue and next_scrape_at

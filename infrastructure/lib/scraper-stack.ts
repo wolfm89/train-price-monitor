@@ -101,7 +101,7 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
       memorySize: 512,
-      // A 18-target batch is ~36 paced calls. ABORT_THRESHOLD_MS in
+      // A 22-target batch is ~44 paced calls (~125 s). ABORT_THRESHOLD_MS in
       // scraper/src/poller.ts (210 s) is deliberately below this.
       timeout: cdk.Duration.seconds(240),
       logGroup: pollerLogGroup,
@@ -109,11 +109,11 @@ export class ScraperStack extends cdk.Stack {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
-        // 18 targets = 36 API calls per run, which is just above the ~1,654
-        // scrapes/day the TTD intervals need for the 60-day horizon, so the
-        // backlog drains and the schedule is actually met. Raise it only while the
-        // transport stats in the "Poller finished" log stay clean.
-        SCRAPER_BATCH_SIZE: '18',
+        // 22 targets = 44 API calls per run (~2,112 scrapes/day), comfortably
+        // above the ~1,654 the TTD intervals need, so the backlog drains in about
+        // a week. Raise it only while the transport stats in the "Poller finished"
+        // log stay clean.
+        SCRAPER_BATCH_SIZE: '22',
         // Spacing and concurrency of DB calls (see shared/db-fetch.ts). Measured:
         // 6 parallel calls were fine, a 60-call burst got the IP throttled for
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
@@ -193,8 +193,8 @@ export class ScraperStack extends cdk.Stack {
 
     new events.Rule(this, 'PollerSchedule', {
       enabled: !scraperPaused,
-      // Every 15 minutes with a small batch: ~1,728 scrapes/day, just above what
-      // the TTD intervals demand. Bigger or more frequent bursts risk getting the
+      // Every 15 minutes with a small batch: ~2,112 scrapes/day, above what the
+      // TTD intervals demand. Bigger or more frequent bursts risk getting the
       // Lambda's egress IP throttled by DB.
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(pollerFn)],

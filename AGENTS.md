@@ -196,8 +196,8 @@ flowchart LR
 - **Pacing.** DB throttles an egress IP that bursts: 6 parallel calls were fine, 60 at concurrency 6
   got the IP a `429` for minutes, 24 calls one at a time with 2.5 s gaps all passed. The module spaces
   request starts (`DB_MIN_GAP_MS`) and caps in-flight requests (`DB_MAX_IN_FLIGHT`). The poller runs
-  at 2.5 s / 2 in flight with a batch of 18 targets (36 calls), every 15 minutes — ~1,728 scrapes a
-  day, just above the ~1,654 the TTD intervals need, so the backlog drains. Raise
+  at 2.5 s / 2 in flight with a batch of 22 targets (44 calls), every 15 minutes — ~2,112 scrapes a
+  day, above the ~1,654 the TTD intervals need, so the backlog drains in about a week. Raise
   `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log stay clean.
 - **Priority.** The schedule table's index is `ByDue` (`status` + `due_key`, where `due_key` is
   `<tier rank>#<next_scrape_at>`). The poller queries it once per tier in order NEAR → MID → FAR, so
