@@ -1,6 +1,16 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ScraperStack } from '../lib/scraper-stack';
+
+// The stack bundles the pre-built scraper output as Lambda assets. The CDK tests
+// do not need real bundles, only that the (gitignored) directories exist.
+beforeAll(() => {
+  for (const name of ['hydrator', 'compactor']) {
+    mkdirSync(resolve(__dirname, '../../scraper/dist', name), { recursive: true });
+  }
+});
 
 function synth(context: Record<string, string> = {}): Template {
   const app = new cdk.App({ context });
