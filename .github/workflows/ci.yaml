@@ -195,8 +195,8 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # linux/amd64 to match the Lambda functions: Chromium's shared libraries
-      # are installed for the target architecture.
+      # linux/amd64 to match the Lambda functions: the images install impit's
+      # linux-x64-gnu binary.
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
@@ -277,34 +277,10 @@ jobs:
           role-duration-seconds: 1200
           role-session-name: GithubWorkflow
 
-      # The vendor CDP endpoint (which embeds the zone password) is never in a
-      # CDK template: CI writes it to an SSM SecureString and the functions read
-      # it at runtime via BROWSER_WS_ENDPOINT_PARAM. Secrets are not available in
-      # `if:` expressions, so the emptiness check happens in the shell.
-      - name: Sync scraping-browser endpoint to SSM
-        env:
-          SCRAPING_BROWSER_URL: ${{ secrets.SCRAPING_BROWSER_URL }}
-          SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
-        run: |
-          set -euo pipefail
-          PARAM="${SCRAPING_BROWSER_PARAM:-/train-price-monitor/scraping-browser-url}"
-          if [[ -z "${SCRAPING_BROWSER_URL}" ]]; then
-            echo "::warning::SCRAPING_BROWSER_URL is not set; leaving ${PARAM} untouched. Journey search will fail until it exists."
-            exit 0
-          fi
-          # Rotating the vendor credential is therefore just: update the repo
-          # secret and re-run this job — no code change, and running functions
-          # pick the new value up within BROWSER_ENDPOINT_TTL_MS. Only the
-          # parameter version is printed, never the value.
-          VERSION="$(aws ssm put-parameter \
-            --name "$PARAM" \
-            --type SecureString \
-            --description "Managed unblocking-browser CDP endpoint (written by CI from the SCRAPING_BROWSER_URL secret)" \
-            --value "$SCRAPING_BROWSER_URL" \
-            --overwrite \
-            --query Version --output text)"
-          echo "Wrote ${PARAM} (version ${VERSION})"
-
+      # The Decodo API key is never in a CDK template: CI writes it to an SSM
+      # SecureString and the functions read it at runtime via
+      # DECODO_API_KEY_PARAM. Secrets are not available in `if:` expressions, so
+      # the emptiness check happens in the shell.
       - name: Sync Decodo API key to SSM
         env:
           DECODO_API_KEY: ${{ secrets.DECODO_API_KEY }}
@@ -313,11 +289,11 @@ jobs:
           set -euo pipefail
           PARAM="${DECODO_API_KEY_PARAM:-/train-price-monitor/decodo-api-key}"
           if [[ -z "${DECODO_API_KEY}" ]]; then
-            echo "::warning::DECODO_API_KEY is not set; leaving ${PARAM} untouched. Journey search will fail until it exists."
+            echo "::warning::DECODO_API_KEY is not set; leaving ${PARAM} untouched. The Decodo fallback for search and refresh will not work until it exists."
             exit 0
           fi
           # Rotating the key is just: update the repo secret and re-run this job;
-          # running functions pick it up within BROWSER_ENDPOINT_TTL_MS. Only the
+          # running functions pick it up within DECODO_KEY_TTL_MS. Only the
           # parameter version is printed, never the value.
           VERSION="$(aws ssm put-parameter \
             --name "$PARAM" \
@@ -334,7 +310,8 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
-          CDK_SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
+          CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+          CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
@@ -343,7 +320,8 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
-          CDK_SCRAPING_BROWSER_PARAM: ${{ vars.CDK_SCRAPING_BROWSER_PARAM }}
+          CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+          CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
 
       - name: Invalidate CloudFront cache
         uses: badsyntax/github-action-aws-cloudfront@master

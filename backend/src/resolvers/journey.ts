@@ -246,12 +246,11 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
  * Resolves the 'updateJourneyMonitors' mutation to update all stored journeys.
  *
  * Journeys are refreshed inline rather than fanned out over SQS. Each SQS
- * message became its own Lambda invocation with its own Chromium cold start,
- * so refreshing N journeys paid the ~4 s browser startup N times; handling them
- * in one invocation pays it once and makes the per-journey cost roughly 3x
- * cheaper as the number of monitored journeys grows. It also removes the
+ * message became its own Lambda invocation (with its own cold start), so
+ * refreshing N journeys paid that cost N times; handling them in one invocation
+ * pays it once. It also removes the
  * retry-to-DLQ path that previously accumulated poison messages whenever DB was
- * unreachable.
+ * unreachable. The shared DB transport paces the calls one after the other.
  */
 export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourneyMonitors']> = async (
   _parent,
@@ -321,7 +320,7 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
  *
  * Extracted from the `updateJourneyMonitor` mutation so the hourly scan can
  * call it directly instead of fanning out one SQS message (and therefore one
- * browser cold start) per journey.
+ * Lambda invocation) per journey.
  */
 async function refreshJourneyMonitor(
   context: GraphQLContext,
@@ -366,13 +365,13 @@ async function refreshJourneyMonitor(
         timestamp: new Date().toISOString(),
         // Persist everything the email needs. The Journey item — and with it
         // `cachedFrom`/`cachedTo` — was just deleted above, so without this the
-        // formatter has to drive the browser to re-derive two strings it
+        // formatter has to ask DB to re-derive two strings it
         // already had, and fails outright when DB is unreachable.
         //
         // The station IDs are carried as well because the cached names are only
         // populated after a successful refresh: a journey that expires before
         // one ever succeeded would otherwise store neither (JSON.stringify
-        // omits undefined values) and fall through to the browser. The IDs are
+        // omits undefined values) and fall through to a DB round-trip. The IDs are
         // required on the entity, so they are always available, and resolve
         // against the local station cache.
         data: JSON.stringify({

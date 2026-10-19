@@ -92,14 +92,15 @@ The output-to-environment mappings are maintained in [`scripts/generate-local-en
 | `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                                |
 | `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES notification emails                               |
 | `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL injected into notification links                       |
-| `BROWSER_WS_ENDPOINT`        | Backend + Scraper | Vendor CDP endpoint (local dev; wins over `BROWSER_WS_ENDPOINT_PARAM`)   |
-| `BROWSER_WS_ENDPOINT_PARAM`  | Backend + Scraper | SSM SecureString name holding the CDP endpoint (injected by CDK)         |
+| `DECODO_API_KEY_PARAM`       | Backend           | SSM SecureString name holding the Decodo fallback key (injected by CDK)  |
+| `DB_MIN_GAP_MS`              | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)               |
 | `LOCAL_DEV`                  | Backend           | Set to `1` to start an HTTP server instead of exporting a Lambda handler |
 | `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway endpoint URL                                                 |
 | `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                                 |
 | `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                                    |
 | `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda env var                                  |
-| `CDK_SCRAPING_BROWSER_PARAM` | Infrastructure    | SSM SecureString name for the vendor CDP endpoint                        |
+| `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo fallback key                        |
+| `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the scraper's poller and hydrator schedules                 |
 | `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB table for scrape schedule (injected by CDK)                     |
 | `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet price data (injected by CDK)                       |
 | `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 90)                                |

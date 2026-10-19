@@ -21,8 +21,7 @@ export class InfrastructureStack extends cdk.Stack {
     new Backend(this, 'Backend', cognitoAuth.userPool, frontendProps.domainName, sesFromEmail);
     new Frontend(this, 'Frontend', frontendProps);
     // Runs daily rather than weekly: every deploy adds a new asset image to the
-    // CDK bootstrap ECR repository. The images are now a few hundred MB (the
-    // Chromium headless shell is gone), but ToolkitCleaner only removes images
+    // CDK bootstrap ECR repository. ToolkitCleaner only removes images
     // no deployed stack still references, so it is safe to run often and keeps
     // ECR storage from accumulating between runs. Orphaned untagged layers are
     // handled by a lifecycle policy on the bootstrap repository (see

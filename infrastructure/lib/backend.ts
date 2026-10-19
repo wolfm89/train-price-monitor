@@ -12,7 +12,6 @@ import {
   aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
-import { grantScrapingBrowserEndpointRead, scrapingBrowserParamName } from './scraping-browser';
 import { decodoApiKeyParamName, grantDecodoApiKeyRead } from './decodo';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
@@ -72,36 +71,31 @@ export class Backend extends Construct {
       FRONTEND_URL: `https://${frontendDomainName}`,
       SES_FROM_EMAIL: sesFromEmail,
       NODE_OPTIONS: '--enable-source-maps',
-      DEPLOY_VERSION: 'v14',
-      // Name of the SSM SecureString holding the vendor CDP endpoint; the value
-      // itself is never in the template (see scraping-browser.ts).
-      BROWSER_WS_ENDPOINT_PARAM: scrapingBrowserParamName(this),
+      DEPLOY_VERSION: 'v15',
+      // DB is reached directly with a Firefox-imitating HTTP client; when DB
+      // throttles the environment the request falls back to Decodo. Name of the
+      // SSM SecureString holding the Decodo key; the value itself is never in the
+      // template (see decodo.ts and shared/db-fetch.ts).
+      DECODO_API_KEY_PARAM: decodoApiKeyParamName(this),
     };
 
-    // Both functions run the same image. DB's bot protection rejects requests
-    // from non-consumer hosts (a browser running in a Lambda container is
-    // refused no matter how genuine it is), so both reach DB through a managed
-    // unblocking browser. Only sizing and triggers differ.
-    //
-    // Memory is now sized for the fetch/parse workload rather than for Chromium
-    // (which used to need 1536 MB and an enlarged /tmp). The browser lives at the
-    // vendor, so the peak here is the bundle plus the station index.
+    // Both functions run the same image (it contains `impit`, a native HTTP
+    // client, next to the bundle). Only sizing, triggers and DB pacing differ.
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
       logGroup: apiLogGroup,
-      // API Gateway REST cuts the integration off at 29 s, but the function is
-      // also the target of the keep-warm rule, and that invocation has to be able
-      // to establish a fresh vendor browser session plus a retry — measured at
-      // ~35 s from cold. The extra headroom therefore only ever applies to
-      // non-API invocations; a slow API request is still cut off by the gateway.
-      timeout: cdk.Duration.seconds(60),
+      // API Gateway REST cuts the integration off at 29 s, so there is no point
+      // in running longer than that.
+      timeout: cdk.Duration.seconds(29),
       memorySize: 512,
       environment: {
         ...commonEnvironment,
-        // Journey searches run through Decodo's managed browser (see
-        // shared/browser-fetch.ts); the key is read from SSM at runtime.
-        DECODO_API_KEY_PARAM: decodoApiKeyParamName(this),
+        // A user is waiting: one short direct attempt, then straight to Decodo.
+        // Worst case is ~8 s direct + ~10 s Decodo, inside the 29 s cap.
+        DB_MAX_ATTEMPTS: '1',
+        DB_REQUEST_TIMEOUT_MS: '8000',
+        DB_MIN_GAP_MS: '300',
       },
     });
 
@@ -111,9 +105,8 @@ export class Backend extends Construct {
 
     // Scheduled/queued work is isolated from the API so a slow refresh cannot
     // consume API concurrency, and so it can run past API Gateway's 29 s cap.
-    // Nobody waits on it, so it is sized for cost rather than latency, and it is
-    // given a more generous retry budget: a blocked vendor session is replaced by
-    // paying another session setup (~8-10 s), which is worth it here.
+    // Nobody waits on it, so it is sized for cost rather than latency and paces
+    // its DB calls gently (one journey after the other).
     const refresherFunction = new lambda.DockerImageFunction(this, 'RefresherLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
@@ -122,9 +115,7 @@ export class Backend extends Construct {
       memorySize: 512,
       environment: {
         ...commonEnvironment,
-        // Each retry costs a full remote-session setup, so allow a few within the
-        // 120 s timeout instead of the tighter default used by the API path.
-        BROWSER_RETRY_BUDGET_MS: '60000',
+        DB_MIN_GAP_MS: '1500',
       },
     });
 
@@ -134,11 +125,8 @@ export class Backend extends Construct {
       table.grantReadWriteData(lambdaFunction);
       table.grantReadWriteData(refresherFunction);
     });
-    // Journey search and the hourly refresh both reach DB through the vendor, so
-    // both need the endpoint parameter.
-    grantScrapingBrowserEndpointRead(this, 'ScrapingBrowserEndpoint', [lambdaFunction, refresherFunction]);
-    // Searches use Decodo; the poller and the hourly refresh keep the CDP endpoint.
-    grantDecodoApiKeyRead(this, 'DecodoApiKey', [lambdaFunction]);
+    // Journey search and the hourly refresh both fall back to Decodo.
+    grantDecodoApiKeyRead(this, 'DecodoApiKey', [lambdaFunction, refresherFunction]);
 
     const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,

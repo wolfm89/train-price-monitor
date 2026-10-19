@@ -2,17 +2,16 @@ import { type TtdTier } from './types.js';
 
 // Scrape intervals are capacity-derived, not aspirational.
 //
-// Routing every request through a real browser (DB blocks all non-browser TLS
-// fingerprints) costs ~2.5 s and 1 GB of Lambda memory per call, which caps the
-// sustainable rate at roughly 1,700 scrapes/day inside the Lambda free tier.
-// The previous 4h/12h/24h tiers implied ~20,900 scrapes/day across the catalog —
-// 12x more than achievable — so every row was permanently overdue, next_scrape_at
-// was meaningless, and NEAR rows designed for 4-hourly sampling were in practice
-// touched about once a week.
+// DB tolerates only a modest request rate per egress IP (bursts are throttled for
+// minutes), and the poller spaces its calls accordingly: a 12-target batch every
+// 15 minutes is ~1,150 scrapes/day. The intervals below demand ~1,654 scrapes/day
+// for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met to about
+// 70 % and the NEAR tier is always served first. Raising SCRAPER_BATCH_SIZE moves
+// that toward 100 % — but only as far as the measured rate limit allows.
 //
-// With a 60-day horizon (140 routes => 8,400 rows) these intervals demand
-// ~1,654 scrapes/day, which fits the budget with margin, so rows are now
-// actually scraped on the schedule they claim.
+// The previous 4h/12h/24h tiers implied ~20,900 scrapes/day across the catalog —
+// 12x more than achievable — so every row was permanently overdue and next_scrape_at
+// was meaningless.
 const INTERVAL_MS: Record<TtdTier, number> = {
   FAR: 16 * 24 * 60 * 60 * 1000, // 16d — 4,060 rows => ~254/day
   MID: 8 * 24 * 60 * 60 * 1000, // 8d — 3,360 rows => ~420/day

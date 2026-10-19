@@ -11,10 +11,10 @@ through a `mise` monorepo.
 - `frontend/` – React 19 SPA (Material-UI v7, urql, Vite); pages, components, hooks, providers.
 - `backend/` – GraphQL Yoga API with a native AWS Lambda handler (API Gateway v1/v2 + SQS).
 - `scraper/` – Independent serverless pipeline collecting DB price data into Parquet on S3.
-- `shared/` – Code shared by more than one module. Currently `browser-fetch.ts`, the
-  Chromium-backed `fetch` shim both the backend and the scraper alias `cross-fetch` to.
+- `shared/` – Code shared by more than one module. Currently `db-fetch.ts`, the
+  `impit`-backed `fetch` both the backend and the scraper alias `cross-fetch` to.
   It has no `node_modules` of its own: each consuming module type-checks it via its own
-  tsconfig (`include` + a `playwright-core` `paths` entry) and bundles it with esbuild.
+  tsconfig (`include` + an `impit` `paths` entry) and bundles it with esbuild.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
 - `.mise.toml` / `mise.tasks.toml` – Monorepo task definitions shared across modules.
 - `eslint.config.cjs` – Shared ESLint v10 flat config.
@@ -174,65 +174,54 @@ flowchart LR
   without a human reviewing the diff.
 - Keep `no-console` clean; use the powertools logger in backend/scraper.
 
-**Browser-backed transport** (`shared/browser-fetch.ts`):
+**DB transport** (`shared/db-fetch.ts`):
 
-- **2026-09:** DB's Akamai edge started rejecting every non-browser TLS/HTTP2 fingerprint with
-  `403 OPS_BLOCKED`. Verified dead ends: Node fetch/undici, curl-impersonate (Chrome and
-  non-Chrome targets), Bun, and all three db-vendo-client profiles, including with an Android
-  `DBNavigator/...` User-Agent. Only a real Chromium worked, so both Lambdas shipped a headless
-  shell and issued requests from a page on the DB origin.
-- **2026-10-13:** that stopped working too. DB now rejects requests from non-consumer **hosts**:
-  a headless Linux container is refused even when a genuine browser makes the request, and even
-  with no automation (CDP) attached at all. Measured with real Google Chrome 155, Chromium,
-  Firefox, patchright, Camoufox, headless _and_ headful, and a browser driven over no protocol
-  at all — every one got `403 OPS_BLOCKED`; a Windows/macOS consumer browser on the _same_
-  network, and the same request scripted from it, are still allowed. So the decision is about the
-  client environment — not the IP and not automation. Sending the traffic through a consumer
-  **proxy** did not help (the block is above TCP), and injecting a validated `_abck` cookie from
-  a real browser did not transfer.
-- Therefore the browser no longer runs in the Lambda. It runs at a managed unblocking-browser
-  vendor and the shim attaches over CDP: `BROWSER_WS_ENDPOINT` (literal) or
-  `BROWSER_WS_ENDPOINT_PARAM` (SSM SecureString name, read once per execution environment).
-  Both the backend and the poller esbuild-`alias` `cross-fetch` to this shim, so
+- **History.** 2026-09: DB's Akamai edge started rejecting every non-browser TLS/HTTP2 fingerprint
+  with `403 OPS_BLOCKED` (Node fetch/undici, curl-impersonate, Bun, all db-vendo-client profiles).
+  A real Chromium worked until 2026-10-13, when DB also refused headless Linux browsers — real
+  Chrome, Chromium, Firefox, patchright, Camoufox, headless and headful — even from a residential
+  IP, while a Windows/macOS consumer browser on the same network was allowed. A managed
+  unblocking-browser vendor (Bright Data's Browser API) was used next; it needs business KYC
+  (`int.bahn.de/robots.txt` disallows `/web/`), fell back to datacenter egress and billed ~670 KB per
+  session, so it was dropped. Browser-as-a-service fleets (Kernel, Browserless incl. its OS
+  emulation) and unblocker APIs (ZenRows, ScrapingAnt) were tested on 2026-10-19 and are all refused.
+- **What works (measured 2026-10-19):** [`impit`](https://github.com/apify/impit), a Rust HTTP
+  client that imitates a browser's TLS and HTTP/2 handshake. With the **Firefox** profile DB answers
+  201, from a residential IP and from AWS Lambda in eu-central-1; the Chrome profile still gets 403.
+  No browser, no proxy, no vendor account. Apify's DB actor most likely works the same way.
+- **Only `Content-Type`/`Accept` plus `Origin`/`Referer` are sent.** db-vendo-client's own
+  User-Agent and correlation headers turn an accepted request into a 403, so the transport drops
+  them. Both the backend and the poller esbuild-`alias` `cross-fetch` to this module, so
   `db-vendo-client`'s request building and response parsing stay untouched.
-- **Warm-up is fulfilled client-side** (`BROWSER_WARMUP`, default `fulfill`): the page gets a
-  real `https://int.bahn.de` origin without any request traversing the vendor proxy. Measured
-  0 KiB versus ~200 KiB–1.2 MB per session for a real page load. This is the difference between
-  fitting and blowing the vendor's free tier — do not change it casually.
-- **Retry is per session** (`BROWSER_MAX_ATTEMPTS`, `BROWSER_RETRY_BUDGET_MS`): DB's block is
-  all-or-nothing per vendor session (a blocked session fails every request, a good one succeeds
-  for all), so a retry must open a _new_ session, which costs ~8–10 s. The budget bounds how
-  long a caller waits; the API Lambda keeps it low to stay inside API Gateway's 29 s cap.
-- **Credential handling.** The CDP endpoint (which embeds the vendor zone password) lives in an SSM
-  **SecureString** that CI writes from the repository secret `SCRAPING_BROWSER_URL`. The functions are
-  given only the parameter _name_ (`BROWSER_WS_ENDPOINT_PARAM`) and read the value at runtime, so it
-  never appears in a CloudFormation template, in `cdk diff` output, or in a function's environment.
-  The value is cached for `BROWSER_ENDPOINT_TTL_MS` (default 15 min) — finite on purpose, because the
-  keep-warm rule can keep an execution environment alive for weeks and a rotated credential must
-  still take effect. IAM grants exactly `ssm:GetParameter` on that one parameter; no `kms:Decrypt` is
-  needed with the AWS-managed `aws/ssm` key (its policy already permits decryption account-wide), and
-  a customer-managed key would need a grant on the **key ARN** — an alias ARN is not a valid KMS
-  resource.
-  **Rotation:** update the repo secret and re-run the deploy job (or run
-  `aws ssm put-parameter --overwrite` yourself). No code change, no function redeploy, and running
-  environments converge within the TTL.
-- **Keep-warm rule** (`KeepWarmRule`, every 3 minutes): a vendor session lives inside the Lambda
-  execution environment, so both die with it. Measured: 168/168 hourly refresher invocations were
-  cold, and 12 of 83 API invocations over 14 days — i.e. the first search of essentially every
-  visit. The scheduled invocation runs a real (cheap) journeys query and keeps one environment and
-  its session alive, so user searches hit a warm session (~2 s instead of ~20-35 s). This is why
-  the GraphQL Lambda's timeout is 60 s: the keep-warm path may have to build a session plus a
-  retry, while API Gateway still cuts user requests at 29 s.
-- `playwright-core` must stay **external** in both bundles (it is the CDP client). The images no
-  longer ship a browser at all — that removed the Chromium layer, `PLAYWRIGHT_BROWSERS_PATH`,
-  the enlarged `/tmp`, and the x86_64-only constraint.
-- Lambda sizing: without a browser the peaks are small (bundle + station index). Backend
-  functions are 512 MB, the poller 512 MB with a 300 s timeout (remote calls are ~1–8 s each,
-  and `ABORT_THRESHOLD_MS` in the poller is kept just below the function timeout).
-- `@aws-sdk/client-ssm` is **external** in the backend bundle (it is a production dependency, so
-  it is present in the image) and external in the scraper bundle (provided by the Node.js 24
-  runtime, like the other SDK clients). The shared shim resolves it lazily, so local development
-  never touches SSM.
+- **Pacing.** DB throttles an egress IP that bursts: 6 parallel calls were fine, 60 at concurrency 6
+  got the IP a `429` for minutes, 24 calls one at a time with 2.5 s gaps all passed. The module spaces
+  request starts (`DB_MIN_GAP_MS`) and caps in-flight requests (`DB_MAX_IN_FLIGHT`). The poller runs
+  at 2.5 s / 2 in flight with a batch of 12 targets (24 calls, ~70 s), every 15 minutes. Raise
+  `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log stay clean.
+- **Circuit breaker.** After `DB_BREAKER_THRESHOLD` consecutive failed requests the environment stops
+  calling DB for `DB_BREAKER_COOLDOWN_MS`: hammering a throttled IP only extends the ban. With a Decodo
+  key configured the request falls back to Decodo; without one it throws `DbThrottledError`, and the
+  poller ends its batch (the untouched targets are retried by the next run).
+- **Decodo fallback (backend only).** The API and refresher functions have `DECODO_API_KEY_PARAM`
+  and use Decodo's `/scrape` (premium pool; the standard pool cannot send custom headers and is
+  refused) when the direct path is throttled. **The poller has no key on purpose**: it is bulk work and
+  must never spend the free allowance (5K calls/month). `DB_TRANSPORT=decodo` forces the fallback (kill
+  switch). The key lives in an SSM **SecureString** that CI writes from the repository secret
+  `DECODO_API_KEY`; the functions get only the parameter _name_, so it never appears in a template, in
+  `cdk diff` or in a function's environment. IAM grants exactly `ssm:GetParameter` on that parameter
+  (no `kms:Decrypt` is needed with the AWS-managed `aws/ssm` key). **Rotation:** update the repo secret
+  and re-run the deploy job; running environments converge within `DECODO_KEY_TTL_MS` (15 min).
+- **Fingerprints get blocked once popular** (reported in db-vendo-client#46: ~1–2 weeks). If the
+  direct path starts failing, try another profile with `DB_IMPIT_BROWSER` (e.g. `firefox144`) or bump
+  `impit`; Decodo keeps search and refresh working meanwhile.
+- **Packaging.** `impit` is a native module: it is **external** in both bundles and shipped in the
+  images (backend: all production dependencies; poller: `impit` and `impit-linux-x64-gnu` only). The
+  Dockerfiles install with `--os=linux --cpu=x64 --libc=glibc` so the Lambda binary is picked
+  regardless of the build host; the Lambdas are x86_64. `@aws-sdk/client-ssm` is external in the
+  backend bundle (present in the image) and provided by the Node.js 24 runtime for the scraper; the
+  transport imports it lazily, so local development never touches SSM.
+- **Pause switch.** `CDK_SCRAPER_PAUSED=1` (repo variable) disables the poller and hydrator schedules
+  in CDK; unlike a manual console change it survives deploys.
 
 **Backend esbuild bundling** (`--format=cjs`):
 
@@ -258,33 +247,39 @@ flowchart LR
 
 Environment variables (never commit values):
 
-| Variable                     | Module            | Description                                                      |
-| ---------------------------- | ----------------- | ---------------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                |
-| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                        |
-| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                  |
-| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL for notification links                         |
-| `LOCAL_DEV`                  | Backend           | `1` starts an HTTP server instead of the Lambda handler          |
-| `PORT`                       | Backend           | HTTP port for local dev server (default `4000`)                  |
-| `BROWSER_WS_ENDPOINT`        | Backend + Scraper | Vendor CDP endpoint, literal (local dev; wins over `_PARAM`)     |
-| `BROWSER_WS_ENDPOINT_PARAM`  | Backend + Scraper | SSM SecureString name holding the CDP endpoint (injected by CDK) |
-| `BROWSER_ENDPOINT_TTL_MS`    | Backend + Scraper | How long a resolved endpoint is cached (default 15 min)          |
-| `BROWSER_WARMUP`             | Backend + Scraper | `fulfill` (default, 0 billed bytes) or `load` the real page      |
-| `BROWSER_MAX_ATTEMPTS`       | Backend + Scraper | Attempts per request before failing (default `3`)                |
-| `BROWSER_RETRY_BUDGET_MS`    | Backend + Scraper | Wall-clock budget for retries (default `20000`)                  |
-| `BROWSER_PROXY`              | Backend + Scraper | Proxy for the local-Chromium fallback (debugging)                |
-| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway base URL                                             |
-| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                         |
-| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                            |
-| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                 |
-| `CDK_SCRAPING_BROWSER_PARAM` | Infrastructure    | SSM SecureString name for the vendor CDP endpoint                |
-| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                        |
-| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                     |
-| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`; 1 target = 2 calls)        |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | Days ahead to seed (default `60`)                                |
-| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper           | Newest days re-seeded per nightly run (default `3`)              |
-| `HYDRATOR_FULL_SEED`         | Scraper           | `1` seeds the whole window and prunes beyond it (manual)         |
-| `AWS_ENDPOINT_URL`           | Scraper           | Local Floci endpoint (set by mise tasks)                         |
+| Variable                     | Module            | Description                                                       |
+| ---------------------------- | ----------------- | ----------------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                 |
+| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                         |
+| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                   |
+| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL for notification links                          |
+| `LOCAL_DEV`                  | Backend           | `1` starts an HTTP server instead of the Lambda handler           |
+| `PORT`                       | Backend           | HTTP port for local dev server (default `4000`)                   |
+| `DB_MIN_GAP_MS`              | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)        |
+| `DB_MAX_IN_FLIGHT`           | Backend + Scraper | Concurrent DB requests (default `2`)                              |
+| `DB_MAX_ATTEMPTS`            | Backend + Scraper | Direct attempts per request (default `2`)                         |
+| `DB_RETRY_BACKOFF_MS`        | Backend + Scraper | Pause before a retry, times the attempt number (default `3000`)   |
+| `DB_REQUEST_TIMEOUT_MS`      | Backend + Scraper | Per-attempt timeout (default `20000`)                             |
+| `DB_BREAKER_THRESHOLD`       | Backend + Scraper | Consecutive failed requests that open the breaker (default `3`)   |
+| `DB_BREAKER_COOLDOWN_MS`     | Backend + Scraper | How long the breaker stays open (default `180000`)                |
+| `DB_IMPIT_BROWSER`           | Backend + Scraper | impit browser profile (default `firefox`; Chrome profiles fail)   |
+| `DB_TRANSPORT`               | Backend           | `decodo` forces the Decodo fallback (kill switch)                 |
+| `DECODO_API_KEY`             | Backend           | Decodo key, literal (local dev; wins over `_PARAM`)               |
+| `DECODO_API_KEY_PARAM`       | Backend           | SSM SecureString name holding the Decodo key (injected by CDK)    |
+| `DECODO_KEY_TTL_MS`          | Backend           | How long a resolved Decodo key is cached (default 15 min)         |
+| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway base URL                                              |
+| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                          |
+| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                             |
+| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                  |
+| `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo key                          |
+| `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the poller and hydrator schedules                    |
+| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                         |
+| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                      |
+| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`, CDK sets `12`; 1 = 2 calls) |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | Days ahead to seed (default `60`)                                 |
+| `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper           | Newest days re-seeded per nightly run (default `3`)               |
+| `HYDRATOR_FULL_SEED`         | Scraper           | `1` seeds the whole window and prunes beyond it (manual)          |
+| `AWS_ENDPOINT_URL`           | Scraper           | Local Floci endpoint (set by mise tasks)                          |
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
 - Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).

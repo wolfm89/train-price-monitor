@@ -258,24 +258,6 @@ export class DbHafasManager {
   }
 
   /**
-   * Exercises the DB path without caring about the result, to keep the vendor
-   * browser session usable.
-   *
-   * Called by the scheduled keep-warm invocation (see backend.ts). Session setup
-   * costs ~8-10 s in a fresh Lambda execution environment and roughly a third of
-   * new vendor sessions are blocked and have to be replaced, so a search issued
-   * right after the environment was recycled pays 10-20 s. Keeping one
-   * environment — and therefore one session — alive off the request path means a
-   * user's search never pays that.
-   *
-   * A real journeys query (rather than a synthetic probe) is deliberate: it runs
-   * the same code path a search does, so success proves the session is usable.
-   */
-  async warmUp(): Promise<void> {
-    await this.queryJourneys('8000191', '8011160', new Date(Date.now() + 3 * 86_400_000), { results: 1 });
-  }
-
-  /**
    * Refreshes a journey using the provided refresh token and pricing options.
    * @param refreshToken - The refresh token associated with the journey.
    * @param pricingOptions - Optional pricing options (loyalty card, class, age, D-Ticket).

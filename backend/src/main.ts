@@ -8,6 +8,7 @@ import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
 import logger from './lib/logger';
+import { takeDbTransportStats } from '../../shared/db-fetch';
 
 dotenv.config();
 
@@ -163,7 +164,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
       // so anything reaching here is a genuine transient failure worth retrying.
       throw new Error(`GraphQL execution error(s): ${messages}`);
     }
-    logger.info('SQS message processed', { hasErrors: false });
+    logger.info('SQS message processed', { hasErrors: false, transport: takeDbTransportStats() });
     return { statusCode: 200, body: '' };
   }
 
@@ -203,7 +204,11 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
   });
 
   const responseBody = await response.text();
-  logger.info('GraphQL response', { status: response.status, bodyLength: responseBody.length });
+  logger.info('GraphQL response', {
+    status: response.status,
+    bodyLength: responseBody.length,
+    transport: takeDbTransportStats(),
+  });
 
   const responseHeaders: Record<string, string> = {};
   response.headers.forEach((value, key) => {

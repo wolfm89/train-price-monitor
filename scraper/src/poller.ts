@@ -10,6 +10,7 @@ import { computeTtdTier, computeNextScrapeAt } from './ttd.js';
 import { positiveIntFromEnv } from './env.js';
 import { fetchDayJourneys } from './client.js';
 import { ROUTE_CATALOG } from './routes.js';
+import { DbThrottledError, takeDbTransportStats } from '../../shared/db-fetch.js';
 
 const logger = new Logger({ serviceName: 'scraper-poller' });
 
@@ -22,41 +23,24 @@ const TABLE_NAME = process.env.SCRAPER_TABLE_NAME!;
 const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
 
 /**
- * Max targets per invocation. Each target = 2 API calls.
+ * Max targets per invocation. Each target = 2 API calls (2nd and 1st class).
  *
  * Tunable via env so the cadence/batch trade-off can be adjusted without a code
- * change. DB is reached through a managed remote browser (see
- * ../../shared/browser-fetch.ts), which costs ~1-8 s per API call plus a ~10 s
- * session setup once per invocation, so the sustainable batch is much smaller
- * than it was for the raw-HTTP transport.
+ * change. DB is reached directly over HTTP with a Firefox-imitating client (see
+ * ../../shared/db-fetch.ts), which spaces requests (~2.5 s apart in this function,
+ * see the CDK stack) because bursts get the Lambda's IP throttled for minutes.
+ * A 12-target run is therefore ~24 calls, about 70 s.
  */
 const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 10, logger);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the
- * function timeout (300 s) with enough room to finish the current target.
- * Increased from 150 s when DB access moved to a managed remote browser, whose
- * per-call latency (~1-8 s) is higher than the old in-process Chromium. */
-const ABORT_THRESHOLD_MS = 270_000;
-/**
- * Sleep between targets to spread API load.
- *
- * Zero because the browser transport already self-throttles: a single API call
- * now takes ~2.5 s end to end, which is *more* spacing than the ~2.0 s the old
- * raw-HTTP path achieved with a 1.5 s sleep between ~0.5 s calls. Keeping the
- * sleep would add pure billed idle time (~29% of each run) for no extra
- * pacing. Verified against the live API: 20 back-to-back browser requests all
- * returned 201 with no rate limiting.
- */
-const INTER_TARGET_SLEEP_MS = 0;
+ * function timeout with enough room to finish the current target. */
+const ABORT_THRESHOLD_MS = 150_000;
 
 const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Extract the dominant load factor from a journey's legs.
@@ -288,6 +272,14 @@ export const handler = async (): Promise<void> => {
         newTier,
       });
     } catch (err) {
+      if (err instanceof DbThrottledError) {
+        // DB is throttling this environment. Every further request would only
+        // extend the throttle, so stop here: the untouched targets keep their
+        // next_scrape_at and are picked up by the next invocation.
+        logger.warn('DB is throttling this environment, ending the batch early', { route_id: target.route_id });
+        break;
+      }
+
       const msg = String(err);
       if (msg.includes('429') || msg.toLowerCase().includes('too many requests')) {
         logger.warn('Rate limited by Vendo API', { route_id: target.route_id });
@@ -302,16 +294,11 @@ export const handler = async (): Promise<void> => {
       }
       continue;
     }
-
-    // Brief pause between targets to spread API load
-    if (Date.now() - start < ABORT_THRESHOLD_MS) {
-      await sleep(INTER_TARGET_SLEEP_MS);
-    }
   }
 
   if (allBatchRows.length > 0) {
     await writeToS3(allBatchRows, now);
   }
 
-  logger.info('Poller finished', { elapsedMs: Date.now() - start });
+  logger.info('Poller finished', { elapsedMs: Date.now() - start, transport: takeDbTransportStats() });
 };

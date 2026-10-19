@@ -7,7 +7,7 @@ import { Construct } from 'constructs';
  *
  * The value is never part of a CDK template: CI writes it from the repository
  * secret `DECODO_API_KEY` before deploying, and the function reads it at runtime
- * via the name in `DECODO_API_KEY_PARAM` (see shared/browser-fetch.ts). Override
+ * via the name in `DECODO_API_KEY_PARAM` (see shared/db-fetch.ts). Override
  * the name with the `decodo_api_key_param` context key.
  */
 export const DEFAULT_DECODO_API_KEY_PARAM = '/train-price-monitor/decodo-api-key';

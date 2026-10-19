@@ -12,7 +12,7 @@ declare -A CLOUD_FORMATION_OUTPUTS=(
 )
 
 declare -A ENV_FILE_FIELDS=(
-  [backend/.env]='AWS_PROFILE PROFILE_IMAGE_BUCKET_NAME TPM_SQS_QUEUE_URL BROWSER_WS_ENDPOINT'
+  [backend/.env]='AWS_PROFILE PROFILE_IMAGE_BUCKET_NAME TPM_SQS_QUEUE_URL'
   [frontend/.env]='COGNITO_USER_POOL_ID COGNITO_CLIENT_ID COGNITO_IDENTITY_POOL_ID AWS_REGION'
   [frontend/.env.development]='REACT_APP_GRAPHQL_ENDPOINT'
 )
@@ -71,18 +71,6 @@ require_value "Cognito app client for user pool ${COGNITO_USER_POOL_ID}" "$COGNI
 for env_name in "${!STATIC_VALUES[@]}"; do
   printf -v "$env_name" '%s' "${STATIC_VALUES[$env_name]}"
 done
-
-# The vendor CDP endpoint is kept in an SSM SecureString (CI writes it from the
-# repository secret) rather than in git. Optional locally: without it the backend
-# falls back to the bundled Chromium, which DB currently rejects, so journey
-# search fails with OPS_BLOCKED.
-SCRAPING_BROWSER_PARAM="${CDK_SCRAPING_BROWSER_PARAM:-/train-price-monitor/scraping-browser-url}"
-BROWSER_WS_ENDPOINT="$(aws ssm get-parameter --name "$SCRAPING_BROWSER_PARAM" \
-  --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)"
-if [[ -z "$BROWSER_WS_ENDPOINT" || "$BROWSER_WS_ENDPOINT" == "None" ]]; then
-  echo "WARN: SSM parameter ${SCRAPING_BROWSER_PARAM} not found — local journey search will be blocked" >&2
-  BROWSER_WS_ENDPOINT=""
-fi
 
 for file_path in "${ENV_FILES[@]}"; do
   write_env_file "$file_path" "${ENV_FILE_FIELDS[$file_path]}"

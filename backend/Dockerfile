@@ -1,18 +1,10 @@
 # ---------------------------------------------------------------------------
 # Backend image: AWS Lambda Node.js 24 + the pre-built GraphQL bundle.
 #
-# There is deliberately NO browser in this image. Until 2026-10-13 the backend
-# shipped Chromium (headless shell) and issued DB requests from a page it
-# controlled; DB's bot protection then stopped allowing non-consumer *hosts*, so
-# a browser running in a Lambda container is refused no matter how genuine it is.
-# The browser now runs at a managed unblocking-browser vendor and the shim
-# attaches to it over CDP using BROWSER_WS_ENDPOINT[_PARAM]. See
-# ../shared/browser-fetch.ts and AGENTS.md for the evidence.
-#
-# That removed the Playwright browser download, the Chromium shared-library
-# layer (alsa-lib, nss, pango, …) and PLAYWRIGHT_BROWSERS_PATH, and with them the
-# x86_64-only constraint that came from installing those libraries for the target
-# architecture. playwright-core stays: it is the CDP client.
+# DB is reached with `impit`, a native HTTP client that imitates Firefox's TLS and
+# HTTP/2 handshake (see ../shared/db-fetch.ts). It ships a prebuilt binary per
+# platform as an optional dependency, so the dependency stage below pins the
+# Lambda target (linux/x86_64/glibc) instead of whatever the build host is.
 #
 # The application bundle is built on the host (`npm run build`) rather than
 # inside this image, because it bundles ../shared, which is outside this
@@ -21,12 +13,11 @@
 
 # Only packages left external by the esbuild bundle are loaded at runtime, but
 # installing the full production set straight from the lockfile keeps versions
-# pinned and reproducible. This stage is architecture-agnostic (no native
-# builds), so it runs natively on the build host.
+# pinned and reproducible.
 FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS deps
 WORKDIR /deps
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
+RUN npm ci --omit=dev --ignore-scripts --os=linux --cpu=x64 --libc=glibc
 
 FROM public.ecr.aws/lambda/nodejs:24
 
