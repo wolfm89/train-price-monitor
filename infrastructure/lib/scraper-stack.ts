@@ -227,7 +227,7 @@ export class ScraperStack extends cdk.Stack {
 
     // The poller logs one "Poller finished" line per run with the transport
     // counters; these filters turn them into metrics without any extra code.
-    const directOkFilter = new logs.MetricFilter(this, 'PollerDirectOkFilter', {
+    new logs.MetricFilter(this, 'PollerDirectOkFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
       metricNamespace: 'TrainPriceMonitor',
@@ -235,7 +235,7 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '$.transport.directOk',
       defaultValue: 0,
     });
-    const throttledFilter = new logs.MetricFilter(this, 'PollerThrottledFilter', {
+    new logs.MetricFilter(this, 'PollerThrottledFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
       metricNamespace: 'TrainPriceMonitor',
@@ -243,7 +243,7 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '$.transport.directThrottled',
       defaultValue: 0,
     });
-    const runMsFilter = new logs.MetricFilter(this, 'PollerRunMsFilter', {
+    new logs.MetricFilter(this, 'PollerRunMsFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
       metricNamespace: 'TrainPriceMonitor',
