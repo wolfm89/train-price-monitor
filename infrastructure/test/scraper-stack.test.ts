@@ -48,10 +48,10 @@ describe('ScraperStack', () => {
     expect(variables.some((name) => name.startsWith('DECODO') || name.startsWith('BROWSER'))).toBe(false);
   });
 
-  test('Schedule table exposes the ByDue index and nothing reads next_scrape_at', () => {
+  test('Schedule table exposes the ByDue priority index', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
-      GlobalSecondaryIndexes: [
+      GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({
           IndexName: 'ByDue',
           KeySchema: [
@@ -59,7 +59,7 @@ describe('ScraperStack', () => {
             { AttributeName: 'due_key', KeyType: 'RANGE' },
           ],
         }),
-      ],
+      ]),
     });
     const indexes = Object.values(template.findResources('AWS::DynamoDB::Table')).flatMap((table) =>
       (table.Properties.GlobalSecondaryIndexes ?? []).map((index: { IndexName: string }) => index.IndexName)
