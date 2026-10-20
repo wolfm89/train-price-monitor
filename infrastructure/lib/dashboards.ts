@@ -104,7 +104,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   // The schedule table is provisioned at 5 WCU; this is the most constrained
   // resource of the pipeline, so it is the saturation headline.
   const writeUtilization = new cloudwatch.MathExpression({
-    expression: '100 * m1 / 5',
+    expression: '100 * m1 / (5 * 900)',
     usingMetrics: {
       m1: props.scheduleTable.metricConsumedWriteCapacityUnits({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
     },
@@ -212,7 +212,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       new cloudwatch.SingleValueWidget({
         title: 'Data — rows written in the last hour',
         metrics: [rowsPerHour],
-        sparkline: true,
+        sparkline: false,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
       }),
@@ -352,7 +352,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
       new cloudwatch.SingleValueWidget({
         title: 'Saturation — DLQ messages now',
         metrics: [dlqDepth],
-        sparkline: true,
+        sparkline: false,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
       }),
