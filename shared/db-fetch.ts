@@ -4,13 +4,15 @@
  * file with esbuild, so db-vendo-client's request building and response parsing
  * stay untouched).
  *
- * Why not Node's own fetch: DB's edge (Akamai) refuses requests by TLS/HTTP2
- * fingerprint and by client environment, and answers `403 OPS_BLOCKED` to Node,
- * curl, Chrome-imitating clients and headless browsers alike. A client that
- * imitates Firefox's handshake (`impit`, a Rust HTTP client with browser TLS and
- * HTTP/2 impersonation) is accepted — measured on 2026-10-19 from a residential
- * IP and from AWS Lambda in eu-central-1: the Firefox profile got 201 where the
- * Chrome profile got 403. No browser, no proxy, no vendor account.
+ * Why not Node's own fetch: DB's edge (Akamai) refuses requests by TLS
+ * fingerprint and answers `403 OPS_BLOCKED` to Node's default client, curl,
+ * Chrome-imitating clients and headless browsers alike. What passes (measured
+ * 2026-10-20 from Lambda) is Node's own https client with the browser cipher
+ * order below — repeatedly, on keep-alive and fresh connections. The cipher list
+ * is the deciding factor; Node's default order gets 403, ALPN does not matter.
+ * No browser, no proxy, no vendor account. Fingerprints that become popular get
+ * blocked (the impit Firefox profile lasted two days), which is why the fallback
+ * exists.
  *
  * Measured constraints this file encodes:
  *  - Only `Content-Type`/`Accept` plus `Origin`/`Referer` may be sent. db-vendo's
@@ -36,12 +38,12 @@
  *  DB_REQUEST_TIMEOUT_MS    per-attempt timeout (default 20000)
  *  DB_BREAKER_THRESHOLD     consecutive failed requests that open the breaker (default 3)
  *  DB_BREAKER_COOLDOWN_MS   how long the breaker stays open (default 180000)
- *  DB_IMPIT_BROWSER         impit profile (default `firefox`; e.g. `firefox144`)
  *  DB_TRANSPORT             `decodo` forces the fallback path (kill switch)
  *  DECODO_API_KEY[_PARAM]   Decodo credentials (literal, or SSM SecureString name)
  *  DECODO_KEY_TTL_MS        how long a resolved SSM key is cached (default 15 min)
  */
-import type { Impit } from 'impit';
+import https from 'node:https';
+import zlib from 'node:zlib';
 
 interface FetchInit {
   method?: string;
@@ -193,23 +195,35 @@ function recordFailure(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Direct path: impit with Firefox's TLS/HTTP2 fingerprint.
+// Direct path: Node's HTTPS client with a browser cipher list.
+//
+// Measured 2026-10-20 from Lambda: every impit browser profile (Firefox, Chrome,
+// iOS, okhttp) was refused with 403, while Node's own https client with the
+// cipher order below returned 201 — repeatedly, on keep-alive and fresh
+// connections. The cipher list is the deciding factor: Node's default order
+// still gets 403, and ALPN (http/1.1) makes no difference. This is the same
+// class of workaround db-vendo-client#46 describes; like every fingerprint it
+// can be blocked once it becomes popular, which is why the Decodo fallback
+// stays in place.
 // ---------------------------------------------------------------------------
 
-let impitClient: Promise<Impit> | null = null;
+const BROWSER_CIPHERS = [
+  'TLS_AES_128_GCM_SHA256',
+  'TLS_AES_256_GCM_SHA384',
+  'TLS_CHACHA20_POLY1305_SHA256',
+  'ECDHE-ECDSA-AES128-GCM-SHA256',
+  'ECDHE-RSA-AES128-GCM-SHA256',
+].join(':');
 
-function getImpit(): Promise<Impit> {
-  if (!impitClient) {
-    impitClient = import('impit').then(
-      ({ Impit: ImpitClass }) => new ImpitClass({ browser: (process.env.DB_IMPIT_BROWSER || 'firefox') as 'firefox' })
-    );
-    // A failed import must not be cached forever.
-    impitClient.catch(() => {
-      impitClient = null;
-    });
-  }
-  return impitClient;
-}
+const agent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 2,
+  ciphers: BROWSER_CIPHERS,
+  // Browser-like group order; Node's default differs. Harmless either way, so
+  // keep it aligned with the cipher impersonation.
+  ecdhCurve: 'X25519:P-256:P-384',
+  ALPNProtocols: ['http/1.1'],
+});
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
 function isThrottled(status: number, bodyText: string): boolean {
@@ -223,9 +237,17 @@ function pick(headers: Record<string, string> | undefined, name: string): string
   return undefined;
 }
 
-async function directOnce(url: string, init: FetchInit): Promise<FetchCompatibleResponse> {
+function decodeBody(buffer: Buffer, encoding: string | undefined): Buffer {
+  if (!encoding) return buffer;
+  if (encoding === 'gzip') return zlib.gunzipSync(buffer);
+  if (encoding === 'deflate') return zlib.inflateSync(buffer);
+  if (encoding === 'br') return zlib.brotliDecompressSync(buffer);
+  return buffer;
+}
+
+function directOnce(url: string, init: FetchInit): Promise<FetchCompatibleResponse> {
   const target = new URL(url);
-  const client = await getImpit();
+  const timeoutMs = intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000);
 
   const headers: Record<string, string> = {
     Origin: target.origin,
@@ -236,17 +258,45 @@ async function directOnce(url: string, init: FetchInit): Promise<FetchCompatible
   if (contentType) headers['Content-Type'] = contentType;
   if (accept) headers.Accept = accept;
 
-  const response = await client.fetch(url, {
-    method: (init.method ?? 'GET').toUpperCase() as 'GET' | 'POST',
-    headers,
-    body: init.body,
-    timeout: intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000),
-  });
-  const bodyText = await response.text();
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      url,
+      { method: (init.method ?? 'GET').toUpperCase(), headers, agent, timeout: timeoutMs },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          let body: Buffer;
+          try {
+            body = decodeBody(Buffer.concat(chunks), String(response.headers['content-encoding'] ?? ''));
+          } catch (error) {
+            reject(error);
+            return;
+          }
 
-  const responseHeaders: Array<[string, string]> = [];
-  response.headers.forEach((value, name) => responseHeaders.push([name, value]));
-  return new FetchCompatibleResponse(response.status, response.statusText, bodyText, responseHeaders);
+          const responseHeaders: Array<[string, string]> = [];
+          for (const [name, value] of Object.entries(response.headers)) {
+            if (Array.isArray(value)) for (const entry of value) responseHeaders.push([name, entry]);
+            else if (value !== undefined) responseHeaders.push([name, String(value)]);
+          }
+
+          resolve(
+            new FetchCompatibleResponse(
+              response.statusCode ?? 0,
+              response.statusMessage ?? '',
+              body.toString('utf8'),
+              responseHeaders
+            )
+          );
+        });
+      }
+    );
+
+    request.on('error', reject);
+    request.on('timeout', () => request.destroy(new Error('DB request timed out')));
+    if (init.body) request.write(init.body);
+    request.end();
+  });
 }
 
 // ---------------------------------------------------------------------------

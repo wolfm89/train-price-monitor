@@ -7,10 +7,7 @@ import { fileURLToPath } from 'url';
 // the runtime-supplied SDK.
 const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3', '@aws-sdk/client-ssm'];
 
-// impit (used only by the poller via the shared DB transport) is a native module
-// whose platform binary is resolved from node_modules at runtime, so it must stay
-// external and be present next to the bundle — see the Dockerfile.
-const pollerExternal = [...external, 'impit'];
+const pollerExternal = [...external];
 
 const dbFetchShim = fileURLToPath(new URL('../../shared/db-fetch.ts', import.meta.url));
 
@@ -36,7 +33,7 @@ await esbuild.build({
   // db-vendo-client hardcodes `import {Request, fetch} from 'cross-fetch'`,
   // which always resolves to Node's fetch (undici) regardless of runtime.
   // int.bahn.de blocks that TLS/HTTP2 fingerprint outright (OPS_BLOCKED).
-  // Redirecting the import to the shared impit-backed transport fixes this
+  // Redirecting the import to the shared HTTPS transport fixes this
   // without patching node_modules or touching db-vendo-client's
   // request-building/response-parsing logic.
   alias: {

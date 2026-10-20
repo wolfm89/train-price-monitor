@@ -38,7 +38,7 @@ describe('ScraperStack', () => {
       PackageType: 'Image',
       Timeout: 240,
       Environment: {
-        Variables: Match.objectLike({ SCRAPER_BATCH_SIZE: '30', DB_MIN_GAP_MS: '2500', DB_MAX_IN_FLIGHT: '2' }),
+        Variables: Match.objectLike({ SCRAPER_BATCH_SIZE: '25', DB_MIN_GAP_MS: '2500', DB_MAX_IN_FLIGHT: '2' }),
       },
     });
     const poller = Object.values(template.findResources('AWS::Lambda::Function')).find(

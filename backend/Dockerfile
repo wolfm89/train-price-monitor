@@ -1,11 +1,6 @@
 # ---------------------------------------------------------------------------
 # Backend image: AWS Lambda Node.js 24 + the pre-built GraphQL bundle.
 #
-# DB is reached with `impit`, a native HTTP client that imitates Firefox's TLS and
-# HTTP/2 handshake (see ../shared/db-fetch.ts). It ships a prebuilt binary per
-# platform as an optional dependency, so the dependency stage below pins the
-# Lambda target (linux/x86_64/glibc) instead of whatever the build host is.
-#
 # The application bundle is built on the host (`npm run build`) rather than
 # inside this image, because it bundles ../shared, which is outside this
 # Dockerfile's build context. mise/infrastructure build it before the image.
@@ -17,7 +12,7 @@
 FROM --platform=$BUILDPLATFORM public.ecr.aws/lambda/nodejs:24 AS deps
 WORKDIR /deps
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts --os=linux --cpu=x64 --libc=glibc
+RUN npm ci --omit=dev --ignore-scripts
 
 FROM public.ecr.aws/lambda/nodejs:24
 

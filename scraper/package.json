@@ -28,7 +28,6 @@
     "@aws-lambda-powertools/logger": "^2.32.0",
     "@aws-sdk/client-ssm": "^3.1152.0",
     "db-vendo-client": "^6.10.11",
-    "hyparquet-writer": "^0.6.0",
-    "impit": "^0.14.6"
+    "hyparquet-writer": "^0.6.0"
   }
 }

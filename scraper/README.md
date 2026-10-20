@@ -33,7 +33,7 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 
 ### Poller (`src/poller.ts`)
 
-- Runs every 15 minutes with a batch of 30 targets (60 DB calls).
+- Runs every 15 minutes with a batch of 25 targets (50 DB calls).
 - Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 22
   overdue targets, so near departures are served first when capacity is short.
 - Deletes targets whose departure day has passed instead of scraping them.

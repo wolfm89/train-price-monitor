@@ -102,12 +102,12 @@ export class ScraperStack extends cdk.Stack {
     // only needs to hold the route catalog, the AWS SDK and one batch of Parquet
     // rows.
     // -------------------------------------------------------------------------
-    const POLLER_BATCH_SIZE = 30;
+    const POLLER_BATCH_SIZE = 25;
     const pollerFn = new lambda.DockerImageFunction(this, 'ScraperPoller', {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
       memorySize: 512,
-      // A 30-target batch is ~60 paced calls (~150 s). ABORT_THRESHOLD_MS in
+      // A 25-target batch is ~50 paced calls (~125 s). ABORT_THRESHOLD_MS in
       // scraper/src/poller.ts (210 s) is deliberately below this.
       timeout: cdk.Duration.seconds(240),
       logGroup: pollerLogGroup,
@@ -115,7 +115,7 @@ export class ScraperStack extends cdk.Stack {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
-        // 30 targets = 60 API calls per run (~2,880 scrapes/day), comfortably
+        // 25 targets = 50 API calls per run (~2,400 scrapes/day), comfortably
         // above the ~1,654 the TTD intervals need, so the backlog drains in about
         // a week. Raise it only while the transport stats in the "Poller finished"
         // log stay clean.
@@ -199,7 +199,7 @@ export class ScraperStack extends cdk.Stack {
 
     new events.Rule(this, 'PollerSchedule', {
       enabled: !scraperPaused,
-      // Every 15 minutes with a small batch: ~2,880 scrapes/day, above what the
+      // Every 15 minutes with a small batch: ~2,400 scrapes/day, above what the
       // TTD intervals demand. Bigger or more frequent bursts risk getting the
       // Lambda's egress IP throttled by DB.
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),

@@ -14,7 +14,6 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
-      "impit": ["./node_modules/impit/index.d.ts"],
       "@aws-sdk/client-ssm": ["./node_modules/@aws-sdk/client-ssm/dist-types/index.d.ts"],
       "db-vendo-client": ["./node_modules/hafas-client/index.d.ts"],
       "db-vendo-client/p/dbweb/index.js": ["./types/db-vendo-client/index.d.ts"],
