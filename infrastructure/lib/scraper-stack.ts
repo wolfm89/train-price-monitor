@@ -269,6 +269,15 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '1',
     });
 
+    // Data volume: rows written per Parquet batch.
+    new logs.MetricFilter(this, 'PollerRowsFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Parquet written to S3'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerRowsWritten',
+      metricValue: '$.rows',
+    });
+
     // Saturation signal: 1 when the due queue is deeper than one batch.
     new logs.MetricFilter(this, 'PollerBacklogFilter', {
       logGroup: pollerLogGroup,
@@ -367,6 +376,8 @@ export class ScraperStack extends cdk.Stack {
         pollerFunction: pollerFn,
         hydratorFunction: hydratorFn,
         compactorFunction: compactorFn,
+        scheduleTable: table,
+        pollerLogGroup,
         alarms: [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow],
       }),
     });

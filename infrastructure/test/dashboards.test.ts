@@ -26,7 +26,16 @@ function synth(): Template {
   new cdk.aws_cloudwatch.Dashboard(stack, 'ScraperDashboard', {
     dashboardName: 'TrainPriceMonitor-Scraper',
     start: '-PT48H',
-    widgets: scraperWidgets({ pollerFunction: fn, hydratorFunction: fn, compactorFunction: fn, alarms: [alarm] }),
+    widgets: scraperWidgets({
+      pollerFunction: fn,
+      hydratorFunction: fn,
+      compactorFunction: fn,
+      scheduleTable: new cdk.aws_dynamodb.Table(stack, 'Schedule', {
+        partitionKey: { name: 'pk', type: cdk.aws_dynamodb.AttributeType.STRING },
+      }),
+      pollerLogGroup: new cdk.aws_logs.LogGroup(stack, 'PollerLogs'),
+      alarms: [alarm],
+    }),
   });
   const api = new apigateway.RestApi(stack, 'Api', { deployOptions: { stageName: 'prod' } });
   api.root.addMethod('GET', new apigateway.MockIntegration());
@@ -34,7 +43,13 @@ function synth(): Template {
   new cdk.aws_cloudwatch.Dashboard(stack, 'BackendDashboard', {
     dashboardName: 'TrainPriceMonitor-App',
     start: '-PT48H',
-    widgets: appWidgets({ api, apiFunction: fn, dlq: new sqs.Queue(stack, 'Dlq'), alarms: [alarm] }),
+    widgets: appWidgets({
+      api,
+      apiFunction: fn,
+      dlq: new sqs.Queue(stack, 'Dlq'),
+      apiLogGroup: new cdk.aws_logs.LogGroup(stack, 'ApiLogs'),
+      alarms: [alarm],
+    }),
   });
 
   return Template.fromStack(stack);
@@ -66,21 +81,25 @@ describe('Dashboards', () => {
     const scraper = bodies.get('TrainPriceMonitor-Scraper') ?? '';
     for (const title of [
       'Latency — run duration',
-      'Traffic — scrapes',
+      'Traffic — scrapes per run',
       'Errors — failed target scrapes',
-      'Saturation — DB-throttled calls',
+      'Saturation — DB throttling',
+      'Data — price rows written per run',
       'Alarms',
+      'Diagnostics — recent failed target scrapes',
     ]) {
       expect(scraper).toContain(title);
     }
 
     const app = bodies.get('TrainPriceMonitor-App') ?? '';
     for (const title of [
-      'Latency — API',
-      'Traffic — requests',
+      'Latency — API percentiles',
+      'Traffic — requests per 5 minutes',
       'Errors — 4xx',
       'Saturation — Lambda concurrency',
+      'Notifications — SES sends',
       'Alarms',
+      'Diagnostics — recent API errors',
     ]) {
       expect(app).toContain(title);
     }

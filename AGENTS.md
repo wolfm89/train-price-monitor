@@ -253,11 +253,15 @@ flowchart LR
   Signals — one row each for latency, traffic, errors and saturation, plus the alarm state:
   - `TrainPriceMonitor-Scraper`: run duration (p90/max vs the 210 s abort), scrapes per run,
     failed target scrapes + pipeline errors, DB-throttled calls + backlog (1 when the due queue is
-    deeper than one batch).
-  - `TrainPriceMonitor-App`: API p50/p90 and integration p90, requests per 5 min, 4xx/5xx plus
-    the implicit failure (DB refused, Decodo served), Lambda concurrency/throttles plus DLQ depth.
-  - Rates and percentiles, not totals: a 48-hour total says what happened, a rate says what is
-    happening. The SQS queue is not shown — one message per hour is consumed in under a second.
+    deeper than one batch), plus a **Data** section (price rows written per run) and a diagnostics
+    table of the last failed scrapes.
+  - `TrainPriceMonitor-App`: API p50/p90/p99 and integration p90 (1 s tail budget, 500 ms target),
+    requests per 5 min, 4xx/5xx plus the implicit failure (DB refused, Decodo served), Lambda
+    concurrency/throttles plus DLQ depth, plus a **Notifications** section (SES sends, deliveries
+    and bounce rate) and a diagnostics table of the last API errors.
+  - Each signal pairs a graph with a gauge or number; budget/limit lines are annotations on the
+    graph. Rates and percentiles, not totals. The SQS queue is not shown — one message per hour is
+    consumed in under a second.
 - **Do not add a tenth alarm or a fifth custom metric** without accepting cost ($0.10 and $0.30 per
   month respectively), and do not use metric-math, Metrics Insights or anomaly-detection bands in
   alarms — those are billed differently from the free alarm metrics.

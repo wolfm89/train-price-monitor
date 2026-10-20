@@ -77,6 +77,7 @@ describe('ScraperStack', () => {
       'PollerBacklog',
       'PollerDirectOk',
       'PollerFailedTargets',
+      'PollerRowsWritten',
       'PollerRunMs',
       'PollerTargetsScraped',
       'PollerThrottled',

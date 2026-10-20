@@ -294,6 +294,7 @@ export class Backend extends Construct {
         api,
         apiFunction: lambdaFunction,
         dlq,
+        apiLogGroup,
         alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
       }),
     });
