@@ -102,6 +102,7 @@ export class ScraperStack extends cdk.Stack {
     // only needs to hold the route catalog, the AWS SDK and one batch of Parquet
     // rows.
     // -------------------------------------------------------------------------
+    const POLLER_BATCH_SIZE = 30;
     const pollerFn = new lambda.DockerImageFunction(this, 'ScraperPoller', {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
@@ -118,7 +119,7 @@ export class ScraperStack extends cdk.Stack {
         // above the ~1,654 the TTD intervals need, so the backlog drains in about
         // a week. Raise it only while the transport stats in the "Poller finished"
         // log stay clean.
-        SCRAPER_BATCH_SIZE: '30',
+        SCRAPER_BATCH_SIZE: String(POLLER_BATCH_SIZE),
         // Spacing and concurrency of DB calls (see shared/db-fetch.ts). Measured:
         // 6 parallel calls were fine, a 60-call burst got the IP throttled for
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
@@ -373,6 +374,7 @@ export class ScraperStack extends cdk.Stack {
       dashboardName: 'TrainPriceMonitor-Scraper',
       start: DASHBOARD_START,
       widgets: scraperWidgets({
+        batchSize: POLLER_BATCH_SIZE,
         pollerFunction: pollerFn,
         hydratorFunction: hydratorFn,
         compactorFunction: compactorFn,

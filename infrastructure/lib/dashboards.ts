@@ -62,6 +62,8 @@ function logsTable(title: string, logGroup: logs.ILogGroup, queryLines: string[]
 }
 
 export interface ScraperDashboardProps {
+  /** Targets per poller run, drawn as the traffic ceiling. */
+  batchSize: number;
   pollerFunction: lambda.IFunction;
   hydratorFunction: lambda.IFunction;
   compactorFunction: lambda.IFunction;
@@ -162,11 +164,15 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Traffic — scrapes per run',
+        // Bars are only readable while the window holds a handful of runs; 48 h at
+        // 15-minute bars collapses into one solid block.
+        title: 'Traffic — scrapes per run (12 h)',
         left: [scrapes],
         view: cloudwatch.GraphWidgetView.BAR,
         leftYAxis: { min: 0, label: 'scrapes' },
-        leftAnnotations: [{ value: 22, label: 'batch capacity', color: GREEN }],
+        leftAnnotations: [{ value: props.batchSize, label: 'batch capacity', color: GREEN }],
+        start: '-PT12H',
+        legendPosition: cloudwatch.LegendPosition.HIDDEN,
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
@@ -286,6 +292,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   const latencyP99 = props.api.metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p99' });
   const backendP90 = props.api.metricIntegrationLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' });
   const requests = props.api.metricCount({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
+  const requestsPerHour = props.api.metricCount({ period: cdk.Duration.hours(1), statistic: 'Sum' });
   const requestsPerMinute = props.api.metricCount({ period: cdk.Duration.minutes(1), statistic: 'Sum' });
   const clientErrors = props.api.metricClientError({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
   const serverErrors = props.api.metricServerError({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
@@ -344,10 +351,11 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Traffic — requests per 5 minutes',
-        left: [requests],
+        title: 'Traffic — requests per hour',
+        left: [requestsPerHour],
         view: cloudwatch.GraphWidgetView.BAR,
         leftYAxis: { min: 0, label: 'requests' },
+        legendPosition: cloudwatch.LegendPosition.HIDDEN,
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),

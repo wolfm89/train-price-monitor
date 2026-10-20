@@ -27,6 +27,7 @@ function synth(): Template {
     dashboardName: 'TrainPriceMonitor-Scraper',
     start: '-PT48H',
     widgets: scraperWidgets({
+      batchSize: 30,
       pollerFunction: fn,
       hydratorFunction: fn,
       compactorFunction: fn,
@@ -82,7 +83,7 @@ describe('Dashboards', () => {
     const scraper = bodies.get('TrainPriceMonitor-Scraper') ?? '';
     for (const title of [
       'Latency — run duration',
-      'Traffic — scrapes per run',
+      'Traffic — scrapes per run (12 h)',
       'Errors — failed target scrapes',
       'Saturation — DB throttling',
       'Data — price rows written per run',
@@ -96,7 +97,7 @@ describe('Dashboards', () => {
     const app = bodies.get('TrainPriceMonitor-App') ?? '';
     for (const title of [
       'Latency — API percentiles',
-      'Traffic — requests per 5 minutes',
+      'Traffic — requests per hour',
       'Errors — 4xx',
       'Saturation — Lambda concurrency',
       'Notifications — SES sends',
