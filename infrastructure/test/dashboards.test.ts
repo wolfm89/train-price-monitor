@@ -87,7 +87,8 @@ describe('Dashboards', () => {
       'Errors — failed target scrapes',
       'Saturation — DB throttling',
       'Data — price rows written per run',
-      'Storage — bucket size (30 d) and object count',
+      'Storage — bucket size (30 d)',
+      'Storage — objects (30 d)',
       'Alarms',
       'Diagnostics — recent failed target scrapes',
     ]) {

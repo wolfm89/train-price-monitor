@@ -99,10 +99,12 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   const storageStandard = bucketMetric('BucketSizeBytes', 'StandardStorage');
   const storageIa = bucketMetric('BucketSizeBytes', 'StandardIAStorage');
   const objectCount = bucketMetric('NumberOfObjects', 'AllStorageTypes');
-  const storageMiB = new cloudwatch.MathExpression({
-    expression: '(m1 + m2) / 1048576',
+  // Keep bytes: CloudWatch then formats the value as GB/MB on its own. Dividing
+  // to MiB kept the inherited byte unit and rendered "1.66 kB".
+  const storageTotal = new cloudwatch.MathExpression({
+    expression: 'm1 + m2',
     usingMetrics: { m1: storageStandard, m2: storageIa },
-    label: 'storage (MiB)',
+    label: 'storage',
     period: cdk.Duration.days(1),
   });
 
@@ -247,20 +249,35 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Storage — bucket size (30 d) and object count',
+        title: 'Storage — bucket size (30 d)',
         left: [storageStandard, storageIa],
-        right: [objectCount],
         stacked: true,
         leftYAxis: { min: 0, label: 'bytes' },
-        rightYAxis: { min: 0, label: 'objects' },
         start: '-P30D',
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.SingleValueWidget({
         title: 'Storage — current size',
-        metrics: [storageMiB],
+        metrics: [storageTotal],
         sparkline: false,
+        width: VALUE_WIDTH,
+        height: VALUE_HEIGHT,
+      }),
+    ],
+    [
+      new cloudwatch.GraphWidget({
+        title: 'Storage — objects (30 d)',
+        left: [objectCount],
+        leftYAxis: { min: 0, label: 'objects' },
+        start: '-P30D',
+        legendPosition: cloudwatch.LegendPosition.HIDDEN,
+        width: GRAPH_WIDTH,
+        height: GRAPH_HEIGHT,
+      }),
+      new cloudwatch.TextWidget({
+        markdown:
+          'Objects are the Parquet files: one per poller batch plus one compacted file per day. The count rises during the day and drops after compaction at 03:00 UTC.',
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
       }),
