@@ -255,10 +255,12 @@ flowchart LR
     failed target scrapes + pipeline errors, DB-throttled calls + backlog (1 when the due queue is
     deeper than one batch), plus a **Data** section (price rows written per run) and a diagnostics
     table of the last failed scrapes.
-  - `TrainPriceMonitor-App`: API p50/p90/p99 and integration p90 (1 s tail budget, 500 ms target),
+  - `TrainPriceMonitor-App`: API p50/p90/p99 and integration p90 (the 1 s "flow" limit applies to
+    the interactive p50; journey searches take 2-6 s, so the graph marks 8 s as their p99 budget),
     requests per 5 min, 4xx/5xx plus the implicit failure (DB refused, Decodo served), Lambda
-    concurrency/throttles plus DLQ depth, plus a **Notifications** section (SES sends, deliveries
-    and bounce rate) and a diagnostics table of the last API errors.
+    concurrency/throttles plus DLQ depth, plus a **Notifications** section (SES sends and
+    deliveries) and a diagnostics table of the last API errors. The error rate counts 5xx only —
+    4xx here is expired-token noise from the SPA.
   - Each signal pairs a graph with a gauge or number; budget/limit lines are annotations on the
     graph. Rates and percentiles, not totals. The SQS queue is not shown — one message per hour is
     consumed in under a second.
