@@ -110,6 +110,7 @@ export class DbThrottledError extends Error {
 export interface DbTransportStats {
   directOk: number;
   directThrottled: number;
+  directFailed: number;
   retries: number;
   breakerOpened: number;
   breakerSkips: number;
@@ -120,6 +121,7 @@ export interface DbTransportStats {
 const stats: DbTransportStats = {
   directOk: 0,
   directThrottled: 0,
+  directFailed: 0,
   retries: 0,
   breakerOpened: 0,
   breakerSkips: 0,
@@ -375,17 +377,23 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
     try {
       const response = await directOnce(url, init);
       const throttled = isThrottled(response.status, await response.text());
-      if (!throttled) {
+      // A 5xx is a failure, not a success: DB's edge returns 502/503 while it is
+      // recovering, and counting those as successful calls silently defeated the
+      // "no prices" alarm. Only 2xx counts as ok.
+      const failed = response.status >= 500;
+      if (!throttled && !failed) {
         recordSuccess();
         stats.directOk++;
         return response;
       }
-      stats.directThrottled++;
+      if (throttled) stats.directThrottled++;
+      else stats.directFailed++;
       lastResponse = response;
       lastError = null;
     } catch (error) {
-      // Network-level failure (timeout, reset): treated like a refusal.
-      stats.directThrottled++;
+      // Network-level failure (timeout, reset): a failure, not throttling — the
+      // "DB is throttling" alarm must not fire for our own timeouts.
+      stats.directFailed++;
       lastError = error;
       lastResponse = null;
     } finally {
