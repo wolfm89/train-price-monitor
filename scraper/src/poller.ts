@@ -30,8 +30,8 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * ../../shared/db-fetch.ts), which spaces requests (~2.5 s apart in this function,
  * see the CDK stack) because bursts get the Lambda's IP throttled for minutes.
  *
- * 22 targets is ~44 calls, about 125 s. The TTD intervals need ~1,654 scrapes
- * a day for a 60-day horizon; 22 every 15 minutes is ~2,112, so the schedule is
+ * 30 targets is ~60 calls, about 150 s. The TTD intervals need ~1,654 scrapes
+ * a day for a 60-day horizon; 30 every 15 minutes is ~2,880, so the schedule is
  * met and the backlog drains. Raise it only while the `transport` counters in the
  * "Poller finished" log stay clean.
  */

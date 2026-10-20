@@ -196,7 +196,7 @@ flowchart LR
 - **Pacing.** DB throttles an egress IP that bursts: 6 parallel calls were fine, 60 at concurrency 6
   got the IP a `429` for minutes, 24 calls one at a time with 2.5 s gaps all passed. The module spaces
   request starts (`DB_MIN_GAP_MS`) and caps in-flight requests (`DB_MAX_IN_FLIGHT`). The poller runs
-  at 2.5 s / 2 in flight with a batch of 22 targets (44 calls), every 15 minutes — ~2,112 scrapes a
+  at 2.5 s / 2 in flight with a batch of 30 targets (60 calls), every 15 minutes — ~2,880 scrapes a
   day, above the ~1,654 the TTD intervals need, so the backlog drains in about a week. Raise
   `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log stay clean.
 - **Priority.** The schedule table's index is `ByDue` (`status` + `due_key`, where `due_key` is
@@ -324,7 +324,7 @@ Environment variables (never commit values):
 | `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the poller and hydrator schedules                    |
 | `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB schedule table (injected by CDK)                         |
 | `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet data (injected by CDK)                      |
-| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`, CDK sets `12`; 1 = 2 calls) |
+| `SCRAPER_BATCH_SIZE`         | Scraper           | Targets per poller run (default `10`, CDK sets `30`; 1 = 2 calls) |
 | `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | Days ahead to seed (default `60`)                                 |
 | `HYDRATOR_SEED_WINDOW_DAYS`  | Scraper           | Newest days re-seeded per nightly run (default `3`)               |
 | `HYDRATOR_FULL_SEED`         | Scraper           | `1` seeds the whole window and prunes beyond it (manual)          |

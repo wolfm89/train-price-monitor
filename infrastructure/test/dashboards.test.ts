@@ -33,6 +33,7 @@ function synth(): Template {
       scheduleTable: new cdk.aws_dynamodb.Table(stack, 'Schedule', {
         partitionKey: { name: 'pk', type: cdk.aws_dynamodb.AttributeType.STRING },
       }),
+      dataBucket: new cdk.aws_s3.Bucket(stack, 'Data'),
       pollerLogGroup: new cdk.aws_logs.LogGroup(stack, 'PollerLogs'),
       alarms: [alarm],
     }),
@@ -85,6 +86,7 @@ describe('Dashboards', () => {
       'Errors — failed target scrapes',
       'Saturation — DB throttling',
       'Data — price rows written per run',
+      'Storage — bucket size (30 d) and object count',
       'Alarms',
       'Diagnostics — recent failed target scrapes',
     ]) {

@@ -5,6 +5,7 @@ import {
   aws_dynamodb as dynamodb,
   aws_lambda as lambda,
   aws_logs as logs,
+  aws_s3 as s3,
   aws_sqs as sqs,
 } from 'aws-cdk-lib';
 
@@ -65,6 +66,7 @@ export interface ScraperDashboardProps {
   hydratorFunction: lambda.IFunction;
   compactorFunction: lambda.IFunction;
   scheduleTable: dynamodb.ITable;
+  dataBucket: s3.IBucket;
   pollerLogGroup: logs.ILogGroup;
   alarms: cloudwatch.IAlarm[];
 }
@@ -81,6 +83,26 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   const backlog = metric('TrainPriceMonitor', 'PollerBacklog', cdk.Duration.minutes(15), 'Maximum');
   const rowsPerRun = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.minutes(15), 'Sum');
   const rowsPerHour = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.hours(1), 'Sum');
+
+  // S3 publishes storage metrics once per day, so this block has its own
+  // 30-day window instead of the dashboard's 48 hours.
+  const bucketMetric = (name: string, storageType: string): cloudwatch.Metric =>
+    new cloudwatch.Metric({
+      namespace: 'AWS/S3',
+      metricName: name,
+      dimensionsMap: { BucketName: props.dataBucket.bucketName, StorageType: storageType },
+      period: cdk.Duration.days(1),
+      statistic: 'Average',
+    });
+  const storageStandard = bucketMetric('BucketSizeBytes', 'StandardStorage');
+  const storageIa = bucketMetric('BucketSizeBytes', 'StandardIAStorage');
+  const objectCount = bucketMetric('NumberOfObjects', 'AllStorageTypes');
+  const storageMiB = new cloudwatch.MathExpression({
+    expression: '(m1 + m2) / 1048576',
+    usingMetrics: { m1: storageStandard, m2: storageIa },
+    label: 'storage (MiB)',
+    period: cdk.Duration.days(1),
+  });
 
   const pipelineErrors = new cloudwatch.MathExpression({
     expression: 'm1 + m2 + m3',
@@ -113,7 +135,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   });
 
   return [
-    [header('**Scraper** · batch 22 targets every 15 min · priority NEAR → MID → FAR · abort 210 s · timeout 240 s')],
+    [header('**Scraper** · batch 30 targets every 15 min · priority NEAR → MID → FAR · abort 210 s · timeout 240 s')],
     [
       new cloudwatch.GraphWidget({
         title: 'Latency — run duration',
@@ -212,6 +234,26 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       new cloudwatch.SingleValueWidget({
         title: 'Data — rows written in the last hour',
         metrics: [rowsPerHour],
+        sparkline: false,
+        width: VALUE_WIDTH,
+        height: VALUE_HEIGHT,
+      }),
+    ],
+    [
+      new cloudwatch.GraphWidget({
+        title: 'Storage — bucket size (30 d) and object count',
+        left: [storageStandard, storageIa],
+        right: [objectCount],
+        stacked: true,
+        leftYAxis: { min: 0, label: 'bytes' },
+        rightYAxis: { min: 0, label: 'objects' },
+        start: '-P30D',
+        width: GRAPH_WIDTH,
+        height: GRAPH_HEIGHT,
+      }),
+      new cloudwatch.SingleValueWidget({
+        title: 'Storage — current size',
+        metrics: [storageMiB],
         sparkline: false,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
