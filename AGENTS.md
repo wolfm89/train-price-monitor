@@ -249,13 +249,15 @@ flowchart LR
     `PollerNoPrices` (no direct success for 45 min), `PollerRunTooSlow` (>190 s of the 210 s abort).
   - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users),
     `RefresherErrors`, `SearchThrottled`.
-- **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`):
-  `TrainPriceMonitor-Scraper` (four stat tiles — scrapes, DB-throttled calls, slowest run,
-  pipeline errors — plus throughput/pace and its five alarms) and `TrainPriceMonitor-App`
-  (four stat tiles — requests, 5xx, p90 latency, Decodo fallbacks — plus requests/errors,
-  latency, hourly refresh and its four alarms). Stat tiles aggregate over the visible range.
-  The refresh widget shows the refresher's hourly invocations/errors, not the SQS queue:
-  the queue is consumed in under a second, so it reads ~always zero.
+- **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`) follow Google's Four Golden
+  Signals — one row each for latency, traffic, errors and saturation, plus the alarm state:
+  - `TrainPriceMonitor-Scraper`: run duration (p90/max vs the 210 s abort), scrapes per run,
+    failed target scrapes + pipeline errors, DB-throttled calls + backlog (1 when the due queue is
+    deeper than one batch).
+  - `TrainPriceMonitor-App`: API p50/p90 and integration p90, requests per 5 min, 4xx/5xx plus
+    the implicit failure (DB refused, Decodo served), Lambda concurrency/throttles plus DLQ depth.
+  - Rates and percentiles, not totals: a 48-hour total says what happened, a rate says what is
+    happening. The SQS queue is not shown — one message per hour is consumed in under a second.
 - **Do not add a tenth alarm or a fifth custom metric** without accepting cost ($0.10 and $0.30 per
   month respectively), and do not use metric-math, Metrics Insights or anomaly-detection bands in
   alarms — those are billed differently from the free alarm metrics.

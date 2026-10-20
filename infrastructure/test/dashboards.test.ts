@@ -1,6 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { aws_apigateway as apigateway, aws_cloudwatch as cloudwatch, aws_lambda as lambda } from 'aws-cdk-lib';
+import {
+  aws_apigateway as apigateway,
+  aws_cloudwatch as cloudwatch,
+  aws_lambda as lambda,
+  aws_sqs as sqs,
+} from 'aws-cdk-lib';
 import { appWidgets, scraperWidgets } from '../lib/dashboards';
 
 function synth(): Template {
@@ -29,7 +34,7 @@ function synth(): Template {
   new cdk.aws_cloudwatch.Dashboard(stack, 'BackendDashboard', {
     dashboardName: 'TrainPriceMonitor-App',
     start: '-PT48H',
-    widgets: appWidgets({ api, refresherFunction: fn, alarms: [alarm] }),
+    widgets: appWidgets({ api, apiFunction: fn, dlq: new sqs.Queue(stack, 'Dlq'), alarms: [alarm] }),
   });
 
   return Template.fromStack(stack);
@@ -60,11 +65,10 @@ describe('Dashboards', () => {
 
     const scraper = bodies.get('TrainPriceMonitor-Scraper') ?? '';
     for (const title of [
-      'Scrapes (48 h)',
-      'DB calls throttled (48 h)',
-      'Slowest run (48 h, abort at 210 s)',
-      'Pipeline errors (48 h)',
-      'Throughput and pace per run',
+      'Latency — run duration',
+      'Traffic — scrapes',
+      'Errors — failed target scrapes',
+      'Saturation — DB-throttled calls',
       'Alarms',
     ]) {
       expect(scraper).toContain(title);
@@ -72,12 +76,10 @@ describe('Dashboards', () => {
 
     const app = bodies.get('TrainPriceMonitor-App') ?? '';
     for (const title of [
-      'Requests (48 h)',
-      '5xx errors (48 h)',
-      'Latency p90 (48 h)',
-      'Decodo fallbacks (48 h)',
-      'Requests and errors',
-      'Hourly watchlist refresh',
+      'Latency — API',
+      'Traffic — requests',
+      'Errors — 4xx',
+      'Saturation — Lambda concurrency',
       'Alarms',
     ]) {
       expect(app).toContain(title);

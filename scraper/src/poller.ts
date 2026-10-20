@@ -207,12 +207,23 @@ async function scheduleRetry(item: ScheduleItem, delayMs: number, now: Date): Pr
  * returns no prices for them, so they only consume budget. Their TTL would remove
  * them two days later anyway.
  */
-async function selectDueTargets(now: Date, today: string): Promise<{ targets: ScheduleItem[]; expired: number }> {
+async function selectDueTargets(
+  now: Date,
+  today: string
+): Promise<{ targets: ScheduleItem[]; expired: number; backlog: boolean }> {
   const targets: ScheduleItem[] = [];
   let expired = 0;
+  // True when the due queue is deeper than one batch: either a tier returned a
+  // full page (more rows may follow) or the batch filled before the queue was
+  // exhausted. That is the scheduler's saturation signal.
+  let backlog = false;
 
   for (const tier of TIER_QUERY_ORDER) {
-    if (targets.length >= BATCH_SIZE) break;
+    if (targets.length >= BATCH_SIZE) {
+      // Batch full before the lower-priority tiers were read: they may hold more.
+      backlog = true;
+      break;
+    }
 
     // Over-read a little: expired rows are dropped, and a tier may be short.
     const limit = BATCH_SIZE - targets.length + EXPIRED_SCAN_SLACK;
@@ -239,9 +250,11 @@ async function selectDueTargets(now: Date, today: string): Promise<{ targets: Sc
       }
       if (targets.length < BATCH_SIZE) targets.push(item);
     }
+
+    if ((page.Items?.length ?? 0) >= limit) backlog = true;
   }
 
-  return { targets, expired };
+  return { targets, expired, backlog };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +266,9 @@ export const handler = async (): Promise<void> => {
   const now = new Date(start);
   const today = now.toISOString().slice(0, 10);
 
-  const { targets, expired } = await selectDueTargets(now, today);
-  logger.info('Poller started', { targets: targets.length, expiredRemoved: expired });
+  const { targets, expired, backlog } = await selectDueTargets(now, today);
+  // `backlog` is logged as a number so a CloudWatch metric filter can extract it.
+  logger.info('Poller started', { targets: targets.length, expiredRemoved: expired, backlog: backlog ? 1 : 0 });
 
   if (targets.length === 0) {
     return;

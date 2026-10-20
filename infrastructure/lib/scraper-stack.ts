@@ -260,6 +260,24 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '1',
     });
 
+    // Errors signal: targets that failed to scrape (DB refusal, timeout, ...).
+    new logs.MetricFilter(this, 'PollerFailedFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Failed to scrape target'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerFailedTargets',
+      metricValue: '1',
+    });
+
+    // Saturation signal: 1 when the due queue is deeper than one batch.
+    new logs.MetricFilter(this, 'PollerBacklogFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller started'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerBacklog',
+      metricValue: '$.backlog',
+    });
+
     const directOk = new cloudwatch.Metric({
       namespace: 'TrainPriceMonitor',
       metricName: 'PollerDirectOk',
