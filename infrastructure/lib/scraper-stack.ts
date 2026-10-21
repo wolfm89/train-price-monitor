@@ -279,6 +279,16 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '$.rows',
     });
 
+    // Runs that hit the abort threshold. A slow-but-complete run is not a problem;
+    // one that has to stop early is, and the log line says why.
+    new logs.MetricFilter(this, 'PollerAbortedFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Approaching timeout, aborting batch'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'PollerAborted',
+      metricValue: '1',
+    });
+
     // Saturation signal: 1 when the due queue is deeper than one batch.
     new logs.MetricFilter(this, 'PollerBacklogFilter', {
       logGroup: pollerLogGroup,
@@ -300,11 +310,11 @@ export class ScraperStack extends cdk.Stack {
       period: cdk.Duration.minutes(15),
       statistic: 'Sum',
     });
-    const runMs = new cloudwatch.Metric({
+    const aborted = new cloudwatch.Metric({
       namespace: 'TrainPriceMonitor',
-      metricName: 'PollerRunMs',
+      metricName: 'PollerAborted',
       period: cdk.Duration.minutes(15),
-      statistic: 'Maximum',
+      statistic: 'Sum',
     });
 
     // A deliberate pause must not page anyone: the pause switch disables the
@@ -333,11 +343,13 @@ export class ScraperStack extends cdk.Stack {
     });
 
     const dbThrottling = new cloudwatch.Alarm(this, 'PollerThrottledByDb', {
-      alarmDescription: 'DB is throttling the poller transport (early warning before the fingerprint is blocked).',
+      alarmDescription:
+        'DB has throttled the poller in two consecutive runs (early warning before the fingerprint is blocked).',
       metric: throttled,
       threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: 1,
+      evaluationPeriods: 2,
+      datapointsToAlarm: 2,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       actionsEnabled,
     });
@@ -353,17 +365,17 @@ export class ScraperStack extends cdk.Stack {
       actionsEnabled,
     });
 
-    const runTooSlow = new cloudwatch.Alarm(this, 'PollerRunTooSlow', {
-      alarmDescription: 'A poller run is approaching the abort threshold (pacing or latency problem).',
-      metric: runMs,
-      threshold: 190_000,
+    const batchAborted = new cloudwatch.Alarm(this, 'PollerBatchAborted', {
+      alarmDescription: 'A poller run hit the abort threshold (it stopped before finishing its batch).',
+      metric: aborted,
+      threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       evaluationPeriods: 1,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       actionsEnabled,
     });
 
-    for (const alarm of [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow]) {
+    for (const alarm of [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted]) {
       if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
     }
 
@@ -381,7 +393,7 @@ export class ScraperStack extends cdk.Stack {
         scheduleTable: table,
         dataBucket: bucket,
         pollerLogGroup,
-        alarms: [notRunning, pollerErrors, dbThrottling, noPrices, runTooSlow],
+        alarms: [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted],
       }),
     });
 

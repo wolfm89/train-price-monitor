@@ -74,6 +74,7 @@ describe('ScraperStack', () => {
       (filter) => filter.Properties.MetricTransformations[0].MetricName
     );
     expect(metricNames.sort()).toEqual([
+      'PollerAborted',
       'PollerBacklog',
       'PollerDirectOk',
       'PollerFailedTargets',

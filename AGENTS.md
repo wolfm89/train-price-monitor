@@ -241,14 +241,14 @@ flowchart LR
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
 - **Nine alarms** — the CloudWatch free tier allows 10 alarm metrics, 10 custom metrics and 3
-  dashboards; we use 9, 4 and 2. Four custom metrics come from log filters on the existing log
-  lines (`PollerDirectOk`, `PollerThrottled`, `PollerRunMs` from "Poller finished",
-  `SearchFallbackOk` from "GraphQL response"), so no application code emits metrics.
+  dashboards; we use 9, 9 and 2. The custom metrics come from log filters on the existing log
+  lines, so no application code emits metrics.
   - Scraper: `PollerNotRunning` (0 invocations for 45 min, missing data treated as breaching),
-    `PollerErrors`, `PollerThrottledByDb` (early warning that DB is throttling the fingerprint),
-    `PollerNoPrices` (no direct success for 45 min), `PollerRunTooSlow` (>190 s of the 210 s abort).
-  - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users),
-    `RefresherErrors`, `SearchThrottled`.
+    `PollerErrors`, `PollerThrottledByDb` (throttling in two consecutive runs — a single 429 is
+    noise), `PollerNoPrices` (no direct success for 45 min), `PollerBatchAborted` (a run hit the
+    210 s abort; the log line, not a raw duration threshold, so normal 170 s runs stay quiet).
+  - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users,
+    2 of 3 periods so one unlucky search does not page), `RefresherErrors`, `SearchThrottled`.
 - **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`) follow Google's Four Golden
   Signals — one row each for latency, traffic, errors and saturation, plus the alarm state:
   - `TrainPriceMonitor-Scraper`: run duration (p90/max vs the 210 s abort), scrapes per run,

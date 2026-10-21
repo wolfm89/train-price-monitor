@@ -258,7 +258,8 @@ export class Backend extends Construct {
       }),
       threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: 1,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
