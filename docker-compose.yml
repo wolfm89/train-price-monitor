@@ -26,6 +26,8 @@ services:
     volumes:
       - ~/.aws:/root/.aws
       - ./backend:/app
+      # main.ts imports the shared transport from ../../shared
+      - ./shared:/shared
       - /app/node_modules
     working_dir: /app
     command: bash -c 'npm run codegen && npm run dev'

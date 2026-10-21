@@ -1,18 +1,15 @@
 import * as esbuild from 'esbuild';
 import { fileURLToPath } from 'url';
 
-// These packages are provided by the Lambda Node.js 24 runtime and must not
-// be bundled. Externalizing them keeps the bundle small and avoids version
-// conflicts with the runtime-supplied SDK.
-const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3'];
+// These packages are provided by the Lambda Node.js 24 runtime (they live in
+// /var/runtime/node_modules inside the image) and must not be bundled.
+// Externalizing them keeps the bundle small and avoids version conflicts with
+// the runtime-supplied SDK.
+const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3', '@aws-sdk/client-ssm'];
 
-// playwright-core (used only by the poller via the shared browser transport)
-// resolves the Chromium build from its own package directory at runtime, so it
-// must stay external and be present in node_modules next to the bundle — see
-// the Dockerfile.
-const pollerExternal = [...external, 'playwright-core'];
+const pollerExternal = [...external];
 
-const browserFetchShim = fileURLToPath(new URL('../../shared/browser-fetch.ts', import.meta.url));
+const dbFetchShim = fileURLToPath(new URL('../../shared/db-fetch.ts', import.meta.url));
 
 const sharedConfig = {
   bundle: true,
@@ -36,11 +33,11 @@ await esbuild.build({
   // db-vendo-client hardcodes `import {Request, fetch} from 'cross-fetch'`,
   // which always resolves to Node's fetch (undici) regardless of runtime.
   // int.bahn.de blocks that TLS/HTTP2 fingerprint outright (OPS_BLOCKED).
-  // Redirecting the import to the shared browser-backed shim fixes this
+  // Redirecting the import to the shared HTTPS transport fixes this
   // without patching node_modules or touching db-vendo-client's
   // request-building/response-parsing logic.
   alias: {
-    'cross-fetch': browserFetchShim,
+    'cross-fetch': dbFetchShim,
   },
   // Banner required because of a CJS/ESM mismatch in the dependency tree:
   //

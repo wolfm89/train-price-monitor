@@ -170,8 +170,9 @@ const SearchResult: React.FC<Props> = ({
               </Typography>
             </Box>
 
-            {/* Route line — sm+ only */}
-            <Box sx={{ flex: 1, display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: '5px' }}>
+            {/* Route line — md+ only. At exactly 600 px the fixed time, duration and
+                price columns plus this line's minimum width overflow the viewport. */}
+            <Box sx={{ flex: 1, display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: '5px' }}>
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
               <Box
                 sx={{
@@ -193,30 +194,53 @@ const SearchResult: React.FC<Props> = ({
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
             </Box>
 
-            {/* Duration — sm+ only */}
-            <Chip
-              label={formatDuration(result.departure, result.arrival)}
-              size="small"
-              variant="outlined"
-              sx={{ fontSize: 11, fontWeight: 500, height: 24, display: { xs: 'none', sm: 'flex' } }}
-            />
-
-            {/* Means — sm+ only */}
-            <Box sx={{ display: { xs: 'none', sm: 'flex' }, gap: 0.5, flexWrap: 'wrap', minWidth: 70 }}>
-              {result.means.map((mean: string, i: number) => (
-                <Chip
-                  key={i}
-                  label={mean === 'walk' ? '\u{1F6B6}' : mean}
-                  size="small"
-                  sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
-                />
-              ))}
-            </Box>
-
-            {/* xs middle: Duration + Means — xs only; flex:1 lets it grow, items wrap internally */}
+            {/* Duration + means — md+ only.
+                Fixed width on purpose: this is what keeps the route-line icon in
+                a stable column. Its position used to depend on how wide the
+                duration chip and the (variable) list of transport means were, so
+                an ICE+walk+ICE row pushed the icon left of a single-train row. */}
             <Box
               sx={{
-                display: { xs: 'flex', sm: 'none' },
+                display: { xs: 'none', md: 'flex' },
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                gap: 1.75,
+                width: 240,
+                flexShrink: 0,
+              }}
+            >
+              <Chip
+                label={formatDuration(result.departure, result.arrival)}
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: 11, fontWeight: 500, height: 24, flexShrink: 0 }}
+              />
+
+              <Box
+                sx={{
+                  display: 'flex',
+                  flex: 1,
+                  justifyContent: 'flex-end',
+                  gap: 0.5,
+                  flexWrap: 'wrap',
+                  minWidth: 0,
+                }}
+              >
+                {result.means.map((mean: string, i: number) => (
+                  <Chip
+                    key={i}
+                    label={mean === 'walk' ? '\u{1F6B6}' : mean}
+                    size="small"
+                    sx={{ height: 22, fontSize: 10, fontWeight: 700, borderRadius: '4px' }}
+                  />
+                ))}
+              </Box>
+            </Box>
+
+            {/* Compact middle: Duration + Means — below md; flex:1 lets it grow, items wrap internally */}
+            <Box
+              sx={{
+                display: { xs: 'flex', md: 'none' },
                 flex: 1,
                 flexWrap: 'wrap',
                 gap: '5px',
@@ -240,17 +264,22 @@ const SearchResult: React.FC<Props> = ({
               ))}
             </Box>
 
-            {/* Price + Watch — fixed right column: stacked vertically on xs, inline on sm+ */}
+            {/* Price + Watch — fixed right column: stacked vertically on xs, inline on sm+.
+                minWidth on sm+ is what completes the icon alignment: a row without a
+                price has no Watch button, so its right column used to be ~85px
+                narrower, the flex:1 route line grew, and its centred icon drifted
+                43px to the right of every other row. */}
             <Box
               sx={{
                 flexShrink: 0,
+                minWidth: { xs: 'auto', md: 153 },
                 display: 'flex',
-                flexDirection: { xs: 'column', sm: 'row' },
-                alignItems: { xs: 'flex-end', sm: 'center' },
-                gap: { xs: 0.5, sm: 1.75 },
+                flexDirection: { xs: 'column', md: 'row' },
+                alignItems: { xs: 'flex-end', md: 'center' },
+                gap: { xs: 0.5, md: 1.75 },
               }}
             >
-              <Box sx={{ textAlign: 'right', minWidth: { xs: 60, sm: 68 } }}>
+              <Box sx={{ textAlign: 'right', minWidth: { xs: 60, md: 68 } }}>
                 <Typography sx={{ fontFamily: MONO_FONT, fontSize: { xs: 15, sm: 16 }, fontWeight: 500 }}>
                   {result.price ? `€${result.price.toFixed(2)}` : 'n/a'}
                 </Typography>

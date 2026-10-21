@@ -195,8 +195,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # linux/amd64 to match the Lambda functions: Chromium's shared libraries
-      # are installed for the target architecture.
+      # linux/amd64 to match the x86_64 Lambda functions.
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
@@ -277,6 +276,59 @@ jobs:
           role-duration-seconds: 1200
           role-session-name: GithubWorkflow
 
+      # The Decodo API key is never in a CDK template: CI writes it to an SSM
+      # SecureString and the functions read it at runtime via
+      # DECODO_API_KEY_PARAM. Secrets are not available in `if:` expressions, so
+      # the emptiness check happens in the shell.
+      - name: Sync Decodo API key to SSM
+        env:
+          DECODO_API_KEY: ${{ secrets.DECODO_API_KEY }}
+          DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+        run: |
+          set -euo pipefail
+          PARAM="${DECODO_API_KEY_PARAM:-/train-price-monitor/decodo-api-key}"
+          if [[ -z "${DECODO_API_KEY}" ]]; then
+            echo "::warning::DECODO_API_KEY is not set; leaving ${PARAM} untouched. The Decodo fallback for search and refresh will not work until it exists."
+            exit 0
+          fi
+          # Rotating the key is just: update the repo secret and re-run this job;
+          # running functions pick it up within DECODO_KEY_TTL_MS. Only the
+          # parameter version is printed, never the value.
+          VERSION="$(aws ssm put-parameter \
+            --name "$PARAM" \
+            --type SecureString \
+            --value "$DECODO_API_KEY" \
+            --overwrite \
+            --query Version --output text)"
+          echo "Wrote ${PARAM} (version ${VERSION})"
+
+      # Pushover credentials for the alarm forwarder (AlertingStack). Same
+      # pattern as the Decodo key: CI writes them to SSM SecureStrings and the
+      # forwarder reads them at runtime, so neither value is ever in a template.
+      - name: Sync Pushover credentials to SSM
+        env:
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PUSHOVER_API_TOKEN}" || -z "${PUSHOVER_USER_KEY}" ]]; then
+            echo "::warning::PUSHOVER_API_TOKEN / PUSHOVER_USER_KEY are not set; alarm notifications will not be delivered."
+            exit 0
+          fi
+          for pair in \
+            "/train-price-monitor/pushover-token:${PUSHOVER_API_TOKEN}" \
+            "/train-price-monitor/pushover-user-key:${PUSHOVER_USER_KEY}"; do
+            PARAM="${pair%%:*}"
+            VALUE="${pair#*:}"
+            VERSION="$(aws ssm put-parameter \
+              --name "$PARAM" \
+              --type SecureString \
+              --value "$VALUE" \
+              --overwrite \
+              --query Version --output text)"
+            echo "Wrote ${PARAM} (version ${VERSION})"
+          done
+
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
         run: npm run cdk diff
@@ -284,6 +336,8 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
+          CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+          CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
@@ -292,6 +346,8 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
+          CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+          CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
 
       - name: Invalidate CloudFront cache
         uses: badsyntax/github-action-aws-cloudfront@master

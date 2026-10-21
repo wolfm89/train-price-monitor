@@ -32,6 +32,13 @@ export const JourneySearchQuery = gql`
   }
 `;
 
+/**
+ * Asking the API to establish the upstream DB session as soon as the search page
+ * opens. A session lives inside a Lambda execution environment and takes ~8-10 s
+ * to build (plus another ~10 s when the vendor hands out a blocked one), which
+ * used to be paid by the user's first search. Picking stations and a date takes
+ * longer than that, so the setup happens while they fill in the form.
+ */
 export const MonitorJourney = gql`
   mutation (
     $userId: ID!

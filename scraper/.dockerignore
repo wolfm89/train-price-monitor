@@ -6,3 +6,7 @@ dist/hydrator/
 dist/probe/
 tsconfig.json
 *.md
+
+# Never ship local environment files (see backend/.dockerignore)
+.env
+.env.*

@@ -30,17 +30,23 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 - Creates `ROUTE#{id}#DATE#{date}` items with `PENDING` status and an initial `next_scrape_at`.
 - Uses conditional writes (`attribute_not_exists`) to avoid overwriting already-seeded rows.
 - Assigns each target a TTD (Time-To-Departure) tier that determines scrape frequency.
+- `HYDRATOR_FULL_SEED=1` also backfills `due_key` on rows seeded before the `ByDue`
+  index existed; run it once after deploying a schema change that adds that key,
+  otherwise those rows are invisible to the poller.
 
 ### Poller (`src/poller.ts`)
 
-- Runs every 1 minute.
-- Queries the DynamoDB GSI (`ByNextScrape`) for up to 15 overdue targets.
+- Runs every 15 minutes with a batch of 25 targets (50 DB calls).
+- Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 22
+  overdue targets, so near departures are served first when capacity is short.
+- Deletes targets whose departure day has passed instead of scraping them.
 - Makes two API calls per target to the DB Vendo bestprice endpoint (1st and 2nd class).
 - Extracts journey data (price, duration, transfers, load factor) and writes Parquet to S3.
 - Reschedules each target based on its updated TTD tier after a successful scrape.
-- Handles rate limits (429) with a 5-minute retry backoff.
-- Must run as a **Docker Lambda** (not Node.js runtime) because Akamai blocks outbound HTTP from
-  AWS Node.js runtime Lambda egress IPs.
+- Handles rate limits (429) with a 5-minute retry backoff, and ends the batch on `DbThrottledError`.
+- Ships as a **Docker Lambda** with the pre-built ESM bundle (no build inside the container). The
+  transport is pure Node (`node:https`) with rotating browser-like TLS profiles; there is no native
+  module.
 
 ### Compactor (`src/compactor.ts`)
 

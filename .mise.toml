@@ -1,5 +1,5 @@
 min_version = "2024.9.5"
-experimental_monorepo_root = true
+monorepo_root = true
 
 [monorepo]
 config_roots = ["frontend", "backend", "infrastructure", "scraper"]

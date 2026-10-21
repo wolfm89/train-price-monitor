@@ -2,17 +2,16 @@ import { type TtdTier } from './types.js';
 
 // Scrape intervals are capacity-derived, not aspirational.
 //
-// Routing every request through a real browser (DB blocks all non-browser TLS
-// fingerprints) costs ~2.5 s and 1 GB of Lambda memory per call, which caps the
-// sustainable rate at roughly 1,700 scrapes/day inside the Lambda free tier.
-// The previous 4h/12h/24h tiers implied ~20,900 scrapes/day across the catalog —
-// 12x more than achievable — so every row was permanently overdue, next_scrape_at
-// was meaningless, and NEAR rows designed for 4-hourly sampling were in practice
-// touched about once a week.
+// DB tolerates only a modest request rate per egress IP (bursts are throttled for
+// minutes), and the poller spaces its calls accordingly: a 22-target batch every
+// 15 minutes is ~2,400 scrapes/day, above the ~1,654/day these intervals demand
+// for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met and the
+// backlog drains in about a week. The poller serves NEAR first (see `dueKey`), so
+// if capacity ever falls short it is the far end of the horizon that slips.
 //
-// With a 60-day horizon (140 routes => 8,400 rows) these intervals demand
-// ~1,654 scrapes/day, which fits the budget with margin, so rows are now
-// actually scraped on the schedule they claim.
+// The previous 4h/12h/24h tiers implied ~20,900 scrapes/day across the catalog —
+// 12x more than achievable — so every row was permanently overdue and next_scrape_at
+// was meaningless.
 const INTERVAL_MS: Record<TtdTier, number> = {
   FAR: 16 * 24 * 60 * 60 * 1000, // 16d — 4,060 rows => ~254/day
   MID: 8 * 24 * 60 * 60 * 1000, // 8d — 3,360 rows => ~420/day
@@ -45,4 +44,29 @@ export function computeTtdTier(departureDateStr: string, now: Date): TtdTier {
 export function computeNextScrapeAt(tier: TtdTier, now: Date): Date {
   const jitter = (Math.random() * 2 - 1) * JITTER_MS[tier];
   return new Date(now.getTime() + INTERVAL_MS[tier] + jitter);
+}
+
+/**
+ * Ordering rank for the `ByDue` index. Lower is served first, so a shortfall in
+ * poller capacity costs the far end of the horizon rather than the near end:
+ * NEAR targets are the ones a user is about to book.
+ */
+const TIER_RANK: Record<TtdTier, number> = { NEAR: 0, MID: 1, FAR: 2 };
+
+/**
+ * Sort key of the `ByDue` index: `<tier rank>#<next scrape at>`. The rank prefix
+ * makes the index read in priority order; the timestamp inside each rank makes it
+ * a plain due-time range query (`BETWEEN '<rank>#' AND '<rank>#<now>'`).
+ */
+export function dueKey(tier: TtdTier, nextScrapeAt: Date | string): string {
+  const plain = typeof nextScrapeAt === 'string' ? nextScrapeAt : nextScrapeAt.toISOString();
+  return `${TIER_RANK[tier]}#${plain}`;
+}
+
+/** Tier ranks in the order the poller queries them. */
+export const TIER_QUERY_ORDER: TtdTier[] = ['NEAR', 'MID', 'FAR'];
+
+/** Rank of a tier, for building `due_key`. */
+export function tierRank(tier: TtdTier): number {
+  return TIER_RANK[tier];
 }
