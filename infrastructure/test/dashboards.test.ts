@@ -27,7 +27,7 @@ function synth(): Template {
     dashboardName: 'TrainPriceMonitor-Scraper',
     start: '-PT48H',
     widgets: scraperWidgets({
-      batchSize: 30,
+      batchSize: 25,
       pollerFunction: fn,
       hydratorFunction: fn,
       compactorFunction: fn,
@@ -94,6 +94,11 @@ describe('Dashboards', () => {
     ]) {
       expect(scraper).toContain(title);
     }
+
+    // The gauge's warn band must sit above the normal run time (p90 ~190 s at batch
+    // 25) and just below the abort, not at the old 180 s.
+    expect(scraper).toContain('200000');
+    expect(scraper).toContain('210000');
 
     const app = bodies.get('TrainPriceMonitor-App') ?? '';
     for (const title of [

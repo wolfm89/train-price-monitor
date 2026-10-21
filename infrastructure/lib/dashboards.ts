@@ -34,6 +34,12 @@ const VALUE_WIDTH = 8;
 const GRAPH_HEIGHT = 6;
 const VALUE_HEIGHT = 6;
 
+// The poller's own limits, in one place so the graph, the gauge and the alarms
+// cannot drift apart as the batch size changes.
+const RUN_WARN_MS = 200_000;
+const RUN_ABORT_MS = 210_000;
+const RUN_TIMEOUT_MS = 240_000;
+
 const GREEN = '#2ca02c';
 const AMBER = '#ff9900';
 const RED = '#d62728';
@@ -146,8 +152,8 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
         left: [runMsP50, runMsP90, runMsMax],
         leftYAxis: { min: 0, label: 'ms' },
         leftAnnotations: [
-          { value: 210_000, label: 'abort', color: AMBER },
-          { value: 240_000, label: 'timeout', color: RED },
+          { value: RUN_ABORT_MS, label: 'abort', color: AMBER },
+          { value: RUN_TIMEOUT_MS, label: 'timeout', color: RED },
         ],
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
@@ -155,10 +161,12 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       new cloudwatch.GaugeWidget({
         title: 'Latency — slowest run now',
         metrics: [runMsMax],
-        leftYAxis: { min: 0, max: 240_000 },
+        leftYAxis: { min: 0, max: RUN_TIMEOUT_MS },
         annotations: [
-          { value: 180_000, label: 'warn', color: AMBER },
-          { value: 210_000, label: 'abort', color: RED },
+          // 180 s was the warn band at batch 18-22; at batch 25 the p90 is already
+          // 190 s, so warning there would paint a healthy pipeline amber.
+          { value: RUN_WARN_MS, label: 'warn', color: AMBER },
+          { value: RUN_ABORT_MS, label: 'abort', color: RED },
         ],
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
