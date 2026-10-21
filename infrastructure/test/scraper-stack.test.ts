@@ -36,7 +36,7 @@ describe('ScraperStack', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
-      Timeout: 240,
+      Timeout: 300,
       Environment: {
         Variables: Match.objectLike({ SCRAPER_BATCH_SIZE: '25', DB_MIN_GAP_MS: '2500', DB_MAX_IN_FLIGHT: '2' }),
       },

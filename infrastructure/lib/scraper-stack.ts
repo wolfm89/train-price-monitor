@@ -119,9 +119,10 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
       memorySize: 512,
-      // A 25-target batch is ~50 paced calls (~125 s). ABORT_THRESHOLD_MS in
-      // scraper/src/poller.ts (210 s) is deliberately below this.
-      timeout: cdk.Duration.seconds(240),
+      // A 25-target batch is ~50 paced calls (~125 s), and the p90 run is ~190 s.
+      // ABORT_THRESHOLD_MS in scraper/src/poller.ts (250 s) leaves 50 s for the
+      // current target's worst case (~43 s) and the final S3 upload.
+      timeout: cdk.Duration.seconds(300),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
@@ -138,7 +139,7 @@ export class ScraperStack extends cdk.Stack {
         DB_MIN_GAP_MS: '2500',
         DB_MAX_IN_FLIGHT: '2',
         // One target makes two calls in parallel; 45 s covers two 20 s attempts
-        // plus backoff, and 180 s guard + 45 s + upload stays under the timeout.
+        // plus backoff, and 250 s guard + 45 s + upload stays under the timeout.
         DB_TOTAL_BUDGET_MS: '45000',
         // No Decodo key on purpose: the poller is bulk work and must never spend
         // the free allowance. When DB throttles it stops the batch instead.

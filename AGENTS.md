@@ -246,12 +246,12 @@ flowchart LR
   - Scraper: `PollerNotRunning` (0 invocations for 45 min, missing data treated as breaching),
     `PollerErrors`, `PollerThrottledByDb` (throttling in two consecutive runs — a single 429 is
     noise), `PollerNoPrices` (no direct success for 45 min), `PollerBatchAborted` (a run hit the
-    210 s abort; the log line, not a raw duration threshold, so normal 170 s runs stay quiet).
+    250 s abort; the log line, not a raw duration threshold, so normal 190 s runs stay quiet).
   - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users,
     2 of 3 periods so one unlucky search does not page), `RefresherErrors`, `SearchThrottled`.
 - **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`) follow Google's Four Golden
   Signals — one row each for latency, traffic, errors and saturation, plus the alarm state:
-  - `TrainPriceMonitor-Scraper`: run duration (p90/max vs the 210 s abort), scrapes per run,
+  - `TrainPriceMonitor-Scraper`: run duration (p90/max vs the 250 s abort), scrapes per run,
     failed target scrapes + pipeline errors, DB-throttled calls + backlog (1 when the due queue is
     deeper than one batch), plus a **Data** section (price rows written per run) and a diagnostics
     table of the last failed scrapes.

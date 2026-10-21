@@ -38,8 +38,8 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
 const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 10, logger);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the function
  * timeout with room for the current target (two parallel calls, each up to two
- * 20 s attempts plus backoff ~= 43 s) and the final S3 upload. */
-const ABORT_THRESHOLD_MS = 180_000;
+ * 20 s attempts plus backoff ~= 43 s) and the final S3 upload: 250 + 43 + 1 < 300. */
+const ABORT_THRESHOLD_MS = 250_000;
 /**
  * Extra rows to read per tier when selecting a batch, so a run of expired rows
  * (or a tier that is short of targets) does not leave the batch half empty.

@@ -18,7 +18,7 @@ import {
  * Latency budgets: Nielsen/RAIL put "flow" at 1 s and common API SLOs pair
  * p95 < 500 ms with p99 < 1 s, so the app graph annotates 1 s as the tail budget
  * and the gauge bands at 300 ms (good) and 1000 ms (limit). The scraper's
- * budgets are its own limits: 210 s abort, 240 s timeout.
+ * budgets are its own limits: 250 s abort, 300 s timeout.
  *
  * Everything stays inside the CloudWatch free tier (3 dashboards, 50 metrics
  * each). Default window: 48 hours, two nightly compactions.
@@ -37,8 +37,8 @@ const VALUE_HEIGHT = 6;
 // The poller's own limits, in one place so the graph, the gauge and the alarms
 // cannot drift apart as the batch size changes.
 const RUN_WARN_MS = 200_000;
-const RUN_ABORT_MS = 210_000;
-const RUN_TIMEOUT_MS = 240_000;
+const RUN_ABORT_MS = 250_000;
+const RUN_TIMEOUT_MS = 300_000;
 
 const GREEN = '#2ca02c';
 const AMBER = '#ff9900';
@@ -146,7 +146,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   });
 
   return [
-    [header('**Scraper** · batch 30 targets every 15 min · priority NEAR → MID → FAR · abort 210 s · timeout 240 s')],
+    [header('**Scraper** · batch 25 targets every 15 min · priority NEAR → MID → FAR · abort 250 s · timeout 300 s')],
     [
       new cloudwatch.GraphWidget({
         title: 'Latency — run duration',

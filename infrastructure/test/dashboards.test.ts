@@ -98,7 +98,7 @@ describe('Dashboards', () => {
     // The gauge's warn band must sit above the normal run time (p90 ~190 s at batch
     // 25) and just below the abort, not at the old 180 s.
     expect(scraper).toContain('200000');
-    expect(scraper).toContain('210000');
+    expect(scraper).toContain('250000');
 
     const app = bodies.get('TrainPriceMonitor-App') ?? '';
     for (const title of [
