@@ -102,13 +102,6 @@ async function writeAllItems(
 }
 
 /**
- * Delete PENDING rows whose departure lies beyond the current lookahead window.
- *
- * Shrinking the horizon would otherwise leave the now-out-of-range rows in
- * place: their TTL is keyed on departure, so they would linger for months while
- * still being returned as due and consuming the poller's scrape budget.
- */
-/**
  * Gives existing rows the `due_key` that the ByDue index is keyed on.
  *
  * Rows seeded before that index existed are not in it, and the conditional puts
@@ -153,6 +146,13 @@ async function backfillDueKeys(): Promise<number> {
   return updated;
 }
 
+/**
+ * Delete PENDING rows whose departure lies beyond the current lookahead window.
+ *
+ * Shrinking the horizon would otherwise leave the now-out-of-range rows in
+ * place: their TTL is keyed on departure, so they would linger for months while
+ * still being returned as due and consuming the poller's scrape budget.
+ */
 async function pruneBeyondHorizon(horizonDateStr: string): Promise<number> {
   let deleted = 0;
   let cursor: Record<string, unknown> | undefined;
