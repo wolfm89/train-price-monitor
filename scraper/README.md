@@ -44,8 +44,9 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 - Extracts journey data (price, duration, transfers, load factor) and writes Parquet to S3.
 - Reschedules each target based on its updated TTD tier after a successful scrape.
 - Handles rate limits (429) with a 5-minute retry backoff, and ends the batch on `DbThrottledError`.
-- Must run as a **Docker Lambda** (not Node.js runtime) because the native `impit` client has to be
-  present next to the bundle, and because the transport is pinned to the measured-safe pacing.
+- Ships as a **Docker Lambda** with the pre-built ESM bundle (no build inside the container). The
+  transport is pure Node (`node:https`) with rotating browser-like TLS profiles; there is no native
+  module.
 
 ### Compactor (`src/compactor.ts`)
 

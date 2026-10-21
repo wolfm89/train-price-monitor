@@ -195,8 +195,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # linux/amd64 to match the Lambda functions: the images install impit's
-      # linux-x64-gnu binary.
+      # linux/amd64 to match the x86_64 Lambda functions.
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:

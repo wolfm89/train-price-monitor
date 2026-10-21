@@ -4,15 +4,16 @@
  * file with esbuild, so db-vendo-client's request building and response parsing
  * stay untouched).
  *
- * Why not Node's own fetch: DB's edge (Akamai) refuses requests by TLS
- * fingerprint and answers `403 OPS_BLOCKED` to Node's default client, curl,
- * Chrome-imitating clients and headless browsers alike. What passes (measured
- * 2026-10-20 from Lambda) is Node's own https client with the browser cipher
- * order below — repeatedly, on keep-alive and fresh connections. The cipher list
- * is the deciding factor; Node's default order gets 403, ALPN does not matter.
- * No browser, no proxy, no vendor account. Fingerprints that become popular get
- * blocked (the impit Firefox profile lasted two days), which is why the fallback
- * exists.
+ * Why not Node's own fetch: DB's edge (Akamai) matches the TLS ClientHello and
+ * answers `403 OPS_BLOCKED` to Node's default client, curl, Chrome-imitating
+ * clients and headless browsers alike. What passes is Node's own https client
+ * with a browser-like cipher list — repeatedly, on keep-alive and fresh
+ * connections. The exact list/order is what DB matches: the 2026-10-20
+ * Chrome-like order was refused on 2026-10-21 while Firefox, Safari and a
+ * different Chrome order still returned 201 on the real tagesbestpreis POST.
+ * The transport therefore carries several profiles, rotates to the first one DB
+ * accepts, remembers it for the environment, and skips a blocked profile for a
+ * cooldown. No browser, no proxy, no vendor account.
  *
  * Measured constraints this file encodes:
  *  - Only `Content-Type`/`Accept` plus `Origin`/`Referer` may be sent. db-vendo's
@@ -39,6 +40,9 @@
  *  DB_TOTAL_BUDGET_MS       wall-clock budget for one request, direct + fallback (default 24000)
  *  DB_BREAKER_THRESHOLD     consecutive failed requests that open the breaker (default 3)
  *  DB_BREAKER_COOLDOWN_MS   how long the breaker stays open (default 180000)
+ *  DB_TLS_PROFILE           first TLS profile to try: firefox (default), safari,
+ *                           chrome, tls13, tls12. A 403 OPS_BLOCKED rotates on.
+ *  DB_PROFILE_BLOCK_COOLDOWN_MS  how long a blocked profile is skipped (default 900000)
  *  DB_TRANSPORT             `decodo` forces the fallback path (kill switch)
  *  DECODO_API_KEY[_PARAM]   Decodo credentials (literal, or SSM SecureString name)
  *  DECODO_KEY_TTL_MS        how long a resolved SSM key is cached (default 15 min)
@@ -117,8 +121,15 @@ export interface DbTransportStats {
   retries: number;
   breakerOpened: number;
   breakerSkips: number;
+  /** How often a request had to switch to the next TLS profile after OPS_BLOCKED. */
+  profileRotations: number;
   fallbackOk: number;
   fallbackFailed: number;
+}
+
+export interface DbTransportSnapshot extends DbTransportStats {
+  /** The TLS profile the environment is currently using. */
+  tlsProfile: string;
 }
 
 const stats: DbTransportStats = {
@@ -128,13 +139,14 @@ const stats: DbTransportStats = {
   retries: 0,
   breakerOpened: 0,
   breakerSkips: 0,
+  profileRotations: 0,
   fallbackOk: 0,
   fallbackFailed: 0,
 };
 
 /** Returns the counters accumulated since the last call and resets them. */
-export function takeDbTransportStats(): DbTransportStats {
-  const snapshot = { ...stats };
+export function takeDbTransportStats(): DbTransportSnapshot {
+  const snapshot = { ...stats, tlsProfile: TLS_PROFILES[activeProfileIndex].name };
   for (const key of Object.keys(stats) as Array<keyof DbTransportStats>) stats[key] = 0;
   return snapshot;
 }
@@ -196,39 +208,151 @@ function recordFailure(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Direct path: Node's HTTPS client with a browser cipher list.
+// Direct path: Node's HTTPS client with a rotating browser-like TLS profile.
 //
-// Measured 2026-10-20 from Lambda: every impit browser profile (Firefox, Chrome,
-// iOS, okhttp) was refused with 403, while Node's own https client with the
-// cipher order below returned 201 — repeatedly, on keep-alive and fresh
-// connections. The cipher list is the deciding factor: Node's default order
-// still gets 403, and ALPN (http/1.1) makes no difference. This is the same
-// class of workaround db-vendo-client#46 describes; like every fingerprint it
-// can be blocked once it becomes popular, which is why the Decodo fallback
-// stays in place.
+// DB matches the TLS ClientHello, so the cipher list/order decides whether a
+// request gets through. No single list lasts forever: the public
+// db-vendo-client#46 Chrome order was blocked on 2026-10-21 (403 OPS_BLOCKED)
+// while Firefox, Safari and a different Chrome order still returned 201 on the
+// real tagesbestpreis POST. The transport therefore carries several profiles
+// and rotates on a block; the first accepted profile becomes sticky for the
+// environment, and a blocked one is skipped for a cooldown instead of being
+// retried on every request.
 // ---------------------------------------------------------------------------
 
-const BROWSER_CIPHERS = [
-  'TLS_AES_128_GCM_SHA256',
-  'TLS_AES_256_GCM_SHA384',
-  'TLS_CHACHA20_POLY1305_SHA256',
-  'ECDHE-ECDSA-AES128-GCM-SHA256',
-  'ECDHE-RSA-AES128-GCM-SHA256',
-].join(':');
+interface TlsProfile {
+  name: string;
+  ciphers: string;
+  minVersion?: 'TLSv1.2' | 'TLSv1.3';
+  maxVersion?: 'TLSv1.2' | 'TLSv1.3';
+}
 
-const agent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 2,
-  ciphers: BROWSER_CIPHERS,
-  // Browser-like group order; Node's default differs. Harmless either way, so
-  // keep it aligned with the cipher impersonation.
-  ecdhCurve: 'X25519:P-256:P-384',
-  ALPNProtocols: ['http/1.1'],
-});
+const TLS_PROFILES: TlsProfile[] = [
+  {
+    name: 'firefox',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+    ].join(':'),
+  },
+  {
+    name: 'safari',
+    ciphers: [
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'TLS_AES_128_GCM_SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+    ].join(':'),
+  },
+  {
+    name: 'chrome',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+    ].join(':'),
+  },
+  {
+    name: 'tls13',
+    ciphers: ['TLS_AES_256_GCM_SHA384', 'TLS_CHACHA20_POLY1305_SHA256', 'TLS_AES_128_GCM_SHA256'].join(':'),
+    minVersion: 'TLSv1.3',
+    maxVersion: 'TLSv1.3',
+  },
+  {
+    name: 'tls12',
+    ciphers: [
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+    ].join(':'),
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.2',
+  },
+  {
+    // The public 2026-10-20 workaround list. DB blocked it on 2026-10-21, but
+    // blocks have lifted before, so it stays as the last-resort candidate.
+    name: 'legacy',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+    ].join(':'),
+  },
+];
+
+const preferredProfileName = process.env.DB_TLS_PROFILE?.trim();
+const preferredProfileIndex = TLS_PROFILES.findIndex((profile) => profile.name === preferredProfileName);
+let activeProfileIndex = preferredProfileIndex >= 0 ? preferredProfileIndex : 0;
+
+/** Profiles that recently answered OPS_BLOCKED, with the time they may be retried. */
+const blockedProfiles = new Map<string, number>();
+const agents = new Map<string, https.Agent>();
+
+function agentFor(profile: TlsProfile): https.Agent {
+  const existing = agents.get(profile.name);
+  if (existing) return existing;
+
+  const created = new https.Agent({
+    keepAlive: true,
+    maxSockets: 2,
+    ciphers: profile.ciphers,
+    // Browser-like group order; Node's default differs. Keep it aligned with
+    // the cipher impersonation.
+    ecdhCurve: 'X25519:P-256:P-384',
+    ALPNProtocols: ['http/1.1'],
+    ...(profile.minVersion ? { minVersion: profile.minVersion } : {}),
+    ...(profile.maxVersion ? { maxVersion: profile.maxVersion } : {}),
+  });
+  agents.set(profile.name, created);
+  return created;
+}
+
+function isProfileBlocked(profile: TlsProfile): boolean {
+  return (blockedProfiles.get(profile.name) ?? 0) > Date.now();
+}
+
+function markProfileBlocked(profile: TlsProfile): void {
+  blockedProfiles.set(profile.name, Date.now() + intFromEnv('DB_PROFILE_BLOCK_COOLDOWN_MS', 15 * 60_000));
+}
+
+/** Active profile first, then the rest in declaration order, skipping blocked ones. */
+function availableProfiles(): TlsProfile[] {
+  const active = TLS_PROFILES[activeProfileIndex];
+  return [active, ...TLS_PROFILES.filter((profile) => profile !== active)].filter(
+    (profile) => !isProfileBlocked(profile)
+  );
+}
+
+function isFingerprintBlocked(status: number, bodyText: string): boolean {
+  return status === 403 && /OPS_BLOCKED/.test(bodyText);
+}
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
 function isThrottled(status: number, bodyText: string): boolean {
-  return status === 429 || (status === 403 && /OPS_BLOCKED/.test(bodyText));
+  return status === 429 || isFingerprintBlocked(status, bodyText);
 }
 
 function pick(headers: Record<string, string> | undefined, name: string): string | undefined {
@@ -246,7 +370,7 @@ function decodeBody(buffer: Buffer, encoding: string | undefined): Buffer {
   return buffer;
 }
 
-function directOnce(url: string, init: FetchInit): Promise<FetchCompatibleResponse> {
+function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<FetchCompatibleResponse> {
   const target = new URL(url);
   const timeoutMs = intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000);
 
@@ -262,7 +386,7 @@ function directOnce(url: string, init: FetchInit): Promise<FetchCompatibleRespon
   return new Promise((resolve, reject) => {
     const request = https.request(
       url,
-      { method: (init.method ?? 'GET').toUpperCase(), headers, agent, timeout: timeoutMs },
+      { method: (init.method ?? 'GET').toUpperCase(), headers, agent: agentFor(profile), timeout: timeoutMs },
       (response) => {
         const chunks: Buffer[] = [];
         // A connection that dies after the headers emits 'error'/'aborted' on the
@@ -444,8 +568,44 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
   for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
     const release = await acquireSlot();
     try {
-      const response = await directOnce(url, init);
-      const throttled = isThrottled(response.status, await response.text());
+      const candidates = availableProfiles();
+      if (candidates.length === 0) {
+        // Every profile is cooling down after OPS_BLOCKED; do not spend the
+        // budget on another guaranteed refusal.
+        stats.directThrottled++;
+        lastResponse = null;
+        lastError = null;
+        break;
+      }
+
+      let response: FetchCompatibleResponse | null = null;
+      let bodyText = '';
+
+      // Rotate through the profiles until DB accepts one. A blocked profile is
+      // put on cooldown, so the next request starts with the one that worked.
+      for (let index = 0; index < candidates.length; index++) {
+        if (index > 0) stats.profileRotations++;
+        const profile = candidates[index];
+        response = await directOnce(url, init, profile);
+        bodyText = await response.text();
+
+        if (!isFingerprintBlocked(response.status, bodyText)) {
+          activeProfileIndex = TLS_PROFILES.indexOf(profile);
+          break;
+        }
+
+        markProfileBlocked(profile);
+        if (index === candidates.length - 1 || Date.now() >= deadline) break;
+      }
+
+      if (!response) {
+        stats.directThrottled++;
+        lastResponse = null;
+        lastError = null;
+        break;
+      }
+
+      const throttled = isThrottled(response.status, bodyText);
       // Only 2xx is a success. A 5xx is a transient failure; a plain 400/403 is a
       // failure too (counting it as directOk would keep PollerNoPrices green while
       // nothing is scraped). Non-retryable responses are still returned to the

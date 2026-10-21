@@ -103,12 +103,10 @@ export class ScraperStack extends cdk.Stack {
     // Poller Lambda — runs every 15 minutes, scrapes due targets
     // Docker image: ../scraper/Dockerfile  (copies pre-built ESM bundle)
     //
-    // A DockerImageFunction because the bundle needs `impit` next to it: a native
-    // HTTP client that imitates Firefox's TLS/HTTP2 handshake, which is what DB's
-    // Akamai edge accepts (see ../../shared/db-fetch.ts). The esbuild bundle at
-    // dist/poller/index.mjs is copied into the image unchanged — no build happens
-    // inside the container. x86_64, because the image installs impit's
-    // linux-x64-gnu binary.
+    // A DockerImageFunction so the pre-built esbuild bundle at dist/poller/index.mjs
+    // is copied into the image unchanged (no build inside the container). The
+    // transport is pure Node (node:https) with rotating TLS profiles; see
+    // ../../shared/db-fetch.ts. x86_64 to match the Lambda architecture.
     //
     // Sizing: the work is network-bound (a paced call every ~2.5 s), so memory
     // only needs to hold the route catalog, the AWS SDK and one batch of Parquet

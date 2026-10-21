@@ -90,8 +90,8 @@ export class Backend extends Construct {
       DECODO_API_KEY_PARAM: decodoApiKeyParamName(this),
     };
 
-    // Both functions run the same image (it contains `impit`, a native HTTP
-    // client, next to the bundle). Only sizing, triggers and DB pacing differ.
+    // Both functions run the same image (the pre-built bundle plus production
+    // dependencies). Only sizing, triggers and DB pacing differ.
     const lambdaFunction = new lambda.DockerImageFunction(this, 'GraphqlLambda', {
       code: lambda.DockerImageCode.fromImageAsset('../backend'),
       architecture: lambda.Architecture.X86_64,
