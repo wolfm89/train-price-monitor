@@ -137,9 +137,9 @@ export class ScraperStack extends cdk.Stack {
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
         DB_MIN_GAP_MS: '2500',
         DB_MAX_IN_FLIGHT: '2',
-        // One target is two calls; 60 s covers two attempts each plus backoff and
-        // stays well inside the 180 s run guard.
-        DB_TOTAL_BUDGET_MS: '60000',
+        // One target makes two calls in parallel; 45 s covers two 20 s attempts
+        // plus backoff, and 180 s guard + 45 s + upload stays under the timeout.
+        DB_TOTAL_BUDGET_MS: '45000',
         // No Decodo key on purpose: the poller is bulk work and must never spend
         // the free allowance. When DB throttles it stops the batch instead.
       },

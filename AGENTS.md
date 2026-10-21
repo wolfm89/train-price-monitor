@@ -264,7 +264,7 @@ flowchart LR
   - Each signal pairs a graph with a gauge or number; budget/limit lines are annotations on the
     graph. Rates and percentiles, not totals. The SQS queue is not shown — one message per hour is
     consumed in under a second.
-- **Do not add a tenth alarm or a fifth custom metric** without accepting cost ($0.10 and $0.30 per
+- **Do not add a tenth alarm or an eleventh custom metric** without accepting cost ($0.10 and $0.30 per
   month respectively), and do not use metric-math, Metrics Insights or anomaly-detection bands in
   alarms — those are billed differently from the free alarm metrics.
 

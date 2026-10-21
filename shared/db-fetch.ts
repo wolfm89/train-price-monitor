@@ -440,7 +440,8 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  // Do not start an attempt that the shared wall-clock budget can no longer hold.
+  for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
     const release = await acquireSlot();
     try {
       const response = await directOnce(url, init);

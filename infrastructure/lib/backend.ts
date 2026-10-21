@@ -227,7 +227,8 @@ export class Backend extends Construct {
     });
 
     // -------------------------------------------------------------------------
-    // Alarms and dashboard (CloudWatch free tier: 9 alarms, 4 custom metrics)
+    // Alarms and dashboard (CloudWatch free tier: 9 alarms, 10 custom metrics
+    // across both stacks; 3 of them are defined here)
     // -------------------------------------------------------------------------
 
     // The transport logs a `transport` object on every GraphQL response; a
