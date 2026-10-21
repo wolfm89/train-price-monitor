@@ -36,6 +36,7 @@
  *  DB_MAX_ATTEMPTS          direct attempts per request (default 2)
  *  DB_RETRY_BACKOFF_MS      pause before a retry, multiplied by the attempt (default 3000)
  *  DB_REQUEST_TIMEOUT_MS    per-attempt timeout (default 20000)
+ *  DB_TOTAL_BUDGET_MS       wall-clock budget for one request, direct + fallback (default 24000)
  *  DB_BREAKER_THRESHOLD     consecutive failed requests that open the breaker (default 3)
  *  DB_BREAKER_COOLDOWN_MS   how long the breaker stays open (default 180000)
  *  DB_TRANSPORT             `decodo` forces the fallback path (kill switch)
@@ -264,6 +265,11 @@ function directOnce(url: string, init: FetchInit): Promise<FetchCompatibleRespon
       { method: (init.method ?? 'GET').toUpperCase(), headers, agent, timeout: timeoutMs },
       (response) => {
         const chunks: Buffer[] = [];
+        // A connection that dies after the headers emits 'error'/'aborted' on the
+        // response, not on the request; without this the promise never settles and
+        // the transport slot is held until the Lambda times out.
+        response.on('error', reject);
+        response.on('aborted', () => reject(new Error('DB response aborted')));
         response.on('data', (chunk: Buffer) => chunks.push(chunk));
         response.on('end', () => {
           let body: Buffer;
@@ -341,7 +347,12 @@ async function resolveDecodoKey(): Promise<string | null> {
 }
 
 /** Executes one request through Decodo; a DB refusal is retried once because the egress is picked per request. */
-async function decodoFetch(key: string, url: string, init: FetchInit): Promise<FetchCompatibleResponse> {
+async function decodoFetch(
+  key: string,
+  url: string,
+  init: FetchInit,
+  deadline: number
+): Promise<FetchCompatibleResponse> {
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(init.headers ?? {})) {
     // Hop-by-hop headers describe our connection to Decodo, not the request to DB.
@@ -350,6 +361,12 @@ async function decodoFetch(key: string, url: string, init: FetchInit): Promise<F
   }
 
   for (let attempt = 1; ; attempt++) {
+    // Share one wall-clock budget with the direct path: the API Lambda lives
+    // behind a 29 s gateway cap, so a late throttling response must not start
+    // another full 18 s attempt.
+    const remaining = deadline - Date.now();
+    if (remaining < 1_000) throw new Error('DB request budget exhausted before the fallback');
+
     const response = await globalThis.fetch(DECODO_SCRAPE_URL, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -361,7 +378,7 @@ async function decodoFetch(key: string, url: string, init: FetchInit): Promise<F
         force_headers: true,
         ...(init.body ? { payload: Buffer.from(init.body).toString('base64') } : {}),
       }),
-      signal: AbortSignal.timeout(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000) + 10_000),
+      signal: AbortSignal.timeout(Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000) + 10_000, remaining)),
     });
 
     const text = await response.text();
@@ -377,23 +394,22 @@ async function decodoFetch(key: string, url: string, init: FetchInit): Promise<F
 
     const status = result.status_code ?? 200;
     const bodyText = result.content ?? '';
-    if (isThrottled(status, bodyText) && attempt < 2) continue;
+    if (isThrottled(status, bodyText) && attempt < 2 && deadline - Date.now() > 3_000) continue;
 
     return new FetchCompatibleResponse(status, '', bodyText, Object.entries(result.headers ?? {}));
   }
 }
 
-async function viaFallback(url: string, init: FetchInit): Promise<FetchCompatibleResponse | null> {
+async function viaFallback(url: string, init: FetchInit, deadline: number): Promise<FetchCompatibleResponse | null> {
   const key = await resolveDecodoKey();
   if (!key) return null;
 
   try {
-    const response = await decodoFetch(key, url, init);
-    if (isThrottled(response.status, await response.text()) || response.status >= 500) {
-      stats.fallbackFailed++;
-    } else {
-      stats.fallbackOk++;
-    }
+    const response = await decodoFetch(key, url, init, deadline);
+    // The vendor answers 401/402 when the key is wrong or the quota is gone; those
+    // are failures, not successful fallbacks.
+    if (response.ok) stats.fallbackOk++;
+    else stats.fallbackFailed++;
     return response;
   } catch (error) {
     stats.fallbackFailed++;
@@ -406,14 +422,16 @@ async function viaFallback(url: string, init: FetchInit): Promise<FetchCompatibl
 // ---------------------------------------------------------------------------
 
 export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
+  const deadline = Date.now() + intFromEnv('DB_TOTAL_BUDGET_MS', 24_000);
+
   if (process.env.DB_TRANSPORT === 'decodo') {
-    const forced = await viaFallback(url, init);
+    const forced = await viaFallback(url, init, deadline);
     if (forced) return forced;
   }
 
   if (breakerOpen()) {
     stats.breakerSkips++;
-    const fallback = await viaFallback(url, init);
+    const fallback = await viaFallback(url, init, deadline);
     if (fallback) return fallback;
     throw new DbThrottledError();
   }
@@ -427,17 +445,19 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
     try {
       const response = await directOnce(url, init);
       const throttled = isThrottled(response.status, await response.text());
-      // A 5xx is a failure, not a success: DB's edge returns 502/503 while it is
-      // recovering, and counting those as successful calls silently defeated the
-      // "no prices" alarm. Only 2xx counts as ok.
-      const failed = response.status >= 500;
-      if (!throttled && !failed) {
+      // Only 2xx is a success. A 5xx is a transient failure; a plain 400/403 is a
+      // failure too (counting it as directOk would keep PollerNoPrices green while
+      // nothing is scraped). Non-retryable responses are still returned to the
+      // caller so db-vendo can surface them.
+      const retryable = throttled || response.status >= 500;
+      if (!retryable && response.ok) {
         recordSuccess();
         stats.directOk++;
         return response;
       }
       if (throttled) stats.directThrottled++;
       else stats.directFailed++;
+      if (!retryable) return response;
       lastResponse = response;
       lastError = null;
     } catch (error) {
@@ -450,15 +470,15 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
       release();
     }
 
-    if (attempt < maxAttempts) {
+    if (attempt < maxAttempts && Date.now() < deadline) {
       stats.retries++;
-      await sleep(intFromEnv('DB_RETRY_BACKOFF_MS', 3000) * attempt);
+      await sleep(Math.min(intFromEnv('DB_RETRY_BACKOFF_MS', 3000) * attempt, Math.max(0, deadline - Date.now())));
     }
   }
 
   recordFailure();
 
-  const fallback = await viaFallback(url, init);
+  const fallback = await viaFallback(url, init, deadline);
   if (fallback) return fallback;
   if (breakerOpen()) throw new DbThrottledError();
   if (lastResponse) return lastResponse;

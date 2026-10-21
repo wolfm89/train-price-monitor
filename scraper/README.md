@@ -30,6 +30,9 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 - Creates `ROUTE#{id}#DATE#{date}` items with `PENDING` status and an initial `next_scrape_at`.
 - Uses conditional writes (`attribute_not_exists`) to avoid overwriting already-seeded rows.
 - Assigns each target a TTD (Time-To-Departure) tier that determines scrape frequency.
+- `HYDRATOR_FULL_SEED=1` also backfills `due_key` on rows seeded before the `ByDue`
+  index existed; run it once after deploying a schema change that adds that key,
+  otherwise those rows are invisible to the poller.
 
 ### Poller (`src/poller.ts`)
 

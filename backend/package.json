@@ -11,7 +11,9 @@
     "lint": "eslint src/",
     "stations": "node scripts/build-station-index.mjs",
     "pretypecheck": "npm run stations",
-    "prebuild": "npm run stations"
+    "prebuild": "npm run stations",
+    "predev": "npm run stations",
+    "prestart": "npm run stations"
   },
   "author": "",
   "license": "GPL-3.0",

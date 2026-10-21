@@ -1,6 +1,13 @@
 import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, DeleteCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  DeleteCommand,
+  PutCommand,
+  QueryCommand,
+  ScanCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 
 import { ROUTE_CATALOG } from './routes.js';
 import { computeTtdTier, computeNextScrapeAt, dueKey } from './ttd.js';
@@ -101,6 +108,51 @@ async function writeAllItems(
  * place: their TTL is keyed on departure, so they would linger for months while
  * still being returned as due and consuming the poller's scrape budget.
  */
+/**
+ * Gives existing rows the `due_key` that the ByDue index is keyed on.
+ *
+ * Rows seeded before that index existed are not in it, and the conditional puts
+ * below skip them, so without this they would never be scraped again. Only run
+ * with HYDRATOR_FULL_SEED, because it scans the table.
+ */
+async function backfillDueKeys(): Promise<number> {
+  let updated = 0;
+  let cursor: Record<string, unknown> | undefined;
+
+  do {
+    const page = await ddb.send(
+      new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: 'attribute_not_exists(due_key)',
+        ProjectionExpression: 'pk, sk, departure_date, next_scrape_at',
+        ExclusiveStartKey: cursor as Record<string, never> | undefined,
+      })
+    );
+
+    for (const item of page.Items ?? []) {
+      const nextScrapeAt = item.next_scrape_at as string | undefined;
+      const departureDate = item.departure_date as string | undefined;
+      if (!nextScrapeAt || !departureDate) continue;
+
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_NAME,
+          Key: { pk: item.pk, sk: item.sk },
+          UpdateExpression: 'SET due_key = :due',
+          ExpressionAttributeValues: {
+            ':due': dueKey(computeTtdTier(departureDate, new Date(nextScrapeAt)), nextScrapeAt),
+          },
+        })
+      );
+      updated++;
+    }
+
+    cursor = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (cursor);
+
+  return updated;
+}
+
 async function pruneBeyondHorizon(horizonDateStr: string): Promise<number> {
   let deleted = 0;
   let cursor: Record<string, unknown> | undefined;
@@ -154,6 +206,8 @@ export const handler = async (): Promise<void> => {
       const tier = computeTtdTier(departureDateStr, now);
       // Spread initial scrapes randomly across the first interval window
       const nextScrapeAt = computeNextScrapeAt(tier, now);
+      // Priority is ordered by the tier at the time the item becomes due.
+      const dueTier = computeTtdTier(departureDateStr, nextScrapeAt);
 
       // TTL: two days after departure so DynamoDB auto-expires stale rows
       const departureMidnight = new Date(`${departureDateStr}T00:00:00Z`);
@@ -168,7 +222,7 @@ export const handler = async (): Promise<void> => {
         dest_eva: route.destEva,
         status: 'PENDING',
         next_scrape_at: nextScrapeAt.toISOString(),
-        due_key: dueKey(tier, nextScrapeAt),
+        due_key: dueKey(dueTier, nextScrapeAt),
         ttd_tier: tier,
         scrape_count: 0,
         created_at: now.toISOString(),
@@ -184,6 +238,9 @@ export const handler = async (): Promise<void> => {
   logger.info('Hydration complete', { written, skipped, failed, totalItems: items.length });
 
   if (FULL_SEED) {
+    const backfilled = await backfillDueKeys();
+    logger.info('Backfilled due_key on existing rows', { backfilled });
+
     const horizon = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + LOOKAHEAD_DAYS - 1));
     const pruned = await pruneBeyondHorizon(horizon.toISOString().slice(0, 10));
     logger.info('Pruned rows beyond lookahead horizon', { pruned, horizon: horizon.toISOString().slice(0, 10) });

@@ -107,6 +107,8 @@ export class Backend extends Construct {
         DB_MAX_ATTEMPTS: '1',
         DB_REQUEST_TIMEOUT_MS: '8000',
         DB_MIN_GAP_MS: '300',
+        // API Gateway cuts the integration at 29 s; leave 5 s for start-up.
+        DB_TOTAL_BUDGET_MS: '24000',
       },
     });
 
@@ -127,6 +129,7 @@ export class Backend extends Construct {
       environment: {
         ...commonEnvironment,
         DB_MIN_GAP_MS: '1500',
+        DB_TOTAL_BUDGET_MS: '110000',
       },
     });
 
@@ -239,9 +242,32 @@ export class Backend extends Construct {
       metricValue: '$.transport.fallbackOk',
     });
 
+    // Yoga handles resolver errors and returns HTTP 200, and the refresher catches
+    // per-journey failures, so Lambda's Errors metric stays 0 for both. The
+    // ERROR log lines are the real signal.
+    new logs.MetricFilter(this, 'SearchErrorLogFilter', {
+      logGroup: apiLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.level', '=', 'ERROR'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'SearchErrorLogs',
+      metricValue: '1',
+    });
+    new logs.MetricFilter(this, 'RefresherErrorLogFilter', {
+      logGroup: refresherLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.level', '=', 'ERROR'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'RefresherErrorLogs',
+      metricValue: '1',
+    });
+
     const searchErrors = new cloudwatch.Alarm(this, 'SearchErrors', {
       alarmDescription: 'The GraphQL API returned errors (search is failing for the user).',
-      metric: lambdaFunction.metricErrors({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
+      metric: new cloudwatch.Metric({
+        namespace: 'TrainPriceMonitor',
+        metricName: 'SearchErrorLogs',
+        period: cdk.Duration.minutes(5),
+        statistic: 'Sum',
+      }),
       threshold: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       evaluationPeriods: 2,
@@ -265,7 +291,12 @@ export class Backend extends Construct {
 
     const refresherErrors = new cloudwatch.Alarm(this, 'RefresherErrors', {
       alarmDescription: 'The hourly watchlist refresh failed (journeys stay stale and alerts are late).',
-      metric: refresherFunction.metricErrors({ period: cdk.Duration.hours(1), statistic: 'Sum' }),
+      metric: new cloudwatch.Metric({
+        namespace: 'TrainPriceMonitor',
+        metricName: 'RefresherErrorLogs',
+        period: cdk.Duration.hours(1),
+        statistic: 'Sum',
+      }),
       threshold: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       evaluationPeriods: 2,
@@ -283,7 +314,12 @@ export class Backend extends Construct {
 
     // CloudWatch publishes to SNS through a dedicated action object.
     for (const alarm of [searchErrors, searchFallback, refresherErrors, searchThrottled]) {
-      if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
+      if (alertTopic) {
+        alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
+        // Recovery notifications are part of the forwarder; without an OK action
+        // CloudWatch never publishes the transition.
+        alarm.addOkAction(new cloudwatch_actions.SnsAction(alertTopic));
+      }
     }
 
     // Keeps the previous dashboard's construct id so CloudFormation replaces the

@@ -36,14 +36,17 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * "Poller finished" log stay clean.
  */
 const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 10, logger);
-/** Abort if elapsed exceeds this many milliseconds. Must stay below the
- * function timeout with enough room to finish the current target. */
-const ABORT_THRESHOLD_MS = 210_000;
+/** Abort if elapsed exceeds this many milliseconds. Must stay below the function
+ * timeout with room for the current target (two parallel calls, each up to two
+ * 20 s attempts plus backoff ~= 43 s) and the final S3 upload. */
+const ABORT_THRESHOLD_MS = 180_000;
 /**
  * Extra rows to read per tier when selecting a batch, so a run of expired rows
  * (or a tier that is short of targets) does not leave the batch half empty.
  */
 const EXPIRED_SCAN_SLACK = 8;
+/** Safety cap on pages read per tier, so a pathological queue cannot spin. */
+const MAX_PAGES_PER_TIER = 5;
 
 const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 
@@ -156,6 +159,10 @@ async function writeToS3(rows: ParquetRow[], observedAt: Date): Promise<void> {
  */
 async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Promise<void> {
   const nextScrapeAt = computeNextScrapeAt(newTier, now);
+  // Rank by the tier the target will be in *when it becomes due*, not the tier it
+  // is in now: a MID target scraped eight days before departure becomes due on
+  // departure day, where it must sort ahead of MID/FAR work.
+  const dueTier = computeTtdTier(item.departure_date, nextScrapeAt);
 
   await ddb.send(
     new UpdateCommand({
@@ -165,7 +172,7 @@ async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Pro
         'SET next_scrape_at = :next, due_key = :due, last_scraped_at = :now, ttd_tier = :tier, scrape_count = if_not_exists(scrape_count, :zero) + :inc',
       ExpressionAttributeValues: {
         ':next': nextScrapeAt.toISOString(),
-        ':due': dueKey(newTier, nextScrapeAt),
+        ':due': dueKey(dueTier, nextScrapeAt),
         ':now': now.toISOString(),
         ':tier': newTier,
         ':inc': 1,
@@ -227,31 +234,42 @@ async function selectDueTargets(
 
     // Over-read a little: expired rows are dropped, and a tier may be short.
     const limit = BATCH_SIZE - targets.length + EXPIRED_SCAN_SLACK;
-    const page = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_NAME,
-        IndexName: 'ByDue',
-        KeyConditionExpression: '#status = :pending AND due_key BETWEEN :floor AND :ceiling',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':pending': 'PENDING',
-          ':floor': `${tierRank(tier)}#`,
-          ':ceiling': dueKey(tier, now),
-        },
-        Limit: limit,
-      })
-    );
+    let cursor: Record<string, unknown> | undefined;
+    let pages = 0;
 
-    for (const item of (page.Items ?? []) as ScheduleItem[]) {
-      if (item.departure_date < today) {
-        await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: item.pk, sk: 'SCHEDULE' } }));
-        expired++;
-        continue;
+    do {
+      const page = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_NAME,
+          IndexName: 'ByDue',
+          KeyConditionExpression: '#status = :pending AND due_key BETWEEN :floor AND :ceiling',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: {
+            ':pending': 'PENDING',
+            ':floor': `${tierRank(tier)}#`,
+            ':ceiling': dueKey(tier, now),
+          },
+          Limit: limit,
+          ExclusiveStartKey: cursor as Record<string, never> | undefined,
+        })
+      );
+
+      for (const item of (page.Items ?? []) as ScheduleItem[]) {
+        if (item.departure_date < today) {
+          await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: item.pk, sk: 'SCHEDULE' } }));
+          expired++;
+          continue;
+        }
+        if (targets.length < BATCH_SIZE) targets.push(item);
       }
-      if (targets.length < BATCH_SIZE) targets.push(item);
-    }
 
-    if ((page.Items?.length ?? 0) >= limit) backlog = true;
+      cursor = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+      pages++;
+      // Expired rows can consume a whole page, so keep reading this tier until the
+      // batch is full or the tier is exhausted (the cursor is the only reliable
+      // signal for the latter).
+      if (cursor) backlog = true;
+    } while (cursor && targets.length < BATCH_SIZE && pages < MAX_PAGES_PER_TIER);
   }
 
   return { targets, expired, backlog };

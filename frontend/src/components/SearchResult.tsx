@@ -170,8 +170,9 @@ const SearchResult: React.FC<Props> = ({
               </Typography>
             </Box>
 
-            {/* Route line — sm+ only */}
-            <Box sx={{ flex: 1, display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: '5px' }}>
+            {/* Route line — md+ only. At exactly 600 px the fixed time, duration and
+                price columns plus this line's minimum width overflow the viewport. */}
+            <Box sx={{ flex: 1, display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: '5px' }}>
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
               <Box
                 sx={{
@@ -193,14 +194,14 @@ const SearchResult: React.FC<Props> = ({
               <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'divider', flexShrink: 0 }} />
             </Box>
 
-            {/* Duration + means — sm+ only.
+            {/* Duration + means — md+ only.
                 Fixed width on purpose: this is what keeps the route-line icon in
                 a stable column. Its position used to depend on how wide the
                 duration chip and the (variable) list of transport means were, so
                 an ICE+walk+ICE row pushed the icon left of a single-train row. */}
             <Box
               sx={{
-                display: { xs: 'none', sm: 'flex' },
+                display: { xs: 'none', md: 'flex' },
                 alignItems: 'center',
                 justifyContent: 'flex-end',
                 gap: 1.75,
@@ -236,10 +237,10 @@ const SearchResult: React.FC<Props> = ({
               </Box>
             </Box>
 
-            {/* xs middle: Duration + Means — xs only; flex:1 lets it grow, items wrap internally */}
+            {/* Compact middle: Duration + Means — below md; flex:1 lets it grow, items wrap internally */}
             <Box
               sx={{
-                display: { xs: 'flex', sm: 'none' },
+                display: { xs: 'flex', md: 'none' },
                 flex: 1,
                 flexWrap: 'wrap',
                 gap: '5px',
@@ -271,14 +272,14 @@ const SearchResult: React.FC<Props> = ({
             <Box
               sx={{
                 flexShrink: 0,
-                minWidth: { xs: 'auto', sm: 153 },
+                minWidth: { xs: 'auto', md: 153 },
                 display: 'flex',
-                flexDirection: { xs: 'column', sm: 'row' },
-                alignItems: { xs: 'flex-end', sm: 'center' },
-                gap: { xs: 0.5, sm: 1.75 },
+                flexDirection: { xs: 'column', md: 'row' },
+                alignItems: { xs: 'flex-end', md: 'center' },
+                gap: { xs: 0.5, md: 1.75 },
               }}
             >
-              <Box sx={{ textAlign: 'right', minWidth: { xs: 60, sm: 68 } }}>
+              <Box sx={{ textAlign: 'right', minWidth: { xs: 60, md: 68 } }}>
                 <Typography sx={{ fontFamily: MONO_FONT, fontSize: { xs: 15, sm: 16 }, fontWeight: 500 }}>
                   {result.price ? `€${result.price.toFixed(2)}` : 'n/a'}
                 </Typography>

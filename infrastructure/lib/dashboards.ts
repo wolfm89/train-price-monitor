@@ -81,9 +81,10 @@ export interface ScraperDashboardProps {
 
 /** Latency / traffic / errors / saturation for the data pipeline. */
 export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget[][] {
-  const runMsP50 = metric('TrainPriceMonitor', 'PollerRunMs', cdk.Duration.minutes(15), 'p50');
-  const runMsP90 = metric('TrainPriceMonitor', 'PollerRunMs', cdk.Duration.minutes(15), 'p90');
-  const runMsMax = metric('TrainPriceMonitor', 'PollerRunMs', cdk.Duration.minutes(15), 'Maximum');
+  // Lambda's own Duration metric is the run length; no custom metric needed.
+  const runMsP50 = props.pollerFunction.metricDuration({ period: cdk.Duration.minutes(15), statistic: 'p50' });
+  const runMsP90 = props.pollerFunction.metricDuration({ period: cdk.Duration.minutes(15), statistic: 'p90' });
+  const runMsMax = props.pollerFunction.metricDuration({ period: cdk.Duration.minutes(15), statistic: 'Maximum' });
   const scrapes = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Sum');
   const scrapesPerHour = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.hours(1), 'Sum');
   const failed = metric('TrainPriceMonitor', 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum');

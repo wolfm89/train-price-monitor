@@ -60,6 +60,8 @@ exports.handler = async (event) => {
   for (const record of event.Records || []) {
     const alarm = JSON.parse(record.Sns.Message);
     const alarming = alarm.NewStateValue === 'ALARM';
+    // The Region field carries a display name ("EU (Frankfurt)"); the ARN has the id.
+    const region = String(alarm.AlarmArn || '').split(':')[3] || alarm.Region;
     const body = new URLSearchParams({
       token,
       user,
@@ -68,12 +70,14 @@ exports.handler = async (event) => {
       priority: alarming ? '1' : '0',
       sound: alarming ? 'siren' : 'pushover',
       timestamp: String(Math.floor(new Date(alarm.StateChangeTime).getTime() / 1000)),
-      url: 'https://' + alarm.Region + '.console.aws.amazon.com/cloudwatch/home?region=' + alarm.Region +
+      url: 'https://' + region + '.console.aws.amazon.com/cloudwatch/home?region=' + region +
         '#alarmsV2:alarm/' + encodeURIComponent(alarm.AlarmName),
       url_title: 'Open alarm in CloudWatch',
     });
     const res = await fetch('https://api.pushover.net/1/messages.json', { method: 'POST', body });
-    if (!res.ok) console.error('Pushover rejected the notification', res.status, await res.text());
+    // Throw so the SNS-to-Lambda async retry can deliver it; a logged failure
+    // would just lose the alarm.
+    if (!res.ok) throw new Error('Pushover rejected the notification: ' + res.status + ' ' + (await res.text()));
   }
 };
 `;

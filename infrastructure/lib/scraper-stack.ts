@@ -53,6 +53,18 @@ export class ScraperStack extends cdk.Stack {
       writeCapacity: 5,
     });
 
+    // Transitional: CloudFormation rejects creating and deleting a GSI in one
+    // update, so the old index stays for the release that introduces ByDue. It is
+    // unused and removed by a follow-up deploy once ByDue is live everywhere.
+    table.addGlobalSecondaryIndex({
+      indexName: 'ByNextScrape',
+      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'next_scrape_at', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+      readCapacity: 5,
+      writeCapacity: 5,
+    });
+
     // -------------------------------------------------------------------------
     // S3 bucket for Parquet price data
     // -------------------------------------------------------------------------
@@ -125,6 +137,9 @@ export class ScraperStack extends cdk.Stack {
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
         DB_MIN_GAP_MS: '2500',
         DB_MAX_IN_FLIGHT: '2',
+        // One target is two calls; 60 s covers two attempts each plus backoff and
+        // stays well inside the 180 s run guard.
+        DB_TOTAL_BUDGET_MS: '60000',
         // No Decodo key on purpose: the poller is bulk work and must never spend
         // the free allowance. When DB throttles it stops the batch instead.
       },
@@ -242,14 +257,6 @@ export class ScraperStack extends cdk.Stack {
       metricName: 'PollerThrottled',
       metricValue: '$.transport.directThrottled',
     });
-    new logs.MetricFilter(this, 'PollerRunMsFilter', {
-      logGroup: pollerLogGroup,
-      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
-      metricNamespace: 'TrainPriceMonitor',
-      metricName: 'PollerRunMs',
-      metricValue: '$.elapsedMs',
-    });
-
     // One metric per scraped target (the transport counters are per DB call, and
     // there are two calls per target). Used by the dashboard and within the free
     // custom-metric allowance.
@@ -376,7 +383,10 @@ export class ScraperStack extends cdk.Stack {
     });
 
     for (const alarm of [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted]) {
-      if (alertTopic) alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
+      if (alertTopic) {
+        alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
+        alarm.addOkAction(new cloudwatch_actions.SnsAction(alertTopic));
+      }
     }
 
     // The construct id is kept from the previous dashboard implementation so

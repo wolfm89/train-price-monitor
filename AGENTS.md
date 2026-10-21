@@ -241,7 +241,7 @@ flowchart LR
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
 - **Nine alarms** — the CloudWatch free tier allows 10 alarm metrics, 10 custom metrics and 3
-  dashboards; we use 9, 9 and 2. The custom metrics come from log filters on the existing log
+  dashboards; we use 9, 10 and 2. The custom metrics come from log filters on the existing log
   lines, so no application code emits metrics.
   - Scraper: `PollerNotRunning` (0 invocations for 45 min, missing data treated as breaching),
     `PollerErrors`, `PollerThrottledByDb` (throttling in two consecutive runs — a single 429 is
