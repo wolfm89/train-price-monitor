@@ -323,8 +323,24 @@ export class Backend extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
+    // The 10th free alarm slot: a failed SQS refresh that exhausted its retries
+    // must not sit silently in the DLQ. The log-based RefresherErrors alarm only
+    // covers failures the handler caught.
+    const refresherDlq = new cloudwatch.Alarm(this, 'RefresherDlq', {
+      alarmName: 'TPM-App-RefresherDLQ',
+      alarmDescription: 'The refresher DLQ has messages: a watchlist refresh failed after retries.',
+      metric: dlq.metricApproximateNumberOfMessagesVisible({
+        period: cdk.Duration.minutes(5),
+        statistic: 'Maximum',
+      }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
     // CloudWatch publishes to SNS through a dedicated action object.
-    for (const alarm of [searchErrors, searchFallback, refresherErrors, searchThrottled]) {
+    for (const alarm of [searchErrors, searchFallback, refresherErrors, searchThrottled, refresherDlq]) {
       if (alertTopic) {
         alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
         // Recovery notifications are part of the forwarder; without an OK action
@@ -345,7 +361,7 @@ export class Backend extends Construct {
         dlq,
         apiLogGroup,
         refresherLogGroup,
-        alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
+        alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled, refresherDlq],
       }),
     });
   }

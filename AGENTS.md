@@ -247,31 +247,34 @@ flowchart LR
 - **Credentials** live in two SSM SecureStrings (`/train-price-monitor/pushover-token`,
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
-- **Nine alarms** — the CloudWatch free tier allows 10 alarm metrics, 10 custom metrics and 3
-  dashboards; we use 9, 10 and 2. The custom metrics come from log filters on the existing log
+- **Ten alarms** — the CloudWatch free tier allows 10 alarm metrics, 10 custom metrics and 3
+  dashboards; we use 10, 10 and 2. The custom metrics come from log filters on the existing log
   lines, so no application code emits metrics.
   - Scraper: `PollerNotRunning` (0 invocations for 45 min, missing data treated as breaching),
     `PollerErrors`, `PollerThrottledByDb` (throttling in two consecutive runs — a single 429 is
     noise), `PollerNoPrices` (no direct success for 45 min), `PollerBatchAborted` (a run hit the
     250 s abort; the log line, not a raw duration threshold, so normal 190 s runs stay quiet).
   - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users,
-    2 of 3 periods so one unlucky search does not page), `RefresherErrors`, `SearchThrottled`.
+    2 of 3 periods so one unlucky search does not page), `RefresherErrors`, `SearchThrottled`,
+    `RefresherDLQ` (a message reached the dead-letter queue: the refresh exhausted its retries).
 - **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`) follow Google's Four Golden
   Signals — one row each for latency, traffic, errors and saturation, plus the alarm state:
-  - `TrainPriceMonitor-Scraper`: run duration (p90/max vs the 250 s abort), scrapes per run,
-    failed target scrapes + pipeline errors, DB-throttled calls + backlog (1 when the due queue is
-    deeper than one batch), plus a **Data** section (price rows written per run) and a diagnostics
-    table of the last failed scrapes.
-  - `TrainPriceMonitor-App`: API p50/p90/p99 and integration p90 (the 1 s "flow" limit applies to
-    the interactive p50; journey searches take 2-6 s, so the graph marks 8 s as their p99 budget),
-    requests per 5 min, 4xx/5xx plus the implicit failure (DB refused, Decodo served), Lambda
-    concurrency/throttles plus DLQ depth, plus a **Notifications** section (SES sends and
-    deliveries) and a diagnostics table of the last API errors. The error rate counts 5xx only —
-    4xx here is expired-token noise from the SPA.
+  - `TrainPriceMonitor-Scraper`: run duration for poller/hydrator/compactor (p90/max vs the
+    250 s abort), scrapes per run (`Sum(targets) / Sum(invocations)`, batch-capacity line at 25),
+    failed target scrapes + pipeline errors, DB throttled calls + batch aborts + backlog (1 when
+    the due queue is deeper than one batch), plus a **Data** section (price rows written per run),
+    daily S3 storage and a diagnostics table of the last failed scrapes.
+  - `TrainPriceMonitor-App`: API p50/p90/integration p90 on the interactive axis (200 ms SLO) and
+    p99/latency max on the search axis (8 s budget), API requests + GraphQL invocations +
+    refresher runs, 4xx/5xx + GraphQL errors + refresher errors + Decodo fallbacks, an API error
+    rate of `(5xx + GraphQL errors) / invocations` (4xx is expired-token noise), refresher
+    duration vs its 120 s timeout, Lambda throttles + DLQ depth + oldest-message age, plus a
+    **Notifications** block (SES sends/deliveries/bounces/complaints + bounce rate) and a
+    diagnostics table covering both the API and refresher log groups.
   - Each signal pairs a graph with a gauge or number; budget/limit lines are annotations on the
     graph. Rates and percentiles, not totals. The SQS queue is not shown — one message per hour is
     consumed in under a second.
-- **Do not add a tenth alarm or an eleventh custom metric** without accepting cost ($0.10 and $0.30 per
+- **Do not add an eleventh alarm or an eleventh custom metric** without accepting cost ($0.10 and $0.30 per
   month respectively), and do not use metric-math, Metrics Insights or anomaly-detection bands in
   alarms — those are billed differently from the free alarm metrics.
 
