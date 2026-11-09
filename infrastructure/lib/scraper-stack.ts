@@ -319,6 +319,7 @@ export class ScraperStack extends cdk.Stack {
     const actionsEnabled = !scraperPaused;
 
     const notRunning = new cloudwatch.Alarm(this, 'PollerNotRunning', {
+      alarmName: 'TPM-Scraper-PollerNotRunning',
       alarmDescription: 'The poller has not run for 45 minutes: schedule disabled or function broken.',
       metric: pollerFn.metricInvocations({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
       threshold: 1,
@@ -330,6 +331,7 @@ export class ScraperStack extends cdk.Stack {
     });
 
     const pollerErrors = new cloudwatch.Alarm(this, 'PollerErrors', {
+      alarmName: 'TPM-Scraper-PollerErrors',
       alarmDescription: 'The poller returned errors.',
       metric: pollerFn.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
       threshold: 1,
@@ -340,6 +342,7 @@ export class ScraperStack extends cdk.Stack {
     });
 
     const dbThrottling = new cloudwatch.Alarm(this, 'PollerThrottledByDb', {
+      alarmName: 'TPM-Scraper-PollerThrottledByDb',
       alarmDescription:
         'DB has throttled the poller in two consecutive runs (early warning before the fingerprint is blocked).',
       metric: throttled,
@@ -352,6 +355,7 @@ export class ScraperStack extends cdk.Stack {
     });
 
     const noPrices = new cloudwatch.Alarm(this, 'PollerNoPrices', {
+      alarmName: 'TPM-Scraper-PollerNoPrices',
       alarmDescription: 'No target has returned prices for 45 minutes: DB is refusing every request.',
       metric: directOk,
       threshold: 1,
@@ -363,6 +367,7 @@ export class ScraperStack extends cdk.Stack {
     });
 
     const batchAborted = new cloudwatch.Alarm(this, 'PollerBatchAborted', {
+      alarmName: 'TPM-Scraper-PollerBatchAborted',
       alarmDescription: 'A poller run hit the abort threshold (it stopped before finishing its batch).',
       metric: aborted,
       threshold: 0,

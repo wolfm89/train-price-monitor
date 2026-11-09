@@ -268,6 +268,7 @@ export class Backend extends Construct {
     });
 
     const searchErrors = new cloudwatch.Alarm(this, 'SearchErrors', {
+      alarmName: 'TPM-App-SearchErrors',
       alarmDescription: 'The GraphQL API returned errors (search is failing for the user).',
       metric: new cloudwatch.Metric({
         namespace: 'TrainPriceMonitor',
@@ -282,6 +283,7 @@ export class Backend extends Construct {
     });
 
     const searchFallback = new cloudwatch.Alarm(this, 'SearchUsingDecodoFallback', {
+      alarmName: 'TPM-App-SearchUsingDecodoFallback',
       alarmDescription: 'Journey search is falling back to Decodo: DB is refusing the direct transport.',
       metric: new cloudwatch.Metric({
         namespace: 'TrainPriceMonitor',
@@ -297,6 +299,7 @@ export class Backend extends Construct {
     });
 
     const refresherErrors = new cloudwatch.Alarm(this, 'RefresherErrors', {
+      alarmName: 'TPM-App-RefresherErrors',
       alarmDescription: 'The hourly watchlist refresh failed (journeys stay stale and alerts are late).',
       metric: new cloudwatch.Metric({
         namespace: 'TrainPriceMonitor',
@@ -311,6 +314,7 @@ export class Backend extends Construct {
     });
 
     const searchThrottled = new cloudwatch.Alarm(this, 'SearchThrottled', {
+      alarmName: 'TPM-App-SearchThrottled',
       alarmDescription: 'The GraphQL API is being throttled (concurrency limit reached).',
       metric: lambdaFunction.metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
       threshold: 0,

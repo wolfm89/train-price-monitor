@@ -165,6 +165,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
 
   return [
     [header('**Scraper** · batch 25 targets every 15 min · priority NEAR → MID → FAR · abort 250 s · timeout 300 s')],
+    [alarmStatus(props.alarms)],
     [
       new cloudwatch.GraphWidget({
         title: 'Latency — run duration',
@@ -304,7 +305,6 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
         height: VALUE_HEIGHT,
       }),
     ],
-    [alarmStatus(props.alarms)],
     [
       logsTable('Diagnostics — recent failed target scrapes', props.pollerLogGroup, [
         'fields @timestamp, route_id, departure_date, err',
@@ -340,8 +340,11 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     .with({ label: 'Integration p90' });
   const requests = props.api
     .metricCount({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
-    .with({ label: 'API requests' });
+    .with({ label: 'API Gateway requests' });
   const requestsPerHour = props.api.metricCount({ period: cdk.Duration.hours(1), statistic: 'Sum' });
+  const invocations = props.apiFunction
+    .metricInvocations({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+    .with({ label: 'GraphQL invocations' });
   const clientErrors = props.api
     .metricClientError({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
     .with({ label: '4xx (client/token)' });
@@ -350,6 +353,12 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     .with({ label: '5xx' });
   const fallbacks = metric('TrainPriceMonitor', 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum').with({
     label: 'DB refused (Decodo)',
+  });
+  // Yoga returns HTTP 200 with an errors[] payload, so API Gateway's 5xx metric
+  // misses resolver failures. The backend logs them at ERROR; the filter metric
+  // is already part of the free ten.
+  const graphqlErrors = metric('TrainPriceMonitor', 'SearchErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
+    label: 'GraphQL errors',
   });
 
   const concurrency = props.apiFunction
@@ -367,18 +376,36 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
       statistic: 'Maximum',
     })
     .with({ label: 'DLQ messages' });
+  const dlqAge = props.dlq
+    .metricApproximateAgeOfOldestMessage({
+      period: cdk.Duration.minutes(5),
+      statistic: 'Maximum',
+    })
+    .with({ label: 'DLQ oldest message age' });
 
   const sesSends = metric('AWS/SES', 'Send', cdk.Duration.minutes(5), 'Sum').with({ label: 'SES sends' });
   const sesDeliveries = metric('AWS/SES', 'Delivery', cdk.Duration.minutes(5), 'Sum').with({
     label: 'SES deliveries',
   });
+  const sesBounces = metric('AWS/SES', 'Bounce', cdk.Duration.minutes(5), 'Sum').with({ label: 'SES bounces' });
+  const sesComplaints = metric('AWS/SES', 'Complaint', cdk.Duration.minutes(5), 'Sum').with({
+    label: 'SES complaints',
+  });
+  const sesBounceRate = new cloudwatch.MathExpression({
+    expression: '100 * m1 / m2',
+    usingMetrics: { m1: sesBounces, m2: sesSends },
+    label: 'bounce rate %',
+    period: cdk.Duration.minutes(5),
+  });
 
   const errorRate = new cloudwatch.MathExpression({
-    // Server errors only: the 4xx here are expired-token and preflight noise from
-    // the SPA, not failures of the application.
-    expression: '100 * m2 / m3',
-    usingMetrics: { m1: clientErrors, m2: serverErrors, m3: requests },
-    label: 'error rate % (5xx)',
+    // 4xx stays separate (expired tokens / client errors). A GraphQL failure is
+    // an HTTP 200 with an errors[] entry, so the log-based SearchErrorLogs metric
+    // is part of the numerator. Lambda invocations, not the API Gateway count
+    // (which includes preflights), are the denominator.
+    expression: '100 * (m2 + m4) / m3',
+    usingMetrics: { m2: serverErrors, m3: invocations, m4: graphqlErrors },
+    label: 'error rate % (5xx + GraphQL)',
     period: cdk.Duration.minutes(5),
   });
 
@@ -388,14 +415,18 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
         '**App** · GraphQL API behind Cognito · DB direct with Decodo fallback · interactive p50 < 200 ms · search p99 < 8 s'
       ),
     ],
+    [alarmStatus(props.alarms)],
     [
       new cloudwatch.GraphWidget({
         title: 'Latency — API percentiles and backend time',
-        left: [latencyP50, latencyP90, latencyP99, backendP90],
-        leftYAxis: { min: 0, label: 'ms' },
-        // Searches take 2-6 s (DB direct, ~6 s through Decodo), so the 1 s
-        // "flow" limit applies to the interactive majority, not to the tail.
-        leftAnnotations: [{ value: 8000, label: 'search p99 budget', color: AMBER }],
+        // Interactive calls and searches have different budgets; two axes keep
+        // the 8 s search tail from flattening the 10-300 ms interactive curves.
+        left: [latencyP50, latencyP90],
+        right: [latencyP99, backendP90],
+        leftYAxis: { min: 0, max: 1000, label: 'ms (interactive)' },
+        rightYAxis: { min: 0, max: 8000, label: 'ms (search)' },
+        leftAnnotations: [{ value: 200, label: 'interactive SLO', color: GREEN }],
+        rightAnnotations: [{ value: 8000, label: 'search p99 budget', color: AMBER }],
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
@@ -414,32 +445,31 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     [
       new cloudwatch.GraphWidget({
         title: 'Traffic — requests',
-        left: [requests],
+        left: [requests, invocations],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0, label: 'requests' },
-        legendPosition: cloudwatch.LegendPosition.HIDDEN,
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.SingleValueWidget({
         title: 'Traffic — requests (last hour)',
         metrics: [requestsPerHour],
-        sparkline: true,
+        sparkline: false,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
       }),
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Errors — 4xx, 5xx and implicit failures (DB refused, Decodo served)',
-        left: [clientErrors, serverErrors, fallbacks],
+        title: 'Errors — 4xx, 5xx, GraphQL errors and fallbacks',
+        left: [clientErrors, serverErrors, graphqlErrors, fallbacks],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0 },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.GaugeWidget({
-        title: 'Errors — server error rate',
+        title: 'Errors — error rate',
         metrics: [errorRate],
         leftYAxis: { min: 0, max: 100 },
         annotations: [
@@ -461,29 +491,13 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.SingleValueWidget({
-        title: 'Saturation — DLQ messages (current)',
-        metrics: [dlqDepth],
+        title: 'Saturation — DLQ oldest message age',
+        metrics: [dlqAge],
         sparkline: false,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
       }),
     ],
-    [
-      new cloudwatch.GraphWidget({
-        title: 'Notifications — SES sends and deliveries',
-        left: [sesSends, sesDeliveries],
-        leftYAxis: { min: 0, label: 'emails' },
-        width: GRAPH_WIDTH,
-        height: GRAPH_HEIGHT,
-      }),
-      new cloudwatch.TextWidget({
-        markdown:
-          'Alert emails go out through SES when a watched journey crosses its threshold. A healthy account shows sends ≈ deliveries and a bounce rate under 2 %. Until the first alert is sent, this panel stays empty.',
-        width: VALUE_WIDTH,
-        height: VALUE_HEIGHT,
-      }),
-    ],
-    [alarmStatus(props.alarms)],
     [
       logsTable('Diagnostics — recent API errors', props.apiLogGroup, [
         'fields @timestamp, message',
@@ -491,6 +505,23 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
         'sort @timestamp desc',
         'limit 10',
       ]),
+    ],
+    [
+      new cloudwatch.GraphWidget({
+        title: 'Notifications — SES sends, deliveries, bounces',
+        left: [sesSends, sesDeliveries, sesBounces, sesComplaints],
+        leftYAxis: { min: 0, label: 'emails' },
+        width: GRAPH_WIDTH,
+        height: GRAPH_HEIGHT,
+      }),
+      new cloudwatch.GaugeWidget({
+        title: 'Notifications — bounce rate',
+        metrics: [sesBounceRate],
+        leftYAxis: { min: 0, max: 5 },
+        annotations: [{ value: 2, label: 'limit', color: RED }],
+        width: VALUE_WIDTH,
+        height: VALUE_HEIGHT,
+      }),
     ],
   ];
 }
