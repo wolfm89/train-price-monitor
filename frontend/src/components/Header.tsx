@@ -96,13 +96,23 @@ const Header = () => {
   };
 
   useEffect(() => {
-    const intervalId = setInterval(() => {
-      if (user?.['custom:id']) {
+    const refresh = () => {
+      if (user?.['custom:id'] && document.visibilityState === 'visible') {
         reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
       }
-    }, 30000);
+    };
+    const intervalId = setInterval(refresh, 60_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
 
-    return () => clearInterval(intervalId);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    window.addEventListener('focus', refreshWhenVisible);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.removeEventListener('focus', refreshWhenVisible);
+    };
   }, [reexecuteUserNotificationsQuery, user]);
 
   useEffect(() => {

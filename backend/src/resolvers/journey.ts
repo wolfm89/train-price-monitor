@@ -299,6 +299,9 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
         journeyId: journey.id,
         userId: journey.userId,
         error: error instanceof Error ? error.message : error,
+        // The 2026-10-27 failures only had "Cannot read properties of undefined
+        // (reading 'split')" and could not be located after the journeys expired.
+        stack: error instanceof Error ? error.stack : undefined,
       });
     }
   }

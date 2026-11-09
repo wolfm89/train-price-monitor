@@ -53,18 +53,6 @@ export class ScraperStack extends cdk.Stack {
       writeCapacity: 5,
     });
 
-    // Transitional: CloudFormation rejects creating and deleting a GSI in one
-    // update, so the old index stays for the release that introduces ByDue. It is
-    // unused and removed by a follow-up deploy once ByDue is live everywhere.
-    table.addGlobalSecondaryIndex({
-      indexName: 'ByNextScrape',
-      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'next_scrape_at', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
-      readCapacity: 5,
-      writeCapacity: 5,
-    });
-
     // -------------------------------------------------------------------------
     // S3 bucket for Parquet price data
     // -------------------------------------------------------------------------
@@ -136,6 +124,9 @@ export class ScraperStack extends cdk.Stack {
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
         DB_MIN_GAP_MS: '2500',
         DB_MAX_IN_FLIGHT: '2',
+        // Start with the profile that is currently accepted; the transport still
+        // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
+        DB_TLS_PROFILE: 'tls13',
         // One target makes two calls in parallel; 45 s covers two 20 s attempts
         // plus backoff, and 250 s guard + 45 s + upload stays under the timeout.
         DB_TOTAL_BUDGET_MS: '45000',

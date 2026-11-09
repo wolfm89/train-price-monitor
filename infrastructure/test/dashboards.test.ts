@@ -83,12 +83,12 @@ describe('Dashboards', () => {
     const scraper = bodies.get('TrainPriceMonitor-Scraper') ?? '';
     for (const title of [
       'Latency — run duration',
-      'Traffic — scrapes per run (12 h)',
+      'Traffic — scrapes per run',
       'Errors — failed target scrapes',
       'Saturation — DB throttling',
-      'Data — price rows written per run',
-      'Storage — bucket size (30 d)',
-      'Storage — objects (30 d)',
+      'Data — price rows per run',
+      'Storage — bucket size (daily)',
+      'Storage — objects (daily)',
       'Alarms',
       'Diagnostics — recent failed target scrapes',
     ]) {
@@ -103,7 +103,7 @@ describe('Dashboards', () => {
     const app = bodies.get('TrainPriceMonitor-App') ?? '';
     for (const title of [
       'Latency — API percentiles',
-      'Traffic — requests per hour',
+      'Traffic — requests',
       'Errors — 4xx',
       'Saturation — Lambda concurrency',
       'Notifications — SES sends',

@@ -64,9 +64,7 @@ describe('ScraperStack', () => {
     const indexes = Object.values(template.findResources('AWS::DynamoDB::Table')).flatMap((table) =>
       (table.Properties.GlobalSecondaryIndexes ?? []).map((index: { IndexName: string }) => index.IndexName)
     );
-    // ByNextScrape is transitional: CloudFormation cannot create and delete a GSI
-    // in one update.
-    expect(indexes).toEqual(expect.arrayContaining(['ByDue', 'ByNextScrape']));
+    expect(indexes).toEqual(['ByDue']);
   });
 
   test('creates the five poller alarms and their log metrics', () => {

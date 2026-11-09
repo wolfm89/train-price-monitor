@@ -82,19 +82,37 @@ export interface ScraperDashboardProps {
 /** Latency / traffic / errors / saturation for the data pipeline. */
 export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget[][] {
   // Lambda's own Duration metric is the run length; no custom metric needed.
-  const runMsP50 = props.pollerFunction.metricDuration({ period: cdk.Duration.minutes(15), statistic: 'p50' });
-  const runMsP90 = props.pollerFunction.metricDuration({ period: cdk.Duration.minutes(15), statistic: 'p90' });
-  const runMsMax = props.pollerFunction.metricDuration({ period: cdk.Duration.minutes(15), statistic: 'Maximum' });
-  const scrapes = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Sum');
+  const runMsP50 = props.pollerFunction
+    .metricDuration({ period: cdk.Duration.minutes(15), statistic: 'p50' })
+    .with({ label: 'run p50' });
+  const runMsP90 = props.pollerFunction
+    .metricDuration({ period: cdk.Duration.minutes(15), statistic: 'p90' })
+    .with({ label: 'run p90' });
+  const runMsMax = props.pollerFunction
+    .metricDuration({ period: cdk.Duration.minutes(15), statistic: 'Maximum' })
+    .with({ label: 'run max' });
+  // Average across the dashboard's aggregation window keeps this "per run" even
+  // when a 1-week view aggregates four 15-minute runs into one hour.
+  const scrapes = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Average').with({
+    label: 'scrapes per run',
+  });
   const scrapesPerHour = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.hours(1), 'Sum');
-  const failed = metric('TrainPriceMonitor', 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum');
-  const throttled = metric('TrainPriceMonitor', 'PollerThrottled', cdk.Duration.minutes(15), 'Sum');
-  const backlog = metric('TrainPriceMonitor', 'PollerBacklog', cdk.Duration.minutes(15), 'Maximum');
-  const rowsPerRun = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.minutes(15), 'Sum');
+  const failed = metric('TrainPriceMonitor', 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum').with({
+    label: 'failed scrapes',
+  });
+  const throttled = metric('TrainPriceMonitor', 'PollerThrottled', cdk.Duration.minutes(15), 'Sum').with({
+    label: 'throttled calls',
+  });
+  const backlog = metric('TrainPriceMonitor', 'PollerBacklog', cdk.Duration.minutes(15), 'Maximum').with({
+    label: 'backlog (1 = behind)',
+  });
+  const rowsPerRun = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.minutes(15), 'Average').with({
+    label: 'rows per run',
+  });
   const rowsPerHour = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.hours(1), 'Sum');
 
-  // S3 publishes storage metrics once per day, so this block has its own
-  // 30-day window instead of the dashboard's 48 hours.
+  // S3 publishes storage metrics once per day. The graph follows the dashboard's
+  // selected range (one point per day), so it never shows a different time frame.
   const bucketMetric = (name: string, storageType: string): cloudwatch.Metric =>
     new cloudwatch.Metric({
       namespace: 'AWS/S3',
@@ -103,9 +121,9 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       period: cdk.Duration.days(1),
       statistic: 'Average',
     });
-  const storageStandard = bucketMetric('BucketSizeBytes', 'StandardStorage');
-  const storageIa = bucketMetric('BucketSizeBytes', 'StandardIAStorage');
-  const objectCount = bucketMetric('NumberOfObjects', 'AllStorageTypes');
+  const storageStandard = bucketMetric('BucketSizeBytes', 'StandardStorage').with({ label: 'Standard' });
+  const storageIa = bucketMetric('BucketSizeBytes', 'StandardIAStorage').with({ label: 'Standard-IA' });
+  const objectCount = bucketMetric('NumberOfObjects', 'AllStorageTypes').with({ label: 'objects' });
   // Keep bytes: CloudWatch then formats the value as GB/MB on its own. Dividing
   // to MiB kept the inherited byte unit and rendered "1.66 kB".
   const storageTotal = new cloudwatch.MathExpression({
@@ -177,13 +195,11 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       new cloudwatch.GraphWidget({
         // Bars are only readable while the window holds a handful of runs; 48 h at
         // 15-minute bars collapses into one solid block.
-        title: 'Traffic — scrapes per run (12 h)',
+        title: 'Traffic — scrapes per run',
         left: [scrapes],
-        view: cloudwatch.GraphWidgetView.BAR,
+        view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0, label: 'scrapes' },
         leftAnnotations: [{ value: props.batchSize, label: 'batch capacity', color: GREEN }],
-        start: '-PT12H',
-        legendPosition: cloudwatch.LegendPosition.HIDDEN,
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
@@ -199,8 +215,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       new cloudwatch.GraphWidget({
         title: 'Errors — failed target scrapes and pipeline errors',
         left: [failed, pipelineErrors],
-        view: cloudwatch.GraphWidgetView.BAR,
-        stacked: true,
+        view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0 },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
@@ -241,9 +256,9 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Data — price rows written per run',
+        title: 'Data — price rows per run',
         left: [rowsPerRun],
-        view: cloudwatch.GraphWidgetView.BAR,
+        view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0, label: 'rows' },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
@@ -258,11 +273,10 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Storage — bucket size (30 d)',
+        title: 'Storage — bucket size (daily)',
         left: [storageStandard, storageIa],
         stacked: true,
         leftYAxis: { min: 0, label: 'bytes' },
-        start: '-P30D',
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
@@ -276,10 +290,9 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Storage — objects (30 d)',
+        title: 'Storage — objects (daily)',
         left: [objectCount],
         leftYAxis: { min: 0, label: 'objects' },
-        start: '-P30D',
         legendPosition: cloudwatch.LegendPosition.HIDDEN,
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
@@ -313,29 +326,52 @@ export interface AppDashboardProps {
 
 /** Latency / traffic / errors / saturation for the user-facing API. */
 export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
-  const latencyP50 = props.api.metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p50' });
-  const latencyP90 = props.api.metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' });
-  const latencyP99 = props.api.metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p99' });
-  const backendP90 = props.api.metricIntegrationLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' });
-  const requests = props.api.metricCount({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
+  const latencyP50 = props.api
+    .metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p50' })
+    .with({ label: 'Latency p50' });
+  const latencyP90 = props.api
+    .metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' })
+    .with({ label: 'Latency p90' });
+  const latencyP99 = props.api
+    .metricLatency({ period: cdk.Duration.minutes(5), statistic: 'p99' })
+    .with({ label: 'Latency p99' });
+  const backendP90 = props.api
+    .metricIntegrationLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' })
+    .with({ label: 'Integration p90' });
+  const requests = props.api
+    .metricCount({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+    .with({ label: 'API requests' });
   const requestsPerHour = props.api.metricCount({ period: cdk.Duration.hours(1), statistic: 'Sum' });
-  const requestsPerMinute = props.api.metricCount({ period: cdk.Duration.minutes(1), statistic: 'Sum' });
-  const clientErrors = props.api.metricClientError({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
-  const serverErrors = props.api.metricServerError({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
-  const fallbacks = metric('TrainPriceMonitor', 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum');
-
-  const concurrency = props.apiFunction.metric('ConcurrentExecutions', {
-    period: cdk.Duration.minutes(5),
-    statistic: 'Maximum',
-  });
-  const throttles = props.apiFunction.metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' });
-  const dlqDepth = props.dlq.metricApproximateNumberOfMessagesVisible({
-    period: cdk.Duration.minutes(5),
-    statistic: 'Maximum',
+  const clientErrors = props.api
+    .metricClientError({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+    .with({ label: '4xx (client/token)' });
+  const serverErrors = props.api
+    .metricServerError({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+    .with({ label: '5xx' });
+  const fallbacks = metric('TrainPriceMonitor', 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum').with({
+    label: 'DB refused (Decodo)',
   });
 
-  const sesSends = metric('AWS/SES', 'Send', cdk.Duration.minutes(5), 'Sum');
-  const sesDeliveries = metric('AWS/SES', 'Delivery', cdk.Duration.minutes(5), 'Sum');
+  const concurrency = props.apiFunction
+    .metric('ConcurrentExecutions', {
+      period: cdk.Duration.minutes(5),
+      statistic: 'Maximum',
+    })
+    .with({ label: 'API concurrency' });
+  const throttles = props.apiFunction
+    .metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+    .with({ label: 'API throttles' });
+  const dlqDepth = props.dlq
+    .metricApproximateNumberOfMessagesVisible({
+      period: cdk.Duration.minutes(5),
+      statistic: 'Maximum',
+    })
+    .with({ label: 'DLQ messages' });
+
+  const sesSends = metric('AWS/SES', 'Send', cdk.Duration.minutes(5), 'Sum').with({ label: 'SES sends' });
+  const sesDeliveries = metric('AWS/SES', 'Delivery', cdk.Duration.minutes(5), 'Sum').with({
+    label: 'SES deliveries',
+  });
 
   const errorRate = new cloudwatch.MathExpression({
     // Server errors only: the 4xx here are expired-token and preflight noise from
@@ -364,7 +400,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.GaugeWidget({
-        title: 'Latency — p50 now (interactive calls)',
+        title: 'Latency — p50 (current period)',
         metrics: [latencyP50],
         leftYAxis: { min: 0, max: 1000 },
         annotations: [
@@ -377,17 +413,17 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Traffic — requests per hour',
-        left: [requestsPerHour],
-        view: cloudwatch.GraphWidgetView.BAR,
+        title: 'Traffic — requests',
+        left: [requests],
+        view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0, label: 'requests' },
         legendPosition: cloudwatch.LegendPosition.HIDDEN,
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.SingleValueWidget({
-        title: 'Traffic — requests per minute now',
-        metrics: [requestsPerMinute],
+        title: 'Traffic — requests (last hour)',
+        metrics: [requestsPerHour],
         sparkline: true,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
@@ -397,8 +433,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
       new cloudwatch.GraphWidget({
         title: 'Errors — 4xx, 5xx and implicit failures (DB refused, Decodo served)',
         left: [clientErrors, serverErrors, fallbacks],
-        view: cloudwatch.GraphWidgetView.BAR,
-        stacked: true,
+        view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0 },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
@@ -426,7 +461,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.SingleValueWidget({
-        title: 'Saturation — DLQ messages now',
+        title: 'Saturation — DLQ messages (current)',
         metrics: [dlqDepth],
         sparkline: false,
         width: VALUE_WIDTH,

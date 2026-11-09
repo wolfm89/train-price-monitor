@@ -83,9 +83,12 @@ export class Backend extends Construct {
       SES_FROM_EMAIL: sesFromEmail,
       NODE_OPTIONS: '--enable-source-maps',
       DEPLOY_VERSION: 'v15',
-      // DB is reached directly with a Firefox-imitating HTTP client; when DB
-      // throttles the environment the request falls back to Decodo. Name of the
-      // SSM SecureString holding the Decodo key; the value itself is never in the
+      // Start with the profile that is currently accepted; the transport still
+      // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
+      DB_TLS_PROFILE: 'tls13',
+      // DB is reached directly with a browser-like TLS client; when DB throttles
+      // the environment the request falls back to Decodo. Name of the SSM
+      // SecureString holding the Decodo key; the value itself is never in the
       // template (see decodo.ts and shared/db-fetch.ts).
       DECODO_API_KEY_PARAM: decodoApiKeyParamName(this),
     };
@@ -179,6 +182,9 @@ export class Backend extends Construct {
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: apigateway.Cors.DEFAULT_HEADERS,
         allowCredentials: true,
+        // Without this the browser re-preflights every polled GraphQL request,
+        // doubling the API Gateway count.
+        maxAge: cdk.Duration.minutes(10),
       },
       deployOptions: {
         accessLogDestination: new apigateway.LogGroupLogDestination(logGroup),
