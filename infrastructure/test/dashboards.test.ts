@@ -48,8 +48,10 @@ function synth(): Template {
     widgets: appWidgets({
       api,
       apiFunction: fn,
+      refresherFunction: fn,
       dlq: new sqs.Queue(stack, 'Dlq'),
       apiLogGroup: new cdk.aws_logs.LogGroup(stack, 'ApiLogs'),
+      refresherLogGroup: new cdk.aws_logs.LogGroup(stack, 'RefresherLogs'),
       alarms: [alarm],
     }),
   });
@@ -82,7 +84,7 @@ describe('Dashboards', () => {
 
     const scraper = bodies.get('TrainPriceMonitor-Scraper') ?? '';
     for (const title of [
-      'Latency — run duration',
+      'Latency — poller, hydrator and compactor duration',
       'Traffic — scrapes per run',
       'Errors — failed target scrapes',
       'Saturation — DB throttling',
@@ -105,10 +107,10 @@ describe('Dashboards', () => {
       'Latency — API percentiles',
       'Traffic — requests',
       'Errors — 4xx',
-      'Saturation — Lambda concurrency',
+      'Saturation — refresher duration',
       'Notifications — SES sends',
       'Alarms',
-      'Diagnostics — recent API errors',
+      'Diagnostics — recent API and refresher errors',
     ]) {
       expect(app).toContain(title);
     }

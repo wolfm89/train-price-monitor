@@ -56,10 +56,14 @@ function header(markdown: string): cloudwatch.TextWidget {
   return new cloudwatch.TextWidget({ markdown, width: FULL, height: 2 });
 }
 
-function logsTable(title: string, logGroup: logs.ILogGroup, queryLines: string[]): cloudwatch.LogQueryWidget {
+function logsTable(
+  title: string,
+  logGroups: logs.ILogGroup | logs.ILogGroup[],
+  queryLines: string[]
+): cloudwatch.LogQueryWidget {
   return new cloudwatch.LogQueryWidget({
     title,
-    logGroupNames: [logGroup.logGroupName],
+    logGroupNames: (Array.isArray(logGroups) ? logGroups : [logGroups]).map((group) => group.logGroupName),
     queryLines,
     view: cloudwatch.LogQueryVisualizationType.TABLE,
     width: FULL,
@@ -91,20 +95,50 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   const runMsMax = props.pollerFunction
     .metricDuration({ period: cdk.Duration.minutes(15), statistic: 'Maximum' })
     .with({ label: 'run max' });
-  // Average across the dashboard's aggregation window keeps this "per run" even
-  // when a 1-week view aggregates four 15-minute runs into one hour.
-  const scrapes = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Average').with({
+  const hydratorMax = props.hydratorFunction
+    .metricDuration({ period: cdk.Duration.minutes(15), statistic: 'Maximum' })
+    .with({ label: 'hydrator max' });
+  const compactorMax = props.compactorFunction
+    .metricDuration({ period: cdk.Duration.minutes(15), statistic: 'Maximum' })
+    .with({ label: 'compactor max' });
+  // The log filter emits one datapoint per scraped target, so Sum is the target
+  // count and Average would always be 1.0. Divide by the number of runs to keep
+  // the value meaningful at any dashboard aggregation.
+  const scrapes = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Sum');
+  const pollerInvocations = props.pollerFunction.metricInvocations({
+    period: cdk.Duration.minutes(15),
+    statistic: 'Sum',
+  });
+  const scrapesPerRun = new cloudwatch.MathExpression({
+    expression: 'FILL(m1, 0) / IF(m2 > 0, m2, 1)',
+    usingMetrics: { m1: scrapes, m2: pollerInvocations },
     label: 'scrapes per run',
+    period: cdk.Duration.minutes(15),
   });
   const scrapesPerHour = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.hours(1), 'Sum');
-  const failed = metric('TrainPriceMonitor', 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum').with({
-    label: 'failed scrapes',
-  });
-  const throttled = metric('TrainPriceMonitor', 'PollerThrottled', cdk.Duration.minutes(15), 'Sum').with({
-    label: 'throttled calls',
-  });
+  const failed = metric('TrainPriceMonitor', 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum');
+  const throttled = metric('TrainPriceMonitor', 'PollerThrottled', cdk.Duration.minutes(15), 'Sum');
+  const aborted = metric('TrainPriceMonitor', 'PollerAborted', cdk.Duration.minutes(15), 'Sum');
   const backlog = metric('TrainPriceMonitor', 'PollerBacklog', cdk.Duration.minutes(15), 'Maximum').with({
     label: 'backlog (1 = behind)',
+  });
+  const failedFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(failedCount, 0)',
+    usingMetrics: { failedCount: failed },
+    label: 'failed scrapes',
+    period: cdk.Duration.minutes(15),
+  });
+  const throttledFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(throttledCount, 0)',
+    usingMetrics: { throttledCount: throttled },
+    label: 'throttled calls',
+    period: cdk.Duration.minutes(15),
+  });
+  const abortedFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(abortedCount, 0)',
+    usingMetrics: { abortedCount: aborted },
+    label: 'batch aborts',
+    period: cdk.Duration.minutes(15),
   });
   const rowsPerRun = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.minutes(15), 'Average').with({
     label: 'rows per run',
@@ -127,14 +161,14 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   // Keep bytes: CloudWatch then formats the value as GB/MB on its own. Dividing
   // to MiB kept the inherited byte unit and rendered "1.66 kB".
   const storageTotal = new cloudwatch.MathExpression({
-    expression: 'm1 + m2',
+    expression: 'FILL(m1, 0) + FILL(m2, 0)',
     usingMetrics: { m1: storageStandard, m2: storageIa },
     label: 'storage',
     period: cdk.Duration.days(1),
   });
 
   const pipelineErrors = new cloudwatch.MathExpression({
-    expression: 'm1 + m2 + m3',
+    expression: 'FILL(m1, 0) + FILL(m2, 0) + FILL(m3, 0)',
     usingMetrics: {
       m1: props.pollerFunction.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
       m2: props.hydratorFunction.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
@@ -146,7 +180,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
 
   // Failure rate over the visible window: failures / attempts.
   const failureRate = new cloudwatch.MathExpression({
-    expression: '100 * m1 / (m1 + m2)',
+    expression: '100 * FILL(m1, 0) / IF((FILL(m1, 0) + FILL(m2, 0)) > 0, FILL(m1, 0) + FILL(m2, 0), 1)',
     usingMetrics: { m1: failed, m2: scrapes },
     label: 'failure rate %',
     period: cdk.Duration.minutes(15),
@@ -155,7 +189,9 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   // The schedule table is provisioned at 5 WCU; this is the most constrained
   // resource of the pipeline, so it is the saturation headline.
   const writeUtilization = new cloudwatch.MathExpression({
-    expression: '100 * m1 / (5 * 900)',
+    // PERIOD(m1) keeps the denominator equal to the dashboard's aggregation
+    // window; hardcoding 900 s inflated the value 4x on a 1-week view.
+    expression: '100 * FILL(m1, 0) / (5 * PERIOD(m1))',
     usingMetrics: {
       m1: props.scheduleTable.metricConsumedWriteCapacityUnits({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
     },
@@ -168,8 +204,8 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     [alarmStatus(props.alarms)],
     [
       new cloudwatch.GraphWidget({
-        title: 'Latency — run duration',
-        left: [runMsP50, runMsP90, runMsMax],
+        title: 'Latency — poller, hydrator and compactor duration',
+        left: [runMsP50, runMsP90, runMsMax, hydratorMax, compactorMax],
         leftYAxis: { min: 0, label: 'ms' },
         leftAnnotations: [
           { value: RUN_ABORT_MS, label: 'abort', color: AMBER },
@@ -197,7 +233,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
         // Bars are only readable while the window holds a handful of runs; 48 h at
         // 15-minute bars collapses into one solid block.
         title: 'Traffic — scrapes per run',
-        left: [scrapes],
+        left: [scrapesPerRun],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0, label: 'scrapes' },
         leftAnnotations: [{ value: props.batchSize, label: 'batch capacity', color: GREEN }],
@@ -215,7 +251,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     [
       new cloudwatch.GraphWidget({
         title: 'Errors — failed target scrapes and pipeline errors',
-        left: [failed, pipelineErrors],
+        left: [failedFilled, pipelineErrors],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0 },
         width: GRAPH_WIDTH,
@@ -224,7 +260,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       new cloudwatch.GaugeWidget({
         title: 'Errors — failure rate',
         metrics: [failureRate],
-        leftYAxis: { min: 0, max: 100 },
+        leftYAxis: { min: 0, max: 25 },
         annotations: [
           { value: 5, label: 'elevated', color: AMBER },
           { value: 20, label: 'degraded', color: RED },
@@ -235,8 +271,8 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Saturation — DB throttling and backlog',
-        left: [throttled],
+        title: 'Saturation — DB throttling, batch aborts and backlog',
+        left: [throttledFilled, abortedFilled],
         right: [backlog],
         leftYAxis: { min: 0, label: 'throttled calls' },
         rightYAxis: { min: 0, max: 1, label: 'backlog (1 = behind)' },
@@ -319,8 +355,10 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
 export interface AppDashboardProps {
   api: apigateway.RestApi;
   apiFunction: lambda.IFunction;
+  refresherFunction: lambda.IFunction;
   dlq: sqs.IQueue;
   apiLogGroup: logs.ILogGroup;
+  refresherLogGroup: logs.ILogGroup;
   alarms: cloudwatch.IAlarm[];
 }
 
@@ -338,13 +376,18 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   const backendP90 = props.api
     .metricIntegrationLatency({ period: cdk.Duration.minutes(5), statistic: 'p90' })
     .with({ label: 'Integration p90' });
+  const latencyMax = props.api
+    .metricLatency({ period: cdk.Duration.minutes(5), statistic: 'Maximum' })
+    .with({ label: 'Latency max' });
   const requests = props.api
     .metricCount({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
     .with({ label: 'API Gateway requests' });
-  const requestsPerHour = props.api.metricCount({ period: cdk.Duration.hours(1), statistic: 'Sum' });
   const invocations = props.apiFunction
     .metricInvocations({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
     .with({ label: 'GraphQL invocations' });
+  const refresherInvocations = props.refresherFunction
+    .metricInvocations({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+    .with({ label: 'Watchlist refreshes' });
   const clientErrors = props.api
     .metricClientError({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
     .with({ label: '4xx (client/token)' });
@@ -360,16 +403,42 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   const graphqlErrors = metric('TrainPriceMonitor', 'SearchErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
     label: 'GraphQL errors',
   });
+  const refresherErrors = metric('TrainPriceMonitor', 'RefresherErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
+    label: 'Refresher errors',
+  });
+  const graphqlErrorsFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(graphqlErrorCount, 0)',
+    usingMetrics: { graphqlErrorCount: graphqlErrors },
+    label: 'GraphQL errors',
+    period: cdk.Duration.minutes(5),
+  });
+  const refresherErrorsFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(refresherErrorCount, 0)',
+    usingMetrics: { refresherErrorCount: refresherErrors },
+    label: 'Refresher errors',
+    period: cdk.Duration.minutes(5),
+  });
+  const fallbacksFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(fallbackCount, 0)',
+    usingMetrics: { fallbackCount: fallbacks },
+    label: 'DB refused (Decodo)',
+    period: cdk.Duration.minutes(5),
+  });
 
-  const concurrency = props.apiFunction
-    .metric('ConcurrentExecutions', {
-      period: cdk.Duration.minutes(5),
-      statistic: 'Maximum',
-    })
-    .with({ label: 'API concurrency' });
-  const throttles = props.apiFunction
-    .metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
-    .with({ label: 'API throttles' });
+  // Unreserved concurrency (1-3) is not a saturation limit; the refresher's
+  // 120 s timeout and the DLQ are the real capacity signals.
+  const refresherDurationMax = props.refresherFunction
+    .metricDuration({ period: cdk.Duration.minutes(5), statistic: 'Maximum' })
+    .with({ label: 'refresher max duration' });
+  const throttles = new cloudwatch.MathExpression({
+    expression: 'FILL(m1, 0) + FILL(m2, 0)',
+    usingMetrics: {
+      m1: props.apiFunction.metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
+      m2: props.refresherFunction.metricThrottles({ period: cdk.Duration.minutes(5), statistic: 'Sum' }),
+    },
+    label: 'Lambda throttles',
+    period: cdk.Duration.minutes(5),
+  });
   const dlqDepth = props.dlq
     .metricApproximateNumberOfMessagesVisible({
       period: cdk.Duration.minutes(5),
@@ -392,7 +461,8 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     label: 'SES complaints',
   });
   const sesBounceRate = new cloudwatch.MathExpression({
-    expression: '100 * m1 / m2',
+    // Avoid 0/0 when no alert email has been sent yet.
+    expression: '100 * FILL(m1, 0) / IF(m2 > 0, m2, 1)',
     usingMetrics: { m1: sesBounces, m2: sesSends },
     label: 'bounce rate %',
     period: cdk.Duration.minutes(5),
@@ -403,7 +473,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     // an HTTP 200 with an errors[] entry, so the log-based SearchErrorLogs metric
     // is part of the numerator. Lambda invocations, not the API Gateway count
     // (which includes preflights), are the denominator.
-    expression: '100 * (m2 + m4) / m3',
+    expression: '100 * (FILL(m2, 0) + FILL(m4, 0)) / IF(m3 > 0, m3, 1)',
     usingMetrics: { m2: serverErrors, m3: invocations, m4: graphqlErrors },
     label: 'error rate % (5xx + GraphQL)',
     period: cdk.Duration.minutes(5),
@@ -421,8 +491,8 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
         title: 'Latency — API percentiles and backend time',
         // Interactive calls and searches have different budgets; two axes keep
         // the 8 s search tail from flattening the 10-300 ms interactive curves.
-        left: [latencyP50, latencyP90],
-        right: [latencyP99, backendP90],
+        left: [latencyP50, latencyP90, backendP90],
+        right: [latencyP99, latencyMax],
         leftYAxis: { min: 0, max: 1000, label: 'ms (interactive)' },
         rightYAxis: { min: 0, max: 8000, label: 'ms (search)' },
         leftAnnotations: [{ value: 200, label: 'interactive SLO', color: GREEN }],
@@ -444,16 +514,19 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Traffic — requests',
+        title: 'Traffic — requests and watchlist refreshes',
         left: [requests, invocations],
+        right: [refresherInvocations],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0, label: 'requests' },
+        rightYAxis: { min: 0, max: 5, label: 'refreshes' },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.SingleValueWidget({
-        title: 'Traffic — requests (last hour)',
-        metrics: [requestsPerHour],
+        title: 'Watchlist refreshes (selected range)',
+        metrics: [refresherInvocations],
+        setPeriodToTimeRange: true,
         sparkline: false,
         width: VALUE_WIDTH,
         height: VALUE_HEIGHT,
@@ -461,17 +534,17 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Errors — 4xx, 5xx, GraphQL errors and fallbacks',
-        left: [clientErrors, serverErrors, graphqlErrors, fallbacks],
+        title: 'Errors — 4xx, 5xx, GraphQL errors, refresher errors and fallbacks',
+        left: [clientErrors, serverErrors, graphqlErrorsFilled, refresherErrorsFilled, fallbacksFilled],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0 },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
       new cloudwatch.GaugeWidget({
-        title: 'Errors — error rate',
+        title: 'Errors — API error rate',
         metrics: [errorRate],
-        leftYAxis: { min: 0, max: 100 },
+        leftYAxis: { min: 0, max: 10 },
         annotations: [
           { value: 1, label: 'elevated', color: AMBER },
           { value: 5, label: 'degraded', color: RED },
@@ -482,11 +555,12 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Saturation — Lambda concurrency, throttles and dead-letter queue',
-        left: [concurrency, throttles],
-        right: [dlqDepth],
-        leftYAxis: { min: 0 },
-        rightYAxis: { min: 0, label: 'DLQ messages' },
+        title: 'Saturation — refresher duration, throttles and dead-letter queue',
+        left: [refresherDurationMax],
+        right: [throttles, dlqDepth],
+        leftYAxis: { min: 0, max: 120_000, label: 'refresher ms' },
+        rightYAxis: { min: 0, label: 'count' },
+        leftAnnotations: [{ value: 120_000, label: 'refresher timeout (120 s)', color: RED }],
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,
       }),
@@ -499,12 +573,11 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
       }),
     ],
     [
-      logsTable('Diagnostics — recent API errors', props.apiLogGroup, [
-        'fields @timestamp, message',
-        'filter level = "ERROR"',
-        'sort @timestamp desc',
-        'limit 10',
-      ]),
+      logsTable(
+        'Diagnostics — recent API and refresher errors',
+        [props.apiLogGroup, props.refresherLogGroup],
+        ['fields @timestamp, message', 'filter level = "ERROR"', 'sort @timestamp desc', 'limit 10']
+      ),
     ],
     [
       new cloudwatch.GraphWidget({

@@ -341,8 +341,10 @@ export class Backend extends Construct {
       widgets: appWidgets({
         api,
         apiFunction: lambdaFunction,
+        refresherFunction,
         dlq,
         apiLogGroup,
+        refresherLogGroup,
         alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled],
       }),
     });
