@@ -148,8 +148,9 @@ flowchart LR
 - **Frontend** – Vitest (`*.test.{ts,tsx}`); run `mise run //frontend:test` (or `npm test`).
 - **Infrastructure** – Jest with ts-jest (`*.test.ts`); run `mise run //infrastructure:test`.
   Use descriptive names, e.g. `test('SQS Queue Created')`.
-- **Backend** – Node's test runner for the backfill planner and a `ts-node` assertion script for the
-  journey matcher; run `npm test` in `backend`. CI runs it alongside `typecheck` + `lint`.
+- **Backend** – Node's test runner for the backfill planners and `ts-node` assertion scripts for the
+  journey matcher and the privacy helpers (retention, export, upload validation, CORS, log
+  redaction); run `npm test` in `backend`. CI runs it alongside `typecheck` + `lint`.
 - **Scraper** – Node's test runner via `tsx` for TTD tiering/jitter/order and Parquet serialization
   round-trips (`*.test.ts`); run `npm test` in `scraper`. CI runs it alongside `typecheck` + `lint`.
 - **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
@@ -171,6 +172,16 @@ flowchart LR
   local too, so the refresher and other API containers can serve a write up to 30 s late. This is
   accepted for the watchlist read path; do not add a shared cache without revisiting it.
 - IAM follows least privilege; the scraper grants only the table/bucket access each Lambda needs.
+- **Personal data** (see [docs/privacy/](docs/privacy/README.md)): the public privacy policy lives in
+  the `wolfm89/landing-page` repo and must match what the code does. Any change to what is stored,
+  logged, sent to a third party or kept in the browser needs a matching policy update.
+  - Never log email addresses, names, free-text search input, raw events, request bodies or tokens;
+    log pseudonymous IDs (`userId`, `journeyId`) and counts. Pass AWS error messages through
+    `redactEmails` (`backend/src/lib/redact.ts`) before logging them.
+  - Every per-user item must be covered by `exportMyData`, `deleteUser` and the TTL rules in
+    `backend/src/lib/retention.ts`. New item types get a `ttl` or an explicit reason why not.
+  - CORS is an allowlist (`CORS_ALLOWED_ORIGINS`, the API Gateway preflight and the 401 gateway
+    response); do not reintroduce `*`.
 - Pre-commit hooks enforce: trailing-whitespace, LF line endings, valid YAML/JSON, Prettier, ESLint.
   Install with `pip install pre-commit && pre-commit install`.
 - **Dependency scanning:** GitHub Dependabot security alerts and PRs are enabled at the repository
@@ -332,45 +343,48 @@ flowchart LR
 
 Environment variables (never commit values):
 
-| Variable                       | Module            | Description                                                                                       |
-| ------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`    | Backend           | S3 bucket name for profile images                                                                 |
-| `TPM_SQS_QUEUE_URL`            | Backend           | SQS queue URL for journey monitor updates                                                         |
-| `SES_FROM_EMAIL`               | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                                                   |
-| `FRONTEND_URL`                 | Backend (Lambda)  | Frontend base URL for notification links                                                          |
-| `LOCAL_DEV`                    | Backend           | `1` starts an HTTP server instead of the Lambda handler                                           |
-| `PORT`                         | Backend           | HTTP port for local dev server (default `4000`)                                                   |
-| `DB_MIN_GAP_MS`                | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)                                        |
-| `DB_MAX_IN_FLIGHT`             | Backend + Scraper | Concurrent DB requests (default `2`)                                                              |
-| `DB_MAX_ATTEMPTS`              | Backend + Scraper | Direct attempts per request (default `2`)                                                         |
-| `DB_RETRY_BACKOFF_MS`          | Backend + Scraper | Pause before a retry, times the attempt number (default `3000`)                                   |
-| `DB_REQUEST_TIMEOUT_MS`        | Backend + Scraper | Per-attempt timeout (default `20000`)                                                             |
-| `DB_BREAKER_THRESHOLD`         | Backend + Scraper | Consecutive failed requests that open the breaker (default `3`)                                   |
-| `DB_BREAKER_COOLDOWN_MS`       | Backend + Scraper | How long the breaker stays open (default `180000`)                                                |
-| `DB_TOTAL_BUDGET_MS`           | Backend + Scraper | Wall-clock budget per request, direct + fallback                                                  |
-| `DB_TLS_PROFILE`               | Backend + Scraper | First TLS profile: `tls13` in CDK (code default `firefox`), `safari`, `chrome`, `tls12`, `legacy` |
-| `DB_PROFILE_BLOCK_COOLDOWN_MS` | Backend + Scraper | How long a profile that returned `OPS_BLOCKED` is skipped (default 900000)                        |
-| `DB_TRANSPORT`                 | Backend           | `decodo` forces the Decodo fallback (kill switch)                                                 |
-| `DECODO_API_KEY`               | Backend           | Decodo key, literal (local dev; wins over `_PARAM`)                                               |
-| `DECODO_API_KEY_PARAM`         | Backend           | SSM SecureString name holding the Decodo key (injected by CDK)                                    |
-| `DECODO_KEY_TTL_MS`            | Backend           | How long a resolved Decodo key is cached (default 15 min)                                         |
-| `REACT_APP_GRAPHQL_ENDPOINT`   | Frontend          | API Gateway base URL                                                                              |
-| `CDK_APP_NAME`                 | Infrastructure    | Application name (overrides CDK context)                                                          |
-| `CDK_DOMAIN_NAME`              | Infrastructure    | Custom domain name for the deployment                                                             |
-| `CDK_SES_FROM_EMAIL`           | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                                                  |
-| `CDK_DECODO_API_KEY_PARAM`     | Infrastructure    | SSM SecureString name for the Decodo key                                                          |
-| `PUSHOVER_API_TOKEN`           | Infrastructure    | Pushover application token (repo secret; CI writes the SSM param)                                 |
-| `PUSHOVER_USER_KEY`            | Infrastructure    | Pushover user key (repo secret; CI writes the SSM param)                                          |
-| `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda   | SSM parameter name for the Pushover app token (injected by CDK)                                   |
-| `PUSHOVER_USER_PARAM`          | Alerting Lambda   | SSM parameter name for the Pushover user key (injected by CDK)                                    |
-| `CDK_SCRAPER_PAUSED`           | Infrastructure    | `1` disables the poller and hydrator schedules                                                    |
-| `SCRAPER_TABLE_NAME`           | Scraper           | DynamoDB schedule table (injected by CDK)                                                         |
-| `SCRAPER_BUCKET_NAME`          | Scraper           | S3 bucket for Parquet data (injected by CDK)                                                      |
-| `SCRAPER_BATCH_SIZE`           | Scraper           | Targets per poller run (default `10`, CDK sets `25`; 1 = 2 calls)                                 |
-| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper           | Days ahead to seed (default `60`)                                                                 |
-| `HYDRATOR_SEED_WINDOW_DAYS`    | Scraper           | Newest days re-seeded per nightly run (default `3`)                                               |
-| `HYDRATOR_FULL_SEED`           | Scraper           | `1` seeds the whole window and prunes beyond it (manual)                                          |
-| `AWS_ENDPOINT_URL`             | Scraper           | Local Floci endpoint (set by mise tasks)                                                          |
+| Variable                       | Module            | Description                                                                                                 |
+| ------------------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`    | Backend           | S3 bucket name for profile images                                                                           |
+| `TPM_SQS_QUEUE_URL`            | Backend           | SQS queue URL for journey monitor updates                                                                   |
+| `SES_FROM_EMAIL`               | Backend (Lambda)  | Sender address for SES emails (injected by CDK)                                                             |
+| `SES_SANDBOX`                  | Backend (Lambda)  | `false` turns off the sandbox-only per-user recipient identities (injected by CDK)                          |
+| `CORS_ALLOWED_ORIGINS`         | Backend           | Comma-separated browser origins allowed by CORS (CDK: the frontend; default: local dev server on port 3000) |
+| `FRONTEND_URL`                 | Backend (Lambda)  | Frontend base URL for notification links                                                                    |
+| `LOCAL_DEV`                    | Backend           | `1` starts an HTTP server instead of the Lambda handler                                                     |
+| `PORT`                         | Backend           | HTTP port for local dev server (default `4000`)                                                             |
+| `DB_MIN_GAP_MS`                | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)                                                  |
+| `DB_MAX_IN_FLIGHT`             | Backend + Scraper | Concurrent DB requests (default `2`)                                                                        |
+| `DB_MAX_ATTEMPTS`              | Backend + Scraper | Direct attempts per request (default `2`)                                                                   |
+| `DB_RETRY_BACKOFF_MS`          | Backend + Scraper | Pause before a retry, times the attempt number (default `3000`)                                             |
+| `DB_REQUEST_TIMEOUT_MS`        | Backend + Scraper | Per-attempt timeout (default `20000`)                                                                       |
+| `DB_BREAKER_THRESHOLD`         | Backend + Scraper | Consecutive failed requests that open the breaker (default `3`)                                             |
+| `DB_BREAKER_COOLDOWN_MS`       | Backend + Scraper | How long the breaker stays open (default `180000`)                                                          |
+| `DB_TOTAL_BUDGET_MS`           | Backend + Scraper | Wall-clock budget per request, direct + fallback                                                            |
+| `DB_TLS_PROFILE`               | Backend + Scraper | First TLS profile: `tls13` in CDK (code default `firefox`), `safari`, `chrome`, `tls12`, `legacy`           |
+| `DB_PROFILE_BLOCK_COOLDOWN_MS` | Backend + Scraper | How long a profile that returned `OPS_BLOCKED` is skipped (default 900000)                                  |
+| `DB_TRANSPORT`                 | Backend           | `decodo` forces the Decodo fallback (kill switch)                                                           |
+| `DECODO_API_KEY`               | Backend           | Decodo key, literal (local dev; wins over `_PARAM`)                                                         |
+| `DECODO_API_KEY_PARAM`         | Backend           | SSM SecureString name holding the Decodo key (injected by CDK)                                              |
+| `DECODO_KEY_TTL_MS`            | Backend           | How long a resolved Decodo key is cached (default 15 min)                                                   |
+| `REACT_APP_GRAPHQL_ENDPOINT`   | Frontend          | API Gateway base URL                                                                                        |
+| `CDK_APP_NAME`                 | Infrastructure    | Application name (overrides CDK context)                                                                    |
+| `CDK_DOMAIN_NAME`              | Infrastructure    | Custom domain name for the deployment                                                                       |
+| `CDK_SES_FROM_EMAIL`           | Infrastructure    | Sender email injected as Lambda `SES_FROM_EMAIL`                                                            |
+| `CDK_DECODO_API_KEY_PARAM`     | Infrastructure    | SSM SecureString name for the Decodo key                                                                    |
+| `PUSHOVER_API_TOKEN`           | Infrastructure    | Pushover application token (repo secret; CI writes the SSM param)                                           |
+| `PUSHOVER_USER_KEY`            | Infrastructure    | Pushover user key (repo secret; CI writes the SSM param)                                                    |
+| `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda   | SSM parameter name for the Pushover app token (injected by CDK)                                             |
+| `PUSHOVER_USER_PARAM`          | Alerting Lambda   | SSM parameter name for the Pushover user key (injected by CDK)                                              |
+| `CDK_SCRAPER_PAUSED`           | Infrastructure    | `1` disables the poller and hydrator schedules                                                              |
+| `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure    | `1` once SES production access is granted (repo variable); see `docs/privacy/email-and-ses.md`              |
+| `SCRAPER_TABLE_NAME`           | Scraper           | DynamoDB schedule table (injected by CDK)                                                                   |
+| `SCRAPER_BUCKET_NAME`          | Scraper           | S3 bucket for Parquet data (injected by CDK)                                                                |
+| `SCRAPER_BATCH_SIZE`           | Scraper           | Targets per poller run (default `10`, CDK sets `25`; 1 = 2 calls)                                           |
+| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper           | Days ahead to seed (default `60`)                                                                           |
+| `HYDRATOR_SEED_WINDOW_DAYS`    | Scraper           | Newest days re-seeded per nightly run (default `3`)                                                         |
+| `HYDRATOR_FULL_SEED`           | Scraper           | `1` seeds the whole window and prunes beyond it (manual)                                                    |
+| `AWS_ENDPOINT_URL`             | Scraper           | Local Floci endpoint (set by mise tasks)                                                                    |
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
 - Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).
@@ -380,6 +394,8 @@ Environment variables (never commit values):
 
 - [scraper/README.md](scraper/README.md) – Scraper architecture, Parquet schema, local Floci dev.
 - [infrastructure/README.md](infrastructure/README.md) – CDK stacks and mise deploy tasks.
+- [docs/privacy/README.md](docs/privacy/README.md) – Records of processing, processors, data-subject
+  requests, email/SES runbook.
 - [README.md](README.md) – Product overview, getting started, usage.
 - `CDK_APP_NAME`, `CDK_DOMAIN_NAME`, `CDK_SES_FROM_EMAIL` must be set before `cdk deploy`
   (env vars or `-c` context); missing values fail at synth time.

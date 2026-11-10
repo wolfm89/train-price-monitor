@@ -15,6 +15,7 @@ Train price monitoring WebApp that sends notifications to users when prices incr
 - [Environment Variables](#environment-variables)
 - [Usage](#usage)
 - [Technologies](#technologies)
+- [Privacy](#privacy)
 - [Contributing](#contributing)
 
 ## Features
@@ -26,6 +27,7 @@ Train price monitoring WebApp that sends notifications to users when prices incr
 - Automatic cleanup of price-alert notifications when a monitored journey expires
 - Background price scraper that collects historical fare data into Parquet on S3
 - Sign up and log in securely
+- Download a copy of your data or delete your account from the profile page
 - Responsive design for mobile and desktop
 
 > The `scraper/` module is an independent serverless pipeline (Hydrator → Poller → Compactor) that
@@ -86,24 +88,27 @@ The output-to-environment mappings are maintained in [`scripts/generate-local-en
 
 ## Environment Variables
 
-| Variable                     | Module            | Description                                                              |
-| ---------------------------- | ----------------- | ------------------------------------------------------------------------ |
-| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                        |
-| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                                |
-| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES notification emails                               |
-| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL injected into notification links                       |
-| `DECODO_API_KEY_PARAM`       | Backend           | SSM SecureString name holding the Decodo fallback key (injected by CDK)  |
-| `DB_MIN_GAP_MS`              | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)               |
-| `LOCAL_DEV`                  | Backend           | Set to `1` to start an HTTP server instead of exporting a Lambda handler |
-| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway endpoint URL                                                 |
-| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                                 |
-| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                                    |
-| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda env var                                  |
-| `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo fallback key                        |
-| `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the scraper's poller and hydrator schedules                 |
-| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB table for scrape schedule (injected by CDK)                     |
-| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet price data (injected by CDK)                       |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 90)                                |
+| Variable                     | Module            | Description                                                                      |
+| ---------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                                |
+| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                                        |
+| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES notification emails                                       |
+| `SES_SANDBOX`                | Backend (Lambda)  | `false` turns off the sandbox-only per-user SES recipient identities             |
+| `CORS_ALLOWED_ORIGINS`       | Backend           | Comma-separated origins allowed by CORS (default: local dev server on port 3000) |
+| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL injected into notification links                               |
+| `DECODO_API_KEY_PARAM`       | Backend           | SSM SecureString name holding the Decodo fallback key (injected by CDK)          |
+| `DB_MIN_GAP_MS`              | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)                       |
+| `LOCAL_DEV`                  | Backend           | Set to `1` to start an HTTP server instead of exporting a Lambda handler         |
+| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway endpoint URL                                                         |
+| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                                         |
+| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                                            |
+| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda env var                                          |
+| `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo fallback key                                |
+| `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the scraper's poller and hydrator schedules                         |
+| `CDK_SES_PRODUCTION_ACCESS`  | Infrastructure    | `1` once SES production access is granted (see `docs/privacy/`)                  |
+| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB table for scrape schedule (injected by CDK)                             |
+| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet price data (injected by CDK)                               |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 90)                                        |
 
 ## Usage
 
@@ -147,6 +152,14 @@ Infrastructure:
 - AWS CDK v2
 - AWS Cognito
 - Node.js 24
+
+## Privacy
+
+The hosted instance at [tpm.wolfgangmoser.eu](https://tpm.wolfgangmoser.eu) is covered by the
+[privacy policy](https://wolfgangmoser.eu/privacy-policy/) and the
+[legal notice](https://wolfgangmoser.eu/legal-notice/). The records of processing, the list of
+processors, the data-subject request runbook and the email/SES runbook are in
+[docs/privacy/](docs/privacy/README.md).
 
 ## Contributing
 
