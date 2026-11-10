@@ -32,7 +32,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
     onClose();
   };
 
-  const handleKeyPress = (event: React.KeyboardEvent) => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       handleSignUp();
     }
@@ -55,7 +55,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={givenName}
           onChange={(e) => setGivenName(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
           required
         />
         <TextField
@@ -66,7 +66,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={familyName}
           onChange={(e) => setFamilyName(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
         />
         <TextField
           margin="dense"
@@ -78,7 +78,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
             setEmail(e.target.value);
             setIsEmailTouched(true); // Set isEmailTouched to true when email input is changed
           }}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
           required
           error={isEmailTouched && !isEmailValid} // Show error only if email input has been touched and email is not valid
           helperText={isEmailTouched && !isEmailValid && 'Please enter a valid email address'} // Show helper text only if email input has been touched and email is not valid
@@ -90,7 +90,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
           required
         />
         <TextField
@@ -100,7 +100,7 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           fullWidth
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
           required
         />
       </DialogContent>

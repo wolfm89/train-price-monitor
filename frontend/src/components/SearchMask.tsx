@@ -32,6 +32,7 @@ import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { LocationSearchQuery } from '../api/location';
 import { SearchData } from './SearchResult';
+import { berlinWallTimeToDate, berlinWallTimeToIso } from '../utils/berlinTime';
 import {
   LoyaltyCardInput,
   AGE_GROUP_OPTIONS,
@@ -231,15 +232,15 @@ const SearchMask: React.FC<Props> = ({
     }
   }, [toData]);
 
+  // The DB timetable is German local time. Interpreting the picker in
+  // Europe/Berlin keeps the search correct when the device is elsewhere; using
+  // the device timezone shifted the requested departure by the offset.
   function createDateFromDayAndTime(day: string, time: string) {
-    const [year, month, date] = day.split('-').map(Number);
-    const [hours, minutes] = time.split(':').map(Number);
-
-    return new Date(year, month - 1, date, hours, minutes);
+    return berlinWallTimeToDate(day, time);
   }
 
   function createISODateString(day: string, time: string): string {
-    return createDateFromDayAndTime(day, time).toISOString();
+    return berlinWallTimeToIso(day, time);
   }
 
   const buildSearchOptions = (): JourneySearchOptions | undefined => {

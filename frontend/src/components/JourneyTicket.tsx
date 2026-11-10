@@ -61,6 +61,11 @@ const ticketSx = (theme: Theme) => ({
   boxShadow: `0 0 0 1px ${theme.palette.divider}`,
 });
 
+const highlightedTicketSx = (theme: Theme) => ({
+  boxShadow: `0 0 0 2px ${theme.palette.primary.main}, 0 0 0 6px ${alpha(theme.palette.primary.main, 0.18)}`,
+  transition: 'box-shadow 300ms ease-in-out',
+});
+
 const upperZoneSx = {
   position: 'relative',
   px: { xs: 1.5, sm: 2.5 },
@@ -486,9 +491,17 @@ export interface JourneyTicketProps {
   onOpenMenu: (el: HTMLElement, id: string) => void;
   loadingIds: Set<string>;
   showMenu?: boolean;
+  /** Briefly outlines the ticket after a notification link scrolled to it. */
+  highlighted?: boolean;
 }
 
-export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMenu = true }: JourneyTicketProps) {
+export default function JourneyTicket({
+  monitor,
+  onOpenMenu,
+  loadingIds,
+  showMenu = true,
+  highlighted = false,
+}: JourneyTicketProps) {
   const {
     id,
     limitPrice,
@@ -504,8 +517,8 @@ export default function JourneyTicket({ monitor, onOpenMenu, loadingIds, showMen
   } = monitor;
 
   return (
-    <Box sx={{ position: 'relative' }}>
-      <Paper elevation={0} sx={ticketSx}>
+    <Box id={id} sx={{ position: 'relative', scrollMarginTop: '88px' }}>
+      <Paper elevation={0} sx={[ticketSx, highlighted && highlightedTicketSx]}>
         {/* Upper zone */}
         <Box sx={upperZoneSx}>
           {showMenu && (

@@ -28,7 +28,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     onClose();
   };
 
-  const handleKeyPress = (event: React.KeyboardEvent) => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       handleLogin();
     }
@@ -46,7 +46,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           type="text"
           fullWidth
           onChange={(e) => setEmail(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
         />
         <TextField
           margin="dense"
@@ -55,7 +55,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
           type="password"
           fullWidth
           onChange={(e) => setPassword(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyDown}
         />
         <Link component={RouterLink} to="/forgot-password" color="inherit">
           Forgot password?

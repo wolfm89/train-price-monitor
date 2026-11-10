@@ -1,5 +1,6 @@
 import { authExchange } from '@urql/exchange-auth';
 import * as auth from '../utils/auth';
+import { isJwtExpired } from '../utils/jwt';
 import { Client, cacheExchange, fetchExchange } from 'urql';
 
 const apiGatewayEndpoint = `${process.env.REACT_APP_GRAPHQL_ENDPOINT!}graphql`;
@@ -31,8 +32,11 @@ const cognitoAuthExchange = authExchange(async (utils) => {
       token = await getJwtToken();
       if (!token) auth.signOut();
     },
-    willAuthError(_operation) {
-      return !token;
+    // Cognito ID tokens expire after 60 minutes. `willAuthError` runs before the
+    // request is sent, so refreshing here avoids a guaranteed 401 and the extra
+    // round-trip that `didAuthError` would need to recover from it.
+    willAuthError() {
+      return isJwtExpired(token);
     },
   };
 });
