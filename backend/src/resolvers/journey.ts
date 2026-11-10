@@ -22,6 +22,8 @@ import { NOTIFICATION_TYPES } from './notificationTypes';
 import { getJourneyMonitor } from './user';
 import { PricingOptions } from '../managers/DbHafasManager';
 import { LoyaltyCardData, validateLoyaltyCard } from '../lib/loyaltyCards';
+import { findMatchingJourney } from '../lib/journeyMatcher';
+import { requireInternal, requireUserAccess } from '../lib/auth';
 
 /**
  * Stop starting new journey refreshes past this point in a run, leaving headroom
@@ -190,10 +192,7 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
   args,
   context: GraphQLContext
 ): Promise<JourneyMonitor> => {
-  const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id: args.userId }).send();
-  if (!dbUser) {
-    throw new Error(`User with id ${args.userId} not found`);
-  }
+  await requireUserAccess(context, args.userId);
 
   const journeyMonitorId = uuidv4();
   const pricingSnapshot = extractPricingSnapshot(args.options);
@@ -257,6 +256,7 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
   _args,
   context: GraphQLContext
 ): Promise<number> => {
+  requireInternal(context);
   const startedAt = Date.now();
 
   const { Items: allJourneys } = await context.entities.TrainPriceMonitorTable.build(ScanCommand)
@@ -330,8 +330,19 @@ async function refreshJourneyMonitor(
   userId: string,
   journeyId: string
 ): Promise<JourneyMonitor> {
-  Logger.addPersistentLogAttributes({ userId: userId, journeyId: journeyId });
+  Logger.appendKeys({ userId, journeyId });
+  try {
+    return await refreshJourneyMonitorInner(context, userId, journeyId);
+  } finally {
+    Logger.removeKeys(['userId', 'journeyId']);
+  }
+}
 
+async function refreshJourneyMonitorInner(
+  context: GraphQLContext,
+  userId: string,
+  journeyId: string
+): Promise<JourneyMonitor> {
   const dbJourney = await context.entities.Journey.build(GetItemCommand).key({ userId: userId, id: journeyId }).send();
 
   if (!dbJourney.Item) {
@@ -449,17 +460,11 @@ async function refreshJourneyMonitor(
           ...storedPricingOptions,
         });
 
-        const candidates = result.journeys?.filter(
-          (j) => j.legs[0]?.origin?.id === fromStationId && j.legs[j.legs.length - 1]?.destination?.id === toStationId
-        );
-        const matchingJourney = candidates?.reduce<(typeof candidates)[number] | undefined>((best, j) => {
-          const jDep = new Date(j.legs[0]?.plannedDeparture ?? j.legs[0]?.departure ?? 0).getTime();
-          const jDiff = Math.abs(jDep - departure.getTime());
-          if (!best) return j;
-          const bestDep = new Date(best.legs[0]?.plannedDeparture ?? best.legs[0]?.departure ?? 0).getTime();
-          const bestDiff = Math.abs(bestDep - departure.getTime());
-          return jDiff < bestDiff ? j : best;
-        }, undefined);
+        const matchingJourney = findMatchingJourney(result.journeys ?? [], {
+          fromId: fromStationId,
+          toId: toStationId,
+          departure,
+        });
 
         if (matchingJourney) {
           await context.entities.Journey.build(UpdateItemCommand)
@@ -571,7 +576,17 @@ async function refreshJourneyMonitor(
         read: false,
         sent: false,
         timestamp: new Date().toISOString(),
-        data: JSON.stringify({ journeyId: journeyId }),
+        // Snapshot the email payload and the watchlist fallback. The journey or
+        // the notification can be deleted before the SQS worker runs; without a
+        // snapshot that expected miss throws and lands the message in the DLQ.
+        data: JSON.stringify({
+          journeyId,
+          from: journeyMonitor.from,
+          to: journeyMonitor.to,
+          price: newPrice,
+          limitPrice: dbJourney.Item.limitPrice,
+          expires: dbJourney.Item.expires,
+        }),
       })
       .send();
     context.cache.invalidate([{ typename: 'Notification' }]);
@@ -593,7 +608,10 @@ export const updateJourneyMonitor: NonNullable<MutationResolvers['updateJourneyM
   _parent,
   args,
   context: GraphQLContext
-): Promise<JourneyMonitor> => refreshJourneyMonitor(context, args.userId, args.journeyId);
+): Promise<JourneyMonitor> => {
+  await requireUserAccess(context, args.userId);
+  return refreshJourneyMonitor(context, args.userId, args.journeyId);
+};
 
 async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, userId: string, journeyId: string) {
   const { Items: priceAlertNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
@@ -630,7 +648,11 @@ async function sendNotificationEmailIfEnabled(context: GraphQLContext, userId: s
   const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id: userId }).send();
 
   if (!dbUser) {
-    throw new Error(`User with id ${userId} not found`);
+    // The user was deleted between the refresh and the email. The journeys are
+    // deleted with the account, so this is an expected race, not a reason to
+    // fail the whole refresh run.
+    Logger.warn('User not found while queuing notification email', { userId, notificationId });
+    return;
   }
   if (dbUser.emailNotificationsEnabled) {
     await context.sqs.sendEmailNotificationMessage(userId, notificationId);
@@ -649,8 +671,20 @@ export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyM
   { userId, journeyId }: { userId: string; journeyId: string },
   context: GraphQLContext
 ): Promise<JourneyMonitor> => {
-  Logger.addPersistentLogAttributes({ userId: userId, journeyId: journeyId });
+  await requireUserAccess(context, userId);
+  Logger.appendKeys({ userId, journeyId });
+  try {
+    return await deleteJourneyMonitorInner(context, userId, journeyId);
+  } finally {
+    Logger.removeKeys(['userId', 'journeyId']);
+  }
+};
 
+async function deleteJourneyMonitorInner(
+  context: GraphQLContext,
+  userId: string,
+  journeyId: string
+): Promise<JourneyMonitor> {
   const dbJourney = await context.entities.Journey.build(GetItemCommand).key({ userId: userId, id: journeyId }).send();
 
   if (!dbJourney.Item) {
@@ -693,4 +727,4 @@ export const deleteJourneyMonitor: NonNullable<MutationResolvers['deleteJourneyM
   Logger.info(`Deleted journey from database`);
 
   return journeyMonitor;
-};
+}

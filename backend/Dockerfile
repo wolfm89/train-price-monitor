@@ -19,9 +19,9 @@ FROM public.ecr.aws/lambda/nodejs:24
 COPY --from=deps /deps/node_modules ${LAMBDA_TASK_ROOT}/node_modules
 
 # Pre-built CJS bundle (produced by 'npm run build' in backend/). The station
-# index for autocomplete is bundled into it (backend/scripts/build-station-index.mjs).
+# index for autocomplete and the GraphQL SDL are bundled into it
+# (backend/scripts/build-station-index.mjs and build-schema.mjs), so the image
+# needs no runtime data files.
 COPY dist/main.js ${LAMBDA_TASK_ROOT}/
-# main.ts reads the SDL at startup, relative to the task root.
-COPY src/schema/schema.graphql ${LAMBDA_TASK_ROOT}/src/schema/schema.graphql
 
 CMD ["main.handler"]

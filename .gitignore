@@ -46,3 +46,6 @@ stats/
 
 # Generated station index for autocomplete (see backend/scripts/build-station-index.mjs)
 backend/src/stations/
+
+# Generated SDL bundled into the Lambda (see backend/scripts/build-schema.mjs)
+backend/src/schema/schema.generated.json

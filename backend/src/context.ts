@@ -5,6 +5,7 @@ import { DbHafasManager } from './managers/DbHafasManager';
 import dotenv from 'dotenv';
 import { SQSManager } from './managers/SQSManager';
 import SESManager from './managers/SESManager';
+import { AuthClaims, authClaimsFromRequest } from './lib/auth';
 
 dotenv.config();
 const TPM_SQS_QUEUE_URL = process.env.TPM_SQS_QUEUE_URL;
@@ -32,8 +33,24 @@ export type GraphQLContext = {
   sqs: SQSManager;
   ses: SESManager;
   dbHafas: DbHafasManager;
+  /** Verified Cognito claims, absent on the internal SQS path. */
+  auth?: AuthClaims;
+  /** True only for the SQS/EventBridge invocation that runs background work. */
+  isInternal: boolean;
 };
 
-export async function createContext(cache: Cache, _options?: { request?: Request }): Promise<GraphQLContext> {
-  return { cache, entities: { User, Notification, Journey, TrainPriceMonitorTable }, s3, sqs, ses, dbHafas };
+export async function createContext(
+  cache: Cache,
+  options?: { request?: Request; isInternal?: boolean }
+): Promise<GraphQLContext> {
+  return {
+    cache,
+    entities: { User, Notification, Journey, TrainPriceMonitorTable },
+    s3,
+    sqs,
+    ses,
+    dbHafas,
+    auth: authClaimsFromRequest(options?.request) ?? undefined,
+    isInternal: options?.isInternal ?? false,
+  };
 }

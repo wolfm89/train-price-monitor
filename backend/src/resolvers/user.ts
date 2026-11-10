@@ -7,9 +7,11 @@ import {
   DeleteItemCommand,
   QueryCommand,
   StoredJourney,
+  StoredUser,
 } from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
+import { assertUserAccess, requireAuth, requireUserAccess } from '../lib/auth';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import {
   User,
@@ -22,8 +24,9 @@ import {
   LoyaltyCardInput,
   AgeGroup,
 } from '../schema/generated/typeDefs.generated';
-import { NOTIFICATION_TYPES } from './notificationTypes';
+import { NOTIFICATION_TYPES, NotificationSkipError } from './notificationTypes';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { GraphQLError } from 'graphql';
 import { LoyaltyCardData, validateLoyaltyCard, VALID_AGE_GROUPS } from '../lib/loyaltyCards';
 import { LoyaltyCard, LoyaltyCardType } from '../schema/generated/typeDefs.generated';
 
@@ -144,6 +147,16 @@ export const userResolvers: UserResolvers = {
       (result, index): (JourneyExpiryNotification | JourneyStaleNotification | PriceAlertNotification)[] => {
         if (result.status === 'rejected') {
           const n = filteredNotifications[index];
+          if (result.reason instanceof NotificationSkipError) {
+            // Expected for an old notification whose journey is already gone;
+            // dropping it with a WARN keeps it out of the error alarm.
+            Logger.warn('Notification skipped', {
+              notificationId: n.id,
+              notificationType: n.type,
+              reason: result.reason.message,
+            });
+            return [];
+          }
           Logger.error('Failed to load notification', {
             error: result.reason,
             notificationId: n.id,
@@ -164,44 +177,60 @@ export const userResolvers: UserResolvers = {
     return notifications;
   },
   journeyMonitors: async (parent, args, context: GraphQLContext): Promise<JourneyMonitor[]> => {
-    Logger.addPersistentLogAttributes({ userId: parent.id });
-    const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
-      .entities(context.entities.Journey)
-      .query({ partition: `USER#${parent.id}`, range: { beginsWith: 'JOURNEY#' } })
-      .send();
-
-    if (!dbJourneys) {
-      return [];
+    Logger.appendKeys({ userId: parent.id });
+    try {
+      return await loadJourneyMonitors(parent.id, args, context);
+    } finally {
+      Logger.removeKeys(['userId']);
     }
-
-    const journeys: JourneyMonitor[] = (dbJourneys as StoredJourney[]).map(getJourneyMonitor);
-    journeys.sort(
-      (a: JourneyMonitor, b: JourneyMonitor) =>
-        (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
-    );
-
-    const limit = args.limit ?? undefined;
-    if (limit !== undefined) {
-      return journeys.slice(0, limit);
-    }
-    return journeys;
   },
 };
 
-export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context): Promise<User> => {
+async function loadJourneyMonitors(
+  userId: string,
+  args: { limit?: number | null },
+  context: GraphQLContext
+): Promise<JourneyMonitor[]> {
+  const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
+    .entities(context.entities.Journey)
+    .query({ partition: `USER#${userId}`, range: { beginsWith: 'JOURNEY#' } })
+    .send();
+
+  if (!dbJourneys) {
+    return [];
+  }
+
+  const journeys: JourneyMonitor[] = (dbJourneys as StoredJourney[]).map(getJourneyMonitor);
+  journeys.sort(
+    (a: JourneyMonitor, b: JourneyMonitor) =>
+      (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
+  );
+
+  const limit = args.limit ?? undefined;
+  if (limit !== undefined) {
+    return journeys.slice(0, limit);
+  }
+  return journeys;
+}
+
+export const userQuery: NonNullable<QueryResolvers['user']> = async (parent, args, context): Promise<User | null> => {
   const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id: args.id }).send();
   if (!dbUser) {
-    throw new Error('User not found in database');
+    // New accounts are created by the frontend right after signup, so a missing
+    // row is a normal state, not an error. Throwing here made the frontend treat
+    // the existence check as a failure on every first login.
+    return null;
   }
+  assertUserAccess(context, dbUser as StoredUser);
   return dbUser as unknown as User;
 };
 
 export const userProfilePicturePresignedUrlQuery: NonNullable<
   QueryResolvers['userProfilePicturePresignedUrl']
 > = async (_, { id }: { id: string }, context: GraphQLContext) => {
-  const { Item: dbUser } = await context.entities.User.build(GetItemCommand).key({ id }).send();
+  const dbUser = await requireUserAccess(context, id);
   let url: string | undefined = undefined;
-  if (dbUser?.profilePicture) {
+  if (dbUser.profilePicture) {
     url = await context.s3.getPresignedUrl(profileImageBucketName, dbUser.profilePicture);
   }
   const presignedUrl: PresignedUrl = {
@@ -216,7 +245,7 @@ export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUser
   { id, image }: { id: string; image: File },
   context: GraphQLContext
 ) => {
-  const { Item: dbUserCur } = await context.entities.User.build(GetItemCommand).key({ id }).send();
+  const dbUserCur = await requireUserAccess(context, id);
   const filename = `${id}.${image.name.split('.').pop()}`;
 
   try {
@@ -254,27 +283,44 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   }: { id: string; givenName: string; familyName?: InputMaybe<string>; email: string },
   context: GraphQLContext
 ) => {
+  const auth = requireAuth(context);
+  if (auth.customId !== id) {
+    throw new GraphQLError('Cannot create a user for another identity', { extensions: { code: 'FORBIDDEN' } });
+  }
+
   try {
     await context.entities.User.build(PutItemCommand)
       .item({
-        id: id,
-        givenName: givenName,
+        id,
+        givenName,
         familyName: familyName ?? undefined,
-        email: email,
+        email,
+        // The binding is written by the backend from the verified token, never
+        // taken from the GraphQL arguments.
+        cognitoSub: auth.sub,
       })
       .options({ condition: { attr: 'id', exists: false } })
       .send();
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
-      Logger.info(`User with id ${id} already exists`);
-      throw Error('User already exists');
+      const { Item: existing } = await context.entities.User.build(GetItemCommand).key({ id }).send();
+      if (existing && (existing as StoredUser).cognitoSub === auth.sub) {
+        Logger.info(`User with id ${id} already exists and is bound to this identity`);
+        context.cache.invalidate([{ typename: 'User' }]);
+        return existing as unknown as User;
+      }
+      // A row with this public id belongs to another Cognito identity (or predates
+      // the binding). Never attach it to the caller: run the backfill instead.
+      throw new GraphQLError('User already exists for another identity', {
+        extensions: { code: 'FORBIDDEN' },
+      });
     }
     Logger.error(`Failed to create user with id ${id}: ${error}`);
     throw error;
   }
 
-  // Only necessary when using SES in sandbox mode
-  context.ses.createEmailIdentity(email);
+  // Only necessary when using SES in sandbox mode.
+  await context.ses.createEmailIdentity(email);
 
   const user: User = {
     id: id,
@@ -292,6 +338,7 @@ export const updateUserSettings: NonNullable<MutationResolvers['updateUserSettin
   { id, emailNotificationsEnabled }: { id: string; emailNotificationsEnabled: boolean },
   context: GraphQLContext
 ) => {
+  await requireUserAccess(context, id);
   try {
     const { Attributes: dbUser } = await context.entities.User.build(UpdateItemCommand)
       .item({ id, emailNotificationsEnabled })
@@ -320,6 +367,8 @@ export const updateTravelPreferences: NonNullable<MutationResolvers['updateTrave
   },
   context: GraphQLContext
 ) => {
+  await requireUserAccess(context, args.userId);
+
   // Validate loyalty cards
   if (args.loyaltyCards) {
     for (const card of args.loyaltyCards) {
@@ -388,12 +437,10 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   { id }: { id: string },
   context: GraphQLContext
 ): Promise<User> => {
+  const dbUserCur = await requireUserAccess(context, id);
+  Logger.appendKeys({ userId: id });
   try {
-    Logger.addPersistentLogAttributes({ userId: id });
-
-    const { Item: dbUserCur } = await context.entities.User.build(GetItemCommand).key({ id }).send();
-
-    if (dbUserCur && dbUserCur.profilePicture) {
+    if (dbUserCur.profilePicture) {
       Logger.info(`Deleting profile image for user '${id}'`);
       await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
     }
@@ -426,8 +473,8 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
       );
     }
 
-    if (dbUserCur && dbUserCur.email) {
-      context.ses.deleteEmailIdentity(dbUserCur.email);
+    if (dbUserCur.email) {
+      await context.ses.deleteEmailIdentity(dbUserCur.email);
     }
 
     const { Attributes: dbUser } = await context.entities.User.build(DeleteItemCommand)
@@ -444,6 +491,8 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   } catch (error) {
     Logger.error(`Failed to delete user with id ${id}: ${error}`);
     throw error;
+  } finally {
+    Logger.removeKeys(['userId']);
   }
 };
 

@@ -1,5 +1,5 @@
 import { GraphQLContext } from '../context';
-import { User } from '../schema/generated/typeDefs.generated';
+import { JourneyMonitor, User } from '../schema/generated/typeDefs.generated';
 import { GetItemCommand, StoredJourney } from '../model/trainPriceMonitor';
 import { getJourneyMonitor } from './user';
 
@@ -10,7 +10,7 @@ interface NotificationType {
     context: GraphQLContext,
     user: User,
     data: { [key: string]: unknown }
-  ) => Promise<EmailNotificationInfo>;
+  ) => Promise<EmailNotificationInfo | null>;
 }
 
 export interface EmailNotificationInfo {
@@ -19,29 +19,103 @@ export interface EmailNotificationInfo {
   htmlBody: string;
 }
 
+/**
+ * Thrown when an email no longer has enough data to be rendered. The SQS worker
+ * treats this as an expected no-op and acks the message instead of retrying it
+ * into the DLQ; genuine failures keep using ordinary errors.
+ */
+export class NotificationSkipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotificationSkipError';
+  }
+}
+
+interface PriceAlertSnapshot {
+  from?: string;
+  to?: string;
+  price?: number;
+  limitPrice?: number;
+  expires?: string;
+}
+
+function readPriceAlertSnapshot(data: { [key: string]: unknown }): PriceAlertSnapshot {
+  return {
+    from: typeof data['from'] === 'string' ? data['from'] : undefined,
+    to: typeof data['to'] === 'string' ? data['to'] : undefined,
+    price: typeof data['price'] === 'number' ? data['price'] : undefined,
+    limitPrice: typeof data['limitPrice'] === 'number' ? data['limitPrice'] : undefined,
+    expires: typeof data['expires'] === 'string' ? data['expires'] : undefined,
+  };
+}
+
+/**
+ * The notification survives a deleted journey (the email worker and the watchlist
+ * can race the deletion). Serve the snapshot as an unavailable monitor instead of
+ * dropping the notification with an error.
+ */
+function priceAlertFallbackMonitor(userId: string, data: { [key: string]: unknown }): JourneyMonitor {
+  const snapshot = readPriceAlertSnapshot(data);
+  return {
+    id: typeof data['journeyId'] === 'string' ? data['journeyId'] : '',
+    userId,
+    limitPrice: snapshot.limitPrice ?? 0,
+    expires: snapshot.expires ?? new Date(0).toISOString(),
+    from: snapshot.from,
+    to: snapshot.to,
+    unavailable: true,
+    journey: undefined,
+  };
+}
+
 export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   PRICE_ALERT: {
     name: 'PRICE_ALERT',
     mapAdditionalData: async (context, userId, data) => {
-      return { journeyMonitor: await getJourneyMonitorByJourneyId(context, userId, data['journeyId'] as string) };
+      const journeyId = typeof data['journeyId'] === 'string' ? data['journeyId'] : undefined;
+      if (!journeyId) {
+        return { journeyMonitor: priceAlertFallbackMonitor(userId, data) };
+      }
+      const journeyMonitor = await getJourneyMonitorByJourneyId(context, userId, journeyId);
+      return { journeyMonitor: journeyMonitor ?? priceAlertFallbackMonitor(userId, data) };
     },
     formatEmail: async (context, user, data) => {
-      const { id, from, to, journey, limitPrice } = await getJourneyMonitorByJourneyId(
-        context,
-        user.id,
-        data['journeyId'] as string
-      );
-      if (!from || !to) {
-        throw new Error('Could not retrieve journey station names');
+      const journeyId = typeof data['journeyId'] === 'string' ? data['journeyId'] : undefined;
+      if (!journeyId) {
+        return null;
       }
+
+      // New notifications carry everything the email needs, so a journey deleted
+      // before the worker runs is no longer an error. Older ones fall back to DB.
+      const snapshot = readPriceAlertSnapshot(data);
+      let from = snapshot.from;
+      let to = snapshot.to;
+      let price = snapshot.price;
+      let limitPrice = snapshot.limitPrice;
+
+      if (from === undefined || to === undefined || price === undefined || limitPrice === undefined) {
+        const monitor = await getJourneyMonitorByJourneyId(context, user.id, journeyId);
+        if (!monitor) {
+          return null;
+        }
+        from = monitor.from ?? from;
+        to = monitor.to ?? to;
+        price = monitor.journey?.price ?? price;
+        limitPrice = monitor.limitPrice;
+      }
+
+      if (!from || !to || price === undefined || limitPrice === undefined) {
+        return null;
+      }
+
       const subject = `Price alert for your journey from ${from} to ${to}`;
       const htmlBody = `
         <p>Hi ${user.givenName},</p>
         <p>The price for your journey from <b>${from}</b> to <b>${to}</b> has changed.</p>
-        <p>It is now <b>€${journey?.price?.toFixed(2)}</b> (your limit price was <b>€${limitPrice.toFixed(2)}</b>).</p>
-        <p>Check it out here: <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/journeys#${id}">${
+        <p>It is now <b>€${price.toFixed(2)}</b> (your limit price was <b>€${limitPrice.toFixed(2)}</b>).</p>
+        <p>Check it out here: <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/journeys#${journeyId}">${
           process.env.FRONTEND_URL || 'http://localhost:3000'
-        }/journeys#${id}</a></p>
+        }/journeys#${journeyId}</a></p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;
       return { to: user.email, subject, htmlBody };
@@ -102,12 +176,16 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
   },
 };
 
-async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: string, journeyId: string) {
+async function getJourneyMonitorByJourneyId(
+  context: GraphQLContext,
+  userId: string,
+  journeyId: string
+): Promise<JourneyMonitor | null> {
   const { Item: dbJourney } = await context.entities.Journey.build(GetItemCommand)
     .key({ userId, id: journeyId })
     .send();
   if (!dbJourney) {
-    throw new Error(`Journey with ID ${journeyId} not found in database`);
+    return null;
   }
   return getJourneyMonitor(dbJourney as StoredJourney);
 }
@@ -149,9 +227,15 @@ async function resolveExpiredJourneyStations(
     return { from: fromStation?.name ?? fromId, to: toStation?.name ?? toId };
   }
 
-  const journey = await context.dbHafas.requeryJourney(data['refreshToken'] as string);
+  const refreshToken = data['refreshToken'];
+  if (typeof refreshToken !== 'string') {
+    throw new NotificationSkipError('No refresh token for expired journey');
+  }
+
+  const journey = await context.dbHafas.requeryJourney(refreshToken);
   if (!journey) {
-    throw new Error('Could not requery journey');
+    // The journey was deleted before the email was built. Expected, not a retry.
+    throw new NotificationSkipError('Could not requery journey');
   }
 
   return {

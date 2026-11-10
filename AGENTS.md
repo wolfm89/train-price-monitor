@@ -158,6 +158,16 @@ flowchart LR
 - Never commit `.env` files or secrets; secrets are injected by CDK at deploy time.
 - API Gateway uses a Cognito authorizer — all GraphQL requests need a valid JWT (handled by the
   frontend urql client).
+- Every user-scoped resolver loads the `User` row and compares its `cognitoSub` with the verified
+  token; the GraphQL `userId`/`id` arguments are never trusted on their own. Rows without
+  `cognitoSub` are rejected rather than auto-bound to the first caller. New accounts store the
+  binding from the token in `createUser`; existing rows are migrated once with
+  `cd backend && npm run backfill:cognito-sub -- --user-pool-id <pool> --table TrainPriceMonitor`
+  (add `--dry-run` first). The SQS/EventBridge context is the only internal path and is the only
+  caller allowed to run `updateJourneyMonitors` and `sendEmailNotification`.
+- The GraphQL response cache is in-memory per container with a 30 s TTL. Mutation invalidation is
+  local too, so the refresher and other API containers can serve a write up to 30 s late. This is
+  accepted for the watchlist read path; do not add a shared cache without revisiting it.
 - IAM follows least privilege; the scraper grants only the table/bucket access each Lambda needs.
 - Pre-commit hooks enforce: trailing-whitespace, LF line endings, valid YAML/JSON, Prettier, ESLint.
   Install with `pip install pre-commit && pre-commit install`.
@@ -292,6 +302,10 @@ flowchart LR
   first `locations` call per cold environment and added 133 MB to the image; the generated index parses
   in ~20 ms and is 0.67 MiB. The output is **not committed** (the pre-commit hook rejects files over
   500 KB) — it is regenerated before typecheck and build.
+- The GraphQL SDL is **generated and bundled** the same way: `backend/src/schema/schema.generated.json`
+  comes from `schema.graphql` via `npm run schema` (also wired into `pretypecheck`/`prebuild`/`predev`/
+  `prestart`). The generated JSON is not committed; the image no longer copies `schema.graphql` and
+  `main.ts` no longer reads it from a cwd-relative path.
 - The bundle is built on the host, not inside Docker: it pulls in `shared/`, which is outside
   the image's build context. `mise run //infrastructure:deploy` builds it first.
 
