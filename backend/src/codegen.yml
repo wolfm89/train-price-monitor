@@ -9,6 +9,7 @@ generates:
     config:
       scalars:
         File: File
+        DateTime: Date
   src/schema/generated/resolvers.generated.ts:
     plugins:
       - add:
@@ -17,6 +18,7 @@ generates:
     config:
       scalars:
         File: File
+        DateTime: Date
       contextType: ../../context#GraphQLContext
       namespacedImportName: Types
       mappers:
