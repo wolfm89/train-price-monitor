@@ -4,6 +4,7 @@ import { profile as dbProfile } from 'db-vendo-client/p/dbweb/index.js';
 import { parseJourneyLeg as originalParseJourneyLeg } from 'db-vendo-client/parse/journey-leg.js';
 import { parseStopover as originalParseStopover } from 'db-vendo-client/parse/stopover.js';
 import Logger from '../lib/logger';
+import { findMatchingJourney } from '../lib/journeyMatcher';
 import { LoyaltyCardData, toHafasLoyaltyCard, toHafasAgeGroup } from '../lib/loyaltyCards';
 
 interface SimpleStation {
@@ -296,18 +297,21 @@ export class DbHafasManager {
 
     for (const n of [1, 5]) {
       const journeys = await this.queryJourneys(from, to, departure, { results: n, ...pricingOptions });
-      if (journeys.journeys === undefined || journeys.journeys.length === 0) {
-        break;
+      if (!journeys.journeys || journeys.journeys.length === 0) {
+        continue;
       }
 
-      const filteredJourneys = journeys.journeys.filter((journey: Journey) => journey.refreshToken === refreshToken);
-      if (filteredJourneys.length > 0) {
-        const price = filteredJourneys[0].price;
-        if (price) {
-          Logger.info('Price was found through new journeys query');
-          refreshedJourney.price = price;
-          break;
-        }
+      const matchingJourney = findMatchingJourney(journeys.journeys, {
+        refreshToken,
+        fromId: from,
+        toId: to,
+        departure,
+        lineName: refreshedJourney.legs[0].line?.name,
+      });
+      if (matchingJourney?.price) {
+        Logger.info('Price was found through new journeys query');
+        refreshedJourney.price = matchingJourney.price;
+        break;
       }
     }
     if (!refreshedJourney.price) {

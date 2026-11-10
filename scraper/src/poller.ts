@@ -281,6 +281,35 @@ async function selectDueTargets(
 
 export const handler = async (): Promise<void> => {
   const start = Date.now();
+  let hadTargets = false;
+  let runError: unknown;
+  try {
+    hadTargets = await pollerHandlerInner(start);
+  } catch (error) {
+    runError = error;
+  } finally {
+    // Drain once per invocation. Empty runs deliberately use a different message
+    // so the PollerDirectOk metric gets no zero datapoint and PollerNoPrices
+    // cannot fire just because nothing was due.
+    const transport = takeDbTransportStats();
+    if (runError) {
+      logger.error('Poller failed', {
+        elapsedMs: Date.now() - start,
+        transport,
+        error: runError instanceof Error ? runError.message : String(runError),
+      });
+    } else if (hadTargets) {
+      logger.info('Poller finished', { elapsedMs: Date.now() - start, transport });
+    } else {
+      logger.info('Poller finished without targets', { elapsedMs: Date.now() - start, transport });
+    }
+  }
+  if (runError) {
+    throw runError;
+  }
+};
+
+async function pollerHandlerInner(start: number): Promise<boolean> {
   const now = new Date(start);
   const today = now.toISOString().slice(0, 10);
 
@@ -289,7 +318,7 @@ export const handler = async (): Promise<void> => {
   logger.info('Poller started', { targets: targets.length, expiredRemoved: expired, backlog: backlog ? 1 : 0 });
 
   if (targets.length === 0) {
-    return;
+    return false;
   }
 
   const allBatchRows: ParquetRow[] = [];
@@ -384,6 +413,5 @@ export const handler = async (): Promise<void> => {
   if (allBatchRows.length > 0) {
     await writeToS3(allBatchRows, now);
   }
-
-  logger.info('Poller finished', { elapsedMs: Date.now() - start, transport: takeDbTransportStats() });
-};
+  return true;
+}

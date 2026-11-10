@@ -66,6 +66,8 @@ class SESManager {
     } catch (error) {
       if (error && error instanceof AlreadyExistsException) {
         Logger.info(`Email identity ${email} already exists`);
+      } else {
+        Logger.warn(`Failed to create email identity ${email}: ${error}`);
       }
       return undefined;
     }

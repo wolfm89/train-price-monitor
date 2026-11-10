@@ -262,6 +262,28 @@ export class Backend extends Construct {
       metricValue: '$.transport.fallbackOk',
       defaultValue: 0,
     });
+    // A thrown transport/Yoga failure logs "GraphQL request failed" instead of
+    // "GraphQL response"; publish that snapshot to the same metric so a failed
+    // request cannot hide a Decodo fallback from the alarm.
+    new logs.MetricFilter(this, 'SearchFallbackFailureFilter', {
+      logGroup: apiLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL request failed'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'SearchFallbackOk',
+      metricValue: '$.transport.fallbackOk',
+      defaultValue: 0,
+    });
+    // The refresher's failure log carries the same drained snapshot; publish it
+    // too, otherwise a fallback followed by an exception disappears from the
+    // alarm until the next healthy run.
+    new logs.MetricFilter(this, 'RefresherFallbackFailureFilter', {
+      logGroup: refresherLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processing failed'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'SearchFallbackOk',
+      metricValue: '$.transport.fallbackOk',
+      defaultValue: 0,
+    });
 
     // Yoga handles resolver errors and returns HTTP 200, and the refresher catches
     // per-journey failures, so Lambda's Errors metric stays 0 for both. The

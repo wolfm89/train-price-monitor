@@ -34,12 +34,33 @@ export const User = new Entity({
     loyaltyCards: string().optional(),
     ageGroup: string().optional(),
     deutschlandTicketDiscount: boolean().optional(),
+    // Cognito `sub` bound to this row when the account is created. The
+    // authorization guard compares it with the verified token, so it must never
+    // be accepted from a GraphQL argument. Optional because rows that predate
+    // the binding are backfilled by scripts/backfill-cognito-sub.mjs.
+    cognitoSub: string().optional(),
   }),
   computeKey: ({ id }) => ({
     pk: `USER#${id}`,
     sk: 'METADATA#',
   }),
 });
+
+/**
+ * Shape of a stored `User` item as read back from DynamoDB.
+ */
+export interface StoredUser {
+  id: string;
+  email: string;
+  givenName: string;
+  familyName?: string;
+  profilePicture?: string;
+  emailNotificationsEnabled: boolean;
+  loyaltyCards?: string;
+  ageGroup?: string;
+  deutschlandTicketDiscount?: boolean;
+  cognitoSub?: string;
+}
 
 export const Notification = new Entity({
   name: 'Notification',

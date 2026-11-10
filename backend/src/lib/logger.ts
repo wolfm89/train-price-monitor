@@ -1,15 +1,14 @@
 import { Logger } from '@aws-lambda-powertools/logger';
 
-const isDevelopment = (process.env.NODE_ENV || 'development') === 'development';
+// NODE_ENV is unset in Lambda, so the old `(NODE_ENV || 'development')` check
+// silently made production DEBUG; setting NODE_ENV=production then made it WARN,
+// which suppressed the INFO lines the fallback metrics depend on.
+const isDevelopment = process.env.NODE_ENV === 'development';
 
-// This method set the current severity based on
-// the current NODE_ENV: show all the log levels
-// if the server was run in development mode; otherwise,
-// if it was run in production, show only warn and error messages.
-const level = () => {
-  return isDevelopment ? 'DEBUG' : 'WARN';
-};
+const logLevel = (process.env.POWERTOOLS_LOG_LEVEL ??
+  process.env.LOG_LEVEL ??
+  (isDevelopment ? 'DEBUG' : 'INFO')) as NonNullable<ConstructorParameters<typeof Logger>[0]>['logLevel'];
 
-const logger = new Logger({ serviceName: 'tpm-backend', logLevel: level() });
+const logger = new Logger({ serviceName: 'tpm-backend', logLevel });
 
 export default logger;

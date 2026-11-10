@@ -88,6 +88,8 @@ jobs:
         working-directory: backend
       - run: npm run lint
         working-directory: backend
+      - run: npm test
+        working-directory: backend
       - run: npm run build
         working-directory: backend
       - name: Verify generated GraphQL types are committed
