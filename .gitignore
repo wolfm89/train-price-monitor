@@ -43,3 +43,6 @@ stats/
 
 # Google Antigravity
 .antigravitycli
+
+# Generated station index for autocomplete (see backend/scripts/build-station-index.mjs)
+backend/src/stations/

@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2024"],
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
@@ -13,12 +14,11 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
-      "playwright-core": ["./node_modules/playwright-core/index.d.ts"],
+      "@aws-sdk/client-ssm": ["./node_modules/@aws-sdk/client-ssm/dist-types/index.d.ts"],
       "db-vendo-client": ["./node_modules/hafas-client/index.d.ts"],
       "db-vendo-client/p/dbnav/index.js": ["./types/db-vendo-client/index.d.ts"],
       "db-vendo-client/p/db/index.js": ["./types/db-vendo-client/index.d.ts"],
-      "db-vendo-client/p/dbweb/index.js": ["./types/db-vendo-client/index.d.ts"],
-      "db-hafas-stations": ["./types/db-hafas-stations/index.d.ts"]
+      "db-vendo-client/p/dbweb/index.js": ["./types/db-vendo-client/index.d.ts"]
     }
   },
   "include": ["src/**/*", "types/**/*", "../shared/**/*"],

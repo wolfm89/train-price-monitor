@@ -8,6 +8,7 @@ import resolvers from './resolvers/resolvers';
 import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
 import logger from './lib/logger';
+import { takeDbTransportStats } from '../../shared/db-fetch';
 
 dotenv.config();
 
@@ -56,11 +57,16 @@ const yoga = createYoga({
   ],
 });
 
-function isSQSEvent(event: APIGatewayProxyEventV2 | SQSEvent): event is SQSEvent {
-  return 'Records' in event && (event as SQSEvent).Records?.[0]?.eventSource === 'aws:sqs';
+function isSQSEvent(event: unknown): event is SQSEvent {
+  return (
+    typeof event === 'object' &&
+    event !== null &&
+    'Records' in event &&
+    (event as SQSEvent).Records?.[0]?.eventSource === 'aws:sqs'
+  );
 }
 
-function isAPIGatewayEvent(event: APIGatewayProxyEventV2 | SQSEvent): boolean {
+function isAPIGatewayEvent(event: unknown): event is APIGatewayProxyEventV2 {
   const e = event as APIGatewayProxyEventV2;
   // Check for v2 format (requestContext.http)
   if (e.requestContext?.http) return true;
@@ -72,7 +78,7 @@ function isAPIGatewayEvent(event: APIGatewayProxyEventV2 | SQSEvent): boolean {
 }
 
 function extractHttpContext(
-  event: APIGatewayProxyEventV2 | SQSEvent
+  event: APIGatewayProxyEventV2
 ): { method: string; path: string; queryString: string } | null {
   const e = event as APIGatewayProxyEventV2;
   // Try v2 format first
@@ -119,8 +125,8 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
 
   logger.info('Lambda invoked', {
     eventSource: isSQSEvent(event) ? event.Records?.[0]?.eventSource : undefined,
-    httpMethod: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.method : undefined,
-    path: !isSQSEvent(event) ? (event as APIGatewayProxyEventV2).requestContext?.http?.path : undefined,
+    httpMethod: isAPIGatewayEvent(event) ? event.requestContext?.http?.method : undefined,
+    path: isAPIGatewayEvent(event) ? event.requestContext?.http?.path : undefined,
   });
 
   if (isSQSEvent(event)) {
@@ -158,7 +164,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
       // so anything reaching here is a genuine transient failure worth retrying.
       throw new Error(`GraphQL execution error(s): ${messages}`);
     }
-    logger.info('SQS message processed', { hasErrors: false });
+    logger.info('SQS message processed', { hasErrors: false, transport: takeDbTransportStats() });
     return { statusCode: 200, body: '' };
   }
 
@@ -198,7 +204,11 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
   });
 
   const responseBody = await response.text();
-  logger.info('GraphQL response', { status: response.status, bodyLength: responseBody.length });
+  logger.info('GraphQL response', {
+    status: response.status,
+    bodyLength: responseBody.length,
+    transport: takeDbTransportStats(),
+  });
 
   const responseHeaders: Record<string, string> = {};
   response.headers.forEach((value, key) => {

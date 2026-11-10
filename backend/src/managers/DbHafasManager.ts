@@ -75,15 +75,22 @@ export interface QueryJourneysOptions extends PricingOptions {
   laterThan?: string;
 }
 
+// Station index for autocomplete, generated from db-hafas-stations by
+// scripts/build-station-index.mjs and bundled at build time. The package itself
+// (13.5 MB NDJSON, 133 MB on disk) is a devDependency and never ships: reading it
+// with a streaming parser cost ~1.1 s on the first `locations` call in every cold
+// environment, versus ~20 ms for this file. Tuples are [id, name, weight]; the
+// generator documents which stations are kept.
+import stationIndex from '../stations/stations.json';
+
+type StationTuple = [string, string, number];
+
 let stationCachePromise: Promise<SimpleStation[]> | null = null;
 
-async function loadStationCache(): Promise<SimpleStation[]> {
-  const dbHafasStations = await import('db-hafas-stations');
-  const stations: SimpleStation[] = [];
-  for await (const station of dbHafasStations.readSimplifiedStations()) {
-    stations.push(station as SimpleStation);
-  }
-  return stations;
+function loadStationCache(): Promise<SimpleStation[]> {
+  return Promise.resolve(
+    (stationIndex as StationTuple[]).map(([id, name, weight]) => ({ type: 'station', id, name, weight }))
+  );
 }
 
 function getStationCache(): Promise<SimpleStation[]> {

@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Box, CircularProgress, Typography } from '@mui/material';
+import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 import { useQuery } from 'urql';
 import SearchMask from '../components/SearchMask';
 import { JourneySearchOptions } from '../components/SearchMask';
@@ -35,7 +35,7 @@ const SearchPage: React.FC<Props> = () => {
     pause: !user?.['custom:id'],
   });
 
-  const [{ data, fetching }] = useQuery({
+  const [{ data, fetching, error }, reexecuteSearch] = useQuery({
     query: JourneySearchQuery,
     variables: queryVars ?? { from: '', to: '', departure: '' },
     pause: !queryVars,
@@ -55,7 +55,22 @@ const SearchPage: React.FC<Props> = () => {
   const handleSearch = (from: string, to: string, departure: string, options?: JourneySearchOptions) => {
     setSearchClicked(true);
     setSearchOptions(options);
+
+    // Pressing Search again after a failure submits identical values, and urql does
+    // not re-run a query whose variables are unchanged — the button then looked dead
+    // until the form was edited. Re-execute explicitly in that case.
+    const repeated =
+      queryVars !== null &&
+      queryVars.from === from &&
+      queryVars.to === to &&
+      queryVars.departure === departure &&
+      JSON.stringify(queryVars.options ?? null) === JSON.stringify(options ?? null);
+
     setQueryVars({ from, to, departure, options });
+
+    if (repeated) {
+      reexecuteSearch({ requestPolicy: 'network-only' });
+    }
   };
 
   const handleNavigateEarlier = earlierRef
@@ -91,9 +106,18 @@ const SearchPage: React.FC<Props> = () => {
 
       {searchClicked &&
         (fetching && !navigatingDirection ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
-            <CircularProgress />
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5, height: 100 }}>
+            <CircularProgress size={22} />
+            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>Searching Deutsche Bahn…</Typography>
           </Box>
+        ) : error ? (
+          // A failed lookup used to render as "No results found", because the
+          // resolver returns `journeys: null` when the upstream call fails. Say
+          // what actually happened so the user retries instead of concluding the
+          // connection does not exist.
+          <Alert severity="error" sx={{ fontSize: 13 }}>
+            The search could not be completed. Please try again in a moment.
+          </Alert>
         ) : data !== undefined ? (
           (searchResult ?? []).length > 0 || fetching || earlierRef || laterRef ? (
             <SearchResult

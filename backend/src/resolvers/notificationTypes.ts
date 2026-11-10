@@ -122,13 +122,12 @@ async function getJourneyMonitorByJourneyId(context: GraphQLContext, userId: str
  *  1. the persisted names, when the journey had been refreshed successfully;
  *  2. otherwise the station IDs, resolved against the bundled station data the
  *     same way JOURNEY_STALE does — local, so it works with DB unreachable;
- *  3. only failing both, a browser round-trip, which throws when DB is down and
+ *  3. only failing both, a DB round-trip, which throws when DB is down and
  *     would fail the email into the DLQ.
  *
  * Tier 2 matters because the cached names only exist after a successful
  * refresh: a journey that expires before one ever succeeded stores neither name
- * (JSON.stringify omits undefined), which would otherwise go straight to the
- * browser.
+ * (JSON.stringify omits undefined), which would otherwise go straight to DB.
  */
 async function resolveExpiredJourneyStations(
   context: GraphQLContext,

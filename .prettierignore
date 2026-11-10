@@ -6,3 +6,6 @@
 
 # Always ignore generated files.
 **/*.generated.ts
+
+# Generated station index (see backend/scripts/build-station-index.mjs)
+backend/src/stations/stations.json
