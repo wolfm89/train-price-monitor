@@ -119,6 +119,8 @@ jobs:
         working-directory: scraper
       - run: npm run lint
         working-directory: scraper
+      - run: npm test
+        working-directory: scraper
       - run: npm run build
         working-directory: scraper
 
