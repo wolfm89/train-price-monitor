@@ -351,6 +351,12 @@ export type QueryResolvers<
   ContextType = GraphQLContext,
   ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query'],
 > = {
+  exportMyData?: Resolver<
+    ResolversTypes['String'],
+    ParentType,
+    ContextType,
+    RequireFields<Types.QueryExportMyDataArgs, 'id'>
+  >;
   journeys?: Resolver<
     Types.Maybe<ResolversTypes['JourneysResult']>,
     ParentType,

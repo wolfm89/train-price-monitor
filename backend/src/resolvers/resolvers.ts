@@ -2,6 +2,7 @@ import { Resolvers } from '../schema/generated/resolvers.generated';
 import {
   userQuery,
   userProfilePicturePresignedUrlQuery,
+  exportMyDataQuery,
   userResolvers,
   updateUserProfilePicture,
   createUser,
@@ -31,6 +32,7 @@ const resolvers: ResolversWithScalars = {
   Query: {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
+    exportMyData: exportMyDataQuery,
     journeys: journeysQuery,
     locations: locationsQuery,
   },

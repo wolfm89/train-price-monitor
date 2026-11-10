@@ -95,6 +95,11 @@ extend type Query {
   userProfilePicturePresignedUrl(id: ID!): PresignedUrl
 }
 
+# Everything stored for the user, as a JSON document (GDPR access and portability).
+extend type Query {
+  exportMyData(id: ID!): String!
+}
+
 ## Mutations
 
 extend type Mutation {

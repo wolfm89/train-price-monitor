@@ -8,6 +8,8 @@ import dotenv from 'dotenv';
 import { GraphQLContext, createContext } from './context';
 import logger from './lib/logger';
 import { authClaimsFromRequest } from './lib/auth';
+import { CORS_ALLOWED_HEADERS, CORS_METHODS, corsHeaders, parseAllowedOrigins, requestOrigin } from './lib/cors';
+import { redactEmails } from './lib/redact';
 import { takeDbTransportStats } from '../../shared/db-fetch';
 import typeDefs from './schema/schema.generated.json';
 
@@ -20,10 +22,16 @@ const schema: YogaSchemaDefinition<unknown, GraphQLContext> = createSchema({
   resolvers,
 }) as YogaSchemaDefinition<unknown, GraphQLContext>;
 
+// Only the app's own origin (plus the local dev server) may call the API from
+// a browser. Set by the stack; see infrastructure/lib/backend.ts.
+const ALLOWED_ORIGINS = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+
 const YOGA_CORS_CONFIG = {
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
+  origin: ALLOWED_ORIGINS,
+  methods: CORS_METHODS,
+  allowedHeaders: CORS_ALLOWED_HEADERS,
+  // The token travels in the Authorization header; no cookies, so no credentials.
+  credentials: false,
 };
 
 const yoga = createYoga({
@@ -35,22 +43,28 @@ const yoga = createYoga({
     // 30 s in-memory cache, scoped to this container and to the token's `sub`.
     // Mutation invalidation is local too: the refresher and other API containers
     // keep their own cache, so a background write can take up to 30 s to appear.
-    // Accepted for this app; documented in AGENTS.md.
-    useResponseCache({ session: (request) => authClaimsFromRequest(request)?.sub ?? null, cache, ttl: 30_000 }),
+    // Accepted for this app; documented in AGENTS.md. The data export is never
+    // cached, so it always reflects the current state.
+    useResponseCache({
+      session: (request) => authClaimsFromRequest(request)?.sub ?? null,
+      cache,
+      ttl: 30_000,
+      ttlPerSchemaCoordinate: { 'Query.exportMyData': 0 },
+    }),
     useErrorHandler(({ errors, phase }) => {
       for (const error of errors) {
         if (error instanceof Error) {
-          // Expected authorization outcomes are not operational errors: logging
-          // them at ERROR would feed the SearchErrors alarm on every cross-user
-          // probe or stale token.
+          // Expected authorization and input outcomes are not operational
+          // errors: logging them at ERROR would feed the SearchErrors alarm on
+          // every cross-user probe, stale token or rejected upload.
           const code = (error as { extensions?: { code?: unknown } }).extensions?.code;
-          if (code === 'UNAUTHENTICATED' || code === 'FORBIDDEN' || code === 'NOT_FOUND') {
-            logger.warn(error.message, { phase, code });
+          if (code === 'UNAUTHENTICATED' || code === 'FORBIDDEN' || code === 'NOT_FOUND' || code === 'BAD_USER_INPUT') {
+            logger.warn(redactEmails(error.message), { phase, code });
           } else {
-            logger.error(error.message, { phase });
+            logger.error(redactEmails(error.message), { phase });
           }
         } else {
-          logger.error(error);
+          logger.error(redactEmails(String(error)));
         }
       }
     }),
@@ -106,16 +120,15 @@ function extractHttpContext(
   return null;
 }
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': YOGA_CORS_CONFIG.origin,
-  'Access-Control-Allow-Methods': YOGA_CORS_CONFIG.methods.join(', '),
-  'Access-Control-Allow-Headers': YOGA_CORS_CONFIG.allowedHeaders.join(', '),
-};
-
 interface LambdaResponse {
   statusCode: number;
   headers?: Record<string, string>;
   body: string;
+}
+
+/** Top-level keys only: a full API Gateway event carries the caller's token. */
+function describeEvent(event: unknown): { eventKeys: string[] } {
+  return { eventKeys: typeof event === 'object' && event !== null ? Object.keys(event).sort() : [] };
 }
 
 export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context: Context): Promise<LambdaResponse> => {
@@ -147,7 +160,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
           variables = parsed.variables || {};
         }
       } catch {
-        logger.warn('Failed to parse SQS message body', { body });
+        logger.warn('Failed to parse SQS message body', { bodyLength: body.length });
       }
 
       logger.info('Processing SQS message', { query, hasVariables: Object.keys(variables).length > 0 });
@@ -176,17 +189,17 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
 
       if (executeError) {
         logger.error('SQS message processing failed', {
-          error: executeError instanceof Error ? executeError.message : String(executeError),
+          error: redactEmails(executeError instanceof Error ? executeError.message : String(executeError)),
           transport,
         });
         throw executeError;
       }
 
       if (result?.errors && result.errors.length > 0) {
-        const messages = result.errors.map((e) => e.message).join('; ');
+        const messages = redactEmails(result.errors.map((e) => e.message).join('; '));
         logger.error('SQS message processing failed', {
           errorCount: result.errors.length,
-          errors: result.errors.map((error) => ({ message: error.message, path: error.path })),
+          errors: result.errors.map((error) => ({ message: redactEmails(error.message), path: error.path })),
           transport,
         });
         // Throw so SQS retries the message (up to maxReceiveCount) before routing to the DLQ.
@@ -200,17 +213,19 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
     }
 
     if (!isAPIGatewayEvent(event)) {
-      logger.error('Unknown event type', { event: JSON.stringify(event) });
-      return { statusCode: 400, headers: CORS_HEADERS, body: 'Unknown event type' };
+      logger.error('Unknown event type', describeEvent(event));
+      return { statusCode: 400, body: 'Unknown event type' };
     }
 
+    const cors = corsHeaders(requestOrigin(event.headers), ALLOWED_ORIGINS);
+
     if (!httpContext) {
-      logger.error('Failed to extract HTTP context', { event: JSON.stringify(event) });
-      return { statusCode: 400, headers: CORS_HEADERS, body: 'Invalid request' };
+      logger.error('Failed to extract HTTP context', describeEvent(event));
+      return { statusCode: 400, headers: cors, body: 'Invalid request' };
     }
 
     if (httpContext.method === 'OPTIONS') {
-      return { statusCode: 200, headers: CORS_HEADERS, body: '' };
+      return { statusCode: 200, headers: cors, body: '' };
     }
 
     const queryString = httpContext.queryString;
@@ -246,12 +261,12 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
 
     if (requestError || !response) {
       logger.error('GraphQL request failed', {
-        error: requestError instanceof Error ? requestError.message : String(requestError),
+        error: redactEmails(requestError instanceof Error ? requestError.message : String(requestError)),
         transport,
       });
       return {
         statusCode: 500,
-        headers: CORS_HEADERS,
+        headers: cors,
         body: JSON.stringify({ errors: [{ message: 'Internal server error' }] }),
       };
     }

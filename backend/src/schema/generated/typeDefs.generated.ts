@@ -237,10 +237,15 @@ export type ProductFilter = {
 
 export type Query = {
   __typename?: 'Query';
+  exportMyData: Scalars['String']['output'];
   journeys?: Maybe<JourneysResult>;
   locations?: Maybe<Array<Maybe<Location>>>;
   user?: Maybe<User>;
   userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
+};
+
+export type QueryExportMyDataArgs = {
+  id: Scalars['ID']['input'];
 };
 
 export type QueryJourneysArgs = {

@@ -29,6 +29,8 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GraphQLError } from 'graphql';
 import { LoyaltyCardData, validateLoyaltyCard, VALID_AGE_GROUPS } from '../lib/loyaltyCards';
 import { LoyaltyCard, LoyaltyCardType } from '../schema/generated/typeDefs.generated';
+import { validateProfilePicture } from '../lib/profilePicture';
+import { buildDataExport } from '../lib/dataExport';
 
 dotenv.config();
 
@@ -54,7 +56,7 @@ function parseLoyaltyCard(raw?: string): LoyaltyCard | undefined {
       class: card.class,
     };
   } catch {
-    Logger.warn('Failed to parse stored loyaltyCard JSON', { raw });
+    Logger.warn('Failed to parse stored loyaltyCard JSON', { length: raw.length });
     return undefined;
   }
 }
@@ -72,7 +74,7 @@ function parseWalletLoyaltyCards(raw?: string): LoyaltyCard[] | undefined {
       class: card.class,
     }));
   } catch {
-    Logger.warn('Failed to parse stored loyaltyCards JSON', { raw });
+    Logger.warn('Failed to parse stored loyaltyCards JSON', { length: raw.length });
     return undefined;
   }
 }
@@ -240,16 +242,57 @@ export const userProfilePicturePresignedUrlQuery: NonNullable<
   return presignedUrl;
 };
 
+export const exportMyDataQuery: NonNullable<QueryResolvers['exportMyData']> = async (
+  _,
+  { id }: { id: string },
+  context: GraphQLContext
+) => {
+  const dbUser = await requireUserAccess(context, id);
+
+  const [{ Items: dbJourneys }, { Items: dbNotifications }] = await Promise.all([
+    context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Journey)
+      .query({ partition: `USER#${id}`, range: { beginsWith: 'JOURNEY#' } })
+      .options({ maxPages: Infinity })
+      .send(),
+    context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Notification)
+      .query({ partition: `USER#${id}`, range: { beginsWith: 'NOTIFICATION#' } })
+      .options({ maxPages: Infinity })
+      .send(),
+  ]);
+
+  const profilePictureUrl = dbUser.profilePicture
+    ? await context.s3.getPresignedUrl(profileImageBucketName, dbUser.profilePicture)
+    : undefined;
+
+  Logger.info('Exported user data', {
+    userId: id,
+    journeys: dbJourneys?.length ?? 0,
+    notifications: dbNotifications?.length ?? 0,
+  });
+
+  return buildDataExport({
+    user: dbUser as unknown as Record<string, unknown>,
+    journeys: (dbJourneys ?? []) as Record<string, unknown>[],
+    notifications: (dbNotifications ?? []) as Record<string, unknown>[],
+    profilePictureUrl,
+    exportedAt: new Date(),
+  });
+};
+
 export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUserProfilePicture']> = async (
   _,
   { id, image }: { id: string; image: File },
   context: GraphQLContext
 ) => {
   const dbUserCur = await requireUserAccess(context, id);
-  const filename = `${id}.${image.name.split('.').pop()}`;
+  const body = new Uint8Array(await image.arrayBuffer());
+  const { contentType, extension } = validateProfilePicture(body);
+  const filename = `${id}.${extension}`;
 
   try {
-    await context.s3.upload(profileImageBucketName, filename, image);
+    await context.s3.upload(profileImageBucketName, filename, body, contentType);
   } catch (error) {
     Logger.error(`Failed to upload file to S3: ${error}`);
     throw error;
@@ -319,8 +362,11 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
     throw error;
   }
 
-  // Only necessary when using SES in sandbox mode.
-  await context.ses.createEmailIdentity(email);
+  // Only necessary while the SES account is in the sandbox, where every
+  // recipient must be a verified identity (see docs/privacy/email-and-ses.md).
+  if (context.ses.sandbox) {
+    await context.ses.createEmailIdentity(email);
+  }
 
   const user: User = {
     id: id,
@@ -473,7 +519,7 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
       );
     }
 
-    if (dbUserCur.email) {
+    if (context.ses.sandbox && dbUserCur.email) {
       await context.ses.deleteEmailIdentity(dbUserCur.email);
     }
 
