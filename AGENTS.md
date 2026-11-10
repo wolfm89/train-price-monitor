@@ -254,9 +254,12 @@ flowchart LR
     `PollerErrors`, `PollerThrottledByDb` (throttling in two consecutive runs — a single 429 is
     noise), `PollerNoPrices` (no direct success for 45 min), `PollerBatchAborted` (a run hit the
     250 s abort; the log line, not a raw duration threshold, so normal 190 s runs stay quiet).
-  - Backend: `SearchErrors`, `SearchUsingDecodoFallback` (direct transport degraded for users,
-    2 of 3 periods so one unlucky search does not page), `RefresherErrors`, `SearchThrottled`,
-    `RefresherDLQ` (a message reached the dead-letter queue: the refresh exhausted its retries).
+  - Backend: `SearchErrors`, `UsingDecodoFallback` (direct transport degraded for search or
+    refresher; 2 consecutive hours with any fallback, so one unlucky search does not page;
+    `SearchFallbackOk` aggregates the API's GraphQL response line and the refresher's SQS
+    message line), `RefresherErrors`, `SearchThrottled`, `RefresherDLQ` (a message reached the
+    dead-letter queue: the refresh exhausted its retries; purge it after investigating, it
+    remains for 14 days).
 - **Dashboards** (48 h default, `infrastructure/lib/dashboards.ts`) follow Google's Four Golden
   Signals — one row each for latency, traffic, errors and saturation, plus the alarm state:
   - `TrainPriceMonitor-Scraper`: run duration for poller/hydrator/compactor (p90/max vs the

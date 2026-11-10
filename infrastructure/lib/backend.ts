@@ -233,8 +233,8 @@ export class Backend extends Construct {
     });
 
     // -------------------------------------------------------------------------
-    // Alarms and dashboard (CloudWatch free tier: 9 alarms, 10 custom metrics
-    // across both stacks; 3 of them are defined here)
+    // Alarms and dashboard (CloudWatch free tier: 10 alarms, 10 custom metrics
+    // across both stacks; 5 alarms and 3 custom metrics are defined here)
     // -------------------------------------------------------------------------
 
     // The transport logs a `transport` object on every GraphQL response; a
@@ -247,6 +247,20 @@ export class Backend extends Construct {
       metricNamespace: 'TrainPriceMonitor',
       metricName: 'SearchFallbackOk',
       metricValue: '$.transport.fallbackOk',
+      defaultValue: 0,
+    });
+    // The refresher is the component most likely to burn the Decodo allowance
+    // unattended. Its SQS handler logs the transport counters on "SQS message
+    // processed"; publishing to the same metric name keeps the custom-metric
+    // count at 10 while making refresher fallbacks visible to the alarm and
+    // the App dashboard.
+    new logs.MetricFilter(this, 'RefresherFallbackFilter', {
+      logGroup: refresherLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processed'),
+      metricNamespace: 'TrainPriceMonitor',
+      metricName: 'SearchFallbackOk',
+      metricValue: '$.transport.fallbackOk',
+      defaultValue: 0,
     });
 
     // Yoga handles resolver errors and returns HTTP 200, and the refresher catches
@@ -283,18 +297,17 @@ export class Backend extends Construct {
     });
 
     const searchFallback = new cloudwatch.Alarm(this, 'SearchUsingDecodoFallback', {
-      alarmName: 'TPM-App-SearchUsingDecodoFallback',
-      alarmDescription: 'Journey search is falling back to Decodo: DB is refusing the direct transport.',
+      alarmName: 'TPM-App-UsingDecodoFallback',
+      alarmDescription: 'The DB direct transport is degraded: search or refresher requests are falling back to Decodo.',
       metric: new cloudwatch.Metric({
         namespace: 'TrainPriceMonitor',
         metricName: 'SearchFallbackOk',
-        period: cdk.Duration.minutes(5),
+        period: cdk.Duration.hours(1),
         statistic: 'Sum',
       }),
       threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: 3,
-      datapointsToAlarm: 2,
+      evaluationPeriods: 2,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
@@ -328,7 +341,8 @@ export class Backend extends Construct {
     // covers failures the handler caught.
     const refresherDlq = new cloudwatch.Alarm(this, 'RefresherDlq', {
       alarmName: 'TPM-App-RefresherDLQ',
-      alarmDescription: 'The refresher DLQ has messages: a watchlist refresh failed after retries.',
+      alarmDescription:
+        'The refresher DLQ has messages: a watchlist refresh failed after retries. Purge the queue after investigating; messages remain for 14 days.',
       metric: dlq.metricApproximateNumberOfMessagesVisible({
         period: cdk.Duration.minutes(5),
         statistic: 'Maximum',
