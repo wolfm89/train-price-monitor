@@ -43,11 +43,11 @@ const JourneysPage: React.FC = () => {
   // then scroll and briefly outline the matching ticket. An unknown hash is a
   // no-op.
   useEffect(() => {
-    if (!location.hash) {
-      setHighlightedJourneyId(null);
-      return;
-    }
-    if (userJourneysFetching) {
+    // A new navigation always drops the previous outline, including an invalid
+    // hash that no longer resolves to a ticket.
+    setHighlightedJourneyId(null);
+
+    if (!location.hash || userJourneysFetching) {
       return;
     }
 
@@ -70,7 +70,7 @@ const JourneysPage: React.FC = () => {
     setHighlightedJourneyId(targetId);
     const timeout = window.setTimeout(() => setHighlightedJourneyId(null), 4000);
     return () => window.clearTimeout(timeout);
-  }, [location.hash, userJourneysFetching, journeyMonitors.length]);
+  }, [location.hash, location.key, userJourneysFetching, journeyMonitors.length]);
 
   function handleJourneyMonitorDelete(id: string): void {
     setLoadingJourneyIds((prev) => new Set([...prev, id]));

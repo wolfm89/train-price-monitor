@@ -14,6 +14,27 @@ function keys(customId: string): { imageUrlKey: string; imageUrlTimestampKey: st
   };
 }
 
+export interface ProfilePictureOperationLike {
+  operation?: {
+    variables?: Record<string, unknown>;
+  };
+}
+
+/**
+ * True when a query result belongs to the given user.
+ *
+ * urql preserves the previous result while variables change (and while the
+ * query is paused), so the data alone cannot be trusted after an account switch.
+ * The operation variables identify which user the URL was fetched for.
+ */
+export function isProfilePictureResultForUser(
+  result: ProfilePictureOperationLike,
+  customId: string | undefined
+): boolean {
+  if (!customId) return false;
+  return result.operation?.variables?.['id'] === customId;
+}
+
 export function readCachedProfilePicture(
   customId: string | undefined,
   storage: ProfilePictureCacheStorage,

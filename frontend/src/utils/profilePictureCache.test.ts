@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clearCachedProfilePicture,
+  isProfilePictureResultForUser,
   PROFILE_PICTURE_CACHE_TTL_MS,
   readCachedProfilePicture,
   writeCachedProfilePicture,
@@ -59,5 +60,26 @@ describe('profile picture cache', () => {
     writeCachedProfilePicture('user-1', 'https://example.test/a.png', storage, 1_000);
     storage.setItem('image_url_timestamp_user-1', 'not-a-number');
     expect(readCachedProfilePicture('user-1', storage, 2_000)).toBeUndefined();
+  });
+});
+
+describe('isProfilePictureResultForUser', () => {
+  const resultFor = (userId: string) => ({ operation: { variables: { id: userId } } });
+
+  it('accepts a result whose operation belongs to the current user', () => {
+    expect(isProfilePictureResultForUser(resultFor('user-1'), 'user-1')).toBe(true);
+  });
+
+  it('rejects the previous account’s result during an account switch', () => {
+    expect(isProfilePictureResultForUser(resultFor('user-1'), 'user-2')).toBe(false);
+  });
+
+  it('rejects a result without operation variables', () => {
+    expect(isProfilePictureResultForUser({}, 'user-1')).toBe(false);
+    expect(isProfilePictureResultForUser({ operation: {} }, 'user-1')).toBe(false);
+  });
+
+  it('rejects everything when no user is signed in', () => {
+    expect(isProfilePictureResultForUser(resultFor('user-1'), undefined)).toBe(false);
   });
 });

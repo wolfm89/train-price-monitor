@@ -7,6 +7,7 @@ import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from './AlertProvider';
 import {
   clearCachedProfilePicture,
+  isProfilePictureResultForUser,
   readCachedProfilePicture,
   writeCachedProfilePicture,
 } from '../utils/profilePictureCache';
@@ -104,7 +105,10 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [customId, fetchAndCacheUserProfilePictureUrl]);
 
   useEffect(() => {
-    if (!customId) {
+    // urql keeps the previous result's data while a new operation is in flight,
+    // and across the paused sign-out state. Without this guard an A → B switch
+    // would label A's URL with B's id and cache it under B's keys.
+    if (!customId || !isProfilePictureResultForUser(userProfilePictureUrlResult, customId)) {
       return;
     }
     if (userProfilePictureUrlResult.data) {
