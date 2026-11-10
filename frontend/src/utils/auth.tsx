@@ -6,6 +6,7 @@ import {
   CognitoUserAttribute,
   CognitoUserSession,
 } from 'amazon-cognito-identity-js';
+import { loadCognitoSession } from './cognitoSession';
 
 const cognitoUserPoolConfig = {
   UserPoolId: process.env.REACT_APP_COGNITO_USER_POOL_ID!,
@@ -144,21 +145,17 @@ export async function getCurrentUser(): Promise<UserData | null> {
   });
 }
 
-export function getSession() {
-  return new Promise<CognitoUserSession | null>((resolve, reject) => {
-    const cognitoUser = userPool.getCurrentUser();
-    if (!cognitoUser) {
-      reject(new Error('No user found'));
-      return;
-    }
-    cognitoUser.getSession((err: Error, _session: null) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(_session);
-    });
-  });
+export interface GetSessionOptions {
+  /** Exchange the refresh token even while the cached session is still valid. */
+  forceRefresh?: boolean;
+}
+
+export function getSession(options: GetSessionOptions = {}): Promise<CognitoUserSession | null> {
+  const cognitoUser = userPool.getCurrentUser();
+  if (!cognitoUser) {
+    return Promise.reject(new Error('No user found'));
+  }
+  return loadCognitoSession(cognitoUser, Boolean(options.forceRefresh));
 }
 
 export function changePassword(oldPassword: string, newPassword: string): Promise<void> {

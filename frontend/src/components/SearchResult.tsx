@@ -113,7 +113,7 @@ const SearchResult: React.FC<Props> = ({
     setLimitPrice('');
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && isValidLimitPrice()) {
       handleConfirmWatch();
     }
@@ -360,7 +360,7 @@ const SearchResult: React.FC<Props> = ({
             type="number"
             value={limitPrice}
             onChange={(e) => setLimitPrice(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             error={!isValidLimitPrice() && limitPrice !== ''}
             helperText={!isValidLimitPrice() && limitPrice !== '' ? 'Invalid limit price' : ''}
           />

@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
 import { Button, Typography, Box, CircularProgress, Chip, Paper, Grid, useTheme } from '@mui/material';
@@ -294,30 +294,50 @@ const HomePage: React.FC<Props> = () => {
     pause: !user?.['custom:id'],
   });
 
+  const userId = user?.['custom:id'];
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const createAttemptedForUserRef = useRef<string | null>(null);
+
+  // A different account gets a fresh creation attempt. Within one account the
+  // ref keeps the effect from repeating the mutation when the query result
+  // object is recreated after an alert or an unrelated re-render.
   useEffect(() => {
-    if (!user || userExistsResult.fetching) {
+    createAttemptedForUserRef.current = null;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId || userExistsResult.fetching) {
       return;
     }
-    const userExists = !!userExistsResult.data?.user?.id;
-    if (!userExists) {
-      createUser({
-        id: user['custom:id'],
-        email: user['email'],
-        familyName: user['family_name'],
-        givenName: user['given_name'],
-      })
-        .then((result) => {
-          if (result.error) {
-            addAlert(result.error.message, AlertSeverity.Error);
-          } else {
-            reexecuteUserExistsQuery({ requestPolicy: 'network-only' });
-          }
-        })
-        .catch(() => {
-          addAlert('Failed to create account. Please try again.', AlertSeverity.Error);
-        });
+    if (userExistsResult.data?.user?.id) {
+      return;
     }
-  }, [addAlert, createUser, reexecuteUserExistsQuery, user, userExistsResult]);
+    if (createAttemptedForUserRef.current === userId) {
+      return;
+    }
+
+    createAttemptedForUserRef.current = userId;
+    setCreatingAccount(true);
+    createUser({
+      id: userId,
+      email: user['email'],
+      familyName: user['family_name'],
+      givenName: user['given_name'],
+    })
+      .then((result) => {
+        if (result.error) {
+          addAlert(result.error.message, AlertSeverity.Error);
+        } else {
+          reexecuteUserExistsQuery({ requestPolicy: 'network-only' });
+        }
+      })
+      .catch(() => {
+        addAlert('Failed to create account. Please try again.', AlertSeverity.Error);
+      })
+      .finally(() => {
+        setCreatingAccount(false);
+      });
+  }, [addAlert, createUser, reexecuteUserExistsQuery, user, userId, userExistsResult]);
 
   if (!user) {
     return (
@@ -328,7 +348,7 @@ const HomePage: React.FC<Props> = () => {
     );
   }
 
-  if (userExistsResult.fetching) {
+  if (userExistsResult.fetching || creatingAccount) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
         <CircularProgress />

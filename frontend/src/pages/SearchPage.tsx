@@ -8,22 +8,14 @@ import { Journey, SearchData } from '../components/SearchResult';
 import { JourneySearchQuery } from '../api/journey';
 import { UserTravelPreferencesQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
-
-interface QueryVars {
-  from: string;
-  to: string;
-  departure: string;
-  earlierThan?: string;
-  laterThan?: string;
-  options?: JourneySearchOptions;
-}
+import { SearchQueryVars, withPageDirection } from '../utils/searchQueryVars';
 
 interface Props {}
 
 const SearchPage: React.FC<Props> = () => {
   const { user } = useContext(AuthContext);
   const [searchData, setSearchData] = useState<SearchData | null>(null);
-  const [queryVars, setQueryVars] = useState<QueryVars | null>(null);
+  const [queryVars, setQueryVars] = useState<SearchQueryVars | null>(null);
   const [searchClicked, setSearchClicked] = useState<boolean>(false);
   const [navigatingDirection, setNavigatingDirection] = useState<'earlier' | 'later' | null>(null);
   const [searchOptions, setSearchOptions] = useState<JourneySearchOptions | undefined>(undefined);
@@ -76,14 +68,14 @@ const SearchPage: React.FC<Props> = () => {
   const handleNavigateEarlier = earlierRef
     ? () => {
         setNavigatingDirection('earlier');
-        setQueryVars((prev) => ({ ...prev!, earlierThan: earlierRef, laterThan: undefined }));
+        setQueryVars((prev) => withPageDirection(prev, 'earlier', earlierRef));
       }
     : undefined;
 
   const handleNavigateLater = laterRef
     ? () => {
         setNavigatingDirection('later');
-        setQueryVars((prev) => ({ ...prev!, laterThan: laterRef, earlierThan: undefined }));
+        setQueryVars((prev) => withPageDirection(prev, 'later', laterRef));
       }
     : undefined;
 

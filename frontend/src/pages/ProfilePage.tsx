@@ -21,6 +21,7 @@ import { useMutation, useQuery } from 'urql';
 import { DeleteUser, UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
 import { useNavigate } from 'react-router-dom';
 import TravelPreferences from '../components/TravelPreferences';
+import { deleteAccountSafely, hasMutationError } from '../utils/accountDeletion';
 
 // ---------------------------------------------------------------------------
 // Style constants
@@ -93,7 +94,11 @@ const ProfilePage: React.FC = () => {
       }
 
       updateUserProfilePicture({ id: user?.['custom:id'], image: file })
-        .then(() => {
+        .then((result) => {
+          if (hasMutationError(result)) {
+            addAlert('Profile picture change failed. Please try again.', AlertSeverity.Error);
+            return;
+          }
           addAlert('Profile picture changed successfully!', AlertSeverity.Success);
           refetchUserProfilePictureUrl();
         })
@@ -139,22 +144,28 @@ const ProfilePage: React.FC = () => {
 
   const handleConfirmDeleteAccount = async () => {
     setAccountDeletionConfirmed(true);
-    deleteUser({ id: user?.['custom:id'] })
-      .then(() => {
-        deleteCognitoUser()
-          .then(() => {
-            navigate(`/`);
-            addAlert('Account deleted successfully!', AlertSeverity.Success);
-          })
-          .catch(() => {
-            addAlert('Account deletion failed.', AlertSeverity.Error);
-          });
-      })
-      .catch(() => {
-        addAlert('Account deletion failed.', AlertSeverity.Error);
-      });
-
     setShowDeleteConfirmation(false);
+
+    // Backend data first: a failed mutation resolves with `{ error }`, and
+    // deleting the Cognito login anyway would orphan journeys and notifications.
+    const outcome = await deleteAccountSafely({
+      deleteBackendData: () => deleteUser({ id: user?.['custom:id'] }),
+      deleteCognitoUser,
+    });
+
+    if (!outcome.ok) {
+      setAccountDeletionConfirmed(false);
+      addAlert(
+        outcome.stage === 'cognito'
+          ? 'Your account data was deleted, but the login could not be removed. Please contact support.'
+          : 'Account deletion failed. Please try again.',
+        AlertSeverity.Error
+      );
+      return;
+    }
+
+    navigate(`/`);
+    addAlert('Account deleted successfully!', AlertSeverity.Success);
   };
 
   const initials = user ? `${user.given_name?.[0] ?? ''}${user.family_name?.[0] ?? ''}`.toUpperCase() : '';

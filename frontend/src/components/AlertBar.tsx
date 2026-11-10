@@ -1,6 +1,6 @@
 import React from 'react';
 import useAlert from '../hooks/useAlert';
-import { Slide, SlideProps, Snackbar } from '@mui/material';
+import { Slide, Snackbar } from '@mui/material';
 import MuiAlert, { AlertProps } from '@mui/material/Alert';
 
 const Alert = React.forwardRef<HTMLDivElement, AlertProps>(function Alert(props, ref) {
@@ -14,10 +14,6 @@ const AlertBar: React.FC = () => {
     removeAlert();
   };
 
-  const SlideTransition = (props: SlideProps) => {
-    return <Slide {...props} direction="down" />;
-  };
-
   return (
     alert && (
       <Snackbar
@@ -28,7 +24,9 @@ const AlertBar: React.FC = () => {
         }}
         autoHideDuration={5000}
         onClose={onClose}
-        TransitionComponent={SlideTransition}
+        // Slide is a stable module-level component and defaults to direction="down".
+        // Defining the transition inside this component remounted it on every render.
+        slots={{ transition: Slide }}
       >
         <Alert onClose={onClose} severity={alert?.severity} sx={{ width: '100%' }}>
           {alert?.message}

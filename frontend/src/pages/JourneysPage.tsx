@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useState } from 'react';
 import { Box, Button, ListItemIcon, ListItemText, Menu, MenuItem, Stack, Typography } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery } from 'urql';
 
 import { UserJourneysQuery } from '../api/user';
@@ -14,6 +14,7 @@ import JourneyTicket, { Journey } from '../components/JourneyTicket';
 const JourneysPage: React.FC = () => {
   const { user } = useContext(AuthContext);
   const { addAlert } = useAlert();
+  const location = useLocation();
   const [{ data: userJourneysResult, fetching: userJourneysFetching }, reexecuteUserJourneysQuery] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
@@ -24,6 +25,7 @@ const JourneysPage: React.FC = () => {
   const [loadingJourneyIds, setLoadingJourneyIds] = useState<Set<string>>(new Set());
   const [deletedJourneyIds, setDeletedJourneyIds] = useState<Set<string>>(new Set());
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; id: string } | null>(null);
+  const [highlightedJourneyId, setHighlightedJourneyId] = useState<string | null>(null);
 
   const journeyMonitors =
     userJourneysResult?.user?.journeyMonitors?.filter((j: Journey) => !deletedJourneyIds.has(j.id)) ?? [];
@@ -35,6 +37,40 @@ const JourneysPage: React.FC = () => {
   useEffect(() => {
     reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
   }, [reexecuteUserJourneysQuery]);
+
+  // Notification, email and "Review ↗" links point at /journeys#<journeyId>.
+  // The ticket only exists after the watchlist query resolves, so wait for it,
+  // then scroll and briefly outline the matching ticket. An unknown hash is a
+  // no-op.
+  useEffect(() => {
+    // A new navigation always drops the previous outline, including an invalid
+    // hash that no longer resolves to a ticket.
+    setHighlightedJourneyId(null);
+
+    if (!location.hash || userJourneysFetching) {
+      return;
+    }
+
+    let targetId: string;
+    try {
+      targetId = decodeURIComponent(location.hash.slice(1));
+    } catch {
+      return;
+    }
+    if (!targetId) {
+      return;
+    }
+
+    const target = document.getElementById(targetId);
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedJourneyId(targetId);
+    const timeout = window.setTimeout(() => setHighlightedJourneyId(null), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [location.hash, location.key, userJourneysFetching, journeyMonitors.length]);
 
   function handleJourneyMonitorDelete(id: string): void {
     setLoadingJourneyIds((prev) => new Set([...prev, id]));
@@ -96,6 +132,7 @@ const JourneysPage: React.FC = () => {
               monitor={monitor}
               onOpenMenu={(el, id) => setMenuAnchor({ el, id })}
               loadingIds={loadingJourneyIds}
+              highlighted={monitor.id === highlightedJourneyId}
             />
           ))}
         </Stack>
