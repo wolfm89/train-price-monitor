@@ -173,8 +173,13 @@ flowchart LR
 - IAM follows least privilege; the scraper grants only the table/bucket access each Lambda needs.
 - Pre-commit hooks enforce: trailing-whitespace, LF line endings, valid YAML/JSON, Prettier, ESLint.
   Install with `pip install pre-commit && pre-commit install`.
+- **Dependency scanning:** GitHub Dependabot security alerts and PRs are enabled at the repository
+  level. Dependabot PRs are not auto-merged: review them in batches, apply the updates with
+  `npm install`/`npm update` in the affected module, and run that module's checks. `npm audit` is not
+  a CI gate; treat Dependabot alerts as the source of truth and clear findings in a dedicated
+  dependency batch. GitHub Actions run on pinned major tags and are updated together with the
+  workflow.
 - Licensed under GPL-3.0.
-  > TODO: document dependency-scanning tooling (e.g. Dependabot / npm audit) if/when adopted.
 
 ## Agent Guardrails
 
