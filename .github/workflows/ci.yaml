@@ -35,10 +35,10 @@ permissions:
 jobs:
   frontend:
     name: Frontend
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
@@ -63,10 +63,10 @@ jobs:
 
   backend:
     name: Backend
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
@@ -98,10 +98,10 @@ jobs:
 
   scraper:
     name: Scraper
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
@@ -124,10 +124,10 @@ jobs:
 
   infrastructure:
     name: Infrastructure
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
@@ -151,10 +151,10 @@ jobs:
     name: Build & synth
     # Only on pull requests: a deploy performs the equivalent work itself.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
@@ -195,11 +195,11 @@ jobs:
           CDK_DEFAULT_ACCOUNT: '111111111111'
           CDK_DEFAULT_REGION: eu-central-1
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # linux/amd64 to match the x86_64 Lambda functions.
       - name: Build backend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: backend
           platforms: linux/amd64
@@ -208,7 +208,7 @@ jobs:
           cache-to: type=gha,scope=backend,mode=max
 
       - name: Build scraper poller image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: scraper
           platforms: linux/amd64
@@ -221,10 +221,10 @@ jobs:
     # Never on pull requests, and only once every module job is green.
     if: github.event_name != 'pull_request'
     needs: [frontend, backend, scraper, infrastructure]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: 'npm'
@@ -268,7 +268,7 @@ jobs:
         run: npm ci
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -352,10 +352,13 @@ jobs:
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
 
       - name: Invalidate CloudFront cache
-        uses: badsyntax/github-action-aws-cloudfront@master
-        with:
-          aws-region: ${{ vars.AWS_REGION }}
-          distribution-id: ${{ secrets.DISTRIBUTION_ID }}
-          invalidate-paths: '*'
-          default-root-object: 'index.html'
-          include-origin-prefix: false
+        env:
+          DISTRIBUTION_ID: ${{ secrets.DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          INVALIDATION_ID="$(aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths '/*' \
+            --query 'Invalidation.Id' \
+            --output text)"
+          echo "Created CloudFront invalidation ${INVALIDATION_ID}"
