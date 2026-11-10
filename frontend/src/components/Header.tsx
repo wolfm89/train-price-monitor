@@ -97,21 +97,33 @@ const Header = () => {
 
   useEffect(() => {
     const refresh = () => {
-      if (user?.['custom:id'] && document.visibilityState === 'visible') {
+      if (user?.['custom:id']) {
         reexecuteUserNotificationsQuery({ requestPolicy: 'network-only' });
       }
     };
-    const intervalId = setInterval(refresh, 60_000);
-    const refreshWhenVisible = () => {
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      // Visible tabs poll every 30 s; hidden tabs keep a 10-minute heartbeat.
+      const delay = document.visibilityState === 'visible' ? 30_000 : 10 * 60_000;
+      timer = setTimeout(() => {
+        refresh();
+        schedule();
+      }, delay);
+    };
+    const refreshWhenActive = () => {
       if (document.visibilityState === 'visible') refresh();
+      schedule();
     };
 
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    window.addEventListener('focus', refreshWhenVisible);
+    schedule();
+    document.addEventListener('visibilitychange', refreshWhenActive);
+    window.addEventListener('focus', refreshWhenActive);
     return () => {
-      clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
-      window.removeEventListener('focus', refreshWhenVisible);
+      if (timer !== undefined) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', refreshWhenActive);
+      window.removeEventListener('focus', refreshWhenActive);
     };
   }, [reexecuteUserNotificationsQuery, user]);
 
