@@ -148,7 +148,9 @@ flowchart LR
 - **Frontend** – Vitest (`*.test.{ts,tsx}`); run `mise run //frontend:test` (or `npm test`).
 - **Infrastructure** – Jest with ts-jest (`*.test.ts`); run `mise run //infrastructure:test`.
   Use descriptive names, e.g. `test('SQS Queue Created')`.
-- **Scraper / Backend** – No automated test suites yet; rely on `typecheck` + `lint`.
+- **Backend** – Node's test runner for the backfill planner and a `ts-node` assertion script for the
+  journey matcher; run `npm test` in `backend`. CI runs it alongside `typecheck` + `lint`.
+- **Scraper** – No automated test suite yet; rely on `typecheck` + `lint`.
   > TODO: add unit coverage for scraper TTD tiering and Parquet serialization.
 - **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
   formatting and linting on every commit.

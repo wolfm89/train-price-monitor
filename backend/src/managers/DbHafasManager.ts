@@ -306,6 +306,7 @@ export class DbHafasManager {
         fromId: from,
         toId: to,
         departure,
+        lineName: refreshedJourney.legs[0].line?.name,
       });
       if (matchingJourney?.price) {
         Logger.info('Price was found through new journeys query');
