@@ -60,7 +60,7 @@ function priceAlertFallbackMonitor(userId: string, data: { [key: string]: unknow
     id: typeof data['journeyId'] === 'string' ? data['journeyId'] : '',
     userId,
     limitPrice: snapshot.limitPrice ?? 0,
-    expires: snapshot.expires ?? new Date(0).toISOString(),
+    expires: snapshot.expires ? new Date(snapshot.expires) : new Date(0),
     from: snapshot.from,
     to: snapshot.to,
     unavailable: true,

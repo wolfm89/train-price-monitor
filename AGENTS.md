@@ -179,6 +179,12 @@ flowchart LR
   a CI gate; treat Dependabot alerts as the source of truth and clear findings in a dedicated
   dependency batch. GitHub Actions run on pinned major tags and are updated together with the
   workflow.
+- **Known dependency advisories:** the remaining npm findings are moderate/low and confined to dev
+  tooling. `minimatch` needs >= 11.0.5, but ESLint 10, TypeScript-ESLint 8, Jest 30 and GraphQL
+  Codegen 8 still pin 10.x, and `aws-cdk-lib` bundles it; Jest also carries `glob` 10 and
+  `deepmerge`. Infrastructure's production audit additionally reports the CDK-bundled minimatch
+  (3 moderate). Do not run `npm audit fix --force`: it proposes unsupported downgrades (ESLint 9,
+  Jest 25). Re-audit each module when the upstream packages adopt the fixed majors.
 - Licensed under GPL-3.0.
 
 ## Agent Guardrails

@@ -353,7 +353,7 @@ async function refreshJourneyMonitorInner(
     id: dbJourney.Item.id,
     userId: dbJourney.Item.userId,
     limitPrice: dbJourney.Item.limitPrice,
-    expires: dbJourney.Item.expires,
+    expires: new Date(dbJourney.Item.expires),
     unavailable: false,
     journey: { refreshToken: dbJourney.Item.refreshToken },
   };
@@ -695,7 +695,7 @@ async function deleteJourneyMonitorInner(
     id: dbJourney.Item.id,
     userId: dbJourney.Item.userId,
     limitPrice: dbJourney.Item.limitPrice,
-    expires: dbJourney.Item.expires,
+    expires: new Date(dbJourney.Item.expires),
     unavailable: false,
     journey: { refreshToken: dbJourney.Item.refreshToken },
   };

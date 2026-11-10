@@ -203,7 +203,7 @@ async function loadJourneyMonitors(
   const journeys: JourneyMonitor[] = (dbJourneys as StoredJourney[]).map(getJourneyMonitor);
   journeys.sort(
     (a: JourneyMonitor, b: JourneyMonitor) =>
-      (a.journey ? a.journey.departure.getTime() : Infinity) - (b.journey ? b.journey.departure.getTime() : Infinity)
+      (a.journey?.departure?.getTime() ?? Infinity) - (b.journey?.departure?.getTime() ?? Infinity)
   );
 
   const limit = args.limit ?? undefined;
@@ -511,7 +511,7 @@ export function getJourneyMonitor(dbJourney: StoredJourney): JourneyMonitor {
     id: dbJourney.id,
     userId: dbJourney.userId,
     limitPrice: dbJourney.limitPrice,
-    expires: dbJourney.expires,
+    expires: new Date(dbJourney.expires),
     from: dbJourney.cachedFrom ?? undefined,
     to: dbJourney.cachedTo ?? undefined,
     firstClass: dbJourney.firstClass ?? undefined,
