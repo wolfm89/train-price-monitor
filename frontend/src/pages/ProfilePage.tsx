@@ -6,6 +6,7 @@ import {
   Button,
   Avatar,
   Box,
+  Link,
   Switch,
   Paper,
   Dialog,
@@ -17,11 +18,19 @@ import { AuthContext } from '../providers/AuthProvider';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
 import { changePassword } from '../utils/auth';
-import { useMutation, useQuery } from 'urql';
-import { DeleteUser, UpdateUserProfilePicture, UpdateUserSettings, UserSettingsQuery } from '../api/user';
+import { useClient, useMutation, useQuery } from 'urql';
+import {
+  DeleteUser,
+  ExportMyDataQuery,
+  UpdateUserProfilePicture,
+  UpdateUserSettings,
+  UserSettingsQuery,
+} from '../api/user';
 import { useNavigate } from 'react-router-dom';
 import TravelPreferences from '../components/TravelPreferences';
 import { deleteAccountSafely, hasMutationError } from '../utils/accountDeletion';
+import { downloadTextFile, exportFileName, withLoginAttributes } from '../utils/dataExport';
+import { PRIVACY_CONTACT_EMAIL, PRIVACY_POLICY_URL } from '../utils/legalLinks';
 
 // ---------------------------------------------------------------------------
 // Style constants
@@ -69,6 +78,8 @@ const ProfilePage: React.FC = () => {
   });
   const [, updateUserSettings] = useMutation(UpdateUserSettings);
   const [, deleteUser] = useMutation(DeleteUser);
+  const client = useClient();
+  const [exportingData, setExportingData] = useState(false);
 
   useEffect(() => {
     if (userSettingsData) {
@@ -142,6 +153,28 @@ const ProfilePage: React.FC = () => {
     setShowDeleteConfirmation(true);
   };
 
+  const handleExportData = async () => {
+    const userId = user?.['custom:id'];
+    if (!userId) return;
+    setExportingData(true);
+    try {
+      const result = await client
+        .query(ExportMyDataQuery, { id: userId }, { requestPolicy: 'network-only' })
+        .toPromise();
+      const exportJson = result.data?.exportMyData;
+      if (result.error || typeof exportJson !== 'string') {
+        addAlert('Data export failed. Please try again.', AlertSeverity.Error);
+        return;
+      }
+      downloadTextFile(withLoginAttributes(exportJson, user), exportFileName());
+      addAlert('Your data export has been downloaded.', AlertSeverity.Success);
+    } catch {
+      addAlert('Data export failed. Please try again.', AlertSeverity.Error);
+    } finally {
+      setExportingData(false);
+    }
+  };
+
   const handleConfirmDeleteAccount = async () => {
     setAccountDeletionConfirmed(true);
     setShowDeleteConfirmation(false);
@@ -157,7 +190,7 @@ const ProfilePage: React.FC = () => {
       setAccountDeletionConfirmed(false);
       addAlert(
         outcome.stage === 'cognito'
-          ? 'Your account data was deleted, but the login could not be removed. Please contact support.'
+          ? `Your account data was deleted, but the login could not be removed. Please email ${PRIVACY_CONTACT_EMAIL} to have it removed.`
           : 'Account deletion failed. Please try again.',
         AlertSeverity.Error
       );
@@ -354,13 +387,37 @@ const ProfilePage: React.FC = () => {
           {/* Travel Preferences */}
           <TravelPreferences />
 
+          {/* Your data */}
+          <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
+            <Typography variant="sectionTitle" sx={sectionTitleSx}>
+              Your data
+            </Typography>
+            <Typography sx={{ fontSize: 12, color: 'text.secondary', lineHeight: 1.55, mb: 1.75 }}>
+              Download a copy of the personal data stored for your account as a JSON file. How your data is processed is
+              explained in the{' '}
+              <Link href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer">
+                privacy policy
+              </Link>
+              .
+            </Typography>
+            <Button
+              variant="outlined"
+              onClick={handleExportData}
+              disabled={exportingData}
+              sx={{ textTransform: 'none', fontWeight: 500 }}
+            >
+              {exportingData ? 'Preparing download…' : 'Download my data'}
+            </Button>
+          </Paper>
+
           {/* Danger Zone */}
           <Paper elevation={0} sx={{ border: 1, borderColor: 'error.main', borderRadius: 3, p: 2.5 }}>
             <Typography variant="sectionTitle" sx={{ ...sectionTitleSx, borderColor: 'error.main' }} color="error.main">
               Danger zone
             </Typography>
             <Typography sx={{ fontSize: 12, color: 'text.secondary', lineHeight: 1.55, mb: 1.75 }}>
-              Permanently delete your account and all associated journey monitors. This action cannot be undone.
+              Permanently delete your account together with your journey monitors, notifications and profile picture.
+              This action cannot be undone.
             </Typography>
             <Button
               variant="outlined"
