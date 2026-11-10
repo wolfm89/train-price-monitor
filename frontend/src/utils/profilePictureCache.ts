@@ -1,10 +1,37 @@
 /** Presigned profile-picture URLs expire with the STS credentials used to sign them. */
 export const PROFILE_PICTURE_CACHE_TTL_MS = 60 * 60 * 1000;
 
+/** Prefix of the keys older versions used to cache the URL in localStorage. */
+const LEGACY_KEY_PREFIX = 'image_url_';
+
 export interface ProfilePictureCacheStorage {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => void;
   removeItem: (key: string) => void;
+}
+
+/**
+ * Page-lifetime storage for the cache. The presigned URL grants access to the
+ * picture until it expires, so it is kept in memory rather than persisted in
+ * localStorage, where it would outlive the session on a shared device.
+ */
+export function createMemoryStorage(): ProfilePictureCacheStorage {
+  const entries = new Map<string, string>();
+  return {
+    getItem: (key) => entries.get(key) ?? null,
+    setItem: (key, value) => void entries.set(key, value),
+    removeItem: (key) => void entries.delete(key),
+  };
+}
+
+/** Removes the URLs and timestamps that older versions left in localStorage. */
+export function purgeLegacyProfilePictureCache(storage: Pick<Storage, 'length' | 'key' | 'removeItem'>): void {
+  const legacyKeys: string[] = [];
+  for (let index = 0; index < storage.length; index++) {
+    const key = storage.key(index);
+    if (key?.startsWith(LEGACY_KEY_PREFIX)) legacyKeys.push(key);
+  }
+  legacyKeys.forEach((key) => storage.removeItem(key));
 }
 
 function keys(customId: string): { imageUrlKey: string; imageUrlTimestampKey: string } {

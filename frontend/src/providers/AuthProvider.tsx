@@ -7,10 +7,14 @@ import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from './AlertProvider';
 import {
   clearCachedProfilePicture,
+  createMemoryStorage,
   isProfilePictureResultForUser,
+  purgeLegacyProfilePictureCache,
   readCachedProfilePicture,
   writeCachedProfilePicture,
 } from '../utils/profilePictureCache';
+
+const profilePictureCache = createMemoryStorage();
 
 interface CachedProfilePicture {
   userId: string;
@@ -62,6 +66,11 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     getCurrentUser();
+    try {
+      purgeLegacyProfilePictureCache(localStorage);
+    } catch {
+      // Storage can be unavailable (e.g. blocked by the browser); nothing to purge then.
+    }
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -72,7 +81,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     const signedOutUserId = user?.['custom:id'];
     await auth.signOut();
-    clearCachedProfilePicture(signedOutUserId, localStorage);
+    clearCachedProfilePicture(signedOutUserId, profilePictureCache);
     setProfilePicture(null);
     setUser(null);
   };
@@ -80,7 +89,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const deleteUser = async () => {
     const deletedUserId = user?.['custom:id'];
     await auth.deleteUser();
-    clearCachedProfilePicture(deletedUserId, localStorage);
+    clearCachedProfilePicture(deletedUserId, profilePictureCache);
     setProfilePicture(null);
     setUser(null);
   };
@@ -95,7 +104,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const cachedUrl = readCachedProfilePicture(customId, localStorage);
+    const cachedUrl = readCachedProfilePicture(customId, profilePictureCache);
     if (cachedUrl) {
       setProfilePicture({ userId: customId, url: cachedUrl });
     } else {
@@ -115,10 +124,10 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       const newUrl = userProfilePictureUrlResult.data.userProfilePicturePresignedUrl?.url;
       if (newUrl) {
         setProfilePicture({ userId: customId, url: newUrl });
-        writeCachedProfilePicture(customId, newUrl, localStorage);
+        writeCachedProfilePicture(customId, newUrl, profilePictureCache);
       } else {
         setProfilePicture({ userId: customId, url: undefined });
-        clearCachedProfilePicture(customId, localStorage);
+        clearCachedProfilePicture(customId, profilePictureCache);
       }
     } else if (userProfilePictureUrlResult.error) {
       // eslint-disable-next-line no-console

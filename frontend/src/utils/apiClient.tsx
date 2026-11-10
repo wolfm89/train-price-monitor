@@ -58,4 +58,7 @@ const cognitoAuthExchange = authExchange(async (utils) => {
 export const client = new Client({
   url: apiGatewayEndpoint,
   exchanges: [cacheExchange, cognitoAuthExchange, fetchExchange],
+  // urql sends short queries as GET by default, which puts IDs and search terms
+  // into request URLs (and any log that records them). POST keeps them in the body.
+  preferGetMethod: false,
 });
