@@ -150,8 +150,8 @@ flowchart LR
   Use descriptive names, e.g. `test('SQS Queue Created')`.
 - **Backend** – Node's test runner for the backfill planner and a `ts-node` assertion script for the
   journey matcher; run `npm test` in `backend`. CI runs it alongside `typecheck` + `lint`.
-- **Scraper** – No automated test suite yet; rely on `typecheck` + `lint`.
-  > TODO: add unit coverage for scraper TTD tiering and Parquet serialization.
+- **Scraper** – Node's test runner via `tsx` for TTD tiering/jitter/order and Parquet serialization
+  round-trips (`*.test.ts`); run `npm test` in `scraper`. CI runs it alongside `typecheck` + `lint`.
 - **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
   formatting and linting on every commit.
 

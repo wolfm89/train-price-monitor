@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "test": "tsx --test src/*.test.ts"
   },
   "author": "",
   "license": "GPL-3.0",
@@ -22,6 +23,7 @@
     "eslint": "^10.1.0",
     "hyparquet": "^1.26.0",
     "prettier": "^3.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },
   "dependencies": {
