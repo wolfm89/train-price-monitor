@@ -25,7 +25,7 @@ export function loadStoredPricingOptions(dbJourney: {
       const parsed = JSON.parse(dbJourney.loyaltyCard) as LoyaltyCardData | LoyaltyCardData[];
       opts.loyaltyCard = Array.isArray(parsed) ? parsed[0] : parsed;
     } catch {
-      Logger.warn('Failed to parse stored loyaltyCard JSON for pricing', { raw: dbJourney.loyaltyCard });
+      Logger.warn('Failed to parse stored loyaltyCard JSON for pricing', { length: dbJourney.loyaltyCard.length });
     }
   }
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   clearCachedProfilePicture,
+  createMemoryStorage,
   isProfilePictureResultForUser,
   PROFILE_PICTURE_CACHE_TTL_MS,
+  purgeLegacyProfilePictureCache,
   readCachedProfilePicture,
   writeCachedProfilePicture,
 } from './profilePictureCache';
@@ -60,6 +62,33 @@ describe('profile picture cache', () => {
     writeCachedProfilePicture('user-1', 'https://example.test/a.png', storage, 1_000);
     storage.setItem('image_url_timestamp_user-1', 'not-a-number');
     expect(readCachedProfilePicture('user-1', storage, 2_000)).toBeUndefined();
+  });
+});
+
+describe('createMemoryStorage', () => {
+  it('keeps entries only in the instance', () => {
+    const first = createMemoryStorage();
+    const second = createMemoryStorage();
+    writeCachedProfilePicture('user-1', 'https://example.test/a.png', first, 1_000);
+
+    expect(readCachedProfilePicture('user-1', first, 2_000)).toBe('https://example.test/a.png');
+    expect(readCachedProfilePicture('user-1', second, 2_000)).toBeUndefined();
+  });
+});
+
+describe('purgeLegacyProfilePictureCache', () => {
+  it('removes every legacy URL and timestamp but nothing else', () => {
+    localStorage.clear();
+    localStorage.setItem('image_url_user-1', 'https://example.test/a.png');
+    localStorage.setItem('image_url_timestamp_user-1', '1000');
+    localStorage.setItem('image_url_user-2', 'https://example.test/b.png');
+    localStorage.setItem('CognitoIdentityServiceProvider.client.LastAuthUser', 'someone');
+
+    purgeLegacyProfilePictureCache(localStorage);
+
+    expect(localStorage.length).toBe(1);
+    expect(localStorage.getItem('CognitoIdentityServiceProvider.client.LastAuthUser')).toBe('someone');
+    localStorage.clear();
   });
 });
 

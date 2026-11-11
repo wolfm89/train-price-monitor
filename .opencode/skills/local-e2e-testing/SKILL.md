@@ -264,7 +264,7 @@ If you started the servers in this session and they need to be cleaned up:
 
 ```bash
 # Kill by finding the processes
-pkill -9 -f "ts-node-dev" 2>/dev/null
+pkill -9 -f "backend/scripts/dev.mjs" 2>/dev/null
 pkill -9 -f "vite" 2>/dev/null
 
 # Or kill by PID if you saved them
@@ -280,7 +280,7 @@ If the servers were already running before this session (checked in Step 2), lea
 
 ## Environment requirements
 
-- `backend/.env` must exist with `TPM_SQS_QUEUE_URL`, `PROFILE_IMAGE_BUCKET_NAME`, `AWS_PROFILE`
+- `backend/.env` must exist with `TPM_SQS_QUEUE_URL`, `PROFILE_IMAGE_BUCKET_NAME`, `AWS_PROFILE` (`mise run env:local`)
 - `frontend/.env` must exist with Cognito pool IDs and `REACT_APP_AWS_REGION`
 - `frontend/.env.development` must set `REACT_APP_GRAPHQL_ENDPOINT=http://localhost:4000/`
 - AWS credentials must be valid for the profile in `backend/.env` (DynamoDB reads/writes happen against live AWS)

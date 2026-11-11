@@ -73,6 +73,8 @@ export const Notification = new Entity({
     read: boolean().default(false).required(),
     sent: boolean().default(false).required(),
     data: string().optional(),
+    // DynamoDB TTL (epoch seconds), see lib/retention.ts.
+    ttl: number().optional(),
   }),
   computeKey: ({ userId, id }) => ({
     pk: `USER#${userId}`,
@@ -109,6 +111,8 @@ export const Journey = new Entity({
     cachedFrom: string().optional(),
     cachedTo: string().optional(),
     lastCheckedAt: string().optional(),
+    // DynamoDB TTL (epoch seconds), see lib/retention.ts.
+    ttl: number().optional(),
   }),
   computeKey: ({ userId, id }) => ({
     pk: `USER#${userId}`,
@@ -141,6 +145,7 @@ export interface StoredJourney {
   cachedFrom?: string;
   cachedTo?: string;
   lastCheckedAt?: string;
+  ttl?: number;
 }
 
 export {

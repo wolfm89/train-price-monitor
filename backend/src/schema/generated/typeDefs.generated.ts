@@ -126,6 +126,7 @@ export type Mutation = {
   __typename?: 'Mutation';
   createUser?: Maybe<User>;
   deleteJourneyMonitor?: Maybe<JourneyMonitor>;
+  deleteUnconfirmedSignups?: Maybe<Scalars['Int']['output']>;
   deleteUser?: Maybe<User>;
   markNotificationAsRead?: Maybe<Notification>;
   monitorJourney?: Maybe<JourneyMonitor>;
@@ -237,10 +238,15 @@ export type ProductFilter = {
 
 export type Query = {
   __typename?: 'Query';
+  exportMyData: Scalars['String']['output'];
   journeys?: Maybe<JourneysResult>;
   locations?: Maybe<Array<Maybe<Location>>>;
   user?: Maybe<User>;
   userProfilePicturePresignedUrl?: Maybe<PresignedUrl>;
+};
+
+export type QueryExportMyDataArgs = {
+  id: Scalars['ID']['input'];
 };
 
 export type QueryJourneysArgs = {

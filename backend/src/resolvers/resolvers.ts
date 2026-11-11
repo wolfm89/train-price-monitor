@@ -2,12 +2,14 @@ import { Resolvers } from '../schema/generated/resolvers.generated';
 import {
   userQuery,
   userProfilePicturePresignedUrlQuery,
+  exportMyDataQuery,
   userResolvers,
   updateUserProfilePicture,
   createUser,
   updateUserSettings,
   updateTravelPreferences,
   deleteUser,
+  deleteUnconfirmedSignups,
 } from './user';
 import {
   journeysQuery,
@@ -31,6 +33,7 @@ const resolvers: ResolversWithScalars = {
   Query: {
     user: userQuery,
     userProfilePicturePresignedUrl: userProfilePicturePresignedUrlQuery,
+    exportMyData: exportMyDataQuery,
     journeys: journeysQuery,
     locations: locationsQuery,
   },
@@ -40,6 +43,7 @@ const resolvers: ResolversWithScalars = {
     updateUserSettings: updateUserSettings,
     updateTravelPreferences: updateTravelPreferences,
     deleteUser: deleteUser,
+    deleteUnconfirmedSignups: deleteUnconfirmedSignups,
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,
     updateJourneyMonitor: updateJourneyMonitor,

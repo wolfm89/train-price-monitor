@@ -12,6 +12,7 @@ import {
   aws_events_targets as targets,
   aws_sns as sns,
   aws_sqs as sqs,
+  aws_ses as ses,
   aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
@@ -30,6 +31,15 @@ export class Backend extends Construct {
     alertTopic?: sns.ITopic
   ) {
     super(scope, id);
+
+    const frontendOrigin = `https://${frontendDomainName}`;
+
+    // While the SES account is in the sandbox, every recipient has to be a
+    // verified identity, so the API registers each user's address with SES.
+    // Once AWS grants production access, set CDK_SES_PRODUCTION_ACCESS=1 (context
+    // `ses_production_access`) to switch the workaround off and drop its IAM
+    // permissions.
+    const sesSandbox = String(this.node.tryGetContext('ses_production_access') ?? '') !== '1';
 
     // Create DynamoDB tables
     const tables: dynamodb.Table[] = tableDefinitions.map((tableDefinition: dynamodb.TableProps) => {
@@ -79,8 +89,11 @@ export class Backend extends Construct {
     const commonEnvironment = {
       PROFILE_IMAGE_BUCKET_NAME: profileImageBucket.bucketName,
       TPM_SQS_QUEUE_URL: queue.queueUrl,
-      FRONTEND_URL: `https://${frontendDomainName}`,
+      FRONTEND_URL: frontendOrigin,
+      // Origins the Lambda echoes in CORS headers (comma-separated).
+      CORS_ALLOWED_ORIGINS: frontendOrigin,
       SES_FROM_EMAIL: sesFromEmail,
+      SES_SANDBOX: sesSandbox ? 'true' : 'false',
       NODE_OPTIONS: '--enable-source-maps',
       DEPLOY_VERSION: 'v15',
       // Start with the profile that is currently accepted; the transport still
@@ -133,6 +146,8 @@ export class Backend extends Construct {
         ...commonEnvironment,
         DB_MIN_GAP_MS: '1500',
         DB_TOTAL_BUDGET_MS: '110000',
+        // For the daily deletion of unconfirmed sign-ups (deleteUnconfirmedSignups).
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
       },
     });
 
@@ -167,6 +182,26 @@ export class Backend extends Construct {
       })
     );
 
+    // Sign-ups that are never confirmed exist only in Cognito; the refresher
+    // deletes them once a day after UNCONFIRMED_SIGNUP_RETENTION_DAYS
+    // (backend/src/lib/retention.ts), as the privacy policy states.
+    new events.Rule(this, 'DeleteUnconfirmedSignupsRule', {
+      schedule: events.Schedule.rate(cdk.Duration.days(1)),
+      targets: [
+        new targets.SqsQueue(queue, {
+          message: events.RuleTargetInput.fromObject({
+            query: 'mutation { deleteUnconfirmedSignups }',
+          }),
+        }),
+      ],
+    });
+    refresherFunction.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminDeleteUser'],
+        resources: [userPool.userPoolArn],
+      })
+    );
+
     const api = new apigateway.LambdaRestApi(this, 'GraphqlApi', {
       handler: lambdaFunction,
       proxy: true,
@@ -178,16 +213,30 @@ export class Backend extends Construct {
         }),
       },
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        // Only the app itself calls the API from a browser. It sends the token
+        // in the Authorization header, not as a cookie, so no credentials flag.
+        allowOrigins: [frontendOrigin],
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: apigateway.Cors.DEFAULT_HEADERS,
-        allowCredentials: true,
         // Without this the browser re-preflights every polled GraphQL request,
         // doubling the API Gateway count.
         maxAge: cdk.Duration.minutes(10),
       },
       deployOptions: {
         accessLogDestination: new apigateway.LogGroupLogDestination(logGroup),
+        // Request metadata without the caller's IP address or identity: nothing
+        // in operations needs them, and the logs are kept for 14 days.
+        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
+          caller: false,
+          httpMethod: true,
+          ip: false,
+          protocol: true,
+          requestTime: true,
+          resourcePath: true,
+          responseLength: true,
+          status: true,
+          user: false,
+        }),
         loggingLevel: apigateway.MethodLoggingLevel.OFF,
         dataTraceEnabled: false,
       },
@@ -197,20 +246,64 @@ export class Backend extends Construct {
       type: ResponseType.UNAUTHORIZED,
       statusCode: '401',
       responseHeaders: {
-        'Access-Control-Allow-Origin': "'*'",
+        // The app must be able to read the 401 to refresh its token.
+        'Access-Control-Allow-Origin': `'${frontendOrigin}'`,
       },
     });
 
-    // AWS SES email identity must exist in the account for the configured ses_from_email
+    // The verified sending domain, created here instead of by hand. The DKIM
+    // tokens are only known after creation, so they are published as stack
+    // outputs; their CNAME records belong at the DNS provider. Do not create the
+    // identity manually as well, and do not move the sender to another domain:
+    // either replaces this identity and changes the tokens.
+    if (!sesFromEmail.includes('@')) {
+      throw new Error(`ses_from_email '${sesFromEmail}' is not an email address`);
+    }
+    const mailDomain = sesFromEmail.slice(sesFromEmail.lastIndexOf('@') + 1);
+    const domainIdentity = new ses.EmailIdentity(this, 'SesDomainIdentity', {
+      identity: ses.Identity.domain(mailDomain),
+      // Easy DKIM; RSA 2048 is also the SES default, stated here so a change is visible.
+      dkimIdentity: ses.DkimIdentity.easyDkim(ses.EasyDkimSigningKeyLength.RSA_2048_BIT),
+    });
+    new cdk.CfnOutput(this, 'SesDomainIdentityName', { value: domainIdentity.emailIdentityName });
+    new cdk.CfnOutput(this, 'SesDkimToken1Name', { value: domainIdentity.dkimDnsTokenName1 });
+    new cdk.CfnOutput(this, 'SesDkimToken1Value', { value: domainIdentity.dkimDnsTokenValue1 });
+    new cdk.CfnOutput(this, 'SesDkimToken2Name', { value: domainIdentity.dkimDnsTokenName2 });
+    new cdk.CfnOutput(this, 'SesDkimToken2Value', { value: domainIdentity.dkimDnsTokenValue2 });
+    new cdk.CfnOutput(this, 'SesDkimToken3Name', { value: domainIdentity.dkimDnsTokenName3 });
+    new cdk.CfnOutput(this, 'SesDkimToken3Value', { value: domainIdentity.dkimDnsTokenValue3 });
 
-    // Allow Lambda functions to send emails and create email identities. The
-    // refresher needs this too: it consumes the notification-email messages.
-    const sesPolicy = new cdk.aws_iam.PolicyStatement({
-      actions: ['ses:SendEmail', 'ses:CreateEmailIdentity'],
+    // Allow both functions to send emails: the refresher consumes the
+    // notification-email messages. The resource stays '*' on purpose: a send is
+    // authorised against the identity that authorises it (the domain or the
+    // address identity, and in the sandbox both exist), so scoping this to one
+    // of them can silently stop the alert emails.
+    const sesSendPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ['ses:SendEmail'],
       resources: ['*'],
     });
-    lambdaFunction.addToRolePolicy(sesPolicy);
-    refresherFunction.addToRolePolicy(sesPolicy);
+    lambdaFunction.addToRolePolicy(sesSendPolicy);
+    refresherFunction.addToRolePolicy(sesSendPolicy);
+
+    // deleteUser removes the address from the account-level suppression list
+    // (hard bounces and complaints). The action has no resource-level scope.
+    lambdaFunction.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        actions: ['ses:DeleteSuppressedDestination'],
+        resources: ['*'],
+      })
+    );
+
+    // Sandbox workaround only: createUser/deleteUser (API function) add and
+    // remove the user's address as a recipient identity.
+    if (sesSandbox) {
+      lambdaFunction.addToRolePolicy(
+        new cdk.aws_iam.PolicyStatement({
+          actions: ['ses:CreateEmailIdentity', 'ses:DeleteEmailIdentity'],
+          resources: [cdk.Stack.of(this).formatArn({ service: 'ses', resource: 'identity', resourceName: '*' })],
+        })
+      );
+    }
 
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: api.url,

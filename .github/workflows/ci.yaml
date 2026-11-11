@@ -342,6 +342,7 @@ jobs:
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
+          CDK_SES_PRODUCTION_ACCESS: ${{ vars.CDK_SES_PRODUCTION_ACCESS }}
 
       - name: Deploy with AWS CDK
         working-directory: infrastructure
@@ -352,6 +353,7 @@ jobs:
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
+          CDK_SES_PRODUCTION_ACCESS: ${{ vars.CDK_SES_PRODUCTION_ACCESS }}
 
       - name: Invalidate CloudFront cache
         env:

@@ -24,6 +24,7 @@ import { PricingOptions } from '../managers/DbHafasManager';
 import { LoyaltyCardData, validateLoyaltyCard } from '../lib/loyaltyCards';
 import { findMatchingJourney } from '../lib/journeyMatcher';
 import { requireInternal, requireUserAccess } from '../lib/auth';
+import { journeyTtl, notificationTtl } from '../lib/retention';
 
 /**
  * Stop starting new journey refreshes past this point in a run, leaving headroom
@@ -157,7 +158,7 @@ export const journeysQuery: NonNullable<QueryResolvers['journeys']> = async (
   });
 
   if (!result || !result.journeys || result.journeys.length === 0) {
-    Logger.info(`No journeys found from ${args.from} to ${args.to} at ${args.departure.toISOString()}`);
+    Logger.info('No journeys found');
     return { journeys: [], earlierRef: null, laterRef: null };
   }
 
@@ -196,6 +197,7 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
 
   const journeyMonitorId = uuidv4();
   const pricingSnapshot = extractPricingSnapshot(args.options);
+  const expires = args.expires instanceof Date ? args.expires.toISOString() : args.expires;
 
   await context.entities.Journey.build(PutItemCommand)
     .item({
@@ -203,11 +205,12 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
       userId: args.userId,
       limitPrice: args.limitPrice,
       refreshToken: args.refreshToken,
-      expires: args.expires instanceof Date ? args.expires.toISOString() : args.expires,
+      expires,
       fromId: args.fromId,
       toId: args.toId,
       departure: args.departure instanceof Date ? args.departure.toISOString() : args.departure,
       ...pricingSnapshot,
+      ttl: journeyTtl(new Date(expires)),
     })
     .send();
 
@@ -259,8 +262,11 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
   requireInternal(context);
   const startedAt = Date.now();
 
+  // Every page: by default only the first 1 MB of the table would be scanned,
+  // and journeys beyond it would never be refreshed or expired.
   const { Items: allJourneys } = await context.entities.TrainPriceMonitorTable.build(ScanCommand)
     .entities(context.entities.Journey)
+    .options({ maxPages: Infinity })
     .send();
 
   const journeys = (allJourneys ?? []) as StoredJourney[];
@@ -369,6 +375,7 @@ async function refreshJourneyMonitorInner(
     Logger.info(`Deleted journey from database`);
 
     const notificationId = uuidv4();
+    const createdAt = new Date();
     await context.entities.Notification.build(PutItemCommand)
       .item({
         id: notificationId,
@@ -376,7 +383,8 @@ async function refreshJourneyMonitorInner(
         type: NOTIFICATION_TYPES.JOURNEY_EXPIRED.name,
         read: false,
         sent: false,
-        timestamp: new Date().toISOString(),
+        timestamp: createdAt.toISOString(),
+        ttl: notificationTtl(createdAt),
         // Persist everything the email needs. The Journey item — and with it
         // `cachedFrom`/`cachedTo` — was just deleted above, so without this the
         // formatter has to ask DB to re-derive two strings it
@@ -415,6 +423,7 @@ async function refreshJourneyMonitorInner(
   const existingNotifications = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
     .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
+    .options({ maxPages: Infinity })
     .send();
 
   const notificationsArray = existingNotifications?.Items ?? [];
@@ -498,6 +507,7 @@ async function refreshJourneyMonitorInner(
     }
 
     const notificationId = uuidv4();
+    const createdAt = new Date();
     await context.entities.Notification.build(PutItemCommand)
       .item({
         id: notificationId,
@@ -505,7 +515,8 @@ async function refreshJourneyMonitorInner(
         type: NOTIFICATION_TYPES.JOURNEY_STALE.name,
         read: false,
         sent: false,
-        timestamp: new Date().toISOString(),
+        timestamp: createdAt.toISOString(),
+        ttl: notificationTtl(createdAt, new Date(dbJourney.Item.expires)),
         data: JSON.stringify({
           journeyId: journeyId,
           fromId: dbJourney.Item.fromId,
@@ -568,6 +579,7 @@ async function refreshJourneyMonitorInner(
     }
 
     const notificationId = uuidv4();
+    const createdAt = new Date();
     await context.entities.Notification.build(PutItemCommand)
       .item({
         id: notificationId,
@@ -575,7 +587,8 @@ async function refreshJourneyMonitorInner(
         type: NOTIFICATION_TYPES.PRICE_ALERT.name,
         read: false,
         sent: false,
-        timestamp: new Date().toISOString(),
+        timestamp: createdAt.toISOString(),
+        ttl: notificationTtl(createdAt, new Date(dbJourney.Item.expires)),
         // Snapshot the email payload and the watchlist fallback. The journey or
         // the notification can be deleted before the SQS worker runs; without a
         // snapshot that expected miss throws and lands the message in the DLQ.
@@ -621,6 +634,7 @@ async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, 
       filters: {
         Notification: { attr: 'type', eq: NOTIFICATION_TYPES.PRICE_ALERT.name },
       },
+      maxPages: Infinity,
     })
     .send();
 
@@ -703,6 +717,7 @@ async function deleteJourneyMonitorInner(
   const { Items: notifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
     .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
+    .options({ maxPages: Infinity })
     .send();
 
   const journeyNotifications = notifications?.filter((item: { data?: string }) => {

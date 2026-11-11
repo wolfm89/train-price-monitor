@@ -11,7 +11,7 @@ import {
 } from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
-import { assertUserAccess, requireAuth, requireUserAccess } from '../lib/auth';
+import { assertUserAccess, requireAuth, requireInternal, requireUserAccess } from '../lib/auth';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import {
   User,
@@ -29,6 +29,9 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { GraphQLError } from 'graphql';
 import { LoyaltyCardData, validateLoyaltyCard, VALID_AGE_GROUPS } from '../lib/loyaltyCards';
 import { LoyaltyCard, LoyaltyCardType } from '../schema/generated/typeDefs.generated';
+import { validateProfilePicture } from '../lib/profilePicture';
+import { buildDataExport } from '../lib/dataExport';
+import { expiredSignups } from '../lib/retention';
 
 dotenv.config();
 
@@ -54,7 +57,7 @@ function parseLoyaltyCard(raw?: string): LoyaltyCard | undefined {
       class: card.class,
     };
   } catch {
-    Logger.warn('Failed to parse stored loyaltyCard JSON', { raw });
+    Logger.warn('Failed to parse stored loyaltyCard JSON', { length: raw.length });
     return undefined;
   }
 }
@@ -72,7 +75,7 @@ function parseWalletLoyaltyCards(raw?: string): LoyaltyCard[] | undefined {
       class: card.class,
     }));
   } catch {
-    Logger.warn('Failed to parse stored loyaltyCards JSON', { raw });
+    Logger.warn('Failed to parse stored loyaltyCards JSON', { length: raw.length });
     return undefined;
   }
 }
@@ -98,6 +101,7 @@ export const userResolvers: UserResolvers = {
     const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
       .query({ partition: `USER#${parent.id}`, range: { beginsWith: 'NOTIFICATION#' } })
+      .options({ maxPages: Infinity })
       .send();
 
     const userNotifications = dbNotifications ?? [];
@@ -194,6 +198,7 @@ async function loadJourneyMonitors(
   const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Journey)
     .query({ partition: `USER#${userId}`, range: { beginsWith: 'JOURNEY#' } })
+    .options({ maxPages: Infinity })
     .send();
 
   if (!dbJourneys) {
@@ -240,16 +245,57 @@ export const userProfilePicturePresignedUrlQuery: NonNullable<
   return presignedUrl;
 };
 
+export const exportMyDataQuery: NonNullable<QueryResolvers['exportMyData']> = async (
+  _,
+  { id }: { id: string },
+  context: GraphQLContext
+) => {
+  const dbUser = await requireUserAccess(context, id);
+
+  const [{ Items: dbJourneys }, { Items: dbNotifications }] = await Promise.all([
+    context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Journey)
+      .query({ partition: `USER#${id}`, range: { beginsWith: 'JOURNEY#' } })
+      .options({ maxPages: Infinity })
+      .send(),
+    context.entities.TrainPriceMonitorTable.build(QueryCommand)
+      .entities(context.entities.Notification)
+      .query({ partition: `USER#${id}`, range: { beginsWith: 'NOTIFICATION#' } })
+      .options({ maxPages: Infinity })
+      .send(),
+  ]);
+
+  const profilePictureUrl = dbUser.profilePicture
+    ? await context.s3.getPresignedUrl(profileImageBucketName, dbUser.profilePicture)
+    : undefined;
+
+  Logger.info('Exported user data', {
+    userId: id,
+    journeys: dbJourneys?.length ?? 0,
+    notifications: dbNotifications?.length ?? 0,
+  });
+
+  return buildDataExport({
+    user: dbUser as unknown as Record<string, unknown>,
+    journeys: (dbJourneys ?? []) as Record<string, unknown>[],
+    notifications: (dbNotifications ?? []) as Record<string, unknown>[],
+    profilePictureUrl,
+    exportedAt: new Date(),
+  });
+};
+
 export const updateUserProfilePicture: NonNullable<MutationResolvers['updateUserProfilePicture']> = async (
   _,
   { id, image }: { id: string; image: File },
   context: GraphQLContext
 ) => {
   const dbUserCur = await requireUserAccess(context, id);
-  const filename = `${id}.${image.name.split('.').pop()}`;
+  const body = new Uint8Array(await image.arrayBuffer());
+  const { contentType, extension } = validateProfilePicture(body);
+  const filename = `${id}.${extension}`;
 
   try {
-    await context.s3.upload(profileImageBucketName, filename, image);
+    await context.s3.upload(profileImageBucketName, filename, body, contentType);
   } catch (error) {
     Logger.error(`Failed to upload file to S3: ${error}`);
     throw error;
@@ -319,8 +365,11 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
     throw error;
   }
 
-  // Only necessary when using SES in sandbox mode.
-  await context.ses.createEmailIdentity(email);
+  // Only necessary while the SES account is in the sandbox, where every
+  // recipient must be a verified identity.
+  if (context.ses.sandbox) {
+    await context.ses.createEmailIdentity(email);
+  }
 
   const user: User = {
     id: id,
@@ -445,9 +494,11 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
       await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
     }
 
+    // Every page, so that no item survives the account deletion.
     const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
       .query({ partition: `USER#${id}` })
+      .options({ maxPages: Infinity })
       .send();
 
     if (dbNotifications) {
@@ -463,6 +514,7 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
     const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Journey)
       .query({ partition: `USER#${id}` })
+      .options({ maxPages: Infinity })
       .send();
 
     if (dbJourneys) {
@@ -473,8 +525,11 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
       );
     }
 
-    if (dbUserCur.email) {
+    if (context.ses.sandbox && dbUserCur.email) {
       await context.ses.deleteEmailIdentity(dbUserCur.email);
+    }
+    if (dbUserCur.email) {
+      await context.ses.removeSuppressedDestination(dbUserCur.email);
     }
 
     const { Attributes: dbUser } = await context.entities.User.build(DeleteItemCommand)
@@ -494,6 +549,47 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   } finally {
     Logger.removeKeys(['userId']);
   }
+};
+
+/**
+ * Deletes Cognito sign-ups whose email address was not confirmed within
+ * UNCONFIRMED_SIGNUP_RETENTION_DAYS. Such sign-ups never reached the app's
+ * database (the User row is created at the first sign-in), so Cognito holds
+ * all of their data. Runs daily from the refresher's queue.
+ */
+export const deleteUnconfirmedSignups: NonNullable<MutationResolvers['deleteUnconfirmedSignups']> = async (
+  _,
+  _args,
+  context: GraphQLContext
+): Promise<number> => {
+  requireInternal(context);
+  const pending = await context.cognito.listUnconfirmedSignups();
+  const expired = expiredSignups(pending);
+  let deleted = 0;
+  let confirmedMeanwhile = 0;
+  for (const username of expired) {
+    try {
+      // The list can be minutes old by now; never delete someone who confirmed
+      // in the meantime. The window left between this check and the delete is
+      // a single API round trip.
+      if (!(await context.cognito.isStillUnconfirmed(username))) {
+        confirmedMeanwhile++;
+        continue;
+      }
+      await context.cognito.deleteUser(username);
+      deleted++;
+    } catch (error) {
+      Logger.error('Failed to delete unconfirmed sign-up', {
+        error: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+  }
+  Logger.info('Deleted unconfirmed sign-ups', {
+    deleted,
+    confirmedMeanwhile,
+    waiting: pending.length - expired.length,
+  });
+  return deleted;
 };
 
 /**

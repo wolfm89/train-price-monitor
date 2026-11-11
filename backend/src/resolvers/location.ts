@@ -9,7 +9,8 @@ export const locationsQuery: NonNullable<QueryResolvers['locations']> = async (
 ) => {
   const locations = await context.dbHafas.queryLocations(args.query);
   if (locations === undefined || locations.length === 0) {
-    Logger.info(`No locations found for ${args.query}`);
+    // The search text is free user input, so only its length is logged.
+    Logger.info('No locations found', { queryLength: args.query.length });
     return [];
   }
   return locations.map((location) => ({

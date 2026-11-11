@@ -51,6 +51,12 @@ export const UserProfilePictureUrlQuery = gql`
   }
 `;
 
+export const ExportMyDataQuery = gql`
+  query ($id: ID!) {
+    exportMyData(id: $id)
+  }
+`;
+
 export const UserNotificationsQuery = gql`
   query ($id: ID!, $notificationsLimit: Int, $read: Boolean) {
     user(id: $id) {

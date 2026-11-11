@@ -15,12 +15,12 @@ export class S3Manager {
     this.s3 = new S3Client({ region: process.env.AWS_REGION });
   }
 
-  async upload(bucketName: string, filename: string, file: File): Promise<void> {
-    const arrayBuffer = await file.arrayBuffer();
+  async upload(bucketName: string, key: string, body: Uint8Array, contentType?: string): Promise<void> {
     const cmd = new PutObjectCommand({
       Bucket: bucketName,
-      Key: filename,
-      Body: Buffer.from(arrayBuffer),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
     });
     await this.s3.send(cmd);
   }

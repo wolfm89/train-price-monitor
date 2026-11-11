@@ -1,8 +1,9 @@
-import { Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
+import { Button, Dialog, DialogTitle, DialogContent, DialogActions, Link, TextField, Typography } from '@mui/material';
 import React, { useState } from 'react';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 import { signUp } from '../utils/auth';
+import { PRIVACY_POLICY_URL } from '../utils/legalLinks';
 import { v4 as uuidv4 } from 'uuid';
 
 interface Props {
@@ -103,6 +104,13 @@ const SignupModal: React.FC<Props> = ({ open, onClose }) => {
           onKeyDown={handleKeyDown}
           required
         />
+        <Typography sx={{ mt: 1.5, fontSize: 12, color: 'text.secondary', lineHeight: 1.55 }}>
+          Your name and email address are used to run your account and to send the alerts you set up. Details are in the{' '}
+          <Link href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer">
+            privacy policy
+          </Link>
+          .
+        </Typography>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
