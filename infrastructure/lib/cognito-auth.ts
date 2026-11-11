@@ -1,5 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as path from 'path';
 import { Construct } from 'constructs';
 
 export class CognitoAuth extends Construct {
@@ -62,14 +65,37 @@ export class CognitoAuth extends Construct {
         requireDigits: true,
         requireSymbols: true,
       },
+      // The app's interface is English, as are the notification emails, so
+      // transactional mail stays in one language.
       userVerification: {
-        emailSubject: `Verify your email for ${appName}`,
-        emailBody: 'Hello,<br><br>Please verify your email address by clicking the following link: {##Verify Email##}',
+        emailSubject: `${appName}: Confirm your email address`,
+        emailBody:
+          'Hello,<br><br>' +
+          `please confirm your email address for ${appName}:<br>{##Verify Email##}<br><br>` +
+          'If you did not create an account, ignore this email.',
         emailStyle: cognito.VerificationEmailStyle.LINK,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+
+    // The password-reset wording cannot be set through user pool properties, so a
+    // CustomMessage trigger rewrites it. It needs EmailSendingAccount DEVELOPER,
+    // which the pool gets above; every other trigger source passes through.
+    const customMessageLogGroup = new logs.LogGroup(this, 'CustomMessageLogs', {
+      retention: logs.RetentionDays.TWO_WEEKS,
+    });
+    const customMessage = new lambda.Function(this, 'CustomMessage', {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/custom-message')),
+      description: 'Own wording for the Cognito password-reset mail',
+      environment: { APP_NAME: appName },
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      logGroup: customMessageLogGroup,
+    });
+    this.userPool.addTrigger(cognito.UserPoolOperation.CUSTOM_MESSAGE, customMessage);
 
     // Create a Cognito domain
     this.userPool.addDomain('CognitoDomain', {

@@ -189,6 +189,9 @@ jobs:
         working-directory: infrastructure
         run: |
           npm ci
+          # The plain-TypeScript Lambda handlers (lambda/) are shipped as their
+          # tsc output, so compile before synthesizing the asset.
+          npm run build
           npx cdk synth --quiet
         env:
           CDK_APP_NAME: ci
@@ -332,6 +335,10 @@ jobs:
               --query Version --output text)"
             echo "Wrote ${PARAM} (version ${VERSION})"
           done
+
+      - name: Build infrastructure
+        working-directory: infrastructure
+        run: npm run build
 
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
