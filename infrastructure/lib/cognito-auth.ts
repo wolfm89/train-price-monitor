@@ -34,7 +34,8 @@ export class CognitoAuth extends Construct {
         // The identity this stack creates and verifies for the configured sender.
         fromEmail: sesFromEmail,
         fromName: appName,
-        sesRegion: 'eu-central-1',
+        // Same region as the identity Backend creates, whatever the stack region is.
+        sesRegion: cdk.Stack.of(this).region,
         sesVerifiedDomain: mailDomain,
       }),
       customAttributes: {
