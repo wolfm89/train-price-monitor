@@ -58,11 +58,11 @@ together with an update to the policy (both languages and the "Stand / Last upda
   the stack with Easy DKIM; the `SesDkimToken*` outputs are the CNAME records for the DNS provider.
   Do not create that identity by hand as well, and do not change the sender domain casually: either
   replaces the identity and its tokens.
-- **Sandbox:** SES delivers only to verified addresses, so `createUser` registers each user's
-  address as a recipient identity and `deleteUser` removes it. Set the repository variable
-  `CDK_SES_PRODUCTION_ACCESS=1` once AWS grants production access; the Lambdas then get
-  `SES_SANDBOX=false` and lose the identity permissions, and the remaining per-user identities are
-  deleted by hand.
+- **Production access** was granted on 11 November 2026 and `CDK_SES_PRODUCTION_ACCESS=1` is set,
+  so both Lambdas run with `SES_SANDBOX=false`: they no longer register recipients with SES, the API
+  role has no identity permissions, and the per-user identities were deleted. Without the variable
+  the sandbox workaround returns: each user's address is registered as a recipient identity on the
+  first sign-in and removed on deletion.
 - `deleteUser` also removes the address from the SES account-level suppression list. If SES fails
   there (or when removing the sandbox identity), the deletion stops before the user row is removed,
   so the user can retry; an absent entry or an address SES considers invalid counts as removed.
