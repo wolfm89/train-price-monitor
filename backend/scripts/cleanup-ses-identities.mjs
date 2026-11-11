@@ -8,7 +8,7 @@
 //
 // --keep is required (the sender identity) and may be repeated. Identities of
 // current users stay: in the sandbox they are needed to receive alerts. After
-// SES production access, docs/privacy/email-and-ses.md removes all of them.
+// SES production access, all of them can be removed.
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { DeleteEmailIdentityCommand, ListEmailIdentitiesCommand, SESv2Client } from '@aws-sdk/client-sesv2';

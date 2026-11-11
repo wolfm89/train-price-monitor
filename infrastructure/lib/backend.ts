@@ -38,7 +38,7 @@ export class Backend extends Construct {
     // verified identity, so the API registers each user's address with SES.
     // Once AWS grants production access, set CDK_SES_PRODUCTION_ACCESS=1 (context
     // `ses_production_access`) to switch the workaround off and drop its IAM
-    // permissions. See docs/privacy/email-and-ses.md.
+    // permissions.
     const sesSandbox = String(this.node.tryGetContext('ses_production_access') ?? '') !== '1';
 
     // Create DynamoDB tables

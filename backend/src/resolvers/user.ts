@@ -366,7 +366,7 @@ export const createUser: NonNullable<MutationResolvers['createUser']> = async (
   }
 
   // Only necessary while the SES account is in the sandbox, where every
-  // recipient must be a verified identity (see docs/privacy/email-and-ses.md).
+  // recipient must be a verified identity.
   if (context.ses.sandbox) {
     await context.ses.createEmailIdentity(email);
   }

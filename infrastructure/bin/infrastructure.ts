@@ -18,7 +18,7 @@ if (process.env.CDK_DECODO_API_KEY_PARAM)
 // `1` disables the scraper's poller and hydrator schedules (they stay deployed).
 if (process.env.CDK_SCRAPER_PAUSED) app.node.setContext('scraper_paused', process.env.CDK_SCRAPER_PAUSED);
 // `1` once SES production access is granted: turns off the sandbox-only
-// per-user recipient identities (see docs/privacy/email-and-ses.md).
+// per-user recipient identities.
 if (process.env.CDK_SES_PRODUCTION_ACCESS)
   app.node.setContext('ses_production_access', process.env.CDK_SES_PRODUCTION_ACCESS);
 
