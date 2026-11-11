@@ -3,7 +3,7 @@ import { GraphQLError } from 'graphql';
 import { buildDataExport } from './dataExport';
 import { corsHeaders, parseAllowedOrigins, requestOrigin } from './cors';
 import { MAX_PROFILE_PICTURE_BYTES, validateProfilePicture } from './profilePicture';
-import { redactEmails } from './redact';
+import { graphqlErrorLogEntry, redactEmails } from './redact';
 import { JOURNEY_TTL_MARGIN_DAYS, NOTIFICATION_RETENTION_DAYS, journeyTtl, notificationTtl } from './retention';
 
 const DAY = 24 * 60 * 60;
@@ -75,6 +75,22 @@ assert.equal(
 );
 assert.equal(redactEmails('<a@b.de>, "c@d.com"'), '<[email]>, "[email]"');
 assert.equal(redactEmails('no address here'), 'no address here');
+
+// GraphQL errors without a resolver path quote the client's input and are never logged verbatim.
+const coercion = graphqlErrorLogEntry(
+  new GraphQLError('Variable "$enabled" got invalid value "John Smith"; Boolean cannot represent a non boolean value')
+);
+assert.deepEqual(coercion, { level: 'error', message: 'GraphQL request rejected', code: undefined });
+assert.deepEqual(
+  graphqlErrorLogEntry(new GraphQLError('Forbidden', { path: ['user'], extensions: { code: 'FORBIDDEN' } })),
+  { level: 'warn', message: 'Forbidden', code: 'FORBIDDEN' }
+);
+assert.deepEqual(graphqlErrorLogEntry(new Error('MessageRejected: jane@example.com is not verified')), {
+  level: 'error',
+  message: 'MessageRejected: [email] is not verified',
+  code: undefined,
+});
+assert.deepEqual(graphqlErrorLogEntry('boom'), { level: 'error', message: 'Unknown GraphQL error' });
 
 // --- data export ----------------------------------------------------------------
 

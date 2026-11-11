@@ -9,7 +9,7 @@ import { GraphQLContext, createContext } from './context';
 import logger from './lib/logger';
 import { authClaimsFromRequest } from './lib/auth';
 import { CORS_ALLOWED_HEADERS, CORS_METHODS, corsHeaders, parseAllowedOrigins, requestOrigin } from './lib/cors';
-import { redactEmails } from './lib/redact';
+import { graphqlErrorLogEntry, redactEmails } from './lib/redact';
 import { takeDbTransportStats } from '../../shared/db-fetch';
 import typeDefs from './schema/schema.generated.json';
 
@@ -53,19 +53,11 @@ const yoga = createYoga({
     }),
     useErrorHandler(({ errors, phase }) => {
       for (const error of errors) {
-        if (error instanceof Error) {
-          // Expected authorization and input outcomes are not operational
-          // errors: logging them at ERROR would feed the SearchErrors alarm on
-          // every cross-user probe, stale token or rejected upload.
-          const code = (error as { extensions?: { code?: unknown } }).extensions?.code;
-          if (code === 'UNAUTHENTICATED' || code === 'FORBIDDEN' || code === 'NOT_FOUND' || code === 'BAD_USER_INPUT') {
-            logger.warn(redactEmails(error.message), { phase, code });
-          } else {
-            logger.error(redactEmails(error.message), { phase });
-          }
-        } else {
-          logger.error(redactEmails(String(error)));
-        }
+        // Expected authorization and input outcomes are logged as warnings so
+        // cross-user probes, stale tokens and rejected uploads do not feed the
+        // SearchErrors alarm. Errors that quote client input are not logged verbatim.
+        const { level, message, code } = graphqlErrorLogEntry(error);
+        logger[level](message, { phase, code });
       }
     }),
   ],
