@@ -174,7 +174,7 @@ flowchart LR
   local too, so the refresher and other API containers can serve a write up to 30 s late. This is
   accepted for the watchlist read path; do not add a shared cache without revisiting it.
 - IAM follows least privilege; the scraper grants only the table/bucket access each Lambda needs.
-- **Personal data** (see [docs/privacy/](docs/privacy/README.md)): the public privacy policy lives in
+- **Personal data** (see [docs/privacy.md](docs/privacy.md)): the public privacy policy lives in
   the `wolfm89/landing-page` repo and must match what the code does. Any change to what is stored,
   logged, sent to a third party or kept in the browser needs a matching policy update.
   - Never log email addresses, names, free-text search input, raw events, request bodies or tokens;
@@ -380,7 +380,7 @@ Environment variables (never commit values):
 | `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda     | SSM parameter name for the Pushover app token (injected by CDK)                                             |
 | `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
 | `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
-| `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy/email-and-ses.md`              |
+| `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
 | `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
 | `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |
 | `SCRAPER_BATCH_SIZE`           | Scraper             | Targets per poller run (default `10`, CDK sets `25`; 1 = 2 calls)                                           |
@@ -397,8 +397,8 @@ Environment variables (never commit values):
 
 - [scraper/README.md](scraper/README.md) – Scraper architecture, Parquet schema, local Floci dev.
 - [infrastructure/README.md](infrastructure/README.md) – CDK stacks and mise deploy tasks.
-- [docs/privacy/README.md](docs/privacy/README.md) – Records of processing, processors, data-subject
-  requests, email/SES runbook.
+- [docs/privacy.md](docs/privacy.md) – What the app stores, logging/export/retention rules and the
+  email setup that a code change has to respect.
 - [README.md](README.md) – Product overview, getting started, usage.
 - `CDK_APP_NAME`, `CDK_DOMAIN_NAME`, `CDK_SES_FROM_EMAIL` must be set before `cdk deploy`
   (env vars or `-c` context); missing values fail at synth time.
@@ -406,5 +406,5 @@ Environment variables (never commit values):
   (API), `InfrastructureStack-BackendRefresherLambdaLogs*` (refresher) and
   `InfrastructureStack-BackendApiGatewayLogs*` (access logs). Older
   `/aws/lambda/InfrastructureStack-Backend*` groups predate them; delete them or give them a
-  retention (see `docs/privacy/email-and-ses.md`).
+  retention.
   Scraper log groups: `/aws/lambda/ScraperStack-Scraper*`. Docker Lambda cold start is ~15s.

@@ -105,7 +105,7 @@ The output-to-environment mappings are maintained in [`scripts/generate-local-en
 | `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda env var                                          |
 | `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo fallback key                                |
 | `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the scraper's poller and hydrator schedules                         |
-| `CDK_SES_PRODUCTION_ACCESS`  | Infrastructure    | `1` once SES production access is granted (see `docs/privacy/`)                  |
+| `CDK_SES_PRODUCTION_ACCESS`  | Infrastructure    | `1` once SES production access is granted (see `docs/privacy.md`)                |
 | `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB table for scrape schedule (injected by CDK)                             |
 | `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet price data (injected by CDK)                               |
 | `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 90)                                        |
@@ -157,9 +157,8 @@ Infrastructure:
 
 The hosted instance at [tpm.wolfgangmoser.eu](https://tpm.wolfgangmoser.eu) is covered by the
 [privacy policy](https://wolfgangmoser.eu/privacy-policy/) and the
-[legal notice](https://wolfgangmoser.eu/legal-notice/). The records of processing, the list of
-processors, the data-subject request runbook and the email/SES runbook are in
-[docs/privacy/](docs/privacy/README.md).
+[legal notice](https://wolfgangmoser.eu/legal-notice/). [docs/privacy.md](docs/privacy.md)
+summarises what the code stores, the retention rules and what a change has to respect.
 
 ## Contributing
 
