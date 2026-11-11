@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { maskEmail, planIdentityCleanup } from './cleanup-ses-identities-lib.mjs';
+import { maskEmail, parseKeepArgs, planIdentityCleanup } from './cleanup-ses-identities-lib.mjs';
 
 test('deletes only email identities without a current user', () => {
   const identities = [
@@ -23,4 +23,15 @@ test('deletes only email identities without a current user', () => {
 test('masks addresses in the output', () => {
   assert.equal(maskEmail('jane.doe@example.com'), 'j***@example.com');
   assert.equal(maskEmail('not-an-address'), '***');
+});
+
+test('accepts only email addresses as --keep values', () => {
+  assert.deepEqual(parseKeepArgs(['--keep', 'a@example.com', '--dry-run', '--keep', 'b@example.com']), [
+    'a@example.com',
+    'b@example.com',
+  ]);
+  assert.throws(() => parseKeepArgs(['--keep', '--region', 'eu-central-1']), /--keep needs an email address/);
+  assert.throws(() => parseKeepArgs(['--keep', 'eu-central-1']), /--keep needs an email address/);
+  assert.throws(() => parseKeepArgs(['--keep']), /got nothing/);
+  assert.throws(() => parseKeepArgs(['--dry-run']), /Pass --keep/);
 });

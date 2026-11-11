@@ -31,3 +31,24 @@ export function maskEmail(email) {
   if (!domain) return '***';
   return `${local.slice(0, 1)}***@${domain}`;
 }
+
+/**
+ * Reads every `--keep <address>` from the command line. A missing value, a value
+ * that is another flag, or anything that is not an email address is rejected,
+ * so a typo can never leave the sender identity unprotected.
+ */
+export function parseKeepArgs(args) {
+  const keep = [];
+  args.forEach((arg, index) => {
+    if (arg !== '--keep') return;
+    const value = args[index + 1];
+    if (!value || value.startsWith('--') || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      throw new Error(`--keep needs an email address, got ${value === undefined ? 'nothing' : `'${value}'`}`);
+    }
+    keep.push(value);
+  });
+  if (keep.length === 0) {
+    throw new Error('Pass --keep <sender address> so the sender identity is never deleted');
+  }
+  return keep;
+}

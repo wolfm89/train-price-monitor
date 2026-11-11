@@ -12,7 +12,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { DeleteEmailIdentityCommand, ListEmailIdentitiesCommand, SESv2Client } from '@aws-sdk/client-sesv2';
-import { maskEmail, planIdentityCleanup } from './cleanup-ses-identities-lib.mjs';
+import { maskEmail, parseKeepArgs, planIdentityCleanup } from './cleanup-ses-identities-lib.mjs';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -27,17 +27,9 @@ function argValue(name, fallback) {
   return value;
 }
 
-function argValues(name) {
-  return args.flatMap((arg, index) => (arg === `--${name}` ? [args[index + 1]] : [])).filter(Boolean);
-}
-
 const region = argValue('region', process.env.AWS_REGION || 'eu-central-1');
 const table = argValue('table', process.env.USER_TABLE_NAME || 'TrainPriceMonitor');
-const keep = argValues('keep');
-
-if (keep.length === 0) {
-  throw new Error('Pass --keep <sender address> so the sender identity is never deleted');
-}
+const keep = parseKeepArgs(args);
 
 const ses = new SESv2Client({ region });
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
