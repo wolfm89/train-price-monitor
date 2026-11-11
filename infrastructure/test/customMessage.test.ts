@@ -2,6 +2,10 @@
 // Cognito message must pass through unchanged.
 import { handler, CognitoCustomMessageEvent } from '../lambda/custom-message';
 
+beforeAll(() => {
+  process.env.APP_NAME = 'Train Price Monitor';
+});
+
 function cognitoEvent(triggerSource: string): CognitoCustomMessageEvent {
   return { triggerSource, request: { codeParameter: '{####}' }, response: {} };
 }

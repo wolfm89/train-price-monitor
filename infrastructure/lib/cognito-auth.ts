@@ -91,6 +91,7 @@ export class CognitoAuth extends Construct {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/custom-message')),
       description: 'Own wording for the Cognito password-reset mail',
+      environment: { APP_NAME: appName },
       timeout: cdk.Duration.seconds(5),
       memorySize: 128,
       logGroup: customMessageLogGroup,
