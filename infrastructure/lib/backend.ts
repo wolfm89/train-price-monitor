@@ -12,6 +12,7 @@ import {
   aws_events_targets as targets,
   aws_sns as sns,
   aws_sqs as sqs,
+  aws_ses as ses,
   aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
@@ -250,10 +251,33 @@ export class Backend extends Construct {
       },
     });
 
-    // AWS SES email identity must exist in the account for the configured ses_from_email
+    // The verified sending domain, created here instead of by hand. The DKIM
+    // tokens are only known after creation, so they are published as stack
+    // outputs; their CNAME records belong at the DNS provider. Do not create the
+    // identity manually as well, and do not move the sender to another domain:
+    // either replaces this identity and changes the tokens.
+    if (!sesFromEmail.includes('@')) {
+      throw new Error(`ses_from_email '${sesFromEmail}' is not an email address`);
+    }
+    const mailDomain = sesFromEmail.slice(sesFromEmail.lastIndexOf('@') + 1);
+    const domainIdentity = new ses.EmailIdentity(this, 'SesDomainIdentity', {
+      identity: ses.Identity.domain(mailDomain),
+      // Easy DKIM; RSA 2048 is also the SES default, stated here so a change is visible.
+      dkimIdentity: ses.DkimIdentity.easyDkim(ses.EasyDkimSigningKeyLength.RSA_2048_BIT),
+    });
+    new cdk.CfnOutput(this, 'SesDomainIdentityName', { value: domainIdentity.emailIdentityName });
+    new cdk.CfnOutput(this, 'SesDkimToken1Name', { value: domainIdentity.dkimDnsTokenName1 });
+    new cdk.CfnOutput(this, 'SesDkimToken1Value', { value: domainIdentity.dkimDnsTokenValue1 });
+    new cdk.CfnOutput(this, 'SesDkimToken2Name', { value: domainIdentity.dkimDnsTokenName2 });
+    new cdk.CfnOutput(this, 'SesDkimToken2Value', { value: domainIdentity.dkimDnsTokenValue2 });
+    new cdk.CfnOutput(this, 'SesDkimToken3Name', { value: domainIdentity.dkimDnsTokenName3 });
+    new cdk.CfnOutput(this, 'SesDkimToken3Value', { value: domainIdentity.dkimDnsTokenValue3 });
 
     // Allow both functions to send emails: the refresher consumes the
-    // notification-email messages.
+    // notification-email messages. The resource stays '*' on purpose: a send is
+    // authorised against the identity that authorises it (the domain or the
+    // address identity, and in the sandbox both exist), so scoping this to one
+    // of them can silently stop the alert emails.
     const sesSendPolicy = new cdk.aws_iam.PolicyStatement({
       actions: ['ses:SendEmail'],
       resources: ['*'],
