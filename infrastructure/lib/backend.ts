@@ -145,6 +145,8 @@ export class Backend extends Construct {
         ...commonEnvironment,
         DB_MIN_GAP_MS: '1500',
         DB_TOTAL_BUDGET_MS: '110000',
+        // For the daily deletion of unconfirmed sign-ups (deleteUnconfirmedSignups).
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
       },
     });
 
@@ -176,6 +178,26 @@ export class Backend extends Construct {
         message: events.RuleTargetInput.fromObject({
           query: 'mutation { updateJourneyMonitors }',
         }),
+      })
+    );
+
+    // Sign-ups that are never confirmed exist only in Cognito; the refresher
+    // deletes them once a day after UNCONFIRMED_SIGNUP_RETENTION_DAYS
+    // (backend/src/lib/retention.ts), as the privacy policy states.
+    new events.Rule(this, 'DeleteUnconfirmedSignupsRule', {
+      schedule: events.Schedule.rate(cdk.Duration.days(1)),
+      targets: [
+        new targets.SqsQueue(queue, {
+          message: events.RuleTargetInput.fromObject({
+            query: 'mutation { deleteUnconfirmedSignups }',
+          }),
+        }),
+      ],
+    });
+    refresherFunction.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminDeleteUser'],
+        resources: [userPool.userPoolArn],
       })
     );
 
