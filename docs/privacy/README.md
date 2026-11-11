@@ -37,7 +37,15 @@ Known gaps, deliberately not implemented yet:
   [data-subject-requests.md](data-subject-requests.md)).
 - **No deletion of inactive accounts.** Accounts are kept until the user deletes them. An automatic
   clean-up would need last-activity tracking, a reminder email and server-side `AdminDeleteUser`.
-  Sign-ups that are never confirmed also stay in Cognito until removed by hand.
+  (Sign-ups that are never confirmed are deleted after 7 days by the daily
+  `deleteUnconfirmedSignups` job.)
+- **Decodo transfers.** Requests forwarded through Decodo can leave the EEA through its proxy
+  network, and Decodo's DPA has no SCCs. The requests carry no account data, which is the basis
+  of the policy's wording; a lawyer should confirm it. The technical alternative is to pin the
+  Decodo exit to an EU country (its `geo` parameter) and test that bahn.de still answers.
+- **SES suppression list.** Addresses that bounced or complained stay on the account-level
+  suppression list; `deleteUser` does not remove them (the API is unavailable in the sandbox).
+  After production access, add `DeleteSuppressedDestination` to `deleteUser`.
 - **No processing pause per account.** Restriction requests (Art. 18) are handled manually, see
   [data-subject-requests.md](data-subject-requests.md#restriction-art-18-and-objection-art-21).
 - **Login removal is client-side.** Account deletion deletes the app data through the API and then

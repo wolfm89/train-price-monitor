@@ -42,7 +42,8 @@ profile-picture link and the Cognito attributes of the session). For a request b
    aws sesv2 get-email-identity --email-identity person@example.com          # sandbox identity, if any
    ```
 3. Search the last 14 days of Lambda logs for the user id if the person asks about logs
-   (CloudWatch Logs Insights on `/aws/lambda/InfrastructureStack-Backend*`, filter on `userId`).
+   (CloudWatch Logs Insights on `InfrastructureStack-BackendLambdaLogs*` and
+   `InfrastructureStack-BackendRefresherLambdaLogs*`, filter on `userId`).
 4. Send the data together with the information Art. 15(1) requires — purposes, categories,
    recipients, retention, rights, source. The privacy policy covers all of it; link the relevant
    sections.

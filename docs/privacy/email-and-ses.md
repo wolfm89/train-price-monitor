@@ -19,6 +19,32 @@ Everything here changes AWS or DNS settings and is done by the operator, not by 
   DKIM for SES, no DMARC. `legal@`, `trainpricemonitor@` (and later `dmarc@`) are NETIM forwarding
   aliases to the Proton mailbox.
 
+## Before the privacy policy goes live
+
+The policy (landing-page repo) describes the state after the privacy PR is deployed. Right after
+that deploy, and before the landing-page PR is merged:
+
+1. **Remove the identities of deleted accounts.** They were never removed (see above), so the
+   policy's "removed with your account" would be wrong for former users:
+   ```bash
+   cd backend
+   node scripts/cleanup-ses-identities.mjs --keep trainpricemonitor@wolfgangmoser.eu --dry-run
+   node scripts/cleanup-ses-identities.mjs --keep trainpricemonitor@wolfgangmoser.eu
+   ```
+2. **Give existing journeys and notifications a TTL:**
+   `node scripts/backfill-ttl.mjs --dry-run`, then without `--dry-run`.
+3. **Check the sender:** the secret `CDK_SES_FROM_EMAIL` must be
+   `trainpricemonitor@wolfgangmoser.eu`, and that address (or the domain) verified in SES.
+4. **Check for old log groups** that predate the CDK-managed ones and may never expire. They can
+   still contain whole API Gateway events (with the JWT) and SES errors with addresses:
+   ```bash
+   aws logs describe-log-groups --region eu-central-1 --log-group-name-prefix /aws/lambda/InfrastructureStack-Backend \
+     --query 'logGroups[].[logGroupName,retentionInDays,storedBytes]' --output table
+   aws logs delete-log-group --region eu-central-1 --log-group-name <name>   # or put-retention-policy --retention-in-days 14
+   ```
+   Also confirm that no CloudTrail trail stores events beyond the 90-day event history
+   (`aws cloudtrail describe-trails`); the policy states 90 days.
+
 ## Leaving the sandbox
 
 1. **Domain identity with DKIM.** SES console → _Identities_ → _Create identity_ → _Domain_
