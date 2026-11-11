@@ -10,7 +10,8 @@ Everything here changes AWS or DNS settings and is done by the operator, not by 
   each user an extra "Amazon Web Services – Email Address Verification Request" mail, and
   `deleteUser` removes the identity again.
 - Until this change the Lambda role lacked `ses:DeleteEmailIdentity`, so identities of deleted
-  accounts were **never removed**. They have to be cleaned up (step 6 below).
+  accounts were **never removed**. They were cleaned up on 11 November 2026 (first step of _Before
+  the privacy policy goes live_).
 - Notification emails are sent from `SES_FROM_EMAIL`, set from the GitHub secret
   `CDK_SES_FROM_EMAIL`. It must be `trainpricemonitor@wolfgangmoser.eu` (the address named in the
   privacy policy) and verified in SES.
@@ -22,7 +23,17 @@ Everything here changes AWS or DNS settings and is done by the operator, not by 
 ## Before the privacy policy goes live
 
 The policy (landing-page repo) describes the state after the privacy PR is deployed. Right after
-that deploy, and before the landing-page PR is merged:
+that deploy, and before the landing-page PR is merged.
+
+**Status 11 November 2026: done, except step 2, which has to be repeated after the TPM deploy.**
+
+| Step                             | Status                                                                                                                                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 Identities of deleted accounts | 5 removed; 3 left (sender and the 2 current users)                                                                                                                                                              |
+| 2 TTL backfill                   | 9 items written (2 journeys, 7 notifications), 0 missing. **Re-run after the #135 deploy** for items created before it                                                                                          |
+| 3 Sender                         | Deployed as `trainpricemonitor@wolfgangmoser.eu`, identity verified                                                                                                                                             |
+| 4 Log groups / CloudTrail        | 2023 API Gateway execution logs deleted; all 28 never-expiring groups in `eu-central-1` set to 14 days; no CloudTrail trail. One CDK helper group in `us-east-1` still has no expiry (1.4 KB, no personal data) |
+| 5 Suppression list               | Delete call works in the sandbox (`NotFoundException` for an unknown address); list is empty                                                                                                                    |
 
 1. **Remove the identities of deleted accounts.** They were never removed (see above), so the
    policy's "removed with your account" would be wrong for former users:
