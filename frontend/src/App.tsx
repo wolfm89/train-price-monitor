@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Box, CircularProgress, Container } from '@mui/material';
 import Header from './components/Header';
 import Footer from './components/Footer';
+import SeoMeta from './components/SeoMeta';
 import HomePage from './pages/HomePage';
 import AlertProvider from './providers/AlertProvider';
 import AlertBar from './components/AlertBar';
@@ -34,6 +35,7 @@ export default function App() {
       <AlertProvider>
         <AuthProvider>
           <Router>
+            <SeoMeta />
             <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
               <Header />
               <Container component="main" maxWidth="md" sx={{ my: 4, flex: 1 }}>

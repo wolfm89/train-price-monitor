@@ -431,8 +431,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
               mb: 1.25,
             }}
           >
-            Stop overpaying for
-            <br />
+            Stop overpaying for <br />
             <Box component="span" sx={{ color: 'primary.main' }}>
               train tickets.
             </Box>
@@ -596,8 +595,7 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
               mb: 0,
             }}
           >
-            Stop overpaying for
-            <br />
+            Stop overpaying for <br />
             <Box component="span" sx={{ color: 'primary.main' }}>
               train tickets.
             </Box>

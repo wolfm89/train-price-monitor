@@ -7,6 +7,10 @@ import {
   CacheHeaderBehavior,
   CacheQueryStringBehavior,
   Distribution,
+  Function as CloudFrontFunction,
+  FunctionCode,
+  FunctionEventType,
+  FunctionRuntime,
   HeadersFrameOption,
   HeadersReferrerPolicy,
   ResponseHeadersPolicy,
@@ -16,6 +20,8 @@ import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deplo
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import { redirectToCustomDomainCode } from './cloudfront/redirect-to-custom-domain';
+import { noindexAppRoutesCode } from './cloudfront/noindex-app-routes';
 
 export interface FrontendProps {
   certificate: Certificate;
@@ -75,6 +81,22 @@ export class Frontend extends Construct {
       },
     });
 
+    // Requests that arrive through the distribution's default *.cloudfront.net
+    // host are 301ed to the custom domain, so search engines see one host only.
+    const redirectToCustomDomain = new CloudFrontFunction(this, 'RedirectToCustomDomain', {
+      comment: `301 from the CloudFront domain to https://${domainName}`,
+      runtime: FunctionRuntime.JS_2_0,
+      code: FunctionCode.fromInline(redirectToCustomDomainCode(domainName)),
+    });
+
+    // The app routes are private and must not be indexed, even for crawlers
+    // that do not execute the SPA's client-side robots meta tag.
+    const noindexAppRoutes = new CloudFrontFunction(this, 'NoindexAppRoutes', {
+      comment: 'X-Robots-Tag: noindex for the private app routes',
+      runtime: FunctionRuntime.JS_2_0,
+      code: FunctionCode.fromInline(noindexAppRoutesCode()),
+    });
+
     // CloudFront distribution with custom domain
     const distribution = new Distribution(this, 'DistributionNew', {
       defaultRootObject: 'index.html',
@@ -88,6 +110,10 @@ export class Frontend extends Construct {
         // index.html must always be fresh so browsers pick up new chunk filenames
         // after a deployment — disable caching at the CDN layer for root files.
         cachePolicy: CachePolicy.CACHING_DISABLED,
+        functionAssociations: [
+          { function: redirectToCustomDomain, eventType: FunctionEventType.VIEWER_REQUEST },
+          { function: noindexAppRoutes, eventType: FunctionEventType.VIEWER_RESPONSE },
+        ],
       },
       additionalBehaviors: {
         // Vite writes all JS/CSS bundles under /assets/ with content hashes in
@@ -98,6 +124,10 @@ export class Frontend extends Construct {
           compress: true,
           responseHeadersPolicy,
           cachePolicy: assetsCachePolicy,
+          functionAssociations: [
+            { function: redirectToCustomDomain, eventType: FunctionEventType.VIEWER_REQUEST },
+            { function: noindexAppRoutes, eventType: FunctionEventType.VIEWER_RESPONSE },
+          ],
         },
       },
       errorResponses: [
