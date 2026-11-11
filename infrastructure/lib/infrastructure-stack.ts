@@ -26,7 +26,7 @@ export class InfrastructureStack extends cdk.Stack {
       ? cdk.aws_sns.Topic.fromTopicArn(this, 'AlertTopic', props.alertTopicArn)
       : undefined;
 
-    const cognitoAuth = new CognitoAuth(this, 'CognitoAuth');
+    const cognitoAuth = new CognitoAuth(this, 'CognitoAuth', sesFromEmail);
     new Backend(this, 'Backend', cognitoAuth.userPool, frontendProps.domainName, sesFromEmail, alertTopic);
     new Frontend(this, 'Frontend', frontendProps);
     // Runs daily rather than weekly: every deploy adds a new asset image to the

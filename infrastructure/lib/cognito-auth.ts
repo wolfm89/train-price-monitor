@@ -5,12 +5,16 @@ import { Construct } from 'constructs';
 export class CognitoAuth extends Construct {
   userPool: cognito.UserPool;
 
-  constructor(scope: Construct, id: string) {
+  constructor(scope: Construct, id: string, sesFromEmail: string) {
     super(scope, id);
 
     const appName = this.node.tryGetContext('app_name');
     if (!appName) {
       throw new Error('The "app_name" context variable is not defined.');
+    }
+    const mailDomain = sesFromEmail.slice(sesFromEmail.lastIndexOf('@') + 1);
+    if (!mailDomain || mailDomain === sesFromEmail) {
+      throw new Error(`ses_from_email '${sesFromEmail}' is not an email address`);
     }
 
     // Create a user pool
@@ -27,10 +31,11 @@ export class CognitoAuth extends Construct {
       // DKIM applies, replies reach the operator, and the pool limit is the SES
       // quota instead of 50 per day.
       email: cognito.UserPoolEmail.withSES({
-        fromEmail: 'trainpricemonitor@wolfgangmoser.eu',
-        fromName: 'Train Price Monitor',
+        // The identity this stack creates and verifies for the configured sender.
+        fromEmail: sesFromEmail,
+        fromName: appName,
         sesRegion: 'eu-central-1',
-        sesVerifiedDomain: 'wolfgangmoser.eu',
+        sesVerifiedDomain: mailDomain,
       }),
       customAttributes: {
         id: new cognito.StringAttribute({ minLen: 36, maxLen: 36, mutable: false }),
