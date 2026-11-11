@@ -264,6 +264,11 @@ export class Backend extends Construct {
       identity: ses.Identity.domain(mailDomain),
       // Easy DKIM; RSA 2048 is also the SES default, stated here so a change is visible.
       dkimIdentity: ses.DkimIdentity.easyDkim(ses.EasyDkimSigningKeyLength.RSA_2048_BIT),
+      // Envelope sender in the app's own domain (MX and SPF TXT for the subdomain
+      // live at the DNS provider), so SPF aligns with wolfgangmoser.eu as well as
+      // DKIM. If that DNS is broken, keep sending through amazonses.com.
+      mailFromDomain: 'bounce.wolfgangmoser.eu',
+      mailFromBehaviorOnMxFailure: ses.MailFromBehaviorOnMxFailure.USE_DEFAULT_VALUE,
     });
     new cdk.CfnOutput(this, 'SesDomainIdentityName', { value: domainIdentity.emailIdentityName });
     new cdk.CfnOutput(this, 'SesDkimToken1Name', { value: domainIdentity.dkimDnsTokenName1 });
