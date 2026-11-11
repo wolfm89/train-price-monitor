@@ -7,9 +7,8 @@ import {
   CreateEmailIdentityRequest,
   CreateEmailIdentityCommandOutput,
   AlreadyExistsException,
+  BadRequestException,
   DeleteEmailIdentityCommand,
-  DeleteEmailIdentityRequest,
-  DeleteEmailIdentityCommandOutput,
   DeleteSuppressedDestinationCommand,
   NotFoundException,
 } from '@aws-sdk/client-sesv2';
@@ -20,8 +19,27 @@ function errorName(error: unknown): string {
   return error instanceof Error ? error.name : 'UnknownError';
 }
 
+/**
+ * SES answers a delete with NotFoundException when the entry is absent, and with
+ * BadRequestException when it considers the address itself invalid (for example
+ * a non-ASCII local part that Cognito still accepted). Such an address cannot be
+ * an identity or on the suppression list, so there is nothing left to remove.
+ */
+function nothingToRemove(error: unknown): boolean {
+  return error instanceof NotFoundException || error instanceof BadRequestException;
+}
+
+/**
+ * Logs only the error name, because SES messages echo the address back, and
+ * returns a generic error for the caller to throw.
+ */
+function sanitizedFailure(message: string, error: unknown): Error {
+  Logger.error(message, { error: errorName(error) });
+  return new Error(message);
+}
+
 class SESManager {
-  private ses: SESv2Client;
+  private readonly ses: Pick<SESv2Client, 'send'>;
 
   /**
    * True while the SES account is in the sandbox, where every recipient has to
@@ -30,8 +48,8 @@ class SESManager {
    */
   readonly sandbox: boolean;
 
-  constructor() {
-    this.ses = new SESv2Client({ region: process.env.AWS_REGION });
+  constructor(client: Pick<SESv2Client, 'send'> = new SESv2Client({ region: process.env.AWS_REGION })) {
+    this.ses = client;
     this.sandbox = process.env.SES_SANDBOX !== 'false';
   }
 
@@ -88,30 +106,33 @@ class SESManager {
     }
   }
 
-  // Delete email identity in SES for deleted user (sandbox only)
-  async deleteEmailIdentity(email: string): Promise<DeleteEmailIdentityCommandOutput | undefined> {
-    const request: DeleteEmailIdentityRequest = {
-      EmailIdentity: email,
-    };
+  /**
+   * Deletes the user's email identity in SES (sandbox only). A missing identity
+   * is fine; any other failure throws, so the account deletion stops before the
+   * user row is removed and can be retried.
+   */
+  async deleteEmailIdentity(email: string): Promise<void> {
     try {
-      return await this.ses.send(new DeleteEmailIdentityCommand(request));
+      await this.ses.send(new DeleteEmailIdentityCommand({ EmailIdentity: email }));
     } catch (error) {
-      Logger.error('Failed to delete recipient email identity', { error: errorName(error) });
-      return undefined;
+      if (nothingToRemove(error)) return;
+      throw sanitizedFailure('The email identity could not be removed from SES', error);
     }
   }
 
   /**
    * Removes a deleted user's address from the account-level suppression list,
-   * where SES puts addresses after a hard bounce or a complaint. Absent entries
-   * are the normal case.
+   * where SES puts addresses after a hard bounce or a complaint. An absent entry
+   * is the normal case; any other failure throws, so the account deletion stops
+   * before the user row is removed (nothing could find the entry afterwards) and
+   * can be retried.
    */
   async removeSuppressedDestination(email: string): Promise<void> {
     try {
       await this.ses.send(new DeleteSuppressedDestinationCommand({ EmailAddress: email }));
     } catch (error) {
-      if (error instanceof NotFoundException) return;
-      Logger.warn('Failed to remove the address from the SES suppression list', { error: errorName(error) });
+      if (nothingToRemove(error)) return;
+      throw sanitizedFailure('The address could not be removed from the SES suppression list', error);
     }
   }
 }

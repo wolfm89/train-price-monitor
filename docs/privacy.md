@@ -63,7 +63,9 @@ together with an update to the policy (both languages and the "Stand / Last upda
   `CDK_SES_PRODUCTION_ACCESS=1` once AWS grants production access; the Lambdas then get
   `SES_SANDBOX=false` and lose the identity permissions, and the remaining per-user identities are
   deleted by hand.
-- `deleteUser` also removes the address from the SES account-level suppression list.
+- `deleteUser` also removes the address from the SES account-level suppression list. If SES fails
+  there (or when removing the sandbox identity), the deletion stops before the user row is removed,
+  so the user can retry; an absent entry or an address SES considers invalid counts as removed.
 
 ## Scripts
 
