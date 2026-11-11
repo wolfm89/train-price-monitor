@@ -13,8 +13,9 @@ description = "Deploy all CDK stacks to AWS"
 # The backend and scraper images copy pre-built bundles (their transports live
 # in ../shared, outside each Docker build context), so the bundles must exist
 # before CDK builds the image assets — otherwise a stale or missing dist/ is
-# baked into the image.
-depends = ["//frontend:build", "//backend:build", "//scraper:build"]
+# baked into the image. This module's own build compiles the plain-TypeScript
+# Lambda handlers in lambda/, whose tsc output is what the asset packages.
+depends = ["//infrastructure:build", "//frontend:build", "//backend:build", "//scraper:build"]
 run = "npx cdk deploy --all --require-approval never"
 
 [tasks.deploy-scraper]
