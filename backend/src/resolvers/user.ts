@@ -563,8 +563,16 @@ export const deleteUnconfirmedSignups: NonNullable<MutationResolvers['deleteUnco
   const pending = await context.cognito.listUnconfirmedSignups();
   const expired = expiredSignups(pending);
   let deleted = 0;
+  let confirmedMeanwhile = 0;
   for (const username of expired) {
     try {
+      // The list can be minutes old by now; never delete someone who confirmed
+      // in the meantime. The window left between this check and the delete is
+      // a single API round trip.
+      if (!(await context.cognito.isStillUnconfirmed(username))) {
+        confirmedMeanwhile++;
+        continue;
+      }
       await context.cognito.deleteUser(username);
       deleted++;
     } catch (error) {
@@ -573,7 +581,11 @@ export const deleteUnconfirmedSignups: NonNullable<MutationResolvers['deleteUnco
       });
     }
   }
-  Logger.info('Deleted unconfirmed sign-ups', { deleted, waiting: pending.length - expired.length });
+  Logger.info('Deleted unconfirmed sign-ups', {
+    deleted,
+    confirmedMeanwhile,
+    waiting: pending.length - expired.length,
+  });
   return deleted;
 };
 

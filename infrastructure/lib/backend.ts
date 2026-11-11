@@ -196,7 +196,7 @@ export class Backend extends Construct {
     });
     refresherFunction.addToRolePolicy(
       new cdk.aws_iam.PolicyStatement({
-        actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminDeleteUser'],
+        actions: ['cognito-idp:ListUsers', 'cognito-idp:AdminGetUser', 'cognito-idp:AdminDeleteUser'],
         resources: [userPool.userPoolArn],
       })
     );

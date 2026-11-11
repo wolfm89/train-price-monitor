@@ -1,8 +1,10 @@
 import {
   AdminDeleteUserCommand,
+  AdminGetUserCommand,
   CognitoIdentityProviderClient,
   ListUsersCommand,
   ListUsersCommandOutput,
+  UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider';
 
 export interface PendingSignup {
@@ -49,5 +51,18 @@ export class CognitoManager {
 
   async deleteUser(username: string): Promise<void> {
     await this.client.send(new AdminDeleteUserCommand({ UserPoolId: this.requirePoolId(), Username: username }));
+  }
+
+  /** Fresh status read, so a sign-up confirmed since it was listed is not deleted. */
+  async isStillUnconfirmed(username: string): Promise<boolean> {
+    try {
+      const user = await this.client.send(
+        new AdminGetUserCommand({ UserPoolId: this.requirePoolId(), Username: username })
+      );
+      return user.UserStatus === 'UNCONFIRMED';
+    } catch (error) {
+      if (error instanceof UserNotFoundException) return false;
+      throw error;
+    }
   }
 }
