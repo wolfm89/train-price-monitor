@@ -63,6 +63,11 @@ together with an update to the policy (both languages and the "Stand / Last upda
   role has no identity permissions, and the per-user identities were deleted. Without the variable
   the sandbox workaround returns: each user's address is registered as a recipient identity on the
   first sign-in and removed on deletion.
+- Cognito sends its own confirmation and password-reset mails through SES from
+  `trainpricemonitor@wolfgangmoser.eu` (`UserPoolEmail.withSES` in `cognito-auth.ts`), so they carry
+  the domain's DKIM too.
+- The domain identity uses `bounce.wolfgangmoser.eu` as custom MAIL FROM, so SPF aligns with the
+  domain as well as DKIM; the MX and SPF TXT records for that subdomain live at the DNS provider.
 - `deleteUser` also removes the address from the SES account-level suppression list. If SES fails
   there (or when removing the sandbox identity), the deletion stops before the user row is removed,
   so the user can retry; an absent entry or an address SES considers invalid counts as removed.
