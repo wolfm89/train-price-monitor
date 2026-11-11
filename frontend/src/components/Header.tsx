@@ -62,7 +62,7 @@ const Header = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
-  const { user, userProfilePictureUrl } = useContext(AuthContext);
+  const { user, userProfilePictureUrl, isInitialCheckDone } = useContext(AuthContext);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [{ stale, data: userNotificationsResult }, reexecuteUserNotificationsQuery] = useQuery({
     query: UserNotificationsQuery,
@@ -189,12 +189,14 @@ const Header = () => {
           )}
         </Link>
 
-        {!user && (
+        {/* The auth check is async; rendering the logged-out controls before it
+            resolves makes them flash and then disappear for signed-in users. */}
+        {isInitialCheckDone && !user && (
           <Button onClick={() => setLoginModalOpen(true)} sx={navBtnSx}>
             Log in
           </Button>
         )}
-        {user && (
+        {isInitialCheckDone && user && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
             <Button
               component={Link}

@@ -276,11 +276,19 @@ function AlertBanner({ journey, overage }: AlertBannerProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
+function CenteredLoader() {
+  return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
+      <CircularProgress />
+    </Box>
+  );
+}
+
 const HomePage: React.FC<Props> = () => {
   const [signupModalOpen, setSignupModalOpen] = useState<boolean>(false);
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const { addAlert } = useAlert();
-  const { user } = useContext(AuthContext);
+  const { user, isInitialCheckDone } = useContext(AuthContext);
   const [userExistsResult, reexecuteUserExistsQuery] = useQuery({
     query: UserExistsQuery,
     variables: { id: user?.['custom:id'] },
@@ -339,6 +347,12 @@ const HomePage: React.FC<Props> = () => {
       });
   }, [addAlert, createUser, reexecuteUserExistsQuery, user, userId, userExistsResult]);
 
+  // Wait for the Cognito session check before choosing a layout. Otherwise a
+  // signed-in user briefly sees the logged-out hero before the dashboard.
+  if (!isInitialCheckDone) {
+    return <CenteredLoader />;
+  }
+
   if (!user) {
     return (
       <LoggedOutHero onSignup={() => setSignupModalOpen(true)} onLogin={() => setLoginModalOpen(true)}>
@@ -349,19 +363,11 @@ const HomePage: React.FC<Props> = () => {
   }
 
   if (userExistsResult.fetching || creatingAccount) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
-        <CircularProgress />
-      </Box>
-    );
+    return <CenteredLoader />;
   }
 
   if (journeysFetching) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
-        <CircularProgress />
-      </Box>
-    );
+    return <CenteredLoader />;
   }
 
   if (journeysError) {

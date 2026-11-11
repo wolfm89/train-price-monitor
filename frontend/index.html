@@ -14,6 +14,13 @@
     <meta name="application-name" content="Train Price Monitor" />
     <meta name="theme-color" content="#A82323" />
     <link rel="canonical" href="https://tpm.wolfgangmoser.eu/" />
+    <link rel="preload" as="image" href="/logo-header.webp" type="image/webp" />
+    <style>
+      html,
+      body {
+        background: #f8f8f4;
+      }
+    </style>
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Train Price Monitor" />
@@ -68,11 +75,10 @@
 
   <body>
     <!--
-      Static shell for crawlers and for the first paint before React loads.
-      React replaces the contents of #root when it mounts, so this copy is not
-      duplicated in the running app.
+      No-JS fallback only. The React app replaces #root when it mounts; keeping
+      this content out of #root means JavaScript users never see a splash screen.
     -->
-    <div id="root">
+    <noscript>
       <div
         style="
           min-height: 100vh;
@@ -98,7 +104,8 @@
           watching rises above your limit. Free to use.
         </p>
       </div>
-    </div>
+    </noscript>
+    <div id="root"></div>
     <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>
