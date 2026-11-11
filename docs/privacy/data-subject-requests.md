@@ -87,8 +87,14 @@ Afterwards:
 
 ## Restriction (Art. 18) and objection (Art. 21)
 
-- **Restriction:** switch off email notifications (`emailNotificationsEnabled = false`) and stop
-  using the data beyond storage; note the restriction and tell the person before lifting it.
+- **Restriction:** the app has no switch that pauses processing for one account. Switching off
+  email notifications (`emailNotificationsEnabled = false`) only stops the emails; the hourly
+  refresher keeps querying DB (and Decodo) for every watched journey and keeps writing price
+  snapshots and in-app notifications. To restrict processing to storage, export the account's
+  items first (see above), then delete the watched journeys so the refresher has nothing to
+  process, switch off email notifications, and leave the remaining items untouched. Note the
+  restriction and tell the person before lifting it. If restrictions become common, add a
+  per-user pause flag that the refresher honours.
 - **Objection** applies to processing based on legitimate interests (logs, hosting, emails to
   `legal@`). Stop unless there are compelling legitimate grounds or the data is needed for legal
   claims; logs expire after 14 days anyway. Everything needed to run the account is based on

@@ -37,6 +37,9 @@ Known gaps, deliberately not implemented yet:
   [data-subject-requests.md](data-subject-requests.md)).
 - **No deletion of inactive accounts.** Accounts are kept until the user deletes them. An automatic
   clean-up would need last-activity tracking, a reminder email and server-side `AdminDeleteUser`.
+  Sign-ups that are never confirmed also stay in Cognito until removed by hand.
+- **No processing pause per account.** Restriction requests (Art. 18) are handled manually, see
+  [data-subject-requests.md](data-subject-requests.md#restriction-art-18-and-objection-art-21).
 - **Login removal is client-side.** Account deletion deletes the app data through the API and then
   the Cognito user from the browser. If the second step fails, the login has to be removed by hand
   (the app asks the user to write to `legal@`). A server-side `AdminDeleteUser` would remove that
