@@ -7,6 +7,10 @@ import {
   CacheHeaderBehavior,
   CacheQueryStringBehavior,
   Distribution,
+  Function as CloudFrontFunction,
+  FunctionCode,
+  FunctionEventType,
+  FunctionRuntime,
   HeadersFrameOption,
   HeadersReferrerPolicy,
   ResponseHeadersPolicy,
@@ -16,6 +20,8 @@ import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deplo
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import { viewerRequestCode } from './cloudfront/viewer-request';
+import { noindexSpaRoutesCode } from './cloudfront/viewer-response';
 
 export interface FrontendProps {
   certificate: Certificate;
@@ -75,6 +81,25 @@ export class Frontend extends Construct {
       },
     });
 
+    // One viewer-request function handles both edge concerns: requests that
+    // arrive through the distribution's default *.cloudfront.net host are 301ed
+    // to the custom domain, and extensionless SPA routes are rewritten to
+    // /index.html so they are served by the origin rather than by the error
+    // fallback (viewer-response functions do not run for origin errors).
+    const edgeRouting = new CloudFrontFunction(this, 'EdgeRouting', {
+      comment: `301 from the CloudFront domain to https://${domainName} and SPA routing`,
+      runtime: FunctionRuntime.JS_2_0,
+      code: FunctionCode.fromInline(viewerRequestCode(domainName)),
+    });
+
+    // The app routes are private and must not be indexed, even for crawlers
+    // that do not execute the SPA's client-side robots meta tag.
+    const noindexSpaRoutes = new CloudFrontFunction(this, 'NoindexSpaRoutes', {
+      comment: 'X-Robots-Tag: noindex for the private SPA routes',
+      runtime: FunctionRuntime.JS_2_0,
+      code: FunctionCode.fromInline(noindexSpaRoutesCode()),
+    });
+
     // CloudFront distribution with custom domain
     const distribution = new Distribution(this, 'DistributionNew', {
       defaultRootObject: 'index.html',
@@ -88,6 +113,10 @@ export class Frontend extends Construct {
         // index.html must always be fresh so browsers pick up new chunk filenames
         // after a deployment — disable caching at the CDN layer for root files.
         cachePolicy: CachePolicy.CACHING_DISABLED,
+        functionAssociations: [
+          { function: edgeRouting, eventType: FunctionEventType.VIEWER_REQUEST },
+          { function: noindexSpaRoutes, eventType: FunctionEventType.VIEWER_RESPONSE },
+        ],
       },
       additionalBehaviors: {
         // Vite writes all JS/CSS bundles under /assets/ with content hashes in
@@ -98,6 +127,10 @@ export class Frontend extends Construct {
           compress: true,
           responseHeadersPolicy,
           cachePolicy: assetsCachePolicy,
+          functionAssociations: [
+            { function: edgeRouting, eventType: FunctionEventType.VIEWER_REQUEST },
+            { function: noindexSpaRoutes, eventType: FunctionEventType.VIEWER_RESPONSE },
+          ],
         },
       },
       errorResponses: [

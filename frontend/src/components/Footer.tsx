@@ -36,6 +36,9 @@ const Footer: React.FC<Props> = () => {
         flexShrink: 0,
       }}
     >
+      <Link href="https://wolfgangmoser.eu/" sx={footerLinkSx}>
+        wolfgangmoser.eu
+      </Link>
       <Link href={LEGAL_NOTICE_URL} sx={footerLinkSx}>
         Legal notice
       </Link>

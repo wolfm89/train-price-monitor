@@ -4,14 +4,107 @@
     <meta charset="utf-8" />
     <link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Train Price Monitor" />
+
+    <title>Train Price Monitor – Deutsche Bahn price alerts</title>
+    <meta
+      name="description"
+      content="Track Deutsche Bahn train fares and get an email alert when the price for your journey rises above your limit. Free to use."
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta name="application-name" content="Train Price Monitor" />
+    <meta name="theme-color" content="#A82323" />
+    <link rel="canonical" href="https://tpm.wolfgangmoser.eu/" />
+    <link rel="preload" as="image" href="/logo-header.webp" type="image/webp" />
+    <style>
+      html,
+      body {
+        background: #f8f8f4;
+      }
+    </style>
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Train Price Monitor" />
+    <meta property="og:title" content="Train Price Monitor – Deutsche Bahn price alerts" />
+    <meta
+      property="og:description"
+      content="Track Deutsche Bahn train fares and get an email alert when the price for your journey rises above your limit. Free to use."
+    />
+    <meta property="og:url" content="https://tpm.wolfgangmoser.eu/" />
+    <meta property="og:image" content="https://tpm.wolfgangmoser.eu/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Train Price Monitor logo and the words Deutsche Bahn price alerts" />
+    <meta property="og:locale" content="en_US" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Train Price Monitor – Deutsche Bahn price alerts" />
+    <meta
+      name="twitter:description"
+      content="Track Deutsche Bahn train fares and get an email alert when the price for your journey rises above your limit. Free to use."
+    />
+    <meta name="twitter:image" content="https://tpm.wolfgangmoser.eu/og-image.png" />
+
     <link rel="apple-touch-icon" href="/logo192.png" />
     <link rel="manifest" href="/manifest.json" />
-    <title>Train Price Monitor</title>
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Train Price Monitor",
+        "url": "https://tpm.wolfgangmoser.eu/",
+        "description": "Track Deutsche Bahn train fares and get an email alert when the price for your journey rises above your limit. Free to use.",
+        "applicationCategory": "TravelApplication",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires JavaScript",
+        "inLanguage": "en",
+        "isAccessibleForFree": true,
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "EUR"
+        },
+        "featureList": [
+          "Hourly checks of Deutsche Bahn fares",
+          "Email alerts when a fare exceeds your price limit",
+          "Multiple monitored journeys with individual limits"
+        ]
+      }
+    </script>
   </head>
 
   <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <!--
+      No-JS fallback only. The React app replaces #root when it mounts; keeping
+      this content out of #root means JavaScript users never see a splash screen.
+    -->
+    <noscript>
+      <div
+        style="
+          min-height: 100vh;
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 18px;
+          padding: 40px 24px;
+          background: #f8f8f4;
+          color: #1a1a16;
+          font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+          text-align: center;
+        "
+      >
+        <img src="/logo-hero.webp" width="128" height="128" alt="Train Price Monitor logo" />
+        <h1 style="margin: 0; max-width: 620px; font-size: 32px; line-height: 1.2; letter-spacing: -0.025em">
+          Stop overpaying for train tickets.
+        </h1>
+        <p style="margin: 0; max-width: 560px; font-size: 16px; line-height: 1.65; color: #606058">
+          Train Price Monitor checks Deutsche Bahn fares every hour and emails you when the price for a journey you are
+          watching rises above your limit. Free to use.
+        </p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/index.tsx"></script>
   </body>
