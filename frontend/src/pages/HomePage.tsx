@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
+import LandingSections from '../components/LandingSections';
 import { Button, Typography, Box, CircularProgress, Chip, Paper, Grid, useTheme } from '@mui/material';
 import {
   Train as TrainIcon,
@@ -427,6 +428,7 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           component="img"
           src={process.env.PUBLIC_URL + '/logo-hero.webp'}
           alt="Train Price Monitor Logo"
+          fetchPriority="high"
           sx={{ display: 'block', flexShrink: 0, width: { xs: 150, sm: 220 }, height: { xs: 150, sm: 220 } }}
         />
         <Box sx={{ textAlign: { xs: 'center', sm: 'left' }, width: { xs: '100%', sm: 'auto' } }}>
@@ -464,8 +466,8 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
               mb: 3,
             }}
           >
-            Set a price limit on any journey. We check fares hourly and alert you the moment a ticket exceeds your
-            threshold.
+            Set a price limit on any Deutsche Bahn journey. We check fares hourly and alert you the moment a ticket
+            exceeds your threshold.
           </Typography>
           <Box
             sx={{
@@ -500,29 +502,40 @@ function LoggedOutHero({ onSignup, onLogin, children }: LoggedOutHeroProps) {
           </Box>
         </Box>
       </Box>
-      <Grid container spacing={1.75}>
-        <Grid size={{ xs: 12, sm: 4 }}>
-          <FeatureCard
-            icon={<Visibility sx={{ fontSize: 16 }} />}
-            title="Hourly price checks"
-            body="We poll Deutsche Bahn's systems every hour for every journey you're watching. You'll never miss a price movement."
-          />
+      <Box component="section" aria-labelledby="why-train-price-monitor" sx={{ width: '100%' }}>
+        <Typography
+          id="why-train-price-monitor"
+          variant="h5"
+          component="h2"
+          sx={{ mt: 1, mb: 1.5, textAlign: { xs: 'center', sm: 'left' } }}
+        >
+          Why Train Price Monitor?
+        </Typography>
+        <Grid container spacing={1.75}>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FeatureCard
+              icon={<Visibility sx={{ fontSize: 16 }} />}
+              title="Never miss a fare change"
+              body="We keep watching while you get on with your day."
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FeatureCard
+              icon={<NotificationsActive sx={{ fontSize: 16 }} />}
+              title="Act when the price rises"
+              body="Your limit is the trigger; you decide when to book."
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <FeatureCard
+              icon={<ConfirmationNumber sx={{ fontSize: 16 }} />}
+              title="Every trip in one place"
+              body="Each journey gets its own limit and independent monitoring."
+            />
+          </Grid>
         </Grid>
-        <Grid size={{ xs: 12, sm: 4 }}>
-          <FeatureCard
-            icon={<NotificationsActive sx={{ fontSize: 16 }} />}
-            title="Instant alerts"
-            body="Set your own price limit. Get notified in-app and by email the moment a ticket rises above your threshold."
-          />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 4 }}>
-          <FeatureCard
-            icon={<ConfirmationNumber sx={{ fontSize: 16 }} />}
-            title="Multiple journeys"
-            body="Watch as many connections as you need. Each one gets its own limit and independent monitoring."
-          />
-        </Grid>
-      </Grid>
+      </Box>
+      <LandingSections />
       {children}
     </Box>
   );
