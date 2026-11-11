@@ -15,11 +15,6 @@ export interface CognitoCustomMessageEvent {
 
 function passwordResetBody(appName: string, code: string): string {
   return (
-    'Guten Tag,<br><br>' +
-    `mit diesem Code setzen Sie Ihr Passwort für ${appName} zurück:<br><br>` +
-    `<b>${code}</b><br><br>` +
-    'Der Code ist nur kurze Zeit gültig. Wenn Sie kein neues Passwort angefordert haben, ' +
-    'ignorieren Sie diese E-Mail.<br><br>' +
     'Hello,<br><br>' +
     `use this code to reset your ${appName} password:<br><br>` +
     `<b>${code}</b><br><br>` +
@@ -31,7 +26,7 @@ export async function handler(event: CognitoCustomMessageEvent): Promise<Cognito
   if (event.triggerSource === 'CustomMessage_ForgotPassword') {
     // Set by the stack from the app_name context, like the confirmation subject.
     const appName = process.env.APP_NAME ?? 'Train Price Monitor';
-    event.response.emailSubject = `${appName}: Passwort zurücksetzen / Reset your password`;
+    event.response.emailSubject = `${appName}: Reset your password`;
     event.response.emailMessage = passwordResetBody(appName, event.request.codeParameter);
   }
   return event;

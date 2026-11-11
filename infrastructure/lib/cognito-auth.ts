@@ -65,12 +65,11 @@ export class CognitoAuth extends Construct {
         requireDigits: true,
         requireSymbols: true,
       },
+      // The app's interface is English, as are the notification emails, so
+      // transactional mail stays in one language.
       userVerification: {
-        emailSubject: `${appName}: E-Mail-Adresse bestätigen / Confirm your email address`,
+        emailSubject: `${appName}: Confirm your email address`,
         emailBody:
-          'Guten Tag,<br><br>' +
-          `bitte bestätigen Sie Ihre E-Mail-Adresse für ${appName}:<br>{##Verify Email##}<br><br>` +
-          'Wenn Sie kein Konto angelegt haben, ignorieren Sie diese E-Mail.<br><br>' +
           'Hello,<br><br>' +
           `please confirm your email address for ${appName}:<br>{##Verify Email##}<br><br>` +
           'If you did not create an account, ignore this email.',
