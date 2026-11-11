@@ -261,6 +261,15 @@ export class Backend extends Construct {
     lambdaFunction.addToRolePolicy(sesSendPolicy);
     refresherFunction.addToRolePolicy(sesSendPolicy);
 
+    // deleteUser removes the address from the account-level suppression list
+    // (hard bounces and complaints). The action has no resource-level scope.
+    lambdaFunction.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        actions: ['ses:DeleteSuppressedDestination'],
+        resources: ['*'],
+      })
+    );
+
     // Sandbox workaround only: createUser/deleteUser (API function) add and
     // remove the user's address as a recipient identity.
     if (sesSandbox) {

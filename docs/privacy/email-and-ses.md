@@ -44,6 +44,13 @@ that deploy, and before the landing-page PR is merged:
    ```
    Also confirm that no CloudTrail trail stores events beyond the 90-day event history
    (`aws cloudtrail describe-trails`); the policy states 90 days.
+5. **Check the suppression list.** `deleteUser` removes the address from the account-level
+   suppression list. Confirm that the sandbox allows that call (a `NotFoundException` is the good
+   outcome), then remove entries of accounts that no longer exist:
+   ```bash
+   aws sesv2 delete-suppressed-destination --region eu-central-1 --email-address does-not-exist@wolfgangmoser.eu
+   aws sesv2 list-suppressed-destinations --region eu-central-1
+   ```
 
 ## Leaving the sandbox
 

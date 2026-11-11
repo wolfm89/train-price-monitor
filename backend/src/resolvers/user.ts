@@ -528,6 +528,9 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
     if (context.ses.sandbox && dbUserCur.email) {
       await context.ses.deleteEmailIdentity(dbUserCur.email);
     }
+    if (dbUserCur.email) {
+      await context.ses.removeSuppressedDestination(dbUserCur.email);
+    }
 
     const { Attributes: dbUser } = await context.entities.User.build(DeleteItemCommand)
       .key({ id })

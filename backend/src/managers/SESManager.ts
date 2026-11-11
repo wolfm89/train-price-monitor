@@ -10,6 +10,8 @@ import {
   DeleteEmailIdentityCommand,
   DeleteEmailIdentityRequest,
   DeleteEmailIdentityCommandOutput,
+  DeleteSuppressedDestinationCommand,
+  NotFoundException,
 } from '@aws-sdk/client-sesv2';
 import { EmailNotificationInfo } from '../resolvers/notificationTypes';
 import Logger from '../lib/logger';
@@ -96,6 +98,20 @@ class SESManager {
     } catch (error) {
       Logger.error('Failed to delete recipient email identity', { error: errorName(error) });
       return undefined;
+    }
+  }
+
+  /**
+   * Removes a deleted user's address from the account-level suppression list,
+   * where SES puts addresses after a hard bounce or a complaint. Absent entries
+   * are the normal case.
+   */
+  async removeSuppressedDestination(email: string): Promise<void> {
+    try {
+      await this.ses.send(new DeleteSuppressedDestinationCommand({ EmailAddress: email }));
+    } catch (error) {
+      if (error instanceof NotFoundException) return;
+      Logger.warn('Failed to remove the address from the SES suppression list', { error: errorName(error) });
     }
   }
 }

@@ -43,9 +43,12 @@ Known gaps, deliberately not implemented yet:
   network, and Decodo's DPA has no SCCs. The requests carry no account data, which is the basis
   of the policy's wording; a lawyer should confirm it. The technical alternative is to pin the
   Decodo exit to an EU country (its `geo` parameter) and test that bahn.de still answers.
-- **SES suppression list.** Addresses that bounced or complained stay on the account-level
-  suppression list; `deleteUser` does not remove them (the API is unavailable in the sandbox).
-  After production access, add `DeleteSuppressedDestination` to `deleteUser`.
+- **SES suppression list in the sandbox.** `deleteUser` removes the address from the
+  account-level suppression list (hard bounces and complaints). AWS documents that some
+  suppression-list APIs are unavailable in the sandbox; check once that the delete works (see
+  [email-and-ses.md](email-and-ses.md#before-the-privacy-policy-goes-live)). If it does not,
+  failures appear as warnings `Failed to remove the address from the SES suppression list` and the
+  entries have to be removed after production access.
 - **No processing pause per account.** Restriction requests (Art. 18) are handled manually, see
   [data-subject-requests.md](data-subject-requests.md#restriction-art-18-and-objection-art-21).
 - **Login removal is client-side.** Account deletion deletes the app data through the API and then
