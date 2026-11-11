@@ -1,16 +1,11 @@
 import { viewerRequestCode } from '../lib/cloudfront/viewer-request';
 import { noindexSpaRoutesCode } from '../lib/cloudfront/viewer-response';
 
-interface QueryParameter {
-  value?: string;
-  multiValue?: { value: string }[];
-}
-
 interface ViewerRequest {
   method: string;
   headers: Record<string, { value: string }>;
   uri: string;
-  querystring: Record<string, QueryParameter>;
+  rawQueryString: () => string | undefined;
 }
 
 interface ViewerRequestEvent {
@@ -25,13 +20,13 @@ interface RedirectResponse {
 
 type ViewerRequestResult = ViewerRequest | RedirectResponse;
 
-function request(host: string, uri = '/', querystring: Record<string, QueryParameter> = {}): ViewerRequestEvent {
+function request(host: string, uri = '/', rawQueryString: string | undefined = undefined): ViewerRequestEvent {
   return {
     request: {
       method: 'GET',
       headers: { host: { value: host } },
       uri,
-      querystring,
+      rawQueryString: () => rawQueryString,
     },
   };
 }
@@ -49,7 +44,7 @@ describe('CloudFront viewer request', () => {
     expect(event.request.headers['x-tpm-original-uri']).toBeUndefined();
   });
 
-  test('301s the CloudFront domain to the custom domain with an empty query object', () => {
+  test('301s the CloudFront domain to the custom domain without a query string', () => {
     expect(runViewerRequest(request('d18p9lp3h4c6yx.cloudfront.net', '/journeys'))).toEqual({
       statusCode: 301,
       statusDescription: 'Moved Permanently',
@@ -57,14 +52,9 @@ describe('CloudFront viewer request', () => {
     });
   });
 
-  test('serializes query parameters, including encoded values', () => {
+  test('preserves an already-encoded query string exactly, without double encoding', () => {
     expect(
-      runViewerRequest(
-        request('d18p9lp3h4c6yx.cloudfront.net', '/search', {
-          from: { value: 'München Hbf' },
-          to: { value: 'Berlin Hbf' },
-        })
-      )
+      runViewerRequest(request('d18p9lp3h4c6yx.cloudfront.net', '/search', 'from=M%C3%BCnchen%20Hbf&to=Berlin%20Hbf'))
     ).toEqual({
       statusCode: 301,
       statusDescription: 'Moved Permanently',
@@ -76,25 +66,19 @@ describe('CloudFront viewer request', () => {
     });
   });
 
-  test('preserves repeated query parameters through multiValue', () => {
-    expect(
-      runViewerRequest(
-        request('d18p9lp3h4c6yx.cloudfront.net', '/search', {
-          tag: { value: 'a', multiValue: [{ value: 'a' }, { value: 'b' }] },
-        })
-      )
-    ).toEqual({
+  test('preserves repeated query parameters', () => {
+    expect(runViewerRequest(request('d18p9lp3h4c6yx.cloudfront.net', '/search', 'tag=a&tag=b'))).toEqual({
       statusCode: 301,
       statusDescription: 'Moved Permanently',
       headers: { location: { value: 'https://tpm.wolfgangmoser.eu/search?tag=a&tag=b' } },
     });
   });
 
-  test('redirects an uppercase host', () => {
-    expect(runViewerRequest(request('D18P9LP3H4C6YX.CLOUDFRONT.NET', '/'))).toEqual({
+  test('keeps a bare question mark and redirects an uppercase host', () => {
+    expect(runViewerRequest(request('D18P9LP3H4C6YX.CLOUDFRONT.NET', '/', ''))).toEqual({
       statusCode: 301,
       statusDescription: 'Moved Permanently',
-      headers: { location: { value: 'https://tpm.wolfgangmoser.eu/' } },
+      headers: { location: { value: 'https://tpm.wolfgangmoser.eu/?' } },
     });
   });
 
