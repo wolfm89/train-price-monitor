@@ -37,7 +37,7 @@ const runViewerRequest = new Function(
 ) as (event: ViewerRequestEvent) => ViewerRequestResult;
 
 describe('CloudFront viewer request', () => {
-  test('passes requests for the custom domain through unchanged', () => {
+  test('passes requests for the custom domain and the landing page through unchanged', () => {
     const event = request('tpm.wolfgangmoser.eu', '/');
 
     expect(runViewerRequest(event)).toBe(event.request);
@@ -82,20 +82,39 @@ describe('CloudFront viewer request', () => {
     });
   });
 
-  test('rewrites an extensionless SPA route and records the original URI', () => {
-    const event = request('tpm.wolfgangmoser.eu', '/journeys');
+  test('301s /index.html to the canonical landing page', () => {
+    expect(runViewerRequest(request('tpm.wolfgangmoser.eu', '/index.html', 'a=1'))).toEqual({
+      statusCode: 301,
+      statusDescription: 'Moved Permanently',
+      headers: { location: { value: 'https://tpm.wolfgangmoser.eu/?a=1' } },
+    });
+  });
+
+  test.each([
+    ['/search', '/search'],
+    ['/journeys/', '/journeys/'],
+    ['/profile', '/profile'],
+    ['/forgot-password', '/forgot-password'],
+    ['/reset-password', '/reset-password'],
+  ])('rewrites the known SPA route %s and records the original URI', (requestedUri, recordedUri) => {
+    const event = request('tpm.wolfgangmoser.eu', requestedUri);
 
     expect(runViewerRequest(event)).toBe(event.request);
     expect(event.request.uri).toBe('/index.html');
-    expect(event.request.headers['x-tpm-original-uri']).toEqual({ value: '/journeys' });
+    expect(event.request.headers['x-tpm-original-uri']).toEqual({ value: recordedUri });
   });
 
-  test('rewrites nested SPA routes but leaves files and assets alone', () => {
-    const nested = request('tpm.wolfgangmoser.eu', '/journeys/123');
-    runViewerRequest(nested);
-    expect(nested.request.uri).toBe('/index.html');
+  test('does not rewrite unknown paths, so they can return a real 404', () => {
+    for (const uri of ['/no-such-page', '/journeys/123', '/search/extra']) {
+      const event = request('tpm.wolfgangmoser.eu', uri);
+      runViewerRequest(event);
+      expect(event.request.uri).toBe(uri);
+      expect(event.request.headers['x-tpm-original-uri']).toBeUndefined();
+    }
+  });
 
-    for (const uri of ['/sitemap.xml', '/robots.txt', '/logo-hero.webp', '/assets/index-abc.js']) {
+  test('leaves files and assets alone', () => {
+    for (const uri of ['/sitemap.xml', '/robots.txt', '/404.html', '/logo-hero.webp', '/assets/index-abc.js']) {
       const event = request('tpm.wolfgangmoser.eu', uri);
       runViewerRequest(event);
       expect(event.request.uri).toBe(uri);
