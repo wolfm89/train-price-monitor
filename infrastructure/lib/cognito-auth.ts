@@ -22,6 +22,16 @@ export class CognitoAuth extends Construct {
       autoVerify: {
         email: true,
       },
+      // Confirmation and password-reset mails go through SES from the app's own
+      // verified address, not from no-reply@verificationemail.com: the domain's
+      // DKIM applies, replies reach the operator, and the pool limit is the SES
+      // quota instead of 50 per day.
+      email: cognito.UserPoolEmail.withSES({
+        fromEmail: 'trainpricemonitor@wolfgangmoser.eu',
+        fromName: 'Train Price Monitor',
+        sesRegion: 'eu-central-1',
+        sesVerifiedDomain: 'wolfgangmoser.eu',
+      }),
       customAttributes: {
         id: new cognito.StringAttribute({ minLen: 36, maxLen: 36, mutable: false }),
       },
