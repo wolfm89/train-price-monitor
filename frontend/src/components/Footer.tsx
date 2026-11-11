@@ -37,7 +37,7 @@ const Footer: React.FC<Props> = () => {
       }}
     >
       <Link href="https://wolfgangmoser.eu/" sx={footerLinkSx}>
-        Wolfgang Moser
+        wolfgangmoser.eu
       </Link>
       <Link href={LEGAL_NOTICE_URL} sx={footerLinkSx}>
         Legal notice
