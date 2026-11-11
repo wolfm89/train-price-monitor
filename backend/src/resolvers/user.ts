@@ -100,6 +100,7 @@ export const userResolvers: UserResolvers = {
     const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
       .query({ partition: `USER#${parent.id}`, range: { beginsWith: 'NOTIFICATION#' } })
+      .options({ maxPages: Infinity })
       .send();
 
     const userNotifications = dbNotifications ?? [];
@@ -196,6 +197,7 @@ async function loadJourneyMonitors(
   const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Journey)
     .query({ partition: `USER#${userId}`, range: { beginsWith: 'JOURNEY#' } })
+    .options({ maxPages: Infinity })
     .send();
 
   if (!dbJourneys) {
@@ -491,9 +493,11 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
       await context.s3.deleteFilesWithPrefix(profileImageBucketName, dbUserCur.profilePicture);
     }
 
+    // Every page, so that no item survives the account deletion.
     const { Items: dbNotifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Notification)
       .query({ partition: `USER#${id}` })
+      .options({ maxPages: Infinity })
       .send();
 
     if (dbNotifications) {
@@ -509,6 +513,7 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
     const { Items: dbJourneys } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
       .entities(context.entities.Journey)
       .query({ partition: `USER#${id}` })
+      .options({ maxPages: Infinity })
       .send();
 
     if (dbJourneys) {

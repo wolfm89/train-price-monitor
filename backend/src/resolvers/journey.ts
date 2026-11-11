@@ -262,8 +262,11 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
   requireInternal(context);
   const startedAt = Date.now();
 
+  // Every page: by default only the first 1 MB of the table would be scanned,
+  // and journeys beyond it would never be refreshed or expired.
   const { Items: allJourneys } = await context.entities.TrainPriceMonitorTable.build(ScanCommand)
     .entities(context.entities.Journey)
+    .options({ maxPages: Infinity })
     .send();
 
   const journeys = (allJourneys ?? []) as StoredJourney[];
@@ -420,6 +423,7 @@ async function refreshJourneyMonitorInner(
   const existingNotifications = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
     .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
+    .options({ maxPages: Infinity })
     .send();
 
   const notificationsArray = existingNotifications?.Items ?? [];
@@ -630,6 +634,7 @@ async function deletePriceAlertNotificationsForJourney(context: GraphQLContext, 
       filters: {
         Notification: { attr: 'type', eq: NOTIFICATION_TYPES.PRICE_ALERT.name },
       },
+      maxPages: Infinity,
     })
     .send();
 
@@ -712,6 +717,7 @@ async function deleteJourneyMonitorInner(
   const { Items: notifications } = await context.entities.TrainPriceMonitorTable.build(QueryCommand)
     .entities(context.entities.Notification)
     .query({ partition: `USER#${userId}`, range: { beginsWith: 'NOTIFICATION#' } })
+    .options({ maxPages: Infinity })
     .send();
 
   const journeyNotifications = notifications?.filter((item: { data?: string }) => {
