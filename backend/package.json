@@ -4,9 +4,9 @@
   "description": "",
   "scripts": {
     "codegen": "graphql-codegen --config src/codegen.yml",
-    "dev": "cross-env NODE_ENV=development ts-node-dev --exit-child --respawn src/main.ts",
-    "start": "ts-node src/main.ts",
-    "build": "npm run codegen && esbuild src/main.ts --bundle --minify --sourcemap --platform=node --target=es2020 --format=cjs --alias:cross-fetch=../shared/db-fetch.ts --external:gps-distance --external:https-proxy-agent --external:luxon --external:@aws-sdk/client-ssm --external:qs --external:slugg --outfile=dist/main.js",
+    "dev": "node scripts/dev.mjs",
+    "start": "node --enable-source-maps dist/main.js",
+    "build": "npm run codegen && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "node --test scripts/backfill-cognito-sub-lib.test.mjs scripts/backfill-ttl-lib.test.mjs scripts/cleanup-ses-identities-lib.test.mjs && ts-node --transpile-only src/lib/journeyMatcher.test.ts && ts-node --transpile-only src/lib/privacy.test.ts",
@@ -17,7 +17,8 @@
     "pretypecheck": "npm run generate",
     "prebuild": "npm run generate",
     "predev": "npm run generate",
-    "prestart": "npm run generate"
+    "prestart": "npm run generate",
+    "dev:types": "tsc --noEmit --watch --preserveWatchOutput"
   },
   "author": "",
   "license": "GPL-3.0",
@@ -33,13 +34,11 @@
     "@types/uuid": "^9.0.7",
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
-    "cross-env": "7.0.3",
     "db-hafas-stations": "^2.0.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.1.0",
     "prettier": "^3.0.0",
     "ts-node": "10.9.1",
-    "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {

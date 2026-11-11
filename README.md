@@ -58,9 +58,12 @@ The backend can be started locally with the following steps:
 
 1. `cd backend`
 2. Install dependencies: `npm install`
-3. `LOCAL_DEV=1 PROFILE_IMAGE_BUCKET_NAME=<Bucket name from CDK output> TPM_SQS_QUEUE_URL=<SQS queue URL from CDK output> npm run dev`
+3. `npm run dev` (needs `PROFILE_IMAGE_BUCKET_NAME`, `TPM_SQS_QUEUE_URL` and AWS credentials; `mise run env:local` writes them)
 
-Alternatively, use `mise run //backend:dev` from the repository root (mise sets `LOCAL_DEV=1` automatically).
+Alternatively, use `mise run dev:backend` from the repository root. Either way the dev server runs the
+esbuild bundle with the same `cross-fetch` alias as the Lambda, so journey searches work locally
+instead of being blocked by DB's bot protection. `npm run dev:types` checks types in a second
+terminal; the bundle itself does not typecheck.
 
 For running the price scraper pipeline locally, see [scraper/README.md](scraper/README.md).
 

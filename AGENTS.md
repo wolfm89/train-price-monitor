@@ -41,7 +41,8 @@ npm run lint           # ESLint check
 # Backend (GraphQL Yoga)
 cd backend
 npm install            # Install dependencies
-LOCAL_DEV=1 npm run dev  # Start local HTTP server with hot reload (port 4000)
+npm run dev            # esbuild watch + node, same bundle as Lambda (port 4000)
+npm run dev:types      # Optional: tsc --watch in a second terminal (dev does not typecheck)
 npm run build          # Bundle with esbuild to backend/dist
 npm run codegen        # Generate GraphQL types from schema
 npm run typecheck      # TypeScript check
