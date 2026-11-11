@@ -11,7 +11,7 @@ import {
 } from '../model/trainPriceMonitor';
 import Logger from '../lib/logger';
 import { sort } from '../lib/sort';
-import { assertUserAccess, requireAuth, requireUserAccess } from '../lib/auth';
+import { assertUserAccess, requireAuth, requireInternal, requireUserAccess } from '../lib/auth';
 import { MutationResolvers, QueryResolvers, UserResolvers } from '../schema/generated/resolvers.generated';
 import {
   User,
@@ -31,6 +31,7 @@ import { LoyaltyCardData, validateLoyaltyCard, VALID_AGE_GROUPS } from '../lib/l
 import { LoyaltyCard, LoyaltyCardType } from '../schema/generated/typeDefs.generated';
 import { validateProfilePicture } from '../lib/profilePicture';
 import { buildDataExport } from '../lib/dataExport';
+import { expiredSignups } from '../lib/retention';
 
 dotenv.config();
 
@@ -545,6 +546,35 @@ export const deleteUser: NonNullable<MutationResolvers['deleteUser']> = async (
   } finally {
     Logger.removeKeys(['userId']);
   }
+};
+
+/**
+ * Deletes Cognito sign-ups whose email address was not confirmed within
+ * UNCONFIRMED_SIGNUP_RETENTION_DAYS. Such sign-ups never reached the app's
+ * database (the User row is created at the first sign-in), so Cognito holds
+ * all of their data. Runs daily from the refresher's queue.
+ */
+export const deleteUnconfirmedSignups: NonNullable<MutationResolvers['deleteUnconfirmedSignups']> = async (
+  _,
+  _args,
+  context: GraphQLContext
+): Promise<number> => {
+  requireInternal(context);
+  const pending = await context.cognito.listUnconfirmedSignups();
+  const expired = expiredSignups(pending);
+  let deleted = 0;
+  for (const username of expired) {
+    try {
+      await context.cognito.deleteUser(username);
+      deleted++;
+    } catch (error) {
+      Logger.error('Failed to delete unconfirmed sign-up', {
+        error: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
+  }
+  Logger.info('Deleted unconfirmed sign-ups', { deleted, waiting: pending.length - expired.length });
+  return deleted;
 };
 
 /**

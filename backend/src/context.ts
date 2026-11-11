@@ -5,6 +5,7 @@ import { DbHafasManager } from './managers/DbHafasManager';
 import dotenv from 'dotenv';
 import { SQSManager } from './managers/SQSManager';
 import SESManager from './managers/SESManager';
+import { CognitoManager } from './managers/CognitoManager';
 import { AuthClaims, authClaimsFromRequest } from './lib/auth';
 
 dotenv.config();
@@ -18,6 +19,8 @@ const s3 = new S3Manager();
 const sqs = new SQSManager(TPM_SQS_QUEUE_URL);
 const ses = new SESManager();
 const dbHafas = new DbHafasManager();
+// Only the refresher gets COGNITO_USER_POOL_ID and the matching IAM permissions.
+const cognito = new CognitoManager(process.env.COGNITO_USER_POOL_ID);
 
 type Entities = {
   User: typeof User;
@@ -33,6 +36,7 @@ export type GraphQLContext = {
   sqs: SQSManager;
   ses: SESManager;
   dbHafas: DbHafasManager;
+  cognito: CognitoManager;
   /** Verified Cognito claims, absent on the internal SQS path. */
   auth?: AuthClaims;
   /** True only for the SQS/EventBridge invocation that runs background work. */
@@ -50,6 +54,7 @@ export async function createContext(
     sqs,
     ses,
     dbHafas,
+    cognito,
     auth: authClaimsFromRequest(options?.request) ?? undefined,
     isInternal: options?.isInternal ?? false,
   };

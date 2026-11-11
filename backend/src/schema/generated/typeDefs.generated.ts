@@ -126,6 +126,7 @@ export type Mutation = {
   __typename?: 'Mutation';
   createUser?: Maybe<User>;
   deleteJourneyMonitor?: Maybe<JourneyMonitor>;
+  deleteUnconfirmedSignups?: Maybe<Scalars['Int']['output']>;
   deleteUser?: Maybe<User>;
   markNotificationAsRead?: Maybe<Notification>;
   monitorJourney?: Maybe<JourneyMonitor>;

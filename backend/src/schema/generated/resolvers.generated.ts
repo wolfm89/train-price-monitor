@@ -260,6 +260,7 @@ export type MutationResolvers<
     ContextType,
     RequireFields<Types.MutationDeleteJourneyMonitorArgs, 'journeyId' | 'userId'>
   >;
+  deleteUnconfirmedSignups?: Resolver<Types.Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   deleteUser?: Resolver<
     Types.Maybe<ResolversTypes['User']>,
     ParentType,

@@ -127,6 +127,11 @@ extend type Mutation {
   deleteUser(id: ID!): User
 }
 
+# Internal (scheduled): deletes sign-ups that were never confirmed. Returns the number deleted.
+extend type Mutation {
+  deleteUnconfirmedSignups: Int
+}
+
 # Notification
 
 interface Notification {

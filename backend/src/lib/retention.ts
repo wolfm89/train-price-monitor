@@ -32,3 +32,14 @@ export function notificationTtl(createdAt: Date, journeyExpires?: Date): number 
   const retention = epochSeconds(createdAt) + NOTIFICATION_RETENTION_DAYS * SECONDS_PER_DAY;
   return journeyExpires ? Math.max(retention, journeyTtl(journeyExpires)) : retention;
 }
+
+/** Sign-ups that are not confirmed within this period are deleted from Cognito by a daily job. */
+export const UNCONFIRMED_SIGNUP_RETENTION_DAYS = 7;
+
+/** The usernames of unconfirmed sign-ups older than the retention period. */
+export function expiredSignups(signups: { username: string; createdAt?: Date }[], now: Date = new Date()): string[] {
+  const cutoff = now.getTime() - UNCONFIRMED_SIGNUP_RETENTION_DAYS * SECONDS_PER_DAY * 1000;
+  return signups
+    .filter((signup) => signup.createdAt !== undefined && signup.createdAt.getTime() < cutoff)
+    .map((signup) => signup.username);
+}

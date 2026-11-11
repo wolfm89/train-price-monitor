@@ -9,6 +9,7 @@ import {
   updateUserSettings,
   updateTravelPreferences,
   deleteUser,
+  deleteUnconfirmedSignups,
 } from './user';
 import {
   journeysQuery,
@@ -42,6 +43,7 @@ const resolvers: ResolversWithScalars = {
     updateUserSettings: updateUserSettings,
     updateTravelPreferences: updateTravelPreferences,
     deleteUser: deleteUser,
+    deleteUnconfirmedSignups: deleteUnconfirmedSignups,
     monitorJourney: monitorJourney,
     updateJourneyMonitors: updateJourneyMonitors,
     updateJourneyMonitor: updateJourneyMonitor,

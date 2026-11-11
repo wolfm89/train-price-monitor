@@ -4,7 +4,13 @@ import { buildDataExport } from './dataExport';
 import { corsHeaders, parseAllowedOrigins, requestOrigin } from './cors';
 import { MAX_PROFILE_PICTURE_BYTES, validateProfilePicture } from './profilePicture';
 import { graphqlErrorLogEntry, redactEmails } from './redact';
-import { JOURNEY_TTL_MARGIN_DAYS, NOTIFICATION_RETENTION_DAYS, journeyTtl, notificationTtl } from './retention';
+import {
+  JOURNEY_TTL_MARGIN_DAYS,
+  NOTIFICATION_RETENTION_DAYS,
+  expiredSignups,
+  journeyTtl,
+  notificationTtl,
+} from './retention';
 
 const DAY = 24 * 60 * 60;
 
@@ -21,6 +27,21 @@ assert.equal(
 const lateJourney = new Date('2027-06-01T00:00:00Z');
 assert.equal(notificationTtl(created, lateJourney), journeyTtl(lateJourney));
 assert.equal(notificationTtl(created, new Date('2026-11-05T00:00:00Z')), notificationTtl(created));
+
+// Unconfirmed sign-ups are deleted after seven days; entries without a creation date are kept.
+const now = new Date('2026-11-11T12:00:00Z');
+assert.deepEqual(
+  expiredSignups(
+    [
+      { username: 'old', createdAt: new Date('2026-11-04T11:59:59Z') },
+      { username: 'exactly-seven-days', createdAt: new Date('2026-11-04T12:00:00Z') },
+      { username: 'fresh', createdAt: new Date('2026-11-10T08:00:00Z') },
+      { username: 'unknown' },
+    ],
+    now
+  ),
+  ['old']
+);
 
 // --- profile picture validation ---------------------------------------------
 
