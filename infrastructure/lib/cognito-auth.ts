@@ -5,12 +5,16 @@ import { Construct } from 'constructs';
 export class CognitoAuth extends Construct {
   userPool: cognito.UserPool;
 
-  constructor(scope: Construct, id: string) {
+  constructor(scope: Construct, id: string, sesFromEmail: string) {
     super(scope, id);
 
     const appName = this.node.tryGetContext('app_name');
     if (!appName) {
       throw new Error('The "app_name" context variable is not defined.');
+    }
+    const mailDomain = sesFromEmail.slice(sesFromEmail.lastIndexOf('@') + 1);
+    if (!mailDomain || mailDomain === sesFromEmail) {
+      throw new Error(`ses_from_email '${sesFromEmail}' is not an email address`);
     }
 
     // Create a user pool
@@ -22,6 +26,18 @@ export class CognitoAuth extends Construct {
       autoVerify: {
         email: true,
       },
+      // Confirmation and password-reset mails go through SES from the app's own
+      // verified address, not from no-reply@verificationemail.com: the domain's
+      // DKIM applies, replies reach the operator, and the pool limit is the SES
+      // quota instead of 50 per day.
+      email: cognito.UserPoolEmail.withSES({
+        // The identity this stack creates and verifies for the configured sender.
+        fromEmail: sesFromEmail,
+        fromName: appName,
+        // Same region as the identity Backend creates, whatever the stack region is.
+        sesRegion: cdk.Stack.of(this).region,
+        sesVerifiedDomain: mailDomain,
+      }),
       customAttributes: {
         id: new cognito.StringAttribute({ minLen: 36, maxLen: 36, mutable: false }),
       },
