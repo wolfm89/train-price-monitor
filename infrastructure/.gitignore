@@ -1,7 +1,5 @@
 *.js
 !jest.config.js
-# Plain-JS Lambda handler, not a tsc output
-!lambda/**/*.js
 *.d.ts
 node_modules
 
