@@ -21,7 +21,7 @@ export const FAQ_ITEMS: FaqItem[] = [
   {
     question: 'Which journeys can I monitor?',
     answer:
-      'Any Deutsche Bahn connection you can find in the search, including ICE, IC and regional services. The search filters let you choose train types, class, number of transfers, bike carriage and Deutschland-Ticket options.',
+      'Connections that show a fare and a Watch button in the search results, including ICE, IC and regional services. The search filters let you choose train types, class, number of transfers, bike carriage and Deutschland-Ticket options.',
   },
   {
     question: 'Does Train Price Monitor book tickets?',
