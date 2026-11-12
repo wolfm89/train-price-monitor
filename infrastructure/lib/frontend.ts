@@ -133,16 +133,19 @@ export class Frontend extends Construct {
           ],
         },
       },
+      // Known SPA routes are rewritten to /index.html by EdgeRouting. Anything
+      // else is a real missing page, so serve /404.html with a 404 status
+      // instead of turning every unknown path into a soft 200 homepage.
       errorResponses: [
         {
           httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
+          responseHttpStatus: 404,
+          responsePagePath: '/404.html',
         },
         {
           httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
+          responseHttpStatus: 404,
+          responsePagePath: '/404.html',
         },
       ],
     });

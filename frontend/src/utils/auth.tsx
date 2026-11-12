@@ -112,6 +112,15 @@ export function signOut(): void {
   }
 }
 
+/**
+ * Synchronous check for a stored Cognito user. It only answers whether a
+ * previous sign-in left tokens in local storage; the session itself is still
+ * validated asynchronously by getCurrentUser().
+ */
+export function hasStoredUser(): boolean {
+  return userPool.getCurrentUser() !== null;
+}
+
 export type UserData = {
   [key: string]: string;
 };

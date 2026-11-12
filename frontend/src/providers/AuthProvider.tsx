@@ -36,7 +36,16 @@ const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const { addAlert } = useAlert();
   const [user, setUser] = useState<UserData | null>(null);
-  const [isInitialCheckDone, setIsInitialCheckDone] = useState<boolean>(false);
+  // No stored Cognito user means we already know the visitor is logged out; do
+  // not make the public landing page wait for an async check it cannot change.
+  // Stored sessions still wait for the real getCurrentUser() validation.
+  const [isInitialCheckDone, setIsInitialCheckDone] = useState<boolean>(() => {
+    try {
+      return !auth.hasStoredUser();
+    } catch {
+      return false;
+    }
+  });
   // The picture is tied to the user it was fetched for. Deriving the exposed URL
   // from that owner means a slow query or a cached URL from the previous account
   // can never flash the old avatar after a sign-out or account switch.
