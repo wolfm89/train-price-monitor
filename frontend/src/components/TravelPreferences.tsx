@@ -1,10 +1,12 @@
 import React, { useContext, useEffect, useState } from 'react';
 import {
+  Alert,
   Typography,
   Box,
   Button,
   Paper,
   Switch,
+  FormControlLabel,
   FormControl,
   Select,
   MenuItem,
@@ -18,6 +20,7 @@ import { AuthContext } from '../providers/AuthProvider';
 import { UserTravelPreferencesQuery, UpdateTravelPreferences } from '../api/user';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
+import LoadingStatus from './LoadingStatus';
 import {
   LoyaltyCardInput,
   AGE_GROUP_OPTIONS,
@@ -41,12 +44,32 @@ const fieldLabelSx = {
   mb: 0.5,
 };
 
-const TravelPreferences: React.FC = () => {
+interface TravelPreferencesProps {
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+interface PreferencesSnapshot {
+  loyaltyCards: LoyaltyCard[];
+  ageGroup: string;
+  deutschlandTicketDiscount: boolean;
+}
+
+function samePreferences(left: PreferencesSnapshot, right: PreferencesSnapshot): boolean {
+  const leftKeys = left.loyaltyCards.map(cardToKey).sort().join('|');
+  const rightKeys = right.loyaltyCards.map(cardToKey).sort().join('|');
+  return (
+    leftKeys === rightKeys &&
+    left.ageGroup === right.ageGroup &&
+    left.deutschlandTicketDiscount === right.deutschlandTicketDiscount
+  );
+}
+
+const TravelPreferences: React.FC<TravelPreferencesProps> = ({ onDirtyChange }) => {
   const { user } = useContext(AuthContext);
   const { addAlert } = useAlert();
   const userId = user?.['custom:id'];
 
-  const [{ data, fetching }] = useQuery({
+  const [{ data, fetching, error }] = useQuery({
     query: UserTravelPreferencesQuery,
     variables: { id: userId },
     pause: !userId,
@@ -57,16 +80,29 @@ const TravelPreferences: React.FC = () => {
   const [loyaltyCards, setLoyaltyCards] = useState<LoyaltyCard[]>([]);
   const [ageGroup, setAgeGroup] = useState<string>('ADULT');
   const [deutschlandTicketDiscount, setDeutschlandTicketDiscount] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const [savedPreferences, setSavedPreferences] = useState<PreferencesSnapshot>({
+    loyaltyCards: [],
+    ageGroup: 'ADULT',
+    deutschlandTicketDiscount: false,
+  });
   const [saving, setSaving] = useState(false);
+  const dirty = !samePreferences({ loyaltyCards, ageGroup, deutschlandTicketDiscount }, savedPreferences);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   // Sync state from server data
   useEffect(() => {
     if (data?.user) {
-      setLoyaltyCards(data.user.loyaltyCards ?? []);
-      setAgeGroup(data.user.ageGroup ?? 'ADULT');
-      setDeutschlandTicketDiscount(data.user.deutschlandTicketDiscount ?? false);
-      setDirty(false);
+      const snapshot: PreferencesSnapshot = {
+        loyaltyCards: data.user.loyaltyCards ?? [],
+        ageGroup: data.user.ageGroup ?? 'ADULT',
+        deutschlandTicketDiscount: data.user.deutschlandTicketDiscount ?? false,
+      };
+      setLoyaltyCards(snapshot.loyaltyCards);
+      setAgeGroup(snapshot.ageGroup);
+      setDeutschlandTicketDiscount(snapshot.deutschlandTicketDiscount);
+      setSavedPreferences(snapshot);
     }
   }, [data]);
 
@@ -76,13 +112,11 @@ const TravelPreferences: React.FC = () => {
     const available = LOYALTY_CARD_OPTIONS.find((opt) => !usedKeys.has(opt.key));
     if (available) {
       setLoyaltyCards([...loyaltyCards, available.card]);
-      setDirty(true);
     }
   };
 
   const handleRemoveCard = (index: number) => {
     setLoyaltyCards(loyaltyCards.filter((_, i) => i !== index));
-    setDirty(true);
   };
 
   const handleCardChange = (index: number, key: string) => {
@@ -91,22 +125,20 @@ const TravelPreferences: React.FC = () => {
       const updated = [...loyaltyCards];
       updated[index] = card;
       setLoyaltyCards(updated);
-      setDirty(true);
     }
   };
 
   const handleAgeGroupChange = (e: SelectChangeEvent) => {
     setAgeGroup(e.target.value);
-    setDirty(true);
   };
 
   const handleDTicketToggle = (_event: React.ChangeEvent<HTMLInputElement>, checked: boolean) => {
     setDeutschlandTicketDiscount(checked);
-    setDirty(true);
   };
 
   const handleSave = async () => {
     setSaving(true);
+    const snapshot: PreferencesSnapshot = { loyaltyCards, ageGroup, deutschlandTicketDiscount };
     const result = await updateTravelPreferences({
       userId,
       // Explicitly pick only the input fields — urql adds __typename to query
@@ -123,13 +155,17 @@ const TravelPreferences: React.FC = () => {
     if (result.error) {
       addAlert('Failed to save travel preferences. Please try again.', AlertSeverity.Error);
     } else {
+      setSavedPreferences(snapshot);
       addAlert('Travel preferences saved.', AlertSeverity.Success);
-      setDirty(false);
     }
   };
 
   if (fetching) {
-    return null;
+    return <LoadingStatus label="Loading travel preferences…" inline minHeight={48} />;
+  }
+
+  if (error) {
+    return <Alert severity="error">Could not load your travel preferences. Please try again later.</Alert>;
   }
 
   const usedKeys = new Set(loyaltyCards.map(cardToKey));
@@ -137,7 +173,7 @@ const TravelPreferences: React.FC = () => {
 
   return (
     <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 3, p: 2.5 }}>
-      <Typography variant="sectionTitle" sx={sectionTitleSx}>
+      <Typography component="h2" variant="sectionTitle" sx={sectionTitleSx}>
         Travel preferences
       </Typography>
 
@@ -155,6 +191,7 @@ const TravelPreferences: React.FC = () => {
           <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
             <FormControl size="small" sx={{ flex: 1 }}>
               <Select
+                aria-label={`Discount card ${index + 1}`}
                 value={cardToKey(card)}
                 onChange={(e) => handleCardChange(index, e.target.value)}
                 displayEmpty
@@ -169,7 +206,12 @@ const TravelPreferences: React.FC = () => {
                 )}
               </Select>
             </FormControl>
-            <IconButton size="small" onClick={() => handleRemoveCard(index)} sx={{ color: 'text.secondary' }}>
+            <IconButton
+              size="small"
+              aria-label={`Remove ${cardLabel(card)}`}
+              onClick={() => handleRemoveCard(index)}
+              sx={{ color: 'text.secondary' }}
+            >
               <CloseIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Box>
@@ -189,11 +231,21 @@ const TravelPreferences: React.FC = () => {
 
       {/* Age group */}
       <Box sx={{ mb: 2 }}>
-        <Typography variant="fieldLabel" sx={fieldLabelSx}>
+        <Typography
+          id="travel-age-group-label"
+          variant="fieldLabel"
+          sx={{ ...fieldLabelSx, cursor: 'pointer' }}
+          onClick={() => document.getElementById('travel-age-group')?.focus()}
+        >
           Age group
         </Typography>
         <FormControl size="small" fullWidth>
-          <Select value={ageGroup} onChange={handleAgeGroupChange} sx={{ fontSize: 13 }}>
+          <Select
+            aria-labelledby="travel-age-group-label"
+            value={ageGroup}
+            onChange={handleAgeGroupChange}
+            sx={{ fontSize: 13 }}
+          >
             {AGE_GROUP_OPTIONS.map((opt) => (
               <MenuItem key={opt.value} value={opt.value} sx={{ fontSize: 13 }}>
                 {opt.label}
@@ -204,22 +256,19 @@ const TravelPreferences: React.FC = () => {
       </Box>
 
       {/* Deutschlandticket */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 2,
-        }}
-      >
-        <Box>
-          <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'text.primary' }}>Deutschlandticket</Typography>
-          <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
-            Regional transport costs are deducted from prices
-          </Typography>
-        </Box>
-        <Switch checked={deutschlandTicketDiscount} onChange={handleDTicketToggle} color="secondary" />
-      </Box>
+      <FormControlLabel
+        control={<Switch checked={deutschlandTicketDiscount} onChange={handleDTicketToggle} color="secondary" />}
+        label={
+          <Box>
+            <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'text.primary' }}>Deutschlandticket</Typography>
+            <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+              Regional transport costs are deducted from prices
+            </Typography>
+          </Box>
+        }
+        labelPlacement="start"
+        sx={{ m: 0, mb: 2, width: '100%', justifyContent: 'space-between' }}
+      />
 
       {/* Active preferences summary */}
       {(loyaltyCards.length > 0 || ageGroup !== 'ADULT' || deutschlandTicketDiscount) && (
@@ -246,7 +295,7 @@ const TravelPreferences: React.FC = () => {
           disabled={!dirty || saving || !userId}
           sx={{ textTransform: 'none', fontWeight: 600 }}
         >
-          {saving ? 'Saving...' : 'Save preferences'}
+          {saving ? 'Saving…' : 'Save preferences'}
         </Button>
       </Box>
     </Paper>
