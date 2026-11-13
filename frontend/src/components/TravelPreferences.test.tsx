@@ -55,6 +55,8 @@ describe('TravelPreferences dirty state', () => {
       </AuthContext.Provider>
     );
 
+    expect(screen.getByRole('combobox', { name: 'Age group' })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('switch'));
     expect(onDirtyChange).toHaveBeenLastCalledWith(true);
 
@@ -74,6 +76,7 @@ describe('TravelPreferences dirty state', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Add discount card' }));
+    expect(screen.getByRole('combobox', { name: 'Discount card 1' })).toBeInTheDocument();
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
 
     fireEvent.click(screen.getByRole('button', { name: /Remove Bahncard 25/ }));

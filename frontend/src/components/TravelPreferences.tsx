@@ -191,7 +191,7 @@ const TravelPreferences: React.FC<TravelPreferencesProps> = ({ onDirtyChange }) 
           <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
             <FormControl size="small" sx={{ flex: 1 }}>
               <Select
-                aria-label={`Discount card ${index + 1}`}
+                inputProps={{ 'aria-label': `Discount card ${index + 1}` }}
                 value={cardToKey(card)}
                 onChange={(e) => handleCardChange(index, e.target.value)}
                 displayEmpty
@@ -241,7 +241,8 @@ const TravelPreferences: React.FC<TravelPreferencesProps> = ({ onDirtyChange }) 
         </Typography>
         <FormControl size="small" fullWidth>
           <Select
-            aria-labelledby="travel-age-group-label"
+            id="travel-age-group"
+            labelId="travel-age-group-label"
             value={ageGroup}
             onChange={handleAgeGroupChange}
             sx={{ fontSize: 13 }}
