@@ -1,5 +1,6 @@
 import React from 'react';
 import { Popover, Box, Typography, IconButton, Chip, ButtonBase } from '@mui/material';
+import { formatTime } from '../utils/format';
 import { CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 
 export interface Notification {
@@ -39,7 +40,7 @@ function formatRelativeTime(timestamp: Date): string {
   if (diffMins < 60) return `${diffMins} min ago`;
   if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
   if (diffDays === 1) {
-    return `Yesterday, ${date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`;
+    return `Yesterday, ${formatTime(date)}`;
   }
   return `${diffDays} days ago`;
 }

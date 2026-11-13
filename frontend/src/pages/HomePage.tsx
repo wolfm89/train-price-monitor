@@ -2,7 +2,7 @@ import React, { useContext, useEffect, useRef, useState } from 'react';
 import SignupModal from '../components/SignupModal';
 import LoginModal from '../components/LoginModal';
 import LandingSections from '../components/LandingSections';
-import { Button, Typography, Box, CircularProgress, Chip, Paper, Grid, useTheme } from '@mui/material';
+import { Button, Typography, Box, Chip, Paper, Grid, useTheme } from '@mui/material';
 import {
   Train as TrainIcon,
   Visibility,
@@ -20,6 +20,8 @@ import useAlert from '../hooks/useAlert';
 import { UserExistsQuery, CreateUser, UserJourneysQuery } from '../api/user';
 import { useMutation, useQuery } from 'urql';
 import { Journey } from '../components/JourneyTicket';
+import LoadingStatus from '../components/LoadingStatus';
+import { formatCurrency, formatDate } from '../utils/format';
 
 interface Props {}
 
@@ -197,9 +199,7 @@ interface AlertBannerProps {
 function AlertBanner({ journey, overage }: AlertBannerProps) {
   const price = journey.journey?.price ?? 0;
   const departure = journey.journey?.departure;
-  const departureFormatted = departure
-    ? new Date(departure).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })
-    : null;
+  const departureFormatted = departure ? formatDate(departure) : null;
 
   return (
     <Box
@@ -239,10 +239,10 @@ function AlertBanner({ journey, overage }: AlertBannerProps) {
               textOverflow: 'ellipsis',
             }}
           >
-            {journey.from ?? 'Unknown'} → {journey.to ?? 'Unknown'} is €{overage.toFixed(2)} over your limit
+            {journey.from ?? 'Unknown'} → {journey.to ?? 'Unknown'} is {formatCurrency(overage)} over your limit
           </Typography>
           <Typography sx={{ fontSize: 11, color: 'primary.main', mt: 0.25 }}>
-            Current price €{price.toFixed(2)} · Limit €{journey.limitPrice.toFixed(2)}
+            Current price {formatCurrency(price)} · Limit {formatCurrency(journey.limitPrice)}
             {departureFormatted && ` · Departs ${departureFormatted}`}
           </Typography>
         </Box>
@@ -278,11 +278,7 @@ function AlertBanner({ journey, overage }: AlertBannerProps) {
 // ---------------------------------------------------------------------------
 
 function CenteredLoader() {
-  return (
-    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 100 }}>
-      <CircularProgress />
-    </Box>
-  );
+  return <LoadingStatus label="Loading your dashboard…" />;
 }
 
 const HomePage: React.FC<Props> = () => {
@@ -601,7 +597,7 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
             }}
           />
           <Typography sx={{ fontSize: 18, fontWeight: 500, color: 'text.primary', mb: 0.375 }}>
-            {getGreeting()}, {userName} 👋
+            {getGreeting()}, {userName} <span aria-hidden="true">👋</span>
           </Typography>
           <Typography sx={{ fontSize: 13, color: 'text.secondary', mb: 2.25 }}>
             Here&apos;s an overview of your monitored journeys.
@@ -666,7 +662,7 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
             label="Below limit"
             subtitle={
               belowLimit.length > 0
-                ? `~€${totalSavings.toFixed(0)} saved vs limits`
+                ? `~${formatCurrency(totalSavings, { maximumFractionDigits: 0 })} saved vs limits`
                 : overLimit.length > 0
                   ? 'All exceed budget'
                   : 'No journeys priced yet'
@@ -700,7 +696,7 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
               title="Hourly price checks"
               body="We poll Deutsche Bahn every hour for every journey you're watching."
               statLabel={`${journeyMonitors.length} active`}
-              statColor="#6D9E51"
+              statColor="secondary.dark"
               statIcon={<CheckCircleOutline sx={{ fontSize: 15 }} />}
             />
           </Grid>
@@ -710,8 +706,12 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
               iconBg="#F9E0E0"
               title="Instant alerts"
               body="Get notified in-app and by email the moment a ticket crosses your threshold."
-              statLabel={overLimit.length > 0 ? `${overLimit.length} alert active` : 'No active alerts'}
-              statColor={overLimit.length > 0 ? theme.palette.primary.main : '#6D9E51'}
+              statLabel={
+                overLimit.length > 0
+                  ? `${overLimit.length} alert${overLimit.length === 1 ? '' : 's'} active`
+                  : 'No active alerts'
+              }
+              statColor={overLimit.length > 0 ? theme.palette.primary.main : theme.palette.secondary.dark}
               statIcon={
                 overLimit.length > 0 ? (
                   <ErrorOutline sx={{ fontSize: 15 }} />
@@ -727,7 +727,7 @@ function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps
               iconBg="#FEFFD3"
               title="Multiple journeys"
               body="Watch as many connections as you need. Each with its own limit and independent monitoring."
-              statLabel={`${journeyMonitors.length} journeys`}
+              statLabel={`${journeyMonitors.length} journey${journeyMonitors.length === 1 ? '' : 's'}`}
               statColor="#7A7200"
               statIcon={<AllInclusive sx={{ fontSize: 15 }} />}
             />

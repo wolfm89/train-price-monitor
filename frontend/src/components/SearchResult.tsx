@@ -21,6 +21,7 @@ import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 import { JourneySearchOptions } from './SearchMask';
+import { formatCurrency, formatDuration, formatTime } from '../utils/format';
 
 export interface Journey {
   refreshToken: string;
@@ -32,15 +33,7 @@ export interface Journey {
   price?: number;
 }
 
-export interface SearchData {
-  departure: string;
-  destination: string;
-  date: string;
-  time: string;
-}
-
 interface Props {
-  searchData: SearchData;
   searchResult: Journey[];
   searchOptions?: JourneySearchOptions;
   onNavigateEarlier?: () => void;
@@ -51,7 +44,6 @@ interface Props {
 const MONO_FONT = '"IBM Plex Mono", monospace';
 
 const SearchResult: React.FC<Props> = ({
-  searchData: _searchData,
   searchResult,
   searchOptions,
   onNavigateEarlier,
@@ -124,19 +116,9 @@ const SearchResult: React.FC<Props> = ({
     return !isNaN(floatValue) && floatValue > (selectedJourney?.price ?? 0);
   };
 
-  const formatTime = (dateTime: string) =>
-    new Date(dateTime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-
-  const formatDuration = (dep: string, arr: string) => {
-    const mins = Math.round((new Date(arr).getTime() - new Date(dep).getTime()) / 60000);
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return h > 0 ? `${h}h ${m.toString().padStart(2, '0')}m` : `${m}m`;
-  };
-
   return (
     <>
-      <Typography variant="overline" sx={{ mb: 1.25, display: 'block' }}>
+      <Typography variant="overline" role="status" aria-live="polite" sx={{ mb: 1.25, display: 'block' }}>
         {searchResult.length} connection{searchResult.length !== 1 ? 's' : ''} found
       </Typography>
 
@@ -281,14 +263,15 @@ const SearchResult: React.FC<Props> = ({
             >
               <Box sx={{ textAlign: 'right', minWidth: { xs: 60, md: 68 } }}>
                 <Typography sx={{ fontFamily: MONO_FONT, fontSize: { xs: 15, sm: 16 }, fontWeight: 500 }}>
-                  {result.price ? `€${result.price.toFixed(2)}` : 'n/a'}
+                  {result.price != null ? formatCurrency(result.price) : 'n/a'}
                 </Typography>
               </Box>
 
-              {result.price && (
+              {result.price != null && (
                 <Button
                   size="small"
                   disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
+                  aria-busy={loading && selectedJourney?.refreshToken === result.refreshToken}
                   onClick={() => handleWatchClick(result)}
                   sx={{
                     bgcolor: 'secondary.light',
@@ -302,11 +285,14 @@ const SearchResult: React.FC<Props> = ({
                     fontWeight: 700,
                     textTransform: 'none',
                     whiteSpace: 'nowrap',
-                    '&:hover': { bgcolor: 'secondary.main', color: '#fff' },
+                    '&:hover': { bgcolor: 'secondary.dark', color: '#fff' },
                   }}
                 >
                   {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                    <CircularProgress size={16} />
+                    <>
+                      <CircularProgress size={14} color="inherit" />
+                      Adding…
+                    </>
                   ) : (
                     '+ Watch'
                   )}
@@ -353,7 +339,7 @@ const SearchResult: React.FC<Props> = ({
         <DialogTitle>Set Limit Price</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Current Price: {selectedJourney?.price ? `€${selectedJourney.price.toFixed(2)}` : 'n/a'}
+            Current Price: {selectedJourney?.price != null ? formatCurrency(selectedJourney.price) : 'n/a'}
           </Typography>
           <TextField
             label="Limit Price"
