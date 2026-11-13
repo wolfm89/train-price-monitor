@@ -18,6 +18,44 @@ const s3 = new S3Client(process.env.AWS_ENDPOINT_URL ? { forcePathStyle: true } 
 
 const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
 
+/** Full value fingerprint of a row, for content-level verification. */
+function rowFingerprint(row: ParquetRow): string {
+  return JSON.stringify([
+    row.observed_at.getTime(),
+    row.service_class,
+    row.route_id,
+    row.origin_eva,
+    row.origin_name,
+    row.dest_eva,
+    row.dest_name,
+    row.departure_planned.getTime(),
+    row.arrival_planned.getTime(),
+    row.train_type,
+    row.train_number,
+    row.train_numbers,
+    row.transfers,
+    row.duration_minutes,
+    row.days_to_departure,
+    row.fare_lowest_eur,
+    row.load_factor,
+    row.load_factor_ordinal,
+    row.journey_id,
+    row.schema_version,
+    row.source_profile,
+    row.query_mode,
+    row.timetable_version,
+  ]);
+}
+
+function fingerprintCounts(rows: ParquetRow[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = rowFingerprint(row);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
 interface CompactorEvent {
   /** Optional date override in YYYY-MM-DD format (UTC). If omitted, yesterday is compacted. */
   dateOverride?: string;
@@ -156,7 +194,10 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
     throw new Error(`Aborting compaction: Parquet serialization failed: ${String(err)}`);
   }
 
-  // 5. Robust Verification Level 2: Double-check the newly generated Parquet buffer
+  // 5. Robust Verification Level 2: re-read the generated buffer and compare
+  // content, not just the row count. A level-encoding bug can shift values
+  // between rows without changing the count, and the source files are deleted
+  // right after this check.
   const targetRowCount = deduplicatedRows.length;
   try {
     const verifiedData = await parquetReadObjects({ file: newBuffer });
@@ -165,7 +206,26 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
         `Verification failed (Level 2)! Parsed row count of generated Parquet file (${verifiedData.length}) does not match expected row count (${targetRowCount}).`
       );
     }
-    logger.info('Verification Level 2 passed (generated buffer validated)', { parsedRows: verifiedData.length });
+
+    const expected = fingerprintCounts(deduplicatedRows);
+    const actual = fingerprintCounts(verifiedData.map((r) => fromParquetRecord(r as Record<string, unknown>)));
+    let contentMismatch = expected.size !== actual.size;
+    if (!contentMismatch) {
+      for (const [fingerprint, count] of expected) {
+        if (actual.get(fingerprint) !== count) {
+          contentMismatch = true;
+          break;
+        }
+      }
+    }
+    if (contentMismatch) {
+      throw new Error('Verification failed (Level 2)! Written rows differ from the merged rows.');
+    }
+
+    logger.info('Verification Level 2 passed (generated buffer validated)', {
+      parsedRows: verifiedData.length,
+      distinctRows: expected.size,
+    });
   } catch (err) {
     logger.error('Double-check validation failed', { err: String(err) });
     throw new Error(`Aborting compaction: Generated Parquet file failed validation: ${String(err)}`);

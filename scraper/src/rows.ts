@@ -30,13 +30,23 @@ export function isoSeconds(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-/** A leg that runs on a train, as opposed to a footway between platforms. */
-export function isTrainLeg(leg: Leg): boolean {
+/** A leg on a vehicle (train, bus, …), as opposed to a footway between platforms. */
+export function isVehicleLeg(leg: Leg): boolean {
   return leg.walking !== true && leg.line !== undefined;
 }
 
-export function trainLegsOf(legs: Leg[]): Leg[] {
-  return legs.filter(isTrainLeg);
+export function vehicleLegsOf(legs: Leg[]): Leg[] {
+  return legs.filter(isVehicleLeg);
+}
+
+/** A vehicle leg that runs on rails. Rail-replacement buses are not trains. */
+export function isRailLeg(leg: Leg): boolean {
+  if (!isVehicleLeg(leg)) return false;
+  return (leg.line as TrainLine | undefined)?.mode !== 'bus';
+}
+
+export function railLegsOf(legs: Leg[]): Leg[] {
+  return legs.filter(isRailLeg);
 }
 
 /**
@@ -60,41 +70,34 @@ export function extractLoadFactor(legs: Leg[]): { loadFactor: string | null; ord
 }
 
 /**
- * Stable, class-independent journey identity for a specific connection: a hash
- * of the route, every train leg (trip id or train number plus planned
- * departure) and the final arrival. A first-leg `tripId` alone identifies a
- * train run, not the origin-to-destination itinerary, so two connections that
- * share their first train would otherwise collapse into one journey.
+ * Stable, class-independent identity for one connection: a hash of the route
+ * and the ordered vehicle legs. A leg is identified by its `tripId` when the
+ * API provides one (which encodes the run and date); otherwise by its line name
+ * and planned departure. Planned times are deliberately not mixed in when a
+ * trip id exists: DB shifts planned times routinely, and that must not mint a
+ * new identity for the same connection.
+ *
+ * A first-leg `tripId` alone is not enough — it identifies a train run, not the
+ * origin-to-destination itinerary — and the final arrival is omitted because it
+ * may live on a footway that the two class responses need not agree on.
  */
 export function journeyIdFor(routeId: string, legs: Leg[]): string {
-  const itinerary = trainLegsOf(legs)
+  const itinerary = vehicleLegsOf(legs)
     .map((leg) => {
+      if (leg.tripId) return `t:${leg.tripId}`;
       const line = leg.line as TrainLine | undefined;
       const departure = leg.plannedDeparture ? isoSeconds(new Date(leg.plannedDeparture)) : '?';
-      return `${leg.tripId ?? line?.name ?? '?'}@${departure}`;
+      return `n:${line?.name ?? '?'}@${departure}`;
     })
     .join('>');
-  const lastLeg = legs[legs.length - 1];
-  const arrival = lastLeg?.plannedArrival ? isoSeconds(new Date(lastLeg.plannedArrival)) : '?';
 
-  return createHash('sha1').update(`${routeId}|${itinerary}|${arrival}`).digest('hex');
-}
-
-/**
- * Identity for v1 rows, which only stored the first leg's train number and the
- * journey departure. Cannot distinguish onward trains; that information was
- * never written.
- */
-export function legacyJourneyIdFor(routeId: string, departurePlanned: Date, trainNumber: string): string {
-  return createHash('sha1')
-    .update(`${routeId}|${isoSeconds(departurePlanned)}|${trainNumber}`)
-    .digest('hex');
+  return createHash('sha1').update(`${routeId}|${itinerary}`).digest('hex');
 }
 
 /**
  * Build ParquetRow entries from a list of journeys returned by the API, one row
- * per journey. Journeys without a price are kept (`fare_available = false`):
- * a vanished fare is a signal, not missing data.
+ * per journey. Journeys without a price are kept with a null fare: a vanished
+ * fare is a signal, not missing data.
  */
 export function buildRows(
   journeys: Journey[],
@@ -112,8 +115,10 @@ export function buildRows(
     const legs = (j.legs ?? []) as Leg[];
     if (legs.length === 0) continue;
 
-    const trainLegs = trainLegsOf(legs);
-    if (trainLegs.length === 0) continue;
+    const vehicleLegs = vehicleLegsOf(legs);
+    if (vehicleLegs.length === 0) continue;
+
+    const railLegs = railLegsOf(legs);
 
     const firstLeg = legs[0];
     const lastLeg = legs[legs.length - 1];
@@ -128,14 +133,16 @@ export function buildRows(
     const durationMinutes = Math.round((arrPlanned.getTime() - depPlanned.getTime()) / 60_000);
     const daysToDeparture = (depPlanned.getTime() - observedAt.getTime()) / (24 * 60 * 60 * 1000);
 
-    const firstTrainLine = trainLegs[0].line as TrainLine | undefined;
-    const trainType = firstTrainLine?.productName ?? firstTrainLine?.product ?? 'UNKNOWN';
-    const trainNumber = firstTrainLine?.name ?? 'UNKNOWN';
-    const trainNumbers =
-      trainLegs
-        .map((leg) => (leg.line as TrainLine | undefined)?.name)
-        .filter((name): name is string => Boolean(name))
-        .join(';') || trainNumber;
+    // Label from the first rail leg; a connection that starts with a
+    // rail-replacement bus is still a train journey.
+    const labelLegs = railLegs.length > 0 ? railLegs : vehicleLegs;
+    const labelLine = labelLegs[0].line as TrainLine | undefined;
+    const trainType = labelLine?.productName ?? labelLine?.product ?? 'UNKNOWN';
+    const trainNumber = labelLine?.name ?? 'UNKNOWN';
+    const trainNumbers = railLegs
+      .map((leg) => (leg.line as TrainLine | undefined)?.name)
+      .filter((name): name is string => Boolean(name))
+      .join(';');
 
     const amount = j.price?.amount;
     const fare = typeof amount === 'number' && Number.isFinite(amount) && amount > 0 ? amount : null;
@@ -154,11 +161,10 @@ export function buildRows(
       train_type: trainType,
       train_number: trainNumber,
       train_numbers: trainNumbers,
-      transfers: Math.max(0, trainLegs.length - 1),
+      transfers: Math.max(0, vehicleLegs.length - 1),
       duration_minutes: durationMinutes,
       days_to_departure: daysToDeparture,
       fare_lowest_eur: fare,
-      fare_available: fare !== null,
       load_factor: loadFactor,
       load_factor_ordinal: ordinal,
       journey_id: journeyIdFor(routeId, legs),
@@ -200,6 +206,9 @@ export function parquetRowKey(row: ParquetRow): string {
  * Rebuild a ParquetRow from a parsed file record. Rows written before schema v2
  * have none of the new columns, so every one of them is defaulted here rather
  * than by the compactor caller.
+ *
+ * `journey_id` is null for v1 rows on purpose: v1 only stored the first leg, so
+ * any derived id would be ambiguous and would look like a v2 identity.
  */
 export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
   const toDate = (value: unknown): Date => new Date(value as string | number);
@@ -209,7 +218,6 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
     value === undefined || value === null ? fallback : Number(value);
 
   const routeId = String(record.route_id);
-  const departurePlanned = toDate(record.departure_planned);
   const trainNumber = String(record.train_number);
   const loadFactor = record.load_factor ? String(record.load_factor) : null;
   const storedOrdinal = record.load_factor_ordinal;
@@ -224,7 +232,7 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
     origin_name: String(record.origin_name),
     dest_eva: String(record.dest_eva),
     dest_name: String(record.dest_name),
-    departure_planned: departurePlanned,
+    departure_planned: toDate(record.departure_planned),
     arrival_planned: toDate(record.arrival_planned),
     train_type: String(record.train_type),
     train_number: trainNumber,
@@ -233,16 +241,12 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
     duration_minutes: Number(record.duration_minutes),
     days_to_departure: Number(record.days_to_departure),
     fare_lowest_eur: fare === undefined || fare === null ? null : Number(fare),
-    fare_available: record.fare_available === undefined ? true : Boolean(record.fare_available),
     load_factor: loadFactor,
     load_factor_ordinal:
       storedOrdinal === undefined || storedOrdinal === null
         ? legacyLoadFactorOrdinal(loadFactor)
         : Number(storedOrdinal),
-    journey_id:
-      storedJourneyId === undefined || storedJourneyId === null
-        ? legacyJourneyIdFor(routeId, departurePlanned, trainNumber)
-        : String(storedJourneyId),
+    journey_id: storedJourneyId === undefined || storedJourneyId === null ? null : String(storedJourneyId),
     schema_version: optionalNumber(record.schema_version, 1),
     source_profile: optionalString(record.source_profile, SOURCE_PROFILE),
     query_mode: optionalString(record.query_mode, QUERY_MODE),

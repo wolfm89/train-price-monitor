@@ -21,10 +21,9 @@ const baseRow: ParquetRow = {
   duration_minutes: 240,
   days_to_departure: 0.9,
   fare_lowest_eur: 59.99,
-  fare_available: true,
   load_factor: null,
   load_factor_ordinal: null,
-  journey_id: '2|#VN#1#ST#1794417142#ZI#178580#DA#231126#',
+  journey_id: '3d1f5c4e8b2a97f0c6e1d4b7a9f2c5e8d1b4a7f0',
   schema_version: 2,
   source_profile: 'dbweb',
   query_mode: 'bestprice',
@@ -46,15 +45,22 @@ const secondRow: ParquetRow = {
   fare_lowest_eur: 99.5,
   load_factor: 'high',
   load_factor_ordinal: 2,
-  journey_id: 'hash-aachen-frankfurt',
+  journey_id: '5a2b6d8f0c1e3a7b9d2f4c6e8a1b3d5f7c9e2a4b',
 };
 
 const unpricedRow: ParquetRow = {
   ...baseRow,
   fare_lowest_eur: null,
-  fare_available: false,
   load_factor: 'exceptionally-high',
   load_factor_ordinal: 4,
+};
+
+const legacyRow: ParquetRow = {
+  ...baseRow,
+  schema_version: 1,
+  journey_id: null,
+  load_factor: 'low',
+  load_factor_ordinal: 1,
 };
 
 describe('rowsToParquet', () => {
@@ -84,7 +90,6 @@ describe('rowsToParquet', () => {
       { name: 'fare_lowest_eur', type: 'DOUBLE', converted: undefined },
       { name: 'load_factor', type: 'BYTE_ARRAY', converted: 'UTF8' },
       { name: 'train_numbers', type: 'BYTE_ARRAY', converted: 'UTF8' },
-      { name: 'fare_available', type: 'BOOLEAN', converted: undefined },
       { name: 'load_factor_ordinal', type: 'INT32', converted: undefined },
       { name: 'journey_id', type: 'BYTE_ARRAY', converted: 'UTF8' },
       { name: 'schema_version', type: 'INT32', converted: undefined },
@@ -94,13 +99,21 @@ describe('rowsToParquet', () => {
     ]);
   });
 
-  it('round-trips every field, including nullable fares and load factors', async () => {
-    const rows = await parquetReadObjects({ file: rowsToParquet([baseRow, secondRow, unpricedRow]) });
+  it('marks only the genuinely nullable columns as OPTIONAL', () => {
+    const columns = parquetMetadata(rowsToParquet([baseRow])).schema.slice(1);
+    const optional = columns.filter((column) => column.repetition_type === 'OPTIONAL').map((column) => column.name);
 
-    assert.equal(rows.length, 3);
+    assert.deepEqual(optional, ['fare_lowest_eur', 'load_factor', 'load_factor_ordinal', 'journey_id']);
+  });
+
+  it('round-trips every field, including nullable fares, ids and load factors', async () => {
+    const rows = await parquetReadObjects({ file: rowsToParquet([baseRow, secondRow, unpricedRow, legacyRow]) });
+
+    assert.equal(rows.length, 4);
     assert.deepEqual(rows[0], { ...baseRow });
     assert.deepEqual(rows[1], { ...secondRow });
     assert.deepEqual(rows[2], { ...unpricedRow });
+    assert.deepEqual(rows[3], { ...legacyRow });
   });
 
   it('preserves millisecond timestamps', async () => {

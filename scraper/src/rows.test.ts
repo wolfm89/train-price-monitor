@@ -36,6 +36,14 @@ function walkLeg(dep: string, arr: string): Leg {
   return { plannedDeparture: dep, plannedArrival: arr, walking: true } as Leg;
 }
 
+function busLeg(dep: string, arr: string, name = 'SEV 1'): Leg {
+  return {
+    plannedDeparture: dep,
+    plannedArrival: arr,
+    line: { type: 'line', name, product: 'BUS', mode: 'bus' },
+  } as Leg;
+}
+
 function journey(legs: Leg[], amount?: number): Journey {
   return { legs, price: amount === undefined ? undefined : { amount } } as unknown as Journey;
 }
@@ -76,7 +84,7 @@ describe('extractLoadFactor', () => {
 });
 
 describe('buildRows', () => {
-  it('labels the journey from the first train leg and counts only train legs as transfers', () => {
+  it('labels the journey from the first rail leg and counts vehicle legs as transfers', () => {
     const legs = [
       walkLeg('2026-11-12T08:00:00Z', '2026-11-12T08:10:00Z'),
       trainLeg({ dep: '2026-11-12T08:20:00Z', arr: '2026-11-12T10:00:00Z', name: 'ICE 1', product: 'ICE' }),
@@ -91,17 +99,28 @@ describe('buildRows', () => {
     assert.equal(row.train_numbers, 'ICE 1;RE 2');
     assert.equal(row.departure_planned.toISOString(), '2026-11-12T08:00:00.000Z');
     assert.equal(row.duration_minutes, 190);
-    assert.equal(row.fare_available, true);
     assert.equal(row.fare_lowest_eur, 49.99);
     assert.equal(row.schema_version, 2);
     assert.equal(row.source_profile, 'dbweb');
     assert.equal(row.query_mode, 'bestprice');
   });
 
-  it('keeps an unpriced journey with fare_available=false', () => {
+  it('labels from the rail leg when a bus feeds the train, but counts the bus as a transfer', () => {
+    const legs = [
+      busLeg('2026-11-12T08:00:00Z', '2026-11-12T08:40:00Z'),
+      trainLeg({ dep: '2026-11-12T08:50:00Z', arr: '2026-11-12T11:00:00Z', name: 'ICE 9', product: 'ICE' }),
+    ];
+
+    const [row] = rows(legs, 39.9);
+    assert.equal(row.transfers, 1);
+    assert.equal(row.train_type, 'ICE');
+    assert.equal(row.train_number, 'ICE 9');
+    assert.equal(row.train_numbers, 'ICE 9');
+  });
+
+  it('keeps an unpriced journey with a null fare', () => {
     const [row] = rows([trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T10:00:00Z' })], undefined);
     assert.ok(row, 'the row must not be dropped');
-    assert.equal(row.fare_available, false);
     assert.equal(row.fare_lowest_eur, null);
   });
 
@@ -111,8 +130,28 @@ describe('buildRows', () => {
     const [first] = rows(legs, 79.99, 1);
 
     assert.equal(second.journey_id, first.journey_id);
+    assert.ok(second.journey_id);
     assert.match(second.journey_id, /^[0-9a-f]{40}$/);
     assert.equal(second.journey_id, journeyIdFor('8011160-8000261', legs));
+  });
+
+  it('keeps the journey_id stable across planned-time shifts when a tripId exists', () => {
+    const legsAt = (dep: string, arr: string) => [
+      trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z', tripId: 'trip-a' }),
+      trainLeg({ dep, arr, tripId: 'trip-b' }),
+    ];
+
+    const [before] = rows(legsAt('2026-11-12T09:20:00Z', '2026-11-12T12:00:00Z'), 49.99);
+    const [after] = rows(legsAt('2026-11-12T09:25:00Z', '2026-11-12T12:05:00Z'), 49.99);
+    assert.equal(before.journey_id, after.journey_id);
+  });
+
+  it('falls back to line and departure when a leg has no tripId', () => {
+    const legsAt = (dep: string) => [trainLeg({ dep, arr: '2026-11-12T12:00:00Z', name: 'ICE 1' })];
+
+    const [before] = rows(legsAt('2026-11-12T08:00:00Z'), 49.99);
+    const [after] = rows(legsAt('2026-11-12T08:05:00Z'), 49.99);
+    assert.notEqual(before.journey_id, after.journey_id);
   });
 
   it('distinguishes connections that share their first train', () => {
@@ -200,13 +239,13 @@ describe('fromParquetRecord', () => {
     const row = fromParquetRecord(v1Record);
     assert.equal(row.schema_version, 1);
     assert.equal(row.train_numbers, 'ICE 591');
-    assert.equal(row.fare_available, true);
     assert.equal(row.load_factor, 'low');
     assert.equal(row.load_factor_ordinal, 1);
     assert.equal(row.source_profile, 'dbweb');
     assert.equal(row.query_mode, 'bestprice');
     assert.equal(row.timetable_version, 'unknown');
-    assert.match(row.journey_id, /^[0-9a-f]{40}$/);
+    // v1 never stored the itinerary; a derived id would look authoritative.
+    assert.equal(row.journey_id, null);
     // v1 `transfers` is preserved (2× the real count); silver normalises it.
     assert.equal(row.transfers, 2);
   });
@@ -217,7 +256,6 @@ describe('fromParquetRecord', () => {
       train_numbers: 'ICE 591;RE 1',
       transfers: 1,
       fare_lowest_eur: null,
-      fare_available: false,
       load_factor: 'very-high',
       load_factor_ordinal: 3,
       journey_id: 'trip-1',
@@ -230,7 +268,6 @@ describe('fromParquetRecord', () => {
     assert.equal(row.schema_version, 2);
     assert.equal(row.train_numbers, 'ICE 591;RE 1');
     assert.equal(row.fare_lowest_eur, null);
-    assert.equal(row.fare_available, false);
     assert.equal(row.load_factor_ordinal, 3);
     assert.equal(row.journey_id, 'trip-1');
     assert.equal(row.timetable_version, '2026-12');

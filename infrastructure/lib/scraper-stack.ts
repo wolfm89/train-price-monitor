@@ -20,6 +20,8 @@ interface ScraperStackProps extends cdk.StackProps {
   hydratorLookaheadDays?: number;
   /** ARN of the alert topic (owned by AlertingStack). */
   alertTopicArn?: string;
+  /** DB annual timetable stamped on new rows, e.g. `2026-12` (default `unknown`). */
+  timetableVersion?: string;
 }
 
 export class ScraperStack extends cdk.Stack {
@@ -119,6 +121,9 @@ export class ScraperStack extends cdk.Stack {
         // a week. Raise it only while the transport stats in the "Poller finished"
         // log stay clean.
         SCRAPER_BATCH_SIZE: String(POLLER_BATCH_SIZE),
+        // DB annual timetable, stamped on every row so a model can tell which
+        // schedule a price was quoted under. `unknown` until an operator sets it.
+        TIMETABLE_VERSION: props?.timetableVersion ?? 'unknown',
         // Spacing and concurrency of DB calls (see shared/db-fetch.ts). Measured:
         // 6 parallel calls were fine, a 60-call burst got the IP throttled for
         // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.

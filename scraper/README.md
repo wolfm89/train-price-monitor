@@ -82,38 +82,45 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 
 S3 key layout: `prices/year={YYYY}/month={MM}/day={DD}/batch_{epoch}_{random}.parquet`
 
-| Column                | Type        | Description                                                                |
-| --------------------- | ----------- | -------------------------------------------------------------------------- |
-| `observed_at`         | TIMESTAMP   | When the price was observed                                                |
-| `service_class`       | INT32       | 1 = first class, 2 = second class                                          |
-| `route_id`            | STRING      | `{originEva}-{destEva}`                                                    |
-| `origin_eva`          | STRING      | Origin station EVA number                                                  |
-| `origin_name`         | STRING      | Origin station name                                                        |
-| `dest_eva`            | STRING      | Destination station EVA number                                             |
-| `dest_name`           | STRING      | Destination station name                                                   |
-| `departure_planned`   | TIMESTAMP   | Scheduled departure                                                        |
-| `arrival_planned`     | TIMESTAMP   | Scheduled arrival                                                          |
-| `train_type`          | STRING      | First train leg, e.g. ICE, IC                                              |
-| `train_number`        | STRING      | First train leg                                                            |
-| `transfers`           | INT32       | Train legs − 1 (v2; v1 counted footways, so it is about 2× the real count) |
-| `duration_minutes`    | INT32       | Total journey duration                                                     |
-| `days_to_departure`   | DOUBLE      | Days between observation and departure                                     |
-| `fare_lowest_eur`     | DOUBLE/null | Lowest available fare; null when no fare was offered (v2)                  |
-| `load_factor`         | STRING/null | db-vendo vocabulary; v1 collapsed `low-to-medium`/`exceptionally-high`     |
-| `train_numbers`       | STRING      | Every train leg, `;`-joined (v2)                                           |
-| `fare_available`      | BOOLEAN     | false when the journey had no purchasable fare (v2)                        |
-| `load_factor_ordinal` | INT32/null  | 1 = low-to-medium … 4 = exceptionally-high (v2)                            |
-| `journey_id`          | STRING      | tripId, else hash of route + departure + train number; class-independent   |
-| `schema_version`      | INT32       | 1 for pre-v2 rows, 2 from this change                                      |
-| `source_profile`      | STRING      | Vendo profile used, `dbweb`                                                |
-| `query_mode`          | STRING      | `bestprice`                                                                |
-| `timetable_version`   | STRING      | DB annual timetable, `unknown` until set                                   |
+| Column                | Type        | Description                                                              |
+| --------------------- | ----------- | ------------------------------------------------------------------------ |
+| `observed_at`         | TIMESTAMP   | When the price was observed                                              |
+| `service_class`       | INT32       | 1 = first class, 2 = second class                                        |
+| `route_id`            | STRING      | `{originEva}-{destEva}`                                                  |
+| `origin_eva`          | STRING      | Origin station EVA number                                                |
+| `origin_name`         | STRING      | Origin station name                                                      |
+| `dest_eva`            | STRING      | Destination station EVA number                                           |
+| `dest_name`           | STRING      | Destination station name                                                 |
+| `departure_planned`   | TIMESTAMP   | Scheduled departure                                                      |
+| `arrival_planned`     | TIMESTAMP   | Scheduled arrival                                                        |
+| `train_type`          | STRING      | First rail leg, e.g. ICE, IC                                             |
+| `train_number`        | STRING      | First rail leg                                                           |
+| `transfers`           | INT32       | Vehicle legs − 1 (v1 counted footways, so it is about 2× the real count) |
+| `duration_minutes`    | INT32       | Total journey duration                                                   |
+| `days_to_departure`   | DOUBLE      | Days between observation and departure                                   |
+| `fare_lowest_eur`     | DOUBLE/null | Lowest available fare; null means no fare was offered (v2)               |
+| `load_factor`         | STRING/null | db-vendo vocabulary; v1 collapsed `low-to-medium`/`exceptionally-high`   |
+| `train_numbers`       | STRING      | Rail legs, `;`-joined (v2)                                               |
+| `load_factor_ordinal` | INT32/null  | 1 = low-to-medium … 4 = exceptionally-high (v2)                          |
+| `journey_id`          | STRING/null | SHA-1 of the route and ordered itinerary; null for v1 rows (v2)          |
+| `schema_version`      | INT32       | 1 for pre-v2 rows, 2 from this change                                    |
+| `source_profile`      | STRING      | Vendo profile used, `dbweb`                                              |
+| `query_mode`          | STRING      | `bestprice`                                                              |
+| `timetable_version`   | STRING      | DB annual timetable, `unknown` until `CDK_TIMETABLE_VERSION` is set      |
+
+Only `fare_lowest_eur`, `load_factor`, `load_factor_ordinal` and `journey_id`
+are nullable; every other column is declared REQUIRED.
 
 Schema v2 appends its columns, and the compactor preserves each row's
 `schema_version`, so a file compacted across the deploy contains both v1 and v2
 rows. Readers must branch on `schema_version`, not on the file date: v1 rows have
 `transfers` at twice the real count, `low` covering both `low-to-medium` and
-`exceptionally-high`, and no journey id.
+`exceptionally-high`, and no `journey_id`.
+
+**Schema v2 is one-way for the compactor.** The pre-v2 compactor read
+`fare_lowest_eur` through `Number(...)`, which turns a v2 `null` into `0.00`, and
+it drops every v2 column. Before rolling the scraper stack back, purge or
+quarantine any `batch_*.parquet` file written by v2 — or roll forward instead.
 
 ## Build
 
