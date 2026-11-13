@@ -220,7 +220,7 @@ const Header = () => {
             <IconButton
               size="small"
               aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
-              aria-haspopup="true"
+              aria-haspopup="dialog"
               aria-expanded={open}
               aria-controls={open ? 'notification-popover' : undefined}
               onClick={handleNotificationClick}

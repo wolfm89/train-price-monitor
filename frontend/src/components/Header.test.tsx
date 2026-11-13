@@ -78,7 +78,9 @@ describe('Header', () => {
   it('names the mobile icon controls', () => {
     renderHeader();
 
-    expect(screen.getByRole('button', { name: 'Notifications, 1 unread' })).toBeInTheDocument();
+    const notificationsButton = screen.getByRole('button', { name: 'Notifications, 1 unread' });
+    expect(notificationsButton).toBeInTheDocument();
+    expect(notificationsButton).toHaveAttribute('aria-haspopup', 'dialog');
     expect(screen.getByRole('link', { name: 'Search' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'My Journeys' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Account menu' })).toBeInTheDocument();
