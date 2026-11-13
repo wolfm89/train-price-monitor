@@ -20,7 +20,6 @@ import { AuthContext } from '../providers/AuthProvider';
 import { UserNotificationsQuery } from '../api/user';
 import { useMutation, useQuery } from 'urql';
 import { MarkNotificationAsRead } from '../api/notification';
-import { useNavigate } from 'react-router-dom';
 
 const NAV_HEIGHT = 54;
 
@@ -59,7 +58,6 @@ const navBtnActiveSx = {
 
 const Header = () => {
   const theme = useTheme();
-  const navigate = useNavigate();
   const location = useLocation();
   const isScreenSmall = useMediaQuery(theme.breakpoints.down('sm'));
   const { user, userProfilePictureUrl, isInitialCheckDone } = useContext(AuthContext);
@@ -222,7 +220,7 @@ const Header = () => {
             <IconButton
               size="small"
               aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
-              aria-haspopup="true"
+              aria-haspopup="dialog"
               aria-expanded={open}
               aria-controls={open ? 'notification-popover' : undefined}
               onClick={handleNotificationClick}
@@ -285,16 +283,6 @@ const Header = () => {
         onMarkAsRead={(notificationId: string) => {
           markNotificationAsRead({ userId: user?.['custom:id'], notificationId });
           setNotifications(notifications.filter((notification) => notification.id !== notificationId));
-        }}
-        handleNotificationClicked={(notification: Notification) => {
-          if (notification?.type === 'PRICE_ALERT') {
-            navigate(`/journeys#${notification.journeyMonitor?.id}`);
-          } else if (notification?.type === 'JOURNEY_EXPIRED') {
-            navigate(`/journeys`);
-          } else if (notification?.type === 'JOURNEY_STALE') {
-            navigate(notification.journeyId ? `/journeys#${notification.journeyId}` : '/journeys');
-          }
-          handleNotificationClose();
         }}
       />
       <AccountMenu anchorEl={accountAnchorEl} onClose={handleAccountClose} />
