@@ -238,6 +238,11 @@ export const handler = async (): Promise<void> => {
 
   logger.info('Hydration complete', { written, skipped, failed, totalItems: items.length });
 
+  // Surface partial writes: a clean exit would hide them from Lambda alarms.
+  if (failed > 0) {
+    throw new Error(`Hydration failed for ${failed} of ${items.length} items`);
+  }
+
   if (FULL_SEED) {
     const backfilled = await backfillDueKeys();
     logger.info('Backfilled due_key on existing rows', { backfilled });
