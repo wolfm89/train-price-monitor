@@ -27,7 +27,6 @@ const baseRow: ParquetRow = {
   schema_version: 2,
   source_profile: 'dbweb',
   query_mode: 'bestprice',
-  timetable_version: 'unknown',
 };
 
 const secondRow: ParquetRow = {
@@ -95,7 +94,6 @@ describe('rowsToParquet', () => {
       { name: 'schema_version', type: 'INT32', converted: undefined },
       { name: 'source_profile', type: 'BYTE_ARRAY', converted: 'UTF8' },
       { name: 'query_mode', type: 'BYTE_ARRAY', converted: 'UTF8' },
-      { name: 'timetable_version', type: 'BYTE_ARRAY', converted: 'UTF8' },
     ]);
   });
 

@@ -43,7 +43,6 @@ function rowFingerprint(row: ParquetRow): string {
     row.schema_version,
     row.source_profile,
     row.query_mode,
-    row.timetable_version,
   ]);
 }
 

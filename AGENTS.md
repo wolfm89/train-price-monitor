@@ -381,7 +381,6 @@ Environment variables (never commit values):
 | `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda     | SSM parameter name for the Pushover app token (injected by CDK)                                             |
 | `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
 | `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
-| `CDK_TIMETABLE_VERSION`        | Infrastructure      | DB annual timetable stamped on new rows, e.g. `2026-12` (optional; default `unknown`)                       |
 | `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
 | `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
 | `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |

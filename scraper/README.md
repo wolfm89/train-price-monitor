@@ -108,10 +108,14 @@ S3 key layout: `prices/year={YYYY}/month={MM}/day={DD}/batch_{epoch}_{random}.pa
 | `schema_version`      | INT32       | 1 for pre-v2 rows, 2 from this change                                    |
 | `source_profile`      | STRING      | Vendo profile used, `dbweb`                                              |
 | `query_mode`          | STRING      | `bestprice`                                                              |
-| `timetable_version`   | STRING      | DB annual timetable, `unknown` until `CDK_TIMETABLE_VERSION` is set      |
 
 Only `fare_lowest_eur`, `load_factor`, `load_factor_ordinal` and `journey_id`
 are nullable; every other column is declared REQUIRED.
+
+The DB timetable period is deliberately **not** stored: it is a function of the
+departure date, not of the observation or the deploy, and is derived in the
+analytics layer (`CASE WHEN departure_planned < TIMESTAMP '2026-12-13' THEN
+'2025-12' ELSE '2026-12' END`, boundary updated each December).
 
 Schema v2 appends its columns, and the compactor preserves each row's
 `schema_version`, so a file compacted across the deploy contains both v1 and v2

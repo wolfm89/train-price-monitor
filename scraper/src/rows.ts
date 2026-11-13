@@ -8,7 +8,6 @@ export const SCHEMA_VERSION = 2;
 
 const SOURCE_PROFILE = 'dbweb';
 const QUERY_MODE = 'bestprice';
-const TIMETABLE_VERSION = process.env.TIMETABLE_VERSION || 'unknown';
 
 /** db-vendo-client adds this to `Line`; the shared types do not know it. */
 type TrainLine = Line & { productName?: string };
@@ -199,7 +198,6 @@ export function buildRows(
       schema_version: SCHEMA_VERSION,
       source_profile: SOURCE_PROFILE,
       query_mode: QUERY_MODE,
-      timetable_version: TIMETABLE_VERSION,
     });
   }
 
@@ -293,6 +291,5 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
     schema_version: schemaVersion,
     source_profile: optionalString(record.source_profile, SOURCE_PROFILE),
     query_mode: optionalString(record.query_mode, QUERY_MODE),
-    timetable_version: optionalString(record.timetable_version, 'unknown'),
   };
 }

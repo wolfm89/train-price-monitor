@@ -371,7 +371,6 @@ describe('fromParquetRecord', () => {
     assert.equal(row.load_factor_ordinal, 1);
     assert.equal(row.source_profile, 'dbweb');
     assert.equal(row.query_mode, 'bestprice');
-    assert.equal(row.timetable_version, 'unknown');
     // v1 never stored the itinerary; a derived id would look authoritative.
     assert.equal(row.journey_id, null);
     // v1 `transfers` is preserved (2× the real count); silver normalises it.
@@ -390,7 +389,6 @@ describe('fromParquetRecord', () => {
       schema_version: 2,
       source_profile: 'dbweb',
       query_mode: 'bestprice',
-      timetable_version: '2026-12',
     });
 
     assert.equal(row.schema_version, 2);
@@ -398,7 +396,6 @@ describe('fromParquetRecord', () => {
     assert.equal(row.fare_lowest_eur, null);
     assert.equal(row.load_factor_ordinal, 3);
     assert.equal(row.journey_id, 'trip-1');
-    assert.equal(row.timetable_version, '2026-12');
   });
 
   it('maps the legacy load-factor vocabulary', () => {

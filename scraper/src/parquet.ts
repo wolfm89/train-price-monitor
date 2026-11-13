@@ -80,7 +80,6 @@ export function rowsToParquet(rows: ParquetRow[]): ArrayBuffer {
       },
       { name: 'source_profile', type: 'STRING', nullable: false, data: rows.map((r) => r.source_profile) },
       { name: 'query_mode', type: 'STRING', nullable: false, data: rows.map((r) => r.query_mode) },
-      { name: 'timetable_version', type: 'STRING', nullable: false, data: rows.map((r) => r.timetable_version) },
     ],
   });
 }

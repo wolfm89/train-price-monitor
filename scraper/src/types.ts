@@ -40,5 +40,4 @@ export interface ParquetRow {
   schema_version: number; // 1 for rows written before schema v2, 2 from this change
   source_profile: string; // dbweb
   query_mode: string; // bestprice
-  timetable_version: string; // DB annual timetable, `unknown` until set
 }

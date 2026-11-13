@@ -61,5 +61,4 @@ new ScraperStack(app, 'ScraperStack', {
     region: process.env.CDK_DEFAULT_REGION,
   },
   alertTopicArn: alertingStack.topic.topicArn,
-  ...(process.env.CDK_TIMETABLE_VERSION && { timetableVersion: process.env.CDK_TIMETABLE_VERSION }),
 });
