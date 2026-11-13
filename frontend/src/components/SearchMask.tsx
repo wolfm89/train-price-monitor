@@ -17,7 +17,9 @@ import {
   MenuItem,
   ListSubheader,
   Switch,
+  FormControlLabel,
   SelectChangeEvent,
+  CircularProgress,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -31,8 +33,10 @@ import {
 import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { LocationSearchQuery } from '../api/location';
-import { SearchData } from './SearchResult';
 import { berlinWallTimeToDate, berlinWallTimeToIso } from '../utils/berlinTime';
+import { formatInputDate, formatTime } from '../utils/format';
+import type { SearchQueryVars } from '../utils/searchQueryVars';
+import usePrefersReducedMotion from '../hooks/usePrefersReducedMotion';
 import {
   LoyaltyCardInput,
   AGE_GROUP_OPTIONS,
@@ -69,8 +73,16 @@ export interface JourneySearchOptions {
 }
 
 interface Props {
-  setSearchData: (searchData: SearchData) => void;
-  onSearch: (from: string, to: string, departure: string, options?: JourneySearchOptions) => void;
+  isSearching?: boolean;
+  onSearch: (
+    from: string,
+    to: string,
+    departure: string,
+    options?: JourneySearchOptions,
+    fromName?: string,
+    toName?: string
+  ) => void;
+  initialSearch?: SearchQueryVars | null;
   initialWalletCards?: LoyaltyCardInput[];
   initialAgeGroup?: string;
   initialDeutschlandTicketDiscount?: boolean;
@@ -130,52 +142,92 @@ function dedupLocations(items: readonly Location[]): Location[] {
 }
 
 const SearchMask: React.FC<Props> = ({
-  setSearchData,
+  isSearching = false,
   onSearch,
+  initialSearch,
   initialWalletCards,
   initialAgeGroup,
   initialDeutschlandTicketDiscount,
 }) => {
-  const [from, setFrom] = useState<Location | null>(null);
-  const [fromInput, setFromInput] = useState<string>('');
+  const initialFrom = initialSearch?.from
+    ? { id: initialSearch.from, name: initialSearch.fromName ?? initialSearch.from }
+    : null;
+  const initialTo = initialSearch?.to ? { id: initialSearch.to, name: initialSearch.toName ?? initialSearch.to } : null;
+
+  const [from, setFrom] = useState<Location | null>(initialFrom);
+  const [fromInput, setFromInput] = useState<string>(initialSearch?.fromName ?? initialFrom?.name ?? '');
   const [fromSuggestions, setFromSuggestions] = useState<readonly Location[]>([]);
 
-  const [to, setTo] = useState<Location | null>(null);
-  const [toInput, setToInput] = useState<string>('');
+  const [to, setTo] = useState<Location | null>(initialTo);
+  const [toInput, setToInput] = useState<string>(initialSearch?.toName ?? initialTo?.name ?? '');
   const [toSuggestions, setToSuggestions] = useState<readonly Location[]>([]);
 
-  const [departureDay, setDepartureDay] = useState<string>('');
-  const [departureTime, setDepartureTime] = useState<string>('');
-  const [formValid, setFormValid] = useState<boolean>(false);
+  const [departureDay, setDepartureDay] = useState<string>(() =>
+    initialSearch?.departure ? formatInputDate(initialSearch.departure) : ''
+  );
+  const [departureTime, setDepartureTime] = useState<string>(() =>
+    initialSearch?.departure ? formatTime(initialSearch.departure) : ''
+  );
+  const [showValidation, setShowValidation] = useState(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   // Search options state
   const [showOptions, setShowOptions] = useState(false);
-  const [firstClass, setFirstClass] = useState(false);
-  const [enabledProducts, setEnabledProducts] = useState<Set<keyof ProductFilter>>(() => new Set(ALL_PRODUCT_KEYS));
-  const [maxTransfers, setMaxTransfers] = useState<number>(-1);
-  const [bike, setBike] = useState(false);
+  const [firstClass, setFirstClass] = useState(initialSearch?.options?.firstClass ?? false);
+  const [enabledProducts, setEnabledProducts] = useState<Set<keyof ProductFilter>>(
+    () => new Set(ALL_PRODUCT_KEYS.filter((key) => initialSearch?.options?.products?.[key] !== false))
+  );
+  const [maxTransfers, setMaxTransfers] = useState<number>(initialSearch?.options?.transfers ?? -1);
+  const [bike, setBike] = useState(initialSearch?.options?.bike ?? false);
 
   // Travel preference state (initialised from profile, overridable per search)
   const [loyaltyCard, setLoyaltyCard] = useState<LoyaltyCardInput | null>(
-    initialWalletCards ? bestWalletCard(initialWalletCards) : null
+    initialSearch?.options?.loyaltyCard ?? (initialWalletCards ? bestWalletCard(initialWalletCards) : null)
   );
   const [walletCards, setWalletCards] = useState<LoyaltyCardInput[]>(initialWalletCards ?? []);
-  const [ageGroup, setAgeGroup] = useState<string>(initialAgeGroup ?? 'ADULT');
-  const [deutschlandTicketDiscount, setDeutschlandTicketDiscount] = useState(initialDeutschlandTicketDiscount ?? false);
+  const [ageGroup, setAgeGroup] = useState<string>(initialSearch?.options?.ageGroup ?? initialAgeGroup ?? 'ADULT');
+  const [deutschlandTicketDiscount, setDeutschlandTicketDiscount] = useState(
+    initialSearch?.options?.deutschlandTicketDiscount ?? initialDeutschlandTicketDiscount ?? false
+  );
 
-  // Sync when profile data arrives asynchronously
+  // Hydrate from the URL on mount and on Back/Forward.
+  useEffect(() => {
+    if (!initialSearch) return;
+    setFrom(initialSearch.from ? { id: initialSearch.from, name: initialSearch.fromName ?? initialSearch.from } : null);
+    setFromInput(initialSearch.fromName ?? initialSearch.from);
+    setTo(initialSearch.to ? { id: initialSearch.to, name: initialSearch.toName ?? initialSearch.to } : null);
+    setToInput(initialSearch.toName ?? initialSearch.to);
+    setDepartureDay(initialSearch.departure ? formatInputDate(initialSearch.departure) : '');
+    setDepartureTime(initialSearch.departure ? formatTime(initialSearch.departure) : '');
+    setFirstClass(initialSearch.options?.firstClass ?? false);
+    setEnabledProducts(new Set(ALL_PRODUCT_KEYS.filter((key) => initialSearch.options?.products?.[key] !== false)));
+    setMaxTransfers(initialSearch.options?.transfers ?? -1);
+    setBike(initialSearch.options?.bike ?? false);
+    setLoyaltyCard(
+      initialSearch.options?.loyaltyCard ?? (initialWalletCards ? bestWalletCard(initialWalletCards) : null)
+    );
+    setAgeGroup(initialSearch.options?.ageGroup ?? initialAgeGroup ?? 'ADULT');
+    setDeutschlandTicketDiscount(
+      initialSearch.options?.deutschlandTicketDiscount ?? initialDeutschlandTicketDiscount ?? false
+    );
+    setShowValidation(false);
+  }, [initialSearch, initialWalletCards, initialAgeGroup, initialDeutschlandTicketDiscount]);
+
+  // Sync when profile data arrives asynchronously, unless the URL already supplied a value.
   useEffect(() => {
     if (initialWalletCards !== undefined) {
       setWalletCards(initialWalletCards);
-      setLoyaltyCard(bestWalletCard(initialWalletCards));
+      if (!initialSearch?.options?.loyaltyCard) setLoyaltyCard(bestWalletCard(initialWalletCards));
     }
-  }, [initialWalletCards]);
+  }, [initialWalletCards, initialSearch?.options?.loyaltyCard]);
   useEffect(() => {
-    if (initialAgeGroup !== undefined) setAgeGroup(initialAgeGroup);
-  }, [initialAgeGroup]);
+    if (initialAgeGroup !== undefined && !initialSearch?.options?.ageGroup) setAgeGroup(initialAgeGroup);
+  }, [initialAgeGroup, initialSearch?.options?.ageGroup]);
   useEffect(() => {
-    if (initialDeutschlandTicketDiscount !== undefined) setDeutschlandTicketDiscount(initialDeutschlandTicketDiscount);
-  }, [initialDeutschlandTicketDiscount]);
+    if (initialDeutschlandTicketDiscount !== undefined && !initialSearch?.options?.deutschlandTicketDiscount) {
+      setDeutschlandTicketDiscount(initialDeutschlandTicketDiscount);
+    }
+  }, [initialDeutschlandTicketDiscount, initialSearch?.options?.deutschlandTicketDiscount]);
 
   const [{ data: fromData, fetching: fromFetching }, reexecuteFromSearchQuery] = useQuery({
     query: LocationSearchQuery,
@@ -287,33 +339,61 @@ const SearchMask: React.FC<Props> = ({
     return Object.keys(opts).length > 0 ? opts : undefined;
   };
 
-  const handleSearchClick = () => {
-    setSearchData({
-      departure: from?.name ?? '',
-      destination: to?.name ?? '',
-      date: departureDay,
-      time: departureTime,
-    });
+  const hasFrom = Boolean(from?.id);
+  const hasTo = Boolean(to?.id);
+  const hasDate = departureDay.trim() !== '';
+  const hasTime = departureTime.trim() !== '';
+  const hasProducts = enabledProducts.size > 0;
+  const departureDate = hasDate && hasTime ? createDateFromDayAndTime(departureDay, departureTime) : new Date(NaN);
+  const isFuture = !Number.isNaN(departureDate.getTime()) && departureDate > new Date();
+
+  const validationMessage = !hasFrom
+    ? 'Choose a departure station.'
+    : !hasTo
+      ? 'Choose an arrival station.'
+      : !hasDate || !hasTime
+        ? 'Choose a departure date and time.'
+        : !isFuture
+          ? 'Departure must be in the future.'
+          : !hasProducts
+            ? 'Select at least one transport mode.'
+            : '';
+  const isValid = validationMessage === '';
+  const todayInBerlin = formatInputDate(new Date());
+
+  const focusFirstInvalid = () => {
+    const targetId = !hasFrom ? 'departure' : !hasTo ? 'arrival' : !hasDate || !hasTime || !isFuture ? 'date' : null;
+    if (targetId) {
+      window.setTimeout(() => document.getElementById(targetId)?.focus(), 0);
+      return;
+    }
+    if (!hasProducts) {
+      window.setTimeout(
+        () => document.querySelector<HTMLElement>('[aria-label="Select all transport modes"]')?.focus(),
+        0
+      );
+    }
+  };
+
+  const handleSearchSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isSearching) return;
+
+    setShowValidation(true);
+    if (!isValid) {
+      focusFirstInvalid();
+      return;
+    }
+
     onSearch(
       from?.id ?? '',
       to?.id ?? '',
       createISODateString(departureDay.trim(), departureTime.trim()),
-      buildSearchOptions()
+      buildSearchOptions(),
+      from?.name,
+      to?.name
     );
   };
-
-  React.useEffect(() => {
-    const day = departureDay.trim();
-    const time = departureTime.trim();
-    setFormValid(
-      from?.id !== '' &&
-        to?.id !== '' &&
-        day !== '' &&
-        time !== '' &&
-        enabledProducts.size > 0 &&
-        createDateFromDayAndTime(departureDay, departureTime) > new Date()
-    );
-  }, [from, to, departureDay, departureTime, enabledProducts]);
 
   const handleProductToggle = (keys: (keyof ProductFilter)[]) => {
     setEnabledProducts((prev) => {
@@ -375,12 +455,17 @@ const SearchMask: React.FC<Props> = ({
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.75 }}>
+    <Box
+      component="form"
+      onSubmit={handleSearchSubmit}
+      noValidate
+      sx={{ display: 'flex', flexDirection: 'column', gap: 2.75 }}
+    >
       {/* Card 1: Search fields */}
       <Paper elevation={0} sx={cardSx}>
         <Grid container spacing={1.75} sx={{ mb: 1.75 }}>
           <Grid size={{ xs: 12, sm: 6 }}>
-            <Typography variant="fieldLabel" sx={fieldLabelSx}>
+            <Typography component="label" htmlFor="departure" variant="fieldLabel" sx={fieldLabelSx}>
               From
             </Typography>
             <Autocomplete
@@ -399,6 +484,7 @@ const SearchMask: React.FC<Props> = ({
                   {...params}
                   placeholder="Station"
                   fullWidth
+                  error={showValidation && !hasFrom}
                   inputProps={{
                     ...params.inputProps,
                     'aria-label': 'From station',
@@ -434,7 +520,7 @@ const SearchMask: React.FC<Props> = ({
             />
           </Grid>
           <Grid size={{ xs: 12, sm: 6 }}>
-            <Typography variant="fieldLabel" sx={fieldLabelSx}>
+            <Typography component="label" htmlFor="arrival" variant="fieldLabel" sx={fieldLabelSx}>
               To
             </Typography>
             <Autocomplete
@@ -453,6 +539,7 @@ const SearchMask: React.FC<Props> = ({
                   {...params}
                   placeholder="Station"
                   fullWidth
+                  error={showValidation && !hasTo}
                   inputProps={{
                     ...params.inputProps,
                     'aria-label': 'To station',
@@ -496,7 +583,7 @@ const SearchMask: React.FC<Props> = ({
         >
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 1.5 }}>
             <Box>
-              <Typography variant="fieldLabel" sx={fieldLabelSx}>
+              <Typography component="label" htmlFor="date" variant="fieldLabel" sx={fieldLabelSx}>
                 Departure date
               </Typography>
               <TextField
@@ -506,8 +593,9 @@ const SearchMask: React.FC<Props> = ({
                 onChange={(e) => setDepartureDay(e.target.value)}
                 fullWidth
                 size="small"
+                error={showValidation && (!hasDate || !isFuture)}
                 slotProps={{
-                  htmlInput: { 'aria-label': 'Departure date' },
+                  htmlInput: { 'aria-label': 'Departure date', min: todayInBerlin },
                   input: {
                     startAdornment: (
                       <InputAdornment position="start">
@@ -519,7 +607,7 @@ const SearchMask: React.FC<Props> = ({
               />
             </Box>
             <Box>
-              <Typography variant="fieldLabel" sx={fieldLabelSx}>
+              <Typography component="label" htmlFor="time" variant="fieldLabel" sx={fieldLabelSx}>
                 Time
               </Typography>
               <TextField
@@ -528,6 +616,7 @@ const SearchMask: React.FC<Props> = ({
                 value={departureTime}
                 onChange={(e) => setDepartureTime(e.target.value)}
                 fullWidth
+                error={showValidation && !hasTime}
                 slotProps={{
                   htmlInput: { 'aria-label': 'Departure time' },
                   input: {
@@ -544,11 +633,18 @@ const SearchMask: React.FC<Props> = ({
           </Box>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 1.5, alignItems: 'end' }}>
             <Box>
-              <Typography variant="fieldLabel" sx={fieldLabelSx}>
+              <Typography
+                id="age-group-label"
+                variant="fieldLabel"
+                sx={{ ...fieldLabelSx, cursor: 'pointer' }}
+                onClick={() => document.getElementById('age-group')?.focus()}
+              >
                 Age group
               </Typography>
               <FormControl size="small" fullWidth>
                 <Select
+                  id="age-group"
+                  aria-labelledby="age-group-label"
                   value={ageGroup}
                   onChange={handleAgeGroupChange}
                   sx={{ fontSize: 13 }}
@@ -567,22 +663,42 @@ const SearchMask: React.FC<Props> = ({
               </FormControl>
             </Box>
             <Button
+              type="submit"
               variant="contained"
-              disabled={!formValid}
-              onClick={handleSearchClick}
-              startIcon={<SearchIcon sx={{ fontSize: '16px !important' }} />}
+              disabled={isSearching}
+              aria-busy={isSearching}
+              aria-describedby={showValidation && !isValid ? 'search-validation' : undefined}
+              startIcon={
+                isSearching ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : (
+                  <SearchIcon sx={{ fontSize: '16px !important' }} />
+                )
+              }
               sx={{ textTransform: 'none', fontWeight: 600, height: 40, whiteSpace: 'nowrap' }}
             >
-              Search
+              {isSearching ? 'Searching…' : 'Search'}
             </Button>
           </Box>
+          {showValidation && !isValid && (
+            <Typography
+              id="search-validation"
+              role="status"
+              aria-live="polite"
+              sx={{ fontSize: 12, color: 'error.main', mt: 1.5 }}
+            >
+              {validationMessage}
+            </Typography>
+          )}
         </Box>
       </Paper>
 
       {/* Options toggle */}
       <Box sx={{ mt: -1.5 }}>
         <Button
+          type="button"
           size="small"
+          aria-expanded={showOptions}
           startIcon={<TuneIcon sx={{ fontSize: '14px !important' }} />}
           onClick={() => setShowOptions((prev) => !prev)}
           sx={{
@@ -599,7 +715,7 @@ const SearchMask: React.FC<Props> = ({
         </Button>
       </Box>
 
-      <Collapse in={showOptions}>
+      <Collapse in={showOptions} timeout={prefersReducedMotion ? 0 : 'auto'}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.75 }}>
           {/* Card 2: Journey Preferences + Transport Modes (side-by-side) */}
           <Box
@@ -611,13 +727,16 @@ const SearchMask: React.FC<Props> = ({
           >
             {/* Journey Preferences */}
             <Paper elevation={0} sx={cardSx}>
-              <Typography sx={sectionTitleSx}>Journey Preferences</Typography>
+              <Typography component="h2" sx={sectionTitleSx}>
+                Journey Preferences
+              </Typography>
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="fieldLabel" sx={{ display: 'block', mb: 1 }}>
                   Travel class
                 </Typography>
                 <ToggleButtonGroup
+                  aria-label="Travel class"
                   value={firstClass ? '1' : '2'}
                   exclusive
                   onChange={(_e, val) => {
@@ -635,11 +754,22 @@ const SearchMask: React.FC<Props> = ({
               </Box>
 
               <Box sx={{ mb: 2 }}>
-                <Typography variant="fieldLabel" sx={fieldLabelSx}>
+                <Typography
+                  id="max-transfers-label"
+                  variant="fieldLabel"
+                  sx={{ ...fieldLabelSx, cursor: 'pointer' }}
+                  onClick={() => document.getElementById('max-transfers')?.focus()}
+                >
                   Max transfers
                 </Typography>
                 <FormControl size="small" fullWidth>
-                  <Select value={maxTransfers} onChange={handleTransfersChange} sx={{ fontSize: 13 }}>
+                  <Select
+                    id="max-transfers"
+                    aria-labelledby="max-transfers-label"
+                    value={maxTransfers}
+                    onChange={handleTransfersChange}
+                    sx={{ fontSize: 13 }}
+                  >
                     {TRANSFER_OPTIONS.map((opt) => (
                       <MenuItem key={opt.value} value={opt.value} sx={{ fontSize: 13 }}>
                         {opt.label}
@@ -649,25 +779,34 @@ const SearchMask: React.FC<Props> = ({
                 </FormControl>
               </Box>
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <BikeIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
-                <Typography sx={{ fontSize: 13, fontWeight: 500, color: 'text.primary', flex: 1 }}>
-                  Bicycle space
-                </Typography>
-                <Switch checked={bike} onChange={(_e, checked) => setBike(checked)} color="secondary" size="small" />
-              </Box>
+              <FormControlLabel
+                control={
+                  <Switch checked={bike} onChange={(_e, checked) => setBike(checked)} color="secondary" size="small" />
+                }
+                label={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <BikeIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+                    <Typography sx={{ fontSize: 13, fontWeight: 500, color: 'text.primary' }}>Bicycle space</Typography>
+                  </Box>
+                }
+                labelPlacement="start"
+                sx={{ m: 0, width: '100%', justifyContent: 'space-between' }}
+              />
             </Paper>
 
             {/* Transport Modes */}
             <Paper elevation={0} sx={cardSx}>
-              <Typography sx={sectionTitleSx}>Transport Modes</Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+              <Typography component="h2" sx={sectionTitleSx}>
+                Transport Modes
+              </Typography>
+              <Box role="group" aria-label="Transport modes" sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
                 <Chip
                   label="All"
                   size="small"
                   variant={enabledProducts.size === ALL_PRODUCT_KEYS.length ? 'filled' : 'outlined'}
                   color={enabledProducts.size === ALL_PRODUCT_KEYS.length ? 'primary' : 'default'}
                   onClick={handleEnableAllProducts}
+                  aria-label="Select all transport modes"
                   sx={{ fontSize: 12, cursor: 'pointer' }}
                 />
                 <Chip
@@ -676,6 +815,8 @@ const SearchMask: React.FC<Props> = ({
                   variant={enabledProducts.size === 0 ? 'filled' : 'outlined'}
                   color={enabledProducts.size === 0 ? 'primary' : 'default'}
                   onClick={handleClearAllProducts}
+                  aria-label="Clear all transport modes"
+                  disabled={enabledProducts.size === 0}
                   sx={{ fontSize: 12, cursor: 'pointer' }}
                 />
                 {PRODUCT_TOGGLES.map((p) => (
@@ -686,6 +827,7 @@ const SearchMask: React.FC<Props> = ({
                     variant={p.keys.every((k) => enabledProducts.has(k)) ? 'filled' : 'outlined'}
                     color={p.keys.every((k) => enabledProducts.has(k)) ? 'primary' : 'default'}
                     onClick={() => handleProductToggle(p.keys)}
+                    aria-pressed={p.keys.every((k) => enabledProducts.has(k))}
                     sx={{ fontSize: 12, cursor: 'pointer' }}
                   />
                 ))}
@@ -695,7 +837,9 @@ const SearchMask: React.FC<Props> = ({
 
           {/* Card 3: Discounts & Pricing */}
           <Paper elevation={0} sx={cardSx}>
-            <Typography sx={sectionTitleSx}>Discounts &amp; Pricing</Typography>
+            <Typography component="h2" sx={sectionTitleSx}>
+              Discounts &amp; Pricing
+            </Typography>
 
             <Box
               sx={{
@@ -707,11 +851,18 @@ const SearchMask: React.FC<Props> = ({
             >
               {/* Discount card */}
               <Box sx={{ flexShrink: 0 }}>
-                <Typography variant="fieldLabel" sx={{ display: 'block', mb: 0.75 }}>
+                <Typography
+                  id="discount-card-label"
+                  variant="fieldLabel"
+                  sx={{ display: 'block', mb: 0.75, cursor: 'pointer' }}
+                  onClick={() => document.getElementById('discount-card')?.focus()}
+                >
                   Discount card
                 </Typography>
                 <FormControl size="small">
                   <Select
+                    id="discount-card"
+                    aria-labelledby="discount-card-label"
                     value={loyaltyCard ? cardToKey(loyaltyCard) : ''}
                     onChange={handleLoyaltyCardChange}
                     displayEmpty
@@ -771,17 +922,23 @@ const SearchMask: React.FC<Props> = ({
                 <Typography variant="fieldLabel" sx={{ display: 'block', mb: 0.75 }}>
                   Deutschlandticket
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Switch
-                    checked={deutschlandTicketDiscount}
-                    onChange={handleDTicketToggle}
-                    color="secondary"
-                    size="small"
-                  />
-                  <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
-                    Regional costs deducted from prices
-                  </Typography>
-                </Box>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={deutschlandTicketDiscount}
+                      onChange={handleDTicketToggle}
+                      color="secondary"
+                      size="small"
+                    />
+                  }
+                  label={
+                    <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+                      Regional costs deducted from prices
+                    </Typography>
+                  }
+                  labelPlacement="start"
+                  sx={{ m: 0, gap: 1 }}
+                />
               </Box>
             </Box>
           </Paper>
