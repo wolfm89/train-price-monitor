@@ -164,6 +164,11 @@ async function writeToS3(rows: ParquetRow[], observedAt: Date): Promise<void> {
   logger.info('Parquet written to S3', { key, rows: rows.length });
 }
 
+/** A conditional write found the row gone: the poller deleted it as expired. */
+function isConditionalCheckFailure(error: unknown): boolean {
+  return (error as { name?: string }).name === 'ConditionalCheckFailedException';
+}
+
 /**
  * Update the DynamoDB schedule item after a successful scrape.
  */
@@ -178,6 +183,11 @@ async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Pro
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { pk: item.pk, sk: 'SCHEDULE' },
+      // UpdateItem is an upsert. Without this, a row deleted between selection
+      // and this write is recreated with only the updated attributes: no
+      // departure_date, status or ttl, so it is invisible to ByDue and never
+      // expires.
+      ConditionExpression: 'attribute_exists(pk)',
       UpdateExpression:
         'SET next_scrape_at = :next, due_key = :due, last_scraped_at = :now, ttd_tier = :tier, scrape_count = if_not_exists(scrape_count, :zero) + :inc',
       ExpressionAttributeValues: {
@@ -204,6 +214,9 @@ async function scheduleRetry(item: ScheduleItem, delayMs: number, now: Date): Pr
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { pk: item.pk, sk: 'SCHEDULE' },
+      // Same upsert hazard as markScraped: a deleted row must not be recreated
+      // by a retry.
+      ConditionExpression: 'attribute_exists(pk)',
       UpdateExpression: 'SET next_scrape_at = :next, due_key = :due, ttd_tier = :tier',
       ExpressionAttributeValues: {
         ':next': retryAt.toISOString(),
@@ -219,6 +232,13 @@ async function retryLater(target: ScheduleItem, delayMs: number, now: Date): Pro
   try {
     await scheduleRetry(target, delayMs, now);
   } catch (err) {
+    if (isConditionalCheckFailure(err)) {
+      logger.info('Target expired before reschedule', {
+        route_id: target.route_id,
+        departure_date: target.departure_date,
+      });
+      return;
+    }
     logger.error('Failed to reschedule target', {
       route_id: target.route_id,
       departure_date: target.departure_date,
@@ -464,6 +484,13 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
     try {
       await markScraped(target, now, newTier);
     } catch (err) {
+      if (isConditionalCheckFailure(err)) {
+        logger.info('Target expired before schedule update', {
+          route_id: target.route_id,
+          departure_date: target.departure_date,
+        });
+        continue;
+      }
       logger.error('Failed to update schedule after upload', {
         route_id: target.route_id,
         departure_date: target.departure_date,
