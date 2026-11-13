@@ -180,14 +180,23 @@ const SearchMask: React.FC<Props> = ({
   const [maxTransfers, setMaxTransfers] = useState<number>(initialSearch?.options?.transfers ?? -1);
   const [bike, setBike] = useState(initialSearch?.options?.bike ?? false);
 
-  // Travel preference state (initialised from profile, overridable per search)
+  // Travel preference state. A URL search is authoritative: omitted options
+  // mean the neutral value, not the profile default.
   const [loyaltyCard, setLoyaltyCard] = useState<LoyaltyCardInput | null>(
-    initialSearch?.options?.loyaltyCard ?? (initialWalletCards ? bestWalletCard(initialWalletCards) : null)
+    initialSearch
+      ? (initialSearch.options?.loyaltyCard ?? null)
+      : initialWalletCards
+        ? bestWalletCard(initialWalletCards)
+        : null
   );
   const [walletCards, setWalletCards] = useState<LoyaltyCardInput[]>(initialWalletCards ?? []);
-  const [ageGroup, setAgeGroup] = useState<string>(initialSearch?.options?.ageGroup ?? initialAgeGroup ?? 'ADULT');
+  const [ageGroup, setAgeGroup] = useState<string>(
+    initialSearch ? (initialSearch.options?.ageGroup ?? 'ADULT') : (initialAgeGroup ?? 'ADULT')
+  );
   const [deutschlandTicketDiscount, setDeutschlandTicketDiscount] = useState(
-    initialSearch?.options?.deutschlandTicketDiscount ?? initialDeutschlandTicketDiscount ?? false
+    initialSearch
+      ? (initialSearch.options?.deutschlandTicketDiscount ?? false)
+      : (initialDeutschlandTicketDiscount ?? false)
   );
 
   // Hydrate from the URL on mount and on Back/Forward.
@@ -203,31 +212,28 @@ const SearchMask: React.FC<Props> = ({
     setEnabledProducts(new Set(ALL_PRODUCT_KEYS.filter((key) => initialSearch.options?.products?.[key] !== false)));
     setMaxTransfers(initialSearch.options?.transfers ?? -1);
     setBike(initialSearch.options?.bike ?? false);
-    setLoyaltyCard(
-      initialSearch.options?.loyaltyCard ?? (initialWalletCards ? bestWalletCard(initialWalletCards) : null)
-    );
-    setAgeGroup(initialSearch.options?.ageGroup ?? initialAgeGroup ?? 'ADULT');
-    setDeutschlandTicketDiscount(
-      initialSearch.options?.deutschlandTicketDiscount ?? initialDeutschlandTicketDiscount ?? false
-    );
+    setLoyaltyCard(initialSearch.options?.loyaltyCard ?? null);
+    setAgeGroup(initialSearch.options?.ageGroup ?? 'ADULT');
+    setDeutschlandTicketDiscount(initialSearch.options?.deutschlandTicketDiscount ?? false);
     setShowValidation(false);
   }, [initialSearch, initialWalletCards, initialAgeGroup, initialDeutschlandTicketDiscount]);
 
-  // Sync when profile data arrives asynchronously, unless the URL already supplied a value.
+  // Profile defaults apply only before a URL search exists. Once the URL is
+  // authoritative, omitted options stay neutral.
   useEffect(() => {
     if (initialWalletCards !== undefined) {
       setWalletCards(initialWalletCards);
-      if (!initialSearch?.options?.loyaltyCard) setLoyaltyCard(bestWalletCard(initialWalletCards));
+      if (!initialSearch) setLoyaltyCard(bestWalletCard(initialWalletCards));
     }
-  }, [initialWalletCards, initialSearch?.options?.loyaltyCard]);
+  }, [initialWalletCards, initialSearch]);
   useEffect(() => {
-    if (initialAgeGroup !== undefined && !initialSearch?.options?.ageGroup) setAgeGroup(initialAgeGroup);
-  }, [initialAgeGroup, initialSearch?.options?.ageGroup]);
+    if (!initialSearch && initialAgeGroup !== undefined) setAgeGroup(initialAgeGroup);
+  }, [initialAgeGroup, initialSearch]);
   useEffect(() => {
-    if (initialDeutschlandTicketDiscount !== undefined && !initialSearch?.options?.deutschlandTicketDiscount) {
+    if (!initialSearch && initialDeutschlandTicketDiscount !== undefined) {
       setDeutschlandTicketDiscount(initialDeutschlandTicketDiscount);
     }
-  }, [initialDeutschlandTicketDiscount, initialSearch?.options?.deutschlandTicketDiscount]);
+  }, [initialDeutschlandTicketDiscount, initialSearch]);
 
   const [{ data: fromData, fetching: fromFetching }, reexecuteFromSearchQuery] = useQuery({
     query: LocationSearchQuery,
@@ -644,7 +650,7 @@ const SearchMask: React.FC<Props> = ({
               <FormControl size="small" fullWidth>
                 <Select
                   id="age-group"
-                  aria-labelledby="age-group-label"
+                  labelId="age-group-label"
                   value={ageGroup}
                   onChange={handleAgeGroupChange}
                   sx={{ fontSize: 13 }}
@@ -765,7 +771,7 @@ const SearchMask: React.FC<Props> = ({
                 <FormControl size="small" fullWidth>
                   <Select
                     id="max-transfers"
-                    aria-labelledby="max-transfers-label"
+                    labelId="max-transfers-label"
                     value={maxTransfers}
                     onChange={handleTransfersChange}
                     sx={{ fontSize: 13 }}
@@ -862,7 +868,7 @@ const SearchMask: React.FC<Props> = ({
                 <FormControl size="small">
                   <Select
                     id="discount-card"
-                    aria-labelledby="discount-card-label"
+                    labelId="discount-card-label"
                     value={loyaltyCard ? cardToKey(loyaltyCard) : ''}
                     onChange={handleLoyaltyCardChange}
                     displayEmpty

@@ -41,6 +41,26 @@ describe('SearchMask', () => {
     );
   });
 
+  it('uses neutral options for a URL search instead of profile defaults', async () => {
+    const onSearch = vi.fn();
+    render(
+      <SearchMask
+        onSearch={onSearch}
+        initialSearch={{ ...futureSearch, options: { deutschlandTicketDiscount: false } }}
+        initialWalletCards={[{ type: 'BAHNCARD', discount: 25, class: 2 }]}
+        initialAgeGroup="SENIOR"
+        initialDeutschlandTicketDiscount
+      />
+    );
+
+    expect(screen.getByRole('combobox', { name: 'Age group' })).toHaveTextContent('Adult');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search options' }));
+    expect(await screen.findByRole('combobox', { name: 'Discount card' })).toHaveTextContent('No card');
+    expect(screen.getByRole('combobox', { name: 'Max transfers' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /Regional costs deducted/ })).not.toBeChecked();
+  });
+
   it('does not submit without stations and explains what is missing', () => {
     const onSearch = vi.fn();
     render(<SearchMask onSearch={onSearch} />);
