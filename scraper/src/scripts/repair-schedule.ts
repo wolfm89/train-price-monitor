@@ -117,6 +117,16 @@ async function scanSchedule(limit?: number): Promise<ScheduleItem[]> {
   return limit ? items.slice(0, limit) : items;
 }
 
+/** Items written by an older schema or a partial write can miss the fields we need. */
+function isUsable(item: ScheduleItem): boolean {
+  return Boolean(
+    item.departure_date &&
+    item.next_scrape_at &&
+    Number.isFinite(new Date(`${item.departure_date}T12:00:00Z`).getTime()) &&
+    Number.isFinite(new Date(item.next_scrape_at).getTime())
+  );
+}
+
 /** Decide the replacement for an item whose next scrape is at/after departure. */
 function planRepair(item: ScheduleItem, now: Date): Repair | null {
   const { nearEntry, hardStop } = scheduleBounds(item.departure_date);
@@ -182,10 +192,18 @@ async function main(): Promise<void> {
 
   const items = await scanSchedule(options.limit);
 
+  // Items written by an older schema (or a partial write) can miss the fields
+  // the planner needs. Report them instead of aborting the whole pass.
+  const malformed = items.filter((item) => !isUsable(item));
+  const usable = items.filter(isUsable);
+  if (malformed.length > 0) {
+    log(`skipping ${malformed.length} malformed item(s), e.g. ${malformed[0].pk}`);
+  }
+
   // Plan against the clock after the scan, not the one captured before it: a
   // full pass over 8,517 items at 5 RCU can take minutes.
   const plannedAt = new Date();
-  const planned = items
+  const planned = usable
     .map((item) => ({ item, repair: planRepair(item, plannedAt) }))
     .filter((entry): entry is { item: ScheduleItem; repair: Repair } => entry.repair !== null);
   const repairs = planned.map((entry) => entry.repair);
