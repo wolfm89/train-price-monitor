@@ -1,5 +1,21 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Box, Button, ListItemIcon, ListItemText, Menu, MenuItem, Stack, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
+  Stack,
+  Typography,
+} from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery } from 'urql';
@@ -9,13 +25,19 @@ import { AuthContext } from '../providers/AuthProvider';
 import { DeleteJourneyMonitor } from '../api/journey';
 import { AlertSeverity } from '../providers/AlertProvider';
 import useAlert from '../hooks/useAlert';
+import usePrefersReducedMotion from '../hooks/usePrefersReducedMotion';
 import JourneyTicket, { Journey } from '../components/JourneyTicket';
+import LoadingStatus from '../components/LoadingStatus';
 
 const JourneysPage: React.FC = () => {
   const { user } = useContext(AuthContext);
   const { addAlert } = useAlert();
   const location = useLocation();
-  const [{ data: userJourneysResult, fetching: userJourneysFetching }, reexecuteUserJourneysQuery] = useQuery({
+  const reducedMotion = usePrefersReducedMotion();
+  const [
+    { data: userJourneysResult, fetching: userJourneysFetching, error: userJourneysError },
+    reexecuteUserJourneysQuery,
+  ] = useQuery({
     query: UserJourneysQuery,
     variables: { id: user?.['custom:id'] },
     pause: !user?.['custom:id'],
@@ -25,10 +47,13 @@ const JourneysPage: React.FC = () => {
   const [loadingJourneyIds, setLoadingJourneyIds] = useState<Set<string>>(new Set());
   const [deletedJourneyIds, setDeletedJourneyIds] = useState<Set<string>>(new Set());
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; id: string } | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [highlightedJourneyId, setHighlightedJourneyId] = useState<string | null>(null);
 
   const journeyMonitors =
     userJourneysResult?.user?.journeyMonitors?.filter((j: Journey) => !deletedJourneyIds.has(j.id)) ?? [];
+  const pendingJourney = journeyMonitors.find((journey: Journey) => journey.id === pendingDeleteId) ?? null;
+  const deletingPendingJourney = pendingDeleteId !== null && loadingJourneyIds.has(pendingDeleteId);
 
   const belowLimitCount = journeyMonitors.filter(
     (j: Journey) => j.journey?.price != null && j.journey.price <= j.limitPrice
@@ -66,32 +91,42 @@ const JourneysPage: React.FC = () => {
       return;
     }
 
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+    target.focus({ preventScroll: true });
     setHighlightedJourneyId(targetId);
     const timeout = window.setTimeout(() => setHighlightedJourneyId(null), 4000);
     return () => window.clearTimeout(timeout);
-  }, [location.hash, location.key, userJourneysFetching, journeyMonitors.length]);
+  }, [location.hash, location.key, reducedMotion, userJourneysFetching, journeyMonitors.length]);
 
-  function handleJourneyMonitorDelete(id: string): void {
+  async function handleJourneyMonitorDelete(id: string): Promise<boolean> {
     setLoadingJourneyIds((prev) => new Set([...prev, id]));
-    deleteJourneyMonitor({ userId: user?.['custom:id'], journeyId: id }).then((result) => {
+    try {
+      const result = await deleteJourneyMonitor({ userId: user?.['custom:id'], journeyId: id });
       if (result.error) {
         addAlert(result.error.message, AlertSeverity.Error);
-        setLoadingJourneyIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      } else {
-        setDeletedJourneyIds((prev) => new Set([...prev, id]));
-        setLoadingJourneyIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-        reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
+        return false;
       }
-    });
+
+      setDeletedJourneyIds((prev) => new Set([...prev, id]));
+      reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
+      addAlert('Journey removed from your watchlist.', AlertSeverity.Success);
+      return true;
+    } catch {
+      addAlert('Failed to remove the journey. Please try again.', AlertSeverity.Error);
+      return false;
+    } finally {
+      setLoadingJourneyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  async function confirmDelete(): Promise<void> {
+    if (!pendingDeleteId) return;
+    const removed = await handleJourneyMonitorDelete(pendingDeleteId);
+    if (removed) setPendingDeleteId(null);
   }
 
   return (
@@ -107,10 +142,10 @@ const JourneysPage: React.FC = () => {
         }}
       >
         <Box>
-          <Typography variant="h5" sx={{ mb: 0.25 }}>
+          <Typography component="h1" variant="h5" sx={{ mb: 0.25 }}>
             Journey Watchlist
           </Typography>
-          {!userJourneysFetching && journeyMonitors.length > 0 && (
+          {!userJourneysFetching && !userJourneysError && journeyMonitors.length > 0 && (
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>
               Monitoring {journeyMonitors.length} journey{journeyMonitors.length !== 1 ? 's' : ''} · {belowLimitCount}{' '}
               below limit
@@ -123,7 +158,22 @@ const JourneysPage: React.FC = () => {
       </Box>
 
       {userJourneysFetching ? (
-        <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>Loading journeys...</Typography>
+        <LoadingStatus label="Loading journeys…" />
+      ) : userJourneysError ? (
+        <Alert
+          severity="error"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => reexecuteUserJourneysQuery({ requestPolicy: 'network-only' })}
+            >
+              Try again
+            </Button>
+          }
+        >
+          Could not load your journeys. Please try again.
+        </Alert>
       ) : journeyMonitors.length > 0 ? (
         <Stack spacing={1.5}>
           {journeyMonitors.map((monitor: Journey) => (
@@ -151,7 +201,7 @@ const JourneysPage: React.FC = () => {
         <MenuItem
           onClick={() => {
             if (menuAnchor) {
-              handleJourneyMonitorDelete(menuAnchor.id);
+              setPendingDeleteId(menuAnchor.id);
               setMenuAnchor(null);
             }
           }}
@@ -164,6 +214,38 @@ const JourneysPage: React.FC = () => {
           <ListItemText>Remove from watchlist</ListItemText>
         </MenuItem>
       </Menu>
+
+      <Dialog
+        open={pendingDeleteId !== null}
+        onClose={() => {
+          if (!deletingPendingJourney) setPendingDeleteId(null);
+        }}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Remove journey?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {pendingJourney
+              ? `${pendingJourney.from ?? 'Unknown'} → ${pendingJourney.to ?? 'Unknown'} will be removed from your watchlist.`
+              : 'This journey will be removed from your watchlist.'}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingDeleteId(null)} disabled={deletingPendingJourney}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={confirmDelete}
+            disabled={deletingPendingJourney}
+            startIcon={deletingPendingJourney ? <CircularProgress size={16} color="inherit" /> : <DeleteIcon />}
+          >
+            Remove
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

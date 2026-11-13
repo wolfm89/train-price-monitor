@@ -1,24 +1,28 @@
-import React, { useContext, useEffect, useState } from 'react';
-import { Alert, Box, CircularProgress, Typography } from '@mui/material';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { Alert, Box, Typography } from '@mui/material';
 import { useQuery } from 'urql';
-import SearchMask from '../components/SearchMask';
-import { JourneySearchOptions } from '../components/SearchMask';
-import SearchResult from '../components/SearchResult';
-import { Journey, SearchData } from '../components/SearchResult';
+import { useSearchParams } from 'react-router-dom';
+import SearchMask, { JourneySearchOptions } from '../components/SearchMask';
+import SearchResult, { Journey } from '../components/SearchResult';
 import { JourneySearchQuery } from '../api/journey';
 import { UserTravelPreferencesQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
-import { SearchQueryVars, withPageDirection } from '../utils/searchQueryVars';
+import {
+  fromSearchParams,
+  sameSearchOptions,
+  toSearchParams,
+  withPageDirection,
+  SearchQueryVars,
+} from '../utils/searchQueryVars';
+import LoadingStatus from '../components/LoadingStatus';
 
 interface Props {}
 
 const SearchPage: React.FC<Props> = () => {
   const { user } = useContext(AuthContext);
-  const [searchData, setSearchData] = useState<SearchData | null>(null);
-  const [queryVars, setQueryVars] = useState<SearchQueryVars | null>(null);
-  const [searchClicked, setSearchClicked] = useState<boolean>(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryVars = useMemo(() => fromSearchParams(searchParams), [searchParams]);
   const [navigatingDirection, setNavigatingDirection] = useState<'earlier' | 'later' | null>(null);
-  const [searchOptions, setSearchOptions] = useState<JourneySearchOptions | undefined>(undefined);
 
   // Fetch the user's travel preferences to pre-populate SearchMask
   const [{ data: profileData }] = useQuery({
@@ -27,9 +31,24 @@ const SearchPage: React.FC<Props> = () => {
     pause: !user?.['custom:id'],
   });
 
+  const queryVariables = useMemo(
+    () =>
+      queryVars
+        ? {
+            from: queryVars.from,
+            to: queryVars.to,
+            departure: queryVars.departure,
+            earlierThan: queryVars.earlierThan,
+            laterThan: queryVars.laterThan,
+            options: queryVars.options,
+          }
+        : { from: '', to: '', departure: '' },
+    [queryVars]
+  );
+
   const [{ data, fetching, error }, reexecuteSearch] = useQuery({
     query: JourneySearchQuery,
-    variables: queryVars ?? { from: '', to: '', departure: '' },
+    variables: queryVariables,
     pause: !queryVars,
     requestPolicy: 'network-only',
   });
@@ -44,44 +63,61 @@ const SearchPage: React.FC<Props> = () => {
     }
   }, [fetching]);
 
-  const handleSearch = (from: string, to: string, departure: string, options?: JourneySearchOptions) => {
-    setSearchClicked(true);
-    setSearchOptions(options);
+  const handleSearch = (
+    from: string,
+    to: string,
+    departure: string,
+    options?: JourneySearchOptions,
+    fromName?: string,
+    toName?: string
+  ) => {
+    const next: SearchQueryVars = { from, to, departure, options, fromName, toName };
 
     // Pressing Search again after a failure submits identical values, and urql does
-    // not re-run a query whose variables are unchanged — the button then looked dead
-    // until the form was edited. Re-execute explicitly in that case.
-    const repeated =
+    // not re-run a query whose normalized variables are unchanged. Compare the
+    // query itself (not raw JSON or display-only names) and re-execute explicitly.
+    const sameBaseSearch =
       queryVars !== null &&
       queryVars.from === from &&
       queryVars.to === to &&
       queryVars.departure === departure &&
-      JSON.stringify(queryVars.options ?? null) === JSON.stringify(options ?? null);
+      sameSearchOptions(queryVars.options, options);
+    const hasCursor = Boolean(queryVars?.earlierThan || queryVars?.laterThan);
 
-    setQueryVars({ from, to, departure, options });
-
-    if (repeated) {
+    const nextParams = toSearchParams(next);
+    if (sameBaseSearch && !hasCursor) {
+      if (nextParams.toString() !== searchParams.toString()) {
+        // Only display fields such as station names changed; do not add history.
+        setSearchParams(nextParams, { replace: true });
+      }
       reexecuteSearch({ requestPolicy: 'network-only' });
+      return;
     }
+
+    setSearchParams(nextParams, { replace: false });
   };
 
-  const handleNavigateEarlier = earlierRef
-    ? () => {
-        setNavigatingDirection('earlier');
-        setQueryVars((prev) => withPageDirection(prev, 'earlier', earlierRef));
-      }
-    : undefined;
+  const handleNavigateEarlier =
+    earlierRef && queryVars
+      ? () => {
+          setNavigatingDirection('earlier');
+          const next = withPageDirection(queryVars, 'earlier', earlierRef);
+          if (next) setSearchParams(toSearchParams(next), { replace: false });
+        }
+      : undefined;
 
-  const handleNavigateLater = laterRef
-    ? () => {
-        setNavigatingDirection('later');
-        setQueryVars((prev) => withPageDirection(prev, 'later', laterRef));
-      }
-    : undefined;
+  const handleNavigateLater =
+    laterRef && queryVars
+      ? () => {
+          setNavigatingDirection('later');
+          const next = withPageDirection(queryVars, 'later', laterRef);
+          if (next) setSearchParams(toSearchParams(next), { replace: false });
+        }
+      : undefined;
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 0.5 }}>
+      <Typography component="h1" variant="h5" sx={{ mb: 0.5 }}>
         Search for train rides
       </Typography>
       <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>
@@ -89,19 +125,17 @@ const SearchPage: React.FC<Props> = () => {
       </Typography>
 
       <SearchMask
-        setSearchData={setSearchData}
+        isSearching={fetching && !navigatingDirection}
+        initialSearch={queryVars}
         onSearch={handleSearch}
         initialWalletCards={profileData?.user?.loyaltyCards}
         initialAgeGroup={profileData?.user?.ageGroup}
         initialDeutschlandTicketDiscount={profileData?.user?.deutschlandTicketDiscount}
       />
 
-      {searchClicked &&
+      {queryVars &&
         (fetching && !navigatingDirection ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5, height: 100 }}>
-            <CircularProgress size={22} />
-            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>Searching Deutsche Bahn…</Typography>
-          </Box>
+          <LoadingStatus label="Searching Deutsche Bahn…" />
         ) : error ? (
           // A failed lookup used to render as "No results found", because the
           // resolver returns `journeys: null` when the upstream call fails. Say
@@ -112,14 +146,15 @@ const SearchPage: React.FC<Props> = () => {
           </Alert>
         ) : data !== undefined ? (
           (searchResult ?? []).length > 0 || fetching || earlierRef || laterRef ? (
-            <SearchResult
-              searchData={searchData!}
-              searchResult={searchResult ?? []}
-              searchOptions={searchOptions}
-              onNavigateEarlier={handleNavigateEarlier}
-              onNavigateLater={handleNavigateLater}
-              navigatingDirection={navigatingDirection}
-            />
+            <Box aria-busy={fetching}>
+              <SearchResult
+                searchResult={searchResult ?? []}
+                searchOptions={queryVars.options}
+                onNavigateEarlier={handleNavigateEarlier}
+                onNavigateLater={handleNavigateLater}
+                navigatingDirection={navigatingDirection}
+              />
+            </Box>
           ) : (
             <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>No results found</Typography>
           )

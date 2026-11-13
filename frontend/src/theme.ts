@@ -47,6 +47,7 @@ export const theme = createTheme({
     },
     info: {
       main: '#5b7a9e',
+      dark: '#3f5670',
     },
     background: {
       default: '#f8f8f4',
@@ -56,7 +57,7 @@ export const theme = createTheme({
     text: {
       primary: '#1a1a16',
       secondary: '#606058',
-      disabled: '#757568',
+      disabled: '#6b6b63',
     },
     divider: '#e2e2d8',
   },
@@ -101,5 +102,19 @@ export const theme = createTheme({
   },
   shape: {
     borderRadius: 8,
+  },
+  components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        '@media (prefers-reduced-motion: reduce)': {
+          '*, *::before, *::after': {
+            animationDuration: '0.01ms !important',
+            animationIterationCount: '1 !important',
+            transitionDuration: '0.01ms !important',
+            scrollBehavior: 'auto !important',
+          },
+        },
+      },
+    },
   },
 });

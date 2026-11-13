@@ -1,6 +1,6 @@
 import React, { useContext } from 'react';
 import { Navigate } from 'react-router-dom';
-import { CircularProgress, Box } from '@mui/material';
+import LoadingStatus from '../components/LoadingStatus';
 import { AuthContext } from '../providers/AuthProvider';
 
 interface RouteGuardProps {
@@ -17,11 +17,7 @@ function RouteGuard({ children }: RouteGuardProps) {
   const { user, isInitialCheckDone } = context;
 
   if (!isInitialCheckDone) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
-        <CircularProgress />
-      </Box>
-    );
+    return <LoadingStatus label="Checking your session…" minHeight={200} />;
   }
 
   if (!user) {

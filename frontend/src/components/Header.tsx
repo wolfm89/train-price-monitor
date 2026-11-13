@@ -84,6 +84,7 @@ const Header = () => {
 
   const open = Boolean(notificationAnchorEl);
   const id = open ? 'notification-popover' : undefined;
+  const unreadCount = notifications?.length ?? 0;
 
   const [accountAnchorEl, setAccountAnchorEl] = useState<HTMLButtonElement | null>(null);
 
@@ -197,11 +198,13 @@ const Header = () => {
           </Button>
         )}
         {isInitialCheckDone && user && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box component="nav" aria-label="Main" sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
             <Button
               component={Link}
               to="/search"
               startIcon={<SearchIcon />}
+              aria-label="Search"
+              aria-current={location.pathname === '/search' ? 'page' : undefined}
               sx={location.pathname === '/search' ? navBtnActiveSx : navBtnSx}
             >
               {!isScreenSmall && 'Search'}
@@ -210,12 +213,18 @@ const Header = () => {
               component={Link}
               to="/journeys"
               startIcon={<TrainIcon />}
+              aria-label="My Journeys"
+              aria-current={location.pathname === '/journeys' ? 'page' : undefined}
               sx={location.pathname === '/journeys' ? navBtnActiveSx : navBtnSx}
             >
               {!isScreenSmall && 'My Journeys'}
             </Button>
             <IconButton
               size="small"
+              aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+              aria-haspopup="true"
+              aria-expanded={open}
+              aria-controls={open ? 'notification-popover' : undefined}
               onClick={handleNotificationClick}
               sx={{
                 color: 'rgba(255,255,255,0.85)',
@@ -231,14 +240,22 @@ const Header = () => {
               }}
             >
               <Badge
-                badgeContent={notifications?.length}
+                badgeContent={unreadCount}
                 color="error"
+                aria-hidden="true"
                 sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16 } }}
               >
                 <NotificationsIcon sx={{ fontSize: 20 }} />
               </Badge>
             </IconButton>
-            <IconButton aria-label="user profile" onClick={handleAccountClick} sx={{ ml: 0.5, p: 0 }}>
+            <IconButton
+              aria-label="Account menu"
+              aria-haspopup="menu"
+              aria-expanded={Boolean(accountAnchorEl)}
+              aria-controls="account-menu"
+              onClick={handleAccountClick}
+              sx={{ ml: 0.5, p: 0 }}
+            >
               <Avatar
                 alt="Profile Picture"
                 src={userProfilePictureUrl || undefined}

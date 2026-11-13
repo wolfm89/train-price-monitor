@@ -8,6 +8,7 @@ import TrainIcon from '@mui/icons-material/Train';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
+import { formatCurrency, formatDate, formatDuration, formatTime } from '../utils/format';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,18 +38,6 @@ export interface Journey {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const formatDate = (dt: string) =>
-  new Date(dt).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-const formatTime = (dt: string) => new Date(dt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-
-const formatDuration = (dep: string, arr: string) => {
-  const mins = Math.round((new Date(arr).getTime() - new Date(dep).getTime()) / 60000);
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-};
-
 // ---------------------------------------------------------------------------
 // Sx style constants
 // ---------------------------------------------------------------------------
@@ -62,8 +51,8 @@ const ticketSx = (theme: Theme) => ({
 });
 
 const highlightedTicketSx = (theme: Theme) => ({
-  boxShadow: `0 0 0 2px ${theme.palette.primary.main}, 0 0 0 6px ${alpha(theme.palette.primary.main, 0.18)}`,
-  transition: 'box-shadow 300ms ease-in-out',
+  outline: `2px solid ${theme.palette.primary.main}`,
+  outlineOffset: '4px',
 });
 
 const upperZoneSx = {
@@ -258,7 +247,14 @@ function TimesRow({ journey, unavailable }: TimesRowProps) {
           size="small"
           color="warning"
           variant="outlined"
-          sx={{ alignSelf: 'center', fontWeight: 500, fontSize: 11 }}
+          sx={{
+            alignSelf: 'center',
+            fontWeight: 500,
+            fontSize: 11,
+            color: 'warning.dark',
+            borderColor: 'warning.main',
+            '& .MuiChip-icon': { color: 'warning.dark' },
+          }}
         />
         <TimeBlock label="Arrival" date={'\u2014'} time="--:--" disabled align="right" />
       </Box>
@@ -314,7 +310,7 @@ function TicketStub({
   loyaltyCard,
 }: TicketStubProps) {
   const underLimit = journey.price !== null && journey.price <= limitPrice;
-  const diff = journey.price !== null ? Math.abs(limitPrice - journey.price).toFixed(2) : '0.00';
+  const diff = formatCurrency(journey.price !== null ? Math.abs(limitPrice - journey.price) : 0);
   const priceColor = journey.price !== null ? (underLimit ? 'success.main' : 'error.main') : 'text.disabled';
 
   // Build options pills
@@ -338,7 +334,7 @@ function TicketStub({
     fontWeight: 500,
     borderRadius: '10px',
     backgroundColor: alpha(theme.palette.info.main, 0.12),
-    color: 'info.main',
+    color: 'info.dark',
     border: 'none',
     '& .MuiChip-label': { px: '7px' },
   });
@@ -428,7 +424,7 @@ function TicketStub({
       {/* Price block */}
       <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
-          Limit: &euro;{limitPrice.toFixed(2)}
+          Limit: {formatCurrency(limitPrice)}
         </Typography>
         <Typography
           sx={{
@@ -439,11 +435,11 @@ function TicketStub({
             color: priceColor,
           }}
         >
-          {journey.price !== null ? `\u20AC${journey.price.toFixed(2)}` : 'n/a'}
+          {journey.price !== null ? formatCurrency(journey.price) : 'n/a'}
         </Typography>
         {journey.price !== null && (
           <Typography variant="caption" sx={{ color: priceColor, display: 'block', fontWeight: 500 }}>
-            {underLimit ? `\u2193 \u20AC${diff} under limit` : `\u2191 \u20AC${diff} over limit`}
+            {underLimit ? `\u2193 ${diff} under limit` : `\u2191 ${diff} over limit`}
           </Typography>
         )}
       </Box>
@@ -517,7 +513,7 @@ export default function JourneyTicket({
   } = monitor;
 
   return (
-    <Box id={id} sx={{ position: 'relative', scrollMarginTop: '88px' }}>
+    <Box id={id} tabIndex={-1} sx={{ position: 'relative', scrollMarginTop: '88px' }}>
       <Paper elevation={0} sx={[ticketSx, highlighted && highlightedTicketSx]}>
         {/* Upper zone */}
         <Box sx={upperZoneSx}>
