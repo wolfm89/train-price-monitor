@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromSearchParams, toSearchParams, withPageDirection } from './searchQueryVars';
+import { fromSearchParams, sameSearchOptions, toSearchParams, withPageDirection } from './searchQueryVars';
 import type { SearchQueryVars } from './searchQueryVars';
 
 const options = {
@@ -107,6 +107,17 @@ describe('search URL serialization', () => {
       })
     );
     expect(search?.options?.loyaltyCard).toEqual({ type: 'VORTEILSCARD' });
+  });
+
+  it('compares options regardless of object key order', () => {
+    expect(
+      sameSearchOptions(
+        { firstClass: true, ageGroup: 'SENIOR', products: { nationalExpress: false, regional: true } },
+        { products: { regional: true, nationalExpress: false }, ageGroup: 'SENIOR', firstClass: true }
+      )
+    ).toBe(true);
+
+    expect(sameSearchOptions({ firstClass: true }, { firstClass: false })).toBe(false);
   });
 
   it('keeps earlier and later cursors mutually exclusive', () => {

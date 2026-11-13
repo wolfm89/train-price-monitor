@@ -46,6 +46,33 @@ export function withPageDirection(
     : { ...previous, laterThan: reference, earlierThan: undefined };
 }
 
+/** Stable key-order-insensitive representation of search options. */
+export function canonicalOptionsKey(options?: JourneySearchOptions): string {
+  if (!options) return '';
+  return JSON.stringify({
+    ageGroup: options.ageGroup ?? null,
+    bike: options.bike ?? null,
+    deutschlandTicketDiscount: options.deutschlandTicketDiscount ?? null,
+    firstClass: options.firstClass ?? null,
+    loyaltyCard: options.loyaltyCard
+      ? {
+          type: options.loyaltyCard.type,
+          discount: options.loyaltyCard.discount ?? null,
+          class: options.loyaltyCard.class ?? null,
+        }
+      : null,
+    products: options.products ? PRODUCT_KEYS.map((key) => [key, options.products?.[key] ?? null]) : null,
+    results: options.results ?? null,
+    transfers: options.transfers ?? null,
+    transferTime: options.transferTime ?? null,
+  });
+}
+
+/** Compares options regardless of object key order. */
+export function sameSearchOptions(left?: JourneySearchOptions, right?: JourneySearchOptions): boolean {
+  return canonicalOptionsKey(left) === canonicalOptionsKey(right);
+}
+
 /** Serializes a search into a shareable URL. Unknown values are omitted. */
 export function toSearchParams(vars: SearchQueryVars | null): URLSearchParams {
   const params = new URLSearchParams();

@@ -7,7 +7,13 @@ import SearchResult, { Journey } from '../components/SearchResult';
 import { JourneySearchQuery } from '../api/journey';
 import { UserTravelPreferencesQuery } from '../api/user';
 import { AuthContext } from '../providers/AuthProvider';
-import { fromSearchParams, toSearchParams, withPageDirection, SearchQueryVars } from '../utils/searchQueryVars';
+import {
+  fromSearchParams,
+  sameSearchOptions,
+  toSearchParams,
+  withPageDirection,
+  SearchQueryVars,
+} from '../utils/searchQueryVars';
 import LoadingStatus from '../components/LoadingStatus';
 
 interface Props {}
@@ -68,18 +74,23 @@ const SearchPage: React.FC<Props> = () => {
     const next: SearchQueryVars = { from, to, departure, options, fromName, toName };
 
     // Pressing Search again after a failure submits identical values, and urql does
-    // not re-run a query whose variables are unchanged — the button then looked dead
-    // until the form was edited. Re-execute explicitly in that case.
-    const repeated =
+    // not re-run a query whose normalized variables are unchanged. Compare the
+    // query itself (not raw JSON or display-only names) and re-execute explicitly.
+    const sameBaseSearch =
       queryVars !== null &&
       queryVars.from === from &&
       queryVars.to === to &&
       queryVars.departure === departure &&
-      JSON.stringify(queryVars.options ?? null) === JSON.stringify(options ?? null);
+      sameSearchOptions(queryVars.options, options);
+    const hasCursor = Boolean(queryVars?.earlierThan || queryVars?.laterThan);
 
     const nextParams = toSearchParams(next);
-    if (nextParams.toString() === searchParams.toString()) {
-      if (repeated) reexecuteSearch({ requestPolicy: 'network-only' });
+    if (sameBaseSearch && !hasCursor) {
+      if (nextParams.toString() !== searchParams.toString()) {
+        // Only display fields such as station names changed; do not add history.
+        setSearchParams(nextParams, { replace: true });
+      }
+      reexecuteSearch({ requestPolicy: 'network-only' });
       return;
     }
 
