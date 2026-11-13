@@ -11,6 +11,7 @@ import { parquetReadObjects, parquetMetadata } from 'hyparquet';
 
 import { type ParquetRow } from './types.js';
 import { rowsToParquet } from './parquet.js';
+import { fromParquetRecord } from './rows.js';
 
 const logger = new Logger({ serviceName: 'scraper-compactor' });
 const s3 = new S3Client(process.env.AWS_ENDPOINT_URL ? { forcePathStyle: true } : {});
@@ -112,24 +113,9 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
       const parsedData = await parquetReadObjects({ file: fileBuffer });
 
       for (const r of parsedData) {
-        allRows.push({
-          observed_at: new Date(r.observed_at as string | number),
-          service_class: Number(r.service_class),
-          route_id: String(r.route_id),
-          origin_eva: String(r.origin_eva),
-          origin_name: String(r.origin_name),
-          dest_eva: String(r.dest_eva),
-          dest_name: String(r.dest_name),
-          departure_planned: new Date(r.departure_planned as string | number),
-          arrival_planned: new Date(r.arrival_planned as string | number),
-          train_type: String(r.train_type),
-          train_number: String(r.train_number),
-          transfers: Number(r.transfers),
-          duration_minutes: Number(r.duration_minutes),
-          days_to_departure: Number(r.days_to_departure),
-          fare_lowest_eur: Number(r.fare_lowest_eur),
-          load_factor: r.load_factor ? String(r.load_factor) : null,
-        });
+        // Defaults every v2 column for files written before the schema change
+        // and preserves the per-row schema_version.
+        allRows.push(fromParquetRecord(r as Record<string, unknown>));
       }
     } catch (err) {
       logger.error('Failed to process old file', { key, err: String(err) });

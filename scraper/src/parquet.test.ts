@@ -16,11 +16,19 @@ const baseRow: ParquetRow = {
   arrival_planned: new Date('2026-11-11T12:00:00Z'),
   train_type: 'ICE',
   train_number: 'ICE 123',
+  train_numbers: 'ICE 123',
   transfers: 0,
   duration_minutes: 240,
   days_to_departure: 0.9,
   fare_lowest_eur: 59.99,
+  fare_available: true,
   load_factor: null,
+  load_factor_ordinal: null,
+  journey_id: '2|#VN#1#ST#1794417142#ZI#178580#DA#231126#',
+  schema_version: 2,
+  source_profile: 'dbweb',
+  query_mode: 'bestprice',
+  timetable_version: 'unknown',
 };
 
 const secondRow: ParquetRow = {
@@ -31,11 +39,22 @@ const secondRow: ParquetRow = {
   dest_name: 'Frankfurt(Oder)',
   train_type: 'RE',
   train_number: 'RE 1',
-  transfers: 2,
+  train_numbers: 'RE 1;ICE 2',
+  transfers: 1,
   duration_minutes: 370,
   days_to_departure: 2.25,
   fare_lowest_eur: 99.5,
   load_factor: 'high',
+  load_factor_ordinal: 2,
+  journey_id: 'hash-aachen-frankfurt',
+};
+
+const unpricedRow: ParquetRow = {
+  ...baseRow,
+  fare_lowest_eur: null,
+  fare_available: false,
+  load_factor: 'exceptionally-high',
+  load_factor_ordinal: 4,
 };
 
 describe('rowsToParquet', () => {
@@ -64,15 +83,24 @@ describe('rowsToParquet', () => {
       { name: 'days_to_departure', type: 'DOUBLE', converted: undefined },
       { name: 'fare_lowest_eur', type: 'DOUBLE', converted: undefined },
       { name: 'load_factor', type: 'BYTE_ARRAY', converted: 'UTF8' },
+      { name: 'train_numbers', type: 'BYTE_ARRAY', converted: 'UTF8' },
+      { name: 'fare_available', type: 'BOOLEAN', converted: undefined },
+      { name: 'load_factor_ordinal', type: 'INT32', converted: undefined },
+      { name: 'journey_id', type: 'BYTE_ARRAY', converted: 'UTF8' },
+      { name: 'schema_version', type: 'INT32', converted: undefined },
+      { name: 'source_profile', type: 'BYTE_ARRAY', converted: 'UTF8' },
+      { name: 'query_mode', type: 'BYTE_ARRAY', converted: 'UTF8' },
+      { name: 'timetable_version', type: 'BYTE_ARRAY', converted: 'UTF8' },
     ]);
   });
 
-  it('round-trips every field, including nullable load factors', async () => {
-    const rows = await parquetReadObjects({ file: rowsToParquet([baseRow, secondRow]) });
+  it('round-trips every field, including nullable fares and load factors', async () => {
+    const rows = await parquetReadObjects({ file: rowsToParquet([baseRow, secondRow, unpricedRow]) });
 
-    assert.equal(rows.length, 2);
+    assert.equal(rows.length, 3);
     assert.deepEqual(rows[0], { ...baseRow });
     assert.deepEqual(rows[1], { ...secondRow });
+    assert.deepEqual(rows[2], { ...unpricedRow });
   });
 
   it('preserves millisecond timestamps', async () => {
