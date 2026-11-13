@@ -22,11 +22,15 @@ function trainLeg(options: {
   product?: string;
   tripId?: string;
   loadFactor?: string;
+  from?: string;
+  to?: string;
 }): Leg {
   return {
     tripId: options.tripId,
     plannedDeparture: options.dep,
     plannedArrival: options.arr,
+    origin: { type: 'station', id: options.from ?? 'A', name: 'Origin' },
+    destination: { type: 'station', id: options.to ?? 'D', name: 'Destination' },
     line: { type: 'line', name: options.name ?? 'ICE 1', product: options.product ?? 'ICE' },
     loadFactor: options.loadFactor,
   } as Leg;
@@ -36,10 +40,12 @@ function walkLeg(dep: string, arr: string): Leg {
   return { plannedDeparture: dep, plannedArrival: arr, walking: true } as Leg;
 }
 
-function busLeg(dep: string, arr: string, name = 'SEV 1'): Leg {
+function busLeg(dep: string, arr: string, name = 'SEV 1', from = 'A', to = 'X'): Leg {
   return {
     plannedDeparture: dep,
     plannedArrival: arr,
+    origin: { type: 'station', id: from, name: 'Origin' },
+    destination: { type: 'station', id: to, name: 'Destination' },
     line: { type: 'line', name, product: 'BUS', mode: 'bus' },
   } as Leg;
 }
@@ -203,6 +209,68 @@ describe('buildRows', () => {
 
     const [again] = rows(viaHannover, undefined);
     assert.equal(parquetRowKey(a), parquetRowKey(again));
+  });
+
+  it('distinguishes the same trains when the change station differs', () => {
+    const viaX = [
+      trainLeg({
+        dep: '2026-11-12T08:00:00Z',
+        arr: '2026-11-12T09:00:00Z',
+        name: 'ICE 100',
+        tripId: 'trip-1',
+        from: 'A',
+        to: 'X',
+      }),
+      trainLeg({
+        dep: '2026-11-12T09:10:00Z',
+        arr: '2026-11-12T12:00:00Z',
+        name: 'ICE 200',
+        tripId: 'trip-2',
+        from: 'X',
+        to: 'D',
+      }),
+    ];
+    const viaY = [
+      trainLeg({
+        dep: '2026-11-12T08:00:00Z',
+        arr: '2026-11-12T09:00:00Z',
+        name: 'ICE 100',
+        tripId: 'trip-1',
+        from: 'A',
+        to: 'Y',
+      }),
+      trainLeg({
+        dep: '2026-11-12T09:10:00Z',
+        arr: '2026-11-12T12:00:00Z',
+        name: 'ICE 200',
+        tripId: 'trip-2',
+        from: 'Y',
+        to: 'D',
+      }),
+    ];
+
+    const [a] = rows(viaX, 49.99);
+    const [b] = rows(viaY, 49.99);
+    assert.notEqual(a.journey_id, b.journey_id);
+  });
+
+  it('keys equal-time connections with different feeder buses apart', () => {
+    const make = (busName: string) => [
+      busLeg('2026-11-12T08:00:00Z', '2026-11-12T08:40:00Z', busName, 'A', 'X'),
+      trainLeg({
+        dep: '2026-11-12T09:00:00Z',
+        arr: '2026-11-12T12:00:00Z',
+        name: 'ICE 100',
+        tripId: 'trip-1',
+        from: 'X',
+        to: 'D',
+      }),
+    ];
+
+    const [a] = rows(make('BUS 1'), 49.99);
+    const [b] = rows(make('BUS 2'), 49.99);
+    assert.notEqual(a.journey_id, b.journey_id);
+    assert.notEqual(parquetRowKey(a), parquetRowKey(b));
   });
 
   it('skips journeys that already departed', () => {

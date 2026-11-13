@@ -71,23 +71,25 @@ export function extractLoadFactor(legs: Leg[]): { loadFactor: string | null; ord
 
 /**
  * Stable, class-independent identity for one connection: a hash of the route
- * and the ordered vehicle legs. A leg is identified by its `tripId` when the
- * API provides one (which encodes the run and date); otherwise by its line name
- * and planned departure. Planned times are deliberately not mixed in when a
- * trip id exists: DB shifts planned times routinely, and that must not mint a
- * new identity for the same connection.
+ * and the ordered vehicle legs. A leg contributes its `tripId` when the API
+ * provides one (which encodes the run and date), otherwise its line name and
+ * planned departure, plus the boarding and alighting station. The station pair
+ * is what separates A→X→D from A→Y→D when both trains serve X and Y; planned
+ * times are deliberately not mixed in when a trip id exists, because DB shifts
+ * them routinely and that must not mint a new identity.
  *
  * A first-leg `tripId` alone is not enough — it identifies a train run, not the
- * origin-to-destination itinerary — and the final arrival is omitted because it
- * may live on a footway that the two class responses need not agree on.
+ * origin-to-destination itinerary.
  */
 export function journeyIdFor(routeId: string, legs: Leg[]): string {
   const itinerary = vehicleLegsOf(legs)
     .map((leg) => {
-      if (leg.tripId) return `t:${leg.tripId}`;
       const line = leg.line as TrainLine | undefined;
+      const stops = `@${leg.origin?.id ?? '?'}>${leg.destination?.id ?? '?'}`;
+      if (leg.tripId) return `t:${leg.tripId}${stops}`;
+
       const departure = leg.plannedDeparture ? isoSeconds(new Date(leg.plannedDeparture)) : '?';
-      return `n:${line?.name ?? '?'}@${departure}`;
+      return `n:${line?.name ?? '?'}@${departure}${stops}`;
     })
     .join('>');
 
@@ -187,8 +189,9 @@ export function legacyLoadFactorOrdinal(loadFactor: string | null): number | nul
 
 /**
  * De-duplication key for one observation of one connection during compaction.
- * Onward trains and arrival are part of it: two unpriced connections can share
- * route, departure and first train.
+ * `journey_id` separates connections whose rail legs, times and fare match but
+ * whose feeder vehicles differ; the remaining fields cover v1 rows, which have
+ * no id.
  */
 export function parquetRowKey(row: ParquetRow): string {
   return [
@@ -199,6 +202,7 @@ export function parquetRowKey(row: ParquetRow): string {
     row.arrival_planned.getTime(),
     row.train_numbers,
     row.fare_lowest_eur,
+    row.journey_id ?? '',
   ].join('_');
 }
 

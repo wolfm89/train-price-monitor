@@ -119,8 +119,11 @@ rows. Readers must branch on `schema_version`, not on the file date: v1 rows hav
 
 **Schema v2 is one-way for the compactor.** The pre-v2 compactor read
 `fare_lowest_eur` through `Number(...)`, which turns a v2 `null` into `0.00`, and
-it drops every v2 column. Before rolling the scraper stack back, purge or
-quarantine any `batch_*.parquet` file written by v2 — or roll forward instead.
+it drops every v2 column. A recompaction merges the existing `daily_*` file
+whenever any `batch_*` file is present, so quarantining batches alone is not
+enough. Before rolling the scraper stack back, purge or quarantine every file
+that can contain v2 rows — `batch_*` **and** `daily_*`, including mixed-schema
+daily files — or roll forward instead.
 
 ## Build
 
