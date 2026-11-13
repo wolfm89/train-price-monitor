@@ -27,11 +27,17 @@ export interface ParquetRow {
   dest_name: string;
   departure_planned: Date; // UTC timestamp (written as TIMESTAMP_MILLIS INT64)
   arrival_planned: Date; // UTC timestamp (written as TIMESTAMP_MILLIS INT64)
-  train_type: string;
-  train_number: string;
-  transfers: number;
+  train_type: string; // first train leg
+  train_number: string; // first train leg
+  train_numbers: string; // every rail leg, `;`-joined
+  transfers: number; // vehicle legs − 1 (footways excluded, from schema v2 on)
   duration_minutes: number;
   days_to_departure: number;
-  fare_lowest_eur: number;
-  load_factor: string | null;
+  fare_lowest_eur: number | null; // null: no fare was offered (v2); always a number in v1
+  load_factor: string | null; // db-vendo vocabulary, not v1's collapsed `low`
+  load_factor_ordinal: number | null; // 1 = low-to-medium … 4 = exceptionally-high
+  journey_id: string | null; // null for v1 rows; v2: hash of the full itinerary
+  schema_version: number; // 1 for rows written before schema v2, 2 from this change
+  source_profile: string; // dbweb
+  query_mode: string; // bestprice
 }

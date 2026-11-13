@@ -11,11 +11,49 @@ import { parquetReadObjects, parquetMetadata } from 'hyparquet';
 
 import { type ParquetRow } from './types.js';
 import { rowsToParquet } from './parquet.js';
+import { fromParquetRecord, parquetRowKey } from './rows.js';
 
 const logger = new Logger({ serviceName: 'scraper-compactor' });
 const s3 = new S3Client(process.env.AWS_ENDPOINT_URL ? { forcePathStyle: true } : {});
 
 const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
+
+/** Full value fingerprint of a row, for content-level verification. */
+function rowFingerprint(row: ParquetRow): string {
+  return JSON.stringify([
+    row.observed_at.getTime(),
+    row.service_class,
+    row.route_id,
+    row.origin_eva,
+    row.origin_name,
+    row.dest_eva,
+    row.dest_name,
+    row.departure_planned.getTime(),
+    row.arrival_planned.getTime(),
+    row.train_type,
+    row.train_number,
+    row.train_numbers,
+    row.transfers,
+    row.duration_minutes,
+    row.days_to_departure,
+    row.fare_lowest_eur,
+    row.load_factor,
+    row.load_factor_ordinal,
+    row.journey_id,
+    row.schema_version,
+    row.source_profile,
+    row.query_mode,
+  ]);
+}
+
+function fingerprintCounts(rows: ParquetRow[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = rowFingerprint(row);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
 
 interface CompactorEvent {
   /** Optional date override in YYYY-MM-DD format (UTC). If omitted, yesterday is compacted. */
@@ -112,24 +150,9 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
       const parsedData = await parquetReadObjects({ file: fileBuffer });
 
       for (const r of parsedData) {
-        allRows.push({
-          observed_at: new Date(r.observed_at as string | number),
-          service_class: Number(r.service_class),
-          route_id: String(r.route_id),
-          origin_eva: String(r.origin_eva),
-          origin_name: String(r.origin_name),
-          dest_eva: String(r.dest_eva),
-          dest_name: String(r.dest_name),
-          departure_planned: new Date(r.departure_planned as string | number),
-          arrival_planned: new Date(r.arrival_planned as string | number),
-          train_type: String(r.train_type),
-          train_number: String(r.train_number),
-          transfers: Number(r.transfers),
-          duration_minutes: Number(r.duration_minutes),
-          days_to_departure: Number(r.days_to_departure),
-          fare_lowest_eur: Number(r.fare_lowest_eur),
-          load_factor: r.load_factor ? String(r.load_factor) : null,
-        });
+        // Defaults every v2 column for files written before the schema change
+        // and preserves the per-row schema_version.
+        allRows.push(fromParquetRecord(r as Record<string, unknown>));
       }
     } catch (err) {
       logger.error('Failed to process old file', { key, err: String(err) });
@@ -149,8 +172,7 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
   // 3b. De-duplicate rows in memory to resolve duplicate entries from concurrent retries
   const uniqueRowsMap = new Map<string, ParquetRow>();
   for (const r of allRows) {
-    const key = `${r.observed_at.getTime()}_${r.route_id}_${r.service_class}_${r.departure_planned.getTime()}_${r.train_number}_${r.fare_lowest_eur}`;
-    uniqueRowsMap.set(key, r);
+    uniqueRowsMap.set(parquetRowKey(r), r);
   }
   const deduplicatedRows = Array.from(uniqueRowsMap.values());
   const duplicateCount = allRows.length - deduplicatedRows.length;
@@ -171,7 +193,10 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
     throw new Error(`Aborting compaction: Parquet serialization failed: ${String(err)}`);
   }
 
-  // 5. Robust Verification Level 2: Double-check the newly generated Parquet buffer
+  // 5. Robust Verification Level 2: re-read the generated buffer and compare
+  // content, not just the row count. A level-encoding bug can shift values
+  // between rows without changing the count, and the source files are deleted
+  // right after this check.
   const targetRowCount = deduplicatedRows.length;
   try {
     const verifiedData = await parquetReadObjects({ file: newBuffer });
@@ -180,7 +205,26 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
         `Verification failed (Level 2)! Parsed row count of generated Parquet file (${verifiedData.length}) does not match expected row count (${targetRowCount}).`
       );
     }
-    logger.info('Verification Level 2 passed (generated buffer validated)', { parsedRows: verifiedData.length });
+
+    const expected = fingerprintCounts(deduplicatedRows);
+    const actual = fingerprintCounts(verifiedData.map((r) => fromParquetRecord(r as Record<string, unknown>)));
+    let contentMismatch = expected.size !== actual.size;
+    if (!contentMismatch) {
+      for (const [fingerprint, count] of expected) {
+        if (actual.get(fingerprint) !== count) {
+          contentMismatch = true;
+          break;
+        }
+      }
+    }
+    if (contentMismatch) {
+      throw new Error('Verification failed (Level 2)! Written rows differ from the merged rows.');
+    }
+
+    logger.info('Verification Level 2 passed (generated buffer validated)', {
+      parsedRows: verifiedData.length,
+      distinctRows: expected.size,
+    });
   } catch (err) {
     logger.error('Double-check validation failed', { err: String(err) });
     throw new Error(`Aborting compaction: Generated Parquet file failed validation: ${String(err)}`);
@@ -232,6 +276,6 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
     partition: prefix,
     originalFilesCleaned: oldFiles.length,
     consolidatedFile: newKey,
-    totalRowsSaved: expectedRowCount,
+    totalRowsSaved: deduplicatedRows.length,
   });
 };

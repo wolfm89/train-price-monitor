@@ -2,10 +2,10 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand, UpdateCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import type { Journey, Leg } from 'hafas-client';
 
 import { type ScheduleItem, type ParquetRow, type TtdTier } from './types.js';
 import { rowsToParquet } from './parquet.js';
+import { buildRows } from './rows.js';
 import { computeTtdTier, computeNextScrapeAt, dueKey, tierRank, TIER_QUERY_ORDER } from './ttd.js';
 import { positiveIntFromEnv } from './env.js';
 import { fetchDayJourneys } from './client.js';
@@ -60,83 +60,6 @@ const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Extract the dominant load factor from a journey's legs.
- * Priority: very-high > high > low > null
- */
-function extractLoadFactor(journey: Journey): string | null {
-  const legs = (journey.legs ?? []) as Leg[];
-  const factors = legs.map((l) => (l as unknown as { loadFactor?: string }).loadFactor).filter(Boolean) as string[];
-  if (factors.includes('very-high')) return 'very-high';
-  if (factors.includes('high')) return 'high';
-  if (factors.length > 0) return 'low';
-  return null;
-}
-
-/**
- * Build ParquetRow entries from a list of journeys returned by the API.
- * One row per journey.
- */
-function buildRows(
-  journeys: Journey[],
-  serviceClass: 1 | 2,
-  routeId: string,
-  originEva: string,
-  originName: string,
-  destEva: string,
-  destName: string,
-  observedAt: Date
-): ParquetRow[] {
-  const rows: ParquetRow[] = [];
-
-  for (const j of journeys) {
-    if (!j.price?.amount) continue; // skip journeys without a price
-
-    const legs = (j.legs ?? []) as Leg[];
-    if (legs.length === 0) continue;
-
-    const firstLeg = legs[0];
-    const lastLeg = legs[legs.length - 1];
-
-    const depPlanned = firstLeg.plannedDeparture ? new Date(firstLeg.plannedDeparture) : null;
-    const arrPlanned = lastLeg.plannedArrival ? new Date(lastLeg.plannedArrival) : null;
-    if (!depPlanned || !arrPlanned) continue;
-    // The day's response can still contain journeys that already left; writing
-    // them would put a negative days_to_departure into the dataset.
-    if (depPlanned.getTime() <= observedAt.getTime()) continue;
-
-    const durationMs = arrPlanned.getTime() - depPlanned.getTime();
-    const durationMinutes = Math.round(durationMs / 60_000);
-    const daysToDeparture = (depPlanned.getTime() - observedAt.getTime()) / (24 * 60 * 60 * 1000);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const line = (firstLeg as any).line;
-    const trainType: string = line?.productName ?? line?.product ?? 'UNKNOWN';
-    const trainNumber: string = line?.name ?? 'UNKNOWN';
-
-    rows.push({
-      observed_at: observedAt,
-      service_class: serviceClass,
-      route_id: routeId,
-      origin_eva: originEva,
-      origin_name: originName,
-      dest_eva: destEva,
-      dest_name: destName,
-      departure_planned: depPlanned,
-      arrival_planned: arrPlanned,
-      train_type: trainType,
-      train_number: trainNumber,
-      transfers: Math.max(0, legs.length - 1),
-      duration_minutes: durationMinutes,
-      days_to_departure: daysToDeparture,
-      fare_lowest_eur: j.price.amount,
-      load_factor: extractLoadFactor(j),
-    });
-  }
-
-  return rows;
-}
 
 /**
  * Write an aggregated Parquet batch file to S3.
@@ -425,11 +348,22 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         observedAt
       );
       const allRows = [...rows2nd, ...rows1st];
+      const pricedRows = allRows.filter((row) => row.fare_lowest_eur !== null).length;
+      const unpricedRows = allRows.length - pricedRows;
 
       if (allRows.length === 0) {
-        logger.warn('No priced rows returned', { route_id: target.route_id, departure_date: target.departure_date });
+        logger.warn('No journeys returned', { route_id: target.route_id, departure_date: target.departure_date });
       } else {
         allBatchRows.push(...allRows);
+        if (pricedRows === 0) {
+          // A day where DB returned connections but no fare at all: the pricing
+          // backend may be degraded. Distinct from "no journeys".
+          logger.warn('No priced journeys in target', {
+            route_id: target.route_id,
+            departure_date: target.departure_date,
+            rows: allRows.length,
+          });
+        }
       }
 
       // Reschedule only after the batch is safely in S3 (see below), so a crash
@@ -442,6 +376,8 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         departure_date: target.departure_date,
         rows2nd: rows2nd.length,
         rows1st: rows1st.length,
+        pricedRows,
+        unpricedRows,
         newTier,
       });
     } catch (err) {
