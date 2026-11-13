@@ -75,6 +75,11 @@ function isThrottle(error: unknown): boolean {
   return name === 'ProvisionedThroughputExceededException' || name === 'ThrottlingException';
 }
 
+/** Raised when the conditional write finds the item changed or gone since the scan. */
+function isConditionalCheckFailure(error: unknown): boolean {
+  return (error as { name?: string }).name === 'ConditionalCheckFailedException';
+}
+
 async function withThrottleRetry<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -139,33 +144,51 @@ function planRepair(item: ScheduleItem, now: Date): Repair | null {
   };
 }
 
-async function applyRepair(repair: Repair): Promise<void> {
-  await withThrottleRetry(() =>
-    ddb.send(
-      new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { pk: repair.pk, sk: 'SCHEDULE' },
-        UpdateExpression: 'SET next_scrape_at = :next, due_key = :due, ttd_tier = :tier',
-        ExpressionAttributeValues: {
-          ':next': repair.to,
-          ':due': dueKey(repair.tier, repair.to),
-          ':tier': repair.tier,
-        },
-      })
-    )
-  );
+async function applyRepair(repair: Repair): Promise<'written' | 'skipped'> {
+  try {
+    await withThrottleRetry(() =>
+      ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_NAME,
+          Key: { pk: repair.pk, sk: 'SCHEDULE' },
+          UpdateExpression: 'SET next_scrape_at = :next, due_key = :due, ttd_tier = :tier',
+          // UpdateItem is an upsert: without a condition, a repair planned
+          // before a poller run could overwrite a newer schedule, or recreate
+          // an item the poller deleted as expired during the scan.
+          ConditionExpression: 'attribute_exists(pk) AND next_scrape_at = :from',
+          ExpressionAttributeValues: {
+            ':next': repair.to,
+            ':due': dueKey(repair.tier, repair.to),
+            ':tier': repair.tier,
+            ':from': repair.from,
+          },
+        })
+      )
+    );
+    return 'written';
+  } catch (error) {
+    if (isConditionalCheckFailure(error)) return 'skipped';
+    throw error;
+  }
 }
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const now = new Date();
+  const startedAt = new Date();
 
   log(`table: ${TABLE_NAME}`);
   log(`mode:  ${options.apply ? 'APPLY' : 'DRY RUN'}${options.limit ? ` (limit ${options.limit})` : ''}`);
-  log(`now:   ${now.toISOString()}`);
+  log(`started: ${startedAt.toISOString()}`);
 
   const items = await scanSchedule(options.limit);
-  const repairs = items.map((item) => planRepair(item, now)).filter((repair): repair is Repair => repair !== null);
+
+  // Plan against the clock after the scan, not the one captured before it: a
+  // full pass over 8,517 items at 5 RCU can take minutes.
+  const plannedAt = new Date();
+  const planned = items
+    .map((item) => ({ item, repair: planRepair(item, plannedAt) }))
+    .filter((entry): entry is { item: ScheduleItem; repair: Repair } => entry.repair !== null);
+  const repairs = planned.map((entry) => entry.repair);
 
   log(`scanned ${items.length} items, ${repairs.length} need repair`);
   const byReason = { 'enter-near': 0, 'due-now': 0 };
@@ -185,13 +208,27 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Replan right before each write so a scan that outlives the hard stop cannot
+  // produce timestamps in the past. A conditional failure means the poller
+  // touched the item since the scan; skip it rather than overwrite.
   let written = 0;
-  for (const repair of repairs) {
-    await applyRepair(repair);
-    written++;
-    if (written % 100 === 0) log(`  updated ${written}/${repairs.length}`);
+  let skipped = 0;
+  let expired = 0;
+  let seen = 0;
+  for (const { item } of planned) {
+    seen++;
+    const repair = planRepair(item, new Date());
+    if (!repair) {
+      expired++;
+      continue;
+    }
+    if ((await applyRepair(repair)) === 'written') written++;
+    else skipped++;
+    if (seen % 100 === 0) {
+      log(`  processed ${seen}/${planned.length} (written ${written}, skipped ${skipped}, expired ${expired})`);
+    }
   }
-  log(`updated ${written} items`);
+  log(`written ${written}, skipped ${skipped} (changed since scan), expired ${expired} (hard stop passed)`);
 }
 
 await main();
