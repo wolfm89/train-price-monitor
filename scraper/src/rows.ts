@@ -136,6 +136,16 @@ export function buildRows(
     // prices; keeping them would write an empty train_numbers.
     if (railLegs.length === 0) continue;
 
+    // The identity hash formats every vehicle leg's planned departure. A
+    // malformed onward leg must not throw and discard the whole target.
+    if (
+      vehicleLegs.some(
+        (leg) => leg.plannedDeparture !== undefined && Number.isNaN(new Date(leg.plannedDeparture).getTime())
+      )
+    ) {
+      continue;
+    }
+
     const firstLeg = legs[0];
     const lastLeg = legs[legs.length - 1];
 
@@ -232,11 +242,13 @@ export function parquetRowKey(row: ParquetRow): string {
  */
 export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
   const toDate = (value: unknown, field: string): Date => {
+    if (value === undefined || value === null) throw new Error(`Missing ${field} in Parquet row`);
     const date = new Date(value as string | number);
     if (Number.isNaN(date.getTime())) throw new Error(`Invalid ${field} in Parquet row: ${JSON.stringify(value)}`);
     return date;
   };
   const requiredNumber = (value: unknown, field: string): number => {
+    if (value === undefined || value === null) throw new Error(`Missing ${field} in Parquet row`);
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) throw new Error(`Invalid ${field} in Parquet row: ${JSON.stringify(value)}`);
     return parsed;

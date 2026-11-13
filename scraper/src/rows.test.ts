@@ -314,6 +314,19 @@ describe('buildRows', () => {
     assert.deepEqual(rows([trainLeg({ dep: '2026-11-12T08:00:00Z', arr: 'not-a-date' })], 49.99), []);
   });
 
+  it('skips a journey whose onward leg has an invalid departure', () => {
+    const legs = [
+      trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z', name: 'ICE 100' }),
+      {
+        ...trainLeg({ dep: '2026-11-12T09:10:00Z', arr: '2026-11-12T12:00:00Z', name: 'ICE 200' }),
+        plannedDeparture: 'not-a-date',
+      } as Leg,
+    ];
+
+    // The hash formats the onward departure; it must not throw and lose the target.
+    assert.deepEqual(rows(legs, 49.99), []);
+  });
+
   it('falls back to the stop station id when the stop has no id', () => {
     const viaStop = (stationId: string): Leg =>
       ({
@@ -404,7 +417,14 @@ describe('fromParquetRecord', () => {
     );
     assert.throws(() => fromParquetRecord({ ...v1Record, fare_lowest_eur: 'NaN' }), /Invalid fare_lowest_eur/);
     assert.throws(() => fromParquetRecord({ ...v1Record, observed_at: 'nope' }), /Invalid observed_at/);
-    assert.throws(() => fromParquetRecord({ ...v1Record, service_class: undefined }), /Invalid service_class/);
+    assert.throws(() => fromParquetRecord({ ...v1Record, service_class: undefined }), /Missing service_class/);
+  });
+
+  it('rejects null required values instead of coercing them', () => {
+    // Number(null) === 0 and new Date(null) === 1970-01-01 would otherwise look valid.
+    assert.throws(() => fromParquetRecord({ ...v1Record, days_to_departure: null }), /Missing days_to_departure/);
+    assert.throws(() => fromParquetRecord({ ...v1Record, observed_at: null }), /Missing observed_at/);
+    assert.throws(() => fromParquetRecord({ ...v1Record, service_class: null }), /Missing service_class/);
   });
 });
 
