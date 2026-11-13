@@ -166,11 +166,9 @@ export function buildRows(
     const labelLine = railLegs[0].line as TrainLine | undefined;
     const trainType = labelLine?.productName ?? labelLine?.product ?? 'UNKNOWN';
     const trainNumber = labelLine?.name ?? 'UNKNOWN';
-    const trainNumbers = railLegs
-      .map((leg) => (leg.line as TrainLine | undefined)?.name)
-      .filter((name): name is string => Boolean(name))
-      .join(';');
+    const trainNumbers = railLegs.map((leg) => (leg.line as TrainLine | undefined)?.name ?? 'UNKNOWN').join(';');
 
+    // DB returns 0 or no amount when nothing is bookable; both mean unpriced.
     const amount = j.price?.amount;
     const fare = typeof amount === 'number' && Number.isFinite(amount) && amount > 0 ? amount : null;
     const { loadFactor, ordinal } = extractLoadFactor(legs);
@@ -218,7 +216,9 @@ export function legacyLoadFactorOrdinal(loadFactor: string | null): number | nul
  * no id.
  */
 export function parquetRowKey(row: ParquetRow): string {
-  return [
+  // JSON keeps null, '' and 0 distinct and removes the free-text delimiter
+  // ambiguity of a flat string join (`train_numbers` can contain anything).
+  return JSON.stringify([
     row.observed_at.getTime(),
     row.route_id,
     row.service_class,
@@ -226,8 +226,8 @@ export function parquetRowKey(row: ParquetRow): string {
     row.arrival_planned.getTime(),
     row.train_numbers,
     row.fare_lowest_eur,
-    row.journey_id ?? '',
-  ].join('_');
+    row.journey_id,
+  ]);
 }
 
 /**
@@ -251,11 +251,15 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
     if (!Number.isFinite(parsed)) throw new Error(`Invalid ${field} in Parquet row: ${JSON.stringify(value)}`);
     return parsed;
   };
+  const requiredString = (value: unknown, field: string): string => {
+    if (value === undefined || value === null) throw new Error(`Missing ${field} in Parquet row`);
+    return String(value);
+  };
   const optionalString = (value: unknown, fallback: string): string =>
     value === undefined || value === null ? fallback : String(value);
 
-  const routeId = String(record.route_id);
-  const trainNumber = String(record.train_number);
+  const routeId = requiredString(record.route_id, 'route_id');
+  const trainNumber = requiredString(record.train_number, 'train_number');
   const loadFactor = record.load_factor ? String(record.load_factor) : null;
   const storedOrdinal = record.load_factor_ordinal;
   const fare = record.fare_lowest_eur;
@@ -269,13 +273,13 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
     observed_at: toDate(record.observed_at, 'observed_at'),
     service_class: requiredNumber(record.service_class, 'service_class'),
     route_id: routeId,
-    origin_eva: String(record.origin_eva),
-    origin_name: String(record.origin_name),
-    dest_eva: String(record.dest_eva),
-    dest_name: String(record.dest_name),
+    origin_eva: requiredString(record.origin_eva, 'origin_eva'),
+    origin_name: requiredString(record.origin_name, 'origin_name'),
+    dest_eva: requiredString(record.dest_eva, 'dest_eva'),
+    dest_name: requiredString(record.dest_name, 'dest_name'),
     departure_planned: toDate(record.departure_planned, 'departure_planned'),
     arrival_planned: toDate(record.arrival_planned, 'arrival_planned'),
-    train_type: String(record.train_type),
+    train_type: requiredString(record.train_type, 'train_type'),
     train_number: trainNumber,
     train_numbers: optionalString(record.train_numbers, trainNumber),
     transfers: requiredNumber(record.transfers, 'transfers'),

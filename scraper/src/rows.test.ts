@@ -309,6 +309,21 @@ describe('buildRows', () => {
     );
   });
 
+  it('keeps one train_numbers entry per rail leg even when a line has no name', () => {
+    const unnamed = {
+      plannedDeparture: '2026-11-12T09:10:00Z',
+      plannedArrival: '2026-11-12T12:00:00Z',
+      origin: { type: 'station', id: 'X' },
+      destination: { type: 'station', id: 'D' },
+      line: { type: 'line', product: 'ICE' },
+    } as Leg;
+    const legs = [trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z', name: 'ICE 100' }), unnamed];
+
+    const [row] = rows(legs, 49.99);
+    assert.equal(row.train_number, 'ICE 100');
+    assert.equal(row.train_numbers, 'ICE 100;UNKNOWN');
+  });
+
   it('skips journeys with an invalid planned departure or arrival', () => {
     assert.deepEqual(rows([trainLeg({ dep: 'not-a-date', arr: '2026-11-12T10:00:00Z' })], 49.99), []);
     assert.deepEqual(rows([trainLeg({ dep: '2026-11-12T08:00:00Z', arr: 'not-a-date' })], 49.99), []);
@@ -422,6 +437,14 @@ describe('fromParquetRecord', () => {
     assert.throws(() => fromParquetRecord({ ...v1Record, days_to_departure: null }), /Missing days_to_departure/);
     assert.throws(() => fromParquetRecord({ ...v1Record, observed_at: null }), /Missing observed_at/);
     assert.throws(() => fromParquetRecord({ ...v1Record, service_class: null }), /Missing service_class/);
+    // String(undefined) would become the literal "undefined".
+    assert.throws(() => fromParquetRecord({ ...v1Record, route_id: undefined }), /Missing route_id/);
+    assert.throws(() => fromParquetRecord({ ...v1Record, train_type: null }), /Missing train_type/);
+  });
+
+  it('preserves a zero fare instead of turning it into null', () => {
+    const row = fromParquetRecord({ ...v1Record, fare_lowest_eur: 0 });
+    assert.equal(row.fare_lowest_eur, 0);
   });
 });
 
