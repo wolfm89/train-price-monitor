@@ -174,7 +174,7 @@ async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Pro
         ':next': nextScrapeAt.toISOString(),
         ':due': dueKey(dueTier, nextScrapeAt),
         ':now': now.toISOString(),
-        ':tier': newTier,
+        ':tier': dueTier,
         ':inc': 1,
         ':zero': 0,
       },
@@ -187,14 +187,18 @@ async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Pro
  */
 async function scheduleRetry(item: ScheduleItem, delayMs: number, now: Date): Promise<void> {
   const retryAt = new Date(now.getTime() + delayMs);
+  // Rank by the tier at the retry time, not the stored tier from the last
+  // scrape: a target that just crossed into NEAR must not queue behind MID work.
+  const retryTier = computeTtdTier(item.departure_date, retryAt);
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { pk: item.pk, sk: 'SCHEDULE' },
-      UpdateExpression: 'SET next_scrape_at = :next, due_key = :due',
+      UpdateExpression: 'SET next_scrape_at = :next, due_key = :due, ttd_tier = :tier',
       ExpressionAttributeValues: {
         ':next': retryAt.toISOString(),
-        ':due': dueKey(item.ttd_tier, retryAt),
+        ':due': dueKey(retryTier, retryAt),
+        ':tier': retryTier,
       },
     })
   );

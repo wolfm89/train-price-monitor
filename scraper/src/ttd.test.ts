@@ -4,6 +4,7 @@ import { computeNextScrapeAt, computeTtdTier, dueKey, scheduleBounds, tierRank, 
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 
 function withRandom<T>(value: number, fn: () => T): T {
   const original = Math.random;
@@ -101,14 +102,14 @@ describe('computeNextScrapeAt departure clamp', () => {
   it('pulls an eight-day MID scrape back to the edge of the near window', () => {
     const now = new Date('2026-01-01T12:00:00Z'); // exactly 8.0 days out
     const next = withRandom(0.5, () => computeNextScrapeAt('MID', now, '2026-01-09'));
-    // Seven days before departure noon, plus the one-minute entry margin.
-    assert.equal(next.toISOString(), '2026-01-02T12:01:00.000Z');
+    // nearEntry (7 days minus one minute) plus half of the 6 h entry spread.
+    assert.equal(next.toISOString(), '2026-01-02T15:01:00.000Z');
   });
 
   it('clamps a 7.5-day MID scrape that would otherwise land past departure', () => {
     const now = new Date('2026-01-02T00:00:00Z');
     const next = withRandom(0.5, () => computeNextScrapeAt('MID', now, '2026-01-09'));
-    assert.equal(next.toISOString(), '2026-01-02T12:01:00.000Z');
+    assert.equal(next.toISOString(), '2026-01-02T15:01:00.000Z');
   });
 
   it('leaves a NEAR scrape inside the window at the normal cadence', () => {
@@ -117,7 +118,7 @@ describe('computeNextScrapeAt departure clamp', () => {
     assert.equal(next.toISOString(), '2026-01-04T12:00:00.000Z');
   });
 
-  it('keeps NEAR jitter while the result stays before the hard stop', () => {
+  it('keeps NEAR jitter while the result stays before the final window', () => {
     const now = new Date('2026-01-03T12:00:00Z');
     assert.equal(
       withRandom(0, () => computeNextScrapeAt('NEAR', now, '2026-01-09')).toISOString(),
@@ -129,13 +130,13 @@ describe('computeNextScrapeAt departure clamp', () => {
     );
   });
 
-  it('stops 90 minutes before departure, including the late jitter edge', () => {
+  it('spreads the final scrape across the three hours before departure', () => {
     const now = new Date('2026-01-08T12:00:00Z'); // 1 day out
     const { hardStop } = scheduleBounds('2026-01-09');
     assert.equal(hardStop.toISOString(), '2026-01-09T10:30:00.000Z');
     assert.equal(
       withRandom(0.5, () => computeNextScrapeAt('NEAR', now, '2026-01-09')).toISOString(),
-      '2026-01-09T10:30:00.000Z'
+      '2026-01-09T09:00:00.000Z'
     );
     assert.equal(
       withRandom(1, () => computeNextScrapeAt('NEAR', now, '2026-01-09')).toISOString(),
@@ -143,13 +144,50 @@ describe('computeNextScrapeAt departure clamp', () => {
     );
   });
 
-  it('does not spin once the hard stop has passed', () => {
-    const now = new Date('2026-01-09T11:00:00Z');
+  it('stops after one scrape inside the final window instead of chaining', () => {
+    const now = new Date('2026-01-09T08:00:00Z'); // inside 07:30-10:30
     const next = computeNextScrapeAt('NEAR', now, '2026-01-09');
-    assert.equal(next.toISOString(), '2026-01-10T11:00:00.000Z');
+    assert.equal(next.toISOString(), '2026-01-10T08:00:00.000Z');
+    const afterHardStop = computeNextScrapeAt('NEAR', new Date('2026-01-09T11:00:00Z'), '2026-01-09');
+    assert.equal(afterHardStop.toISOString(), '2026-01-10T11:00:00.000Z');
   });
 
-  it('never schedules after the hard stop, for any tier, date and jitter', () => {
+  it('spreads 140 targets that share a departure date instead of collapsing them', () => {
+    const now = new Date('2026-01-01T12:00:00Z'); // 8 days out: every target clamps
+    const times: number[] = [];
+    for (let i = 0; i < 140; i++) {
+      const r = i / 139;
+      times.push(computeNextScrapeAt('MID', now, '2026-01-09', () => r).getTime());
+    }
+
+    assert.equal(new Set(times).size, 140, 'every target must get its own slot');
+
+    const { nearEntry } = scheduleBounds('2026-01-09');
+    for (const at of times) {
+      assert.ok(at >= nearEntry.getTime());
+      assert.ok(at <= nearEntry.getTime() + 6 * HOUR_MS);
+    }
+
+    const perBatch = new Map<number, number>();
+    for (const at of times) {
+      const bucket = Math.floor(at / (15 * MINUTE_MS));
+      perBatch.set(bucket, (perBatch.get(bucket) ?? 0) + 1);
+    }
+    assert.ok(
+      Math.max(...perBatch.values()) <= 25,
+      `one 15-minute bucket holds ${Math.max(...perBatch.values())} targets, more than a poller batch`
+    );
+  });
+
+  it('rejects an invalid departure date instead of producing NaN', () => {
+    assert.throws(() => scheduleBounds('not-a-date'), /Invalid departure_date/);
+    assert.throws(
+      () => computeNextScrapeAt('MID', new Date('2026-01-01T12:00:00Z'), '2026-13-01'),
+      /Invalid departure_date/
+    );
+  });
+
+  it('never schedules after the hard stop while a scrape is still useful', () => {
     const now = new Date('2026-01-01T12:00:00Z');
     for (let day = 1; day <= 40; day++) {
       const departure = new Date(now.getTime() + day * DAY_MS).toISOString().slice(0, 10);
@@ -178,6 +216,10 @@ describe('dueKey and tier ordering', () => {
 
   it('accepts an already serialized timestamp without changing it', () => {
     assert.equal(dueKey('MID', '2026-01-02T12:00:00.000Z'), '1#2026-01-02T12:00:00.000Z');
+  });
+
+  it('normalises a non-UTC string before building the key', () => {
+    assert.equal(dueKey('MID', '2026-01-02T13:00:00+01:00'), '1#2026-01-02T12:00:00.000Z');
   });
 
   it('serves NEAR before MID before FAR', () => {

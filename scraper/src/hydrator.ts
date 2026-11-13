@@ -224,7 +224,7 @@ export const handler = async (): Promise<void> => {
         status: 'PENDING',
         next_scrape_at: nextScrapeAt.toISOString(),
         due_key: dueKey(dueTier, nextScrapeAt),
-        ttd_tier: tier,
+        ttd_tier: dueTier,
         scrape_count: 0,
         created_at: now.toISOString(),
         ttl,
