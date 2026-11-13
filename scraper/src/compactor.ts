@@ -11,7 +11,7 @@ import { parquetReadObjects, parquetMetadata } from 'hyparquet';
 
 import { type ParquetRow } from './types.js';
 import { rowsToParquet } from './parquet.js';
-import { fromParquetRecord } from './rows.js';
+import { fromParquetRecord, parquetRowKey } from './rows.js';
 
 const logger = new Logger({ serviceName: 'scraper-compactor' });
 const s3 = new S3Client(process.env.AWS_ENDPOINT_URL ? { forcePathStyle: true } : {});
@@ -135,8 +135,7 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
   // 3b. De-duplicate rows in memory to resolve duplicate entries from concurrent retries
   const uniqueRowsMap = new Map<string, ParquetRow>();
   for (const r of allRows) {
-    const key = `${r.observed_at.getTime()}_${r.route_id}_${r.service_class}_${r.departure_planned.getTime()}_${r.train_number}_${r.fare_lowest_eur}`;
-    uniqueRowsMap.set(key, r);
+    uniqueRowsMap.set(parquetRowKey(r), r);
   }
   const deduplicatedRows = Array.from(uniqueRowsMap.values());
   const duplicateCount = allRows.length - deduplicatedRows.length;

@@ -4,7 +4,14 @@ import type { Journey, Leg } from 'hafas-client';
 import { parquetReadObjects } from 'hyparquet';
 
 import { rowsToParquet } from './parquet.js';
-import { buildRows, extractLoadFactor, fromParquetRecord, journeyIdFor, legacyLoadFactorOrdinal } from './rows.js';
+import {
+  buildRows,
+  extractLoadFactor,
+  fromParquetRecord,
+  journeyIdFor,
+  legacyLoadFactorOrdinal,
+  parquetRowKey,
+} from './rows.js';
 
 const observedAt = new Date('2026-11-10T10:00:00Z');
 
@@ -105,19 +112,58 @@ describe('buildRows', () => {
 
     assert.equal(second.journey_id, first.journey_id);
     assert.match(second.journey_id, /^[0-9a-f]{40}$/);
-    assert.equal(second.journey_id, journeyIdFor('8011160-8000261', second.departure_planned, 'ICE 1'));
+    assert.equal(second.journey_id, journeyIdFor('8011160-8000261', legs));
   });
 
-  it('prefers the tripId when the API provides one', () => {
-    const legs = [
-      trainLeg({
-        dep: '2026-11-12T08:00:00Z',
-        arr: '2026-11-12T10:00:00Z',
-        tripId: '2|#VN#1#ST#1794417142#ZI#178580#',
-      }),
+  it('distinguishes connections that share their first train', () => {
+    const shared = trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z', name: 'ICE 100' });
+    const viaHannover = [
+      shared,
+      trainLeg({ dep: '2026-11-12T09:20:00Z', arr: '2026-11-12T12:00:00Z', name: 'ICE 200' }),
     ];
-    const [row] = rows(legs, 49.99);
-    assert.equal(row.journey_id, '2|#VN#1#ST#1794417142#ZI#178580#');
+    const viaLeipzig = [
+      shared,
+      trainLeg({ dep: '2026-11-12T09:30:00Z', arr: '2026-11-12T11:40:00Z', name: 'ICE 300' }),
+    ];
+
+    const [a] = rows(viaHannover, 49.99);
+    const [b] = rows(viaLeipzig, 49.99);
+    assert.notEqual(a.journey_id, b.journey_id);
+  });
+
+  it('scopes the journey_id to the route', () => {
+    const legs = [trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T10:00:00Z', name: 'ICE 100' })];
+    const [own] = rows(legs, 49.99);
+    const [other] = buildRows(
+      [journey(legs, 49.99)],
+      2,
+      '8011160-8000105',
+      '8011160',
+      'Berlin Hbf',
+      '8000105',
+      'Frankfurt(Main)Hbf',
+      observedAt
+    );
+    assert.notEqual(own.journey_id, other.journey_id);
+  });
+
+  it('keys two unpriced connections with different onward trains apart', () => {
+    const shared = trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z', name: 'ICE 100' });
+    const viaHannover = [
+      shared,
+      trainLeg({ dep: '2026-11-12T09:20:00Z', arr: '2026-11-12T12:00:00Z', name: 'ICE 200' }),
+    ];
+    const viaLeipzig = [
+      shared,
+      trainLeg({ dep: '2026-11-12T09:30:00Z', arr: '2026-11-12T11:40:00Z', name: 'ICE 300' }),
+    ];
+
+    const [a] = rows(viaHannover, undefined);
+    const [b] = rows(viaLeipzig, undefined);
+    assert.notEqual(parquetRowKey(a), parquetRowKey(b));
+
+    const [again] = rows(viaHannover, undefined);
+    assert.equal(parquetRowKey(a), parquetRowKey(again));
   });
 
   it('skips journeys that already departed', () => {

@@ -60,12 +60,32 @@ export function extractLoadFactor(legs: Leg[]): { loadFactor: string | null; ord
 }
 
 /**
- * Stable, class-independent journey identity: the HAFAS trip id when the API
- * provides one, otherwise a hash of the fields that identify the train run.
- * `P1.1` derives the same value for historical rows.
+ * Stable, class-independent journey identity for a specific connection: a hash
+ * of the route, every train leg (trip id or train number plus planned
+ * departure) and the final arrival. A first-leg `tripId` alone identifies a
+ * train run, not the origin-to-destination itinerary, so two connections that
+ * share their first train would otherwise collapse into one journey.
  */
-export function journeyIdFor(routeId: string, departurePlanned: Date, trainNumber: string, tripId?: string): string {
-  if (tripId) return tripId;
+export function journeyIdFor(routeId: string, legs: Leg[]): string {
+  const itinerary = trainLegsOf(legs)
+    .map((leg) => {
+      const line = leg.line as TrainLine | undefined;
+      const departure = leg.plannedDeparture ? isoSeconds(new Date(leg.plannedDeparture)) : '?';
+      return `${leg.tripId ?? line?.name ?? '?'}@${departure}`;
+    })
+    .join('>');
+  const lastLeg = legs[legs.length - 1];
+  const arrival = lastLeg?.plannedArrival ? isoSeconds(new Date(lastLeg.plannedArrival)) : '?';
+
+  return createHash('sha1').update(`${routeId}|${itinerary}|${arrival}`).digest('hex');
+}
+
+/**
+ * Identity for v1 rows, which only stored the first leg's train number and the
+ * journey departure. Cannot distinguish onward trains; that information was
+ * never written.
+ */
+export function legacyJourneyIdFor(routeId: string, departurePlanned: Date, trainNumber: string): string {
   return createHash('sha1')
     .update(`${routeId}|${isoSeconds(departurePlanned)}|${trainNumber}`)
     .digest('hex');
@@ -141,7 +161,7 @@ export function buildRows(
       fare_available: fare !== null,
       load_factor: loadFactor,
       load_factor_ordinal: ordinal,
-      journey_id: journeyIdFor(routeId, depPlanned, trainNumber, trainLegs[0].tripId),
+      journey_id: journeyIdFor(routeId, legs),
       schema_version: SCHEMA_VERSION,
       source_profile: SOURCE_PROFILE,
       query_mode: QUERY_MODE,
@@ -157,6 +177,23 @@ export function legacyLoadFactorOrdinal(loadFactor: string | null): number | nul
   if (loadFactor === null) return null;
   if (loadFactor === 'low') return 1;
   return LOAD_FACTOR_RANK[loadFactor] ?? null;
+}
+
+/**
+ * De-duplication key for one observation of one connection during compaction.
+ * Onward trains and arrival are part of it: two unpriced connections can share
+ * route, departure and first train.
+ */
+export function parquetRowKey(row: ParquetRow): string {
+  return [
+    row.observed_at.getTime(),
+    row.route_id,
+    row.service_class,
+    row.departure_planned.getTime(),
+    row.arrival_planned.getTime(),
+    row.train_numbers,
+    row.fare_lowest_eur,
+  ].join('_');
 }
 
 /**
@@ -204,7 +241,7 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
         : Number(storedOrdinal),
     journey_id:
       storedJourneyId === undefined || storedJourneyId === null
-        ? journeyIdFor(routeId, departurePlanned, trainNumber)
+        ? legacyJourneyIdFor(routeId, departurePlanned, trainNumber)
         : String(storedJourneyId),
     schema_version: optionalNumber(record.schema_version, 1),
     source_profile: optionalString(record.source_profile, SOURCE_PROFILE),
