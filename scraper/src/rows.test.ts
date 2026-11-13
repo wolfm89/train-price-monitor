@@ -8,6 +8,7 @@ import {
   buildRows,
   extractLoadFactor,
   fromParquetRecord,
+  isRailLeg,
   journeyIdFor,
   legacyLoadFactorOrdinal,
   parquetRowKey,
@@ -86,6 +87,27 @@ describe('extractLoadFactor', () => {
       trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z', loadFactor: 'exceptionally-high' }),
     ];
     assert.deepEqual(extractLoadFactor(legs), { loadFactor: 'exceptionally-high', ordinal: 4 });
+  });
+});
+
+describe('isRailLeg', () => {
+  it('accepts trains and rejects buses, ferries and unknown non-rail modes', () => {
+    assert.equal(isRailLeg(trainLeg({ dep: '2026-11-12T08:00:00Z', arr: '2026-11-12T09:00:00Z' })), true);
+    assert.equal(isRailLeg(busLeg('2026-11-12T08:00:00Z', '2026-11-12T09:00:00Z')), false);
+
+    const ferry = {
+      plannedDeparture: '2026-11-12T08:00:00Z',
+      plannedArrival: '2026-11-12T09:00:00Z',
+      line: { type: 'line', name: 'F 1', product: 'ferry', mode: 'watercraft' },
+    } as Leg;
+    assert.equal(isRailLeg(ferry), false);
+
+    const unknownProduct = {
+      plannedDeparture: '2026-11-12T08:00:00Z',
+      plannedArrival: '2026-11-12T09:00:00Z',
+      line: { type: 'line', name: 'X 1' },
+    } as Leg;
+    assert.equal(isRailLeg(unknownProduct), true, 'an unmapped product stays rail');
   });
 });
 
@@ -278,8 +300,33 @@ describe('buildRows', () => {
     assert.deepEqual(rows(legs, 49.99), []);
   });
 
-  it('skips journeys with no train leg', () => {
+  it('skips journeys with no rail leg', () => {
     assert.deepEqual(rows([walkLeg('2026-11-12T08:00:00Z', '2026-11-12T08:10:00Z')], 49.99), []);
+    assert.deepEqual(
+      rows([busLeg('2026-11-12T08:00:00Z', '2026-11-12T09:00:00Z')], 49.99),
+      [],
+      'a bus-only replacement service is not a train price'
+    );
+  });
+
+  it('skips journeys with an invalid planned departure or arrival', () => {
+    assert.deepEqual(rows([trainLeg({ dep: 'not-a-date', arr: '2026-11-12T10:00:00Z' })], 49.99), []);
+    assert.deepEqual(rows([trainLeg({ dep: '2026-11-12T08:00:00Z', arr: 'not-a-date' })], 49.99), []);
+  });
+
+  it('falls back to the stop station id when the stop has no id', () => {
+    const viaStop = (stationId: string): Leg =>
+      ({
+        plannedDeparture: '2026-11-12T08:00:00Z',
+        plannedArrival: '2026-11-12T10:00:00Z',
+        origin: { type: 'stop', station: { type: 'station', id: stationId } },
+        destination: { type: 'station', id: 'D' },
+        line: { type: 'line', name: 'ICE 1', product: 'ICE' },
+      }) as Leg;
+
+    const [a] = rows([viaStop('X')], 49.99);
+    const [b] = rows([viaStop('Y')], 49.99);
+    assert.notEqual(a.journey_id, b.journey_id);
   });
 });
 
@@ -348,6 +395,16 @@ describe('fromParquetRecord', () => {
     assert.equal(legacyLoadFactorOrdinal(null), null);
     // `low-to-medium` only exists from v2 on and must map to level 1.
     assert.equal(legacyLoadFactorOrdinal('low-to-medium'), 1);
+  });
+
+  it('rejects non-finite required values instead of writing NaN or zero', () => {
+    assert.throws(
+      () => fromParquetRecord({ ...v1Record, days_to_departure: 'not-a-number' }),
+      /Invalid days_to_departure/
+    );
+    assert.throws(() => fromParquetRecord({ ...v1Record, fare_lowest_eur: 'NaN' }), /Invalid fare_lowest_eur/);
+    assert.throws(() => fromParquetRecord({ ...v1Record, observed_at: 'nope' }), /Invalid observed_at/);
+    assert.throws(() => fromParquetRecord({ ...v1Record, service_class: undefined }), /Invalid service_class/);
   });
 });
 

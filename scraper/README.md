@@ -8,7 +8,7 @@ It runs alongside the main application and is deployed as a separate CDK stack (
 ```mermaid
 flowchart LR
     HydratorRule[EventBridge<br/>nightly 02:00 UTC] --> Hydrator
-    PollerRule[EventBridge<br/>every 1 min] --> Poller
+    PollerRule[EventBridge<br/>every 15 min] --> Poller
     CompactorRule[EventBridge<br/>nightly 03:00 UTC] --> Compactor
 
     Hydrator -->|seed PENDING targets| DDB[(DynamoDB<br/>ScraperSchedule)]
@@ -26,7 +26,7 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 ### Hydrator (`src/hydrator.ts`)
 
 - Runs nightly at 02:00 UTC.
-- Seeds the DynamoDB schedule table with scrape targets for the next N days (default: 90).
+- Seeds the DynamoDB schedule table with scrape targets for the next N days (default: 60).
 - Creates `ROUTE#{id}#DATE#{date}` items with `PENDING` status and an initial `next_scrape_at`.
 - Uses conditional writes (`attribute_not_exists`) to avoid overwriting already-seeded rows.
 - Assigns each target a TTD (Time-To-Departure) tier that determines scrape frequency.
@@ -39,8 +39,8 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 ### Poller (`src/poller.ts`)
 
 - Runs every 15 minutes with a batch of 25 targets (50 DB calls).
-- Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 22
-  overdue targets, so near departures are served first when capacity is short.
+- Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 25
+  targets (plus 8 expired-scan slack), so near departures are served first when capacity is short.
 - Deletes targets whose departure day has passed instead of scraping them.
 - Makes two API calls per target to the DB Vendo bestprice endpoint (1st and 2nd class).
 - Extracts journey data (price, duration, transfers, load factor) and writes Parquet to S3.
@@ -54,7 +54,9 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 
 - Runs nightly at 03:00 UTC.
 - Consolidates all `batch_*.parquet` files from the previous day into a single `daily_*.parquet`.
-- Verifies row counts (Level 1: in-memory merge, Level 2: re-read + parse) before deleting originals.
+- Verifies the merge before deleting originals: Level 1 compares in-memory and
+  parquet-metadata row counts, Level 2 re-reads the generated buffer and compares
+  full content fingerprints.
 - De-duplicates rows from concurrent poller invocations.
 - Retains existing `daily_*` files in the merge to handle compaction retries.
 
@@ -69,9 +71,9 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 
 | Tier   | Time to departure | Scrape interval |
 | ------ | ----------------- | --------------- |
-| `FAR`  | > 30 days         | 24h ±2h         |
-| `MID`  | 7–30 days         | 12h ±1h         |
-| `NEAR` | < 7 days          | 4h ±20min       |
+| `FAR`  | > 30 days         | 16d ±2d         |
+| `MID`  | 7–30 days         | 8d ±1d          |
+| `NEAR` | < 7 days          | 24h ±3h         |
 
 ### Route Catalog (`src/routes.ts`, `stations.json`)
 
@@ -169,10 +171,10 @@ mise run //infrastructure:deploy-scraper
 | ----------------- | ------------------------------------------------------------ |
 | DynamoDB table    | `ScraperSchedule` — provisioned (5 RCU / 5 WCU), TTL enabled |
 | S3 bucket         | Parquet price data, transitions to IA after 90 days          |
-| Poller Lambda     | Docker image (ARM64, 256 MB, 60s timeout)                    |
+| Poller Lambda     | Docker image (x86_64, 512 MB, 300s timeout)                  |
 | Hydrator Lambda   | Node.js 24 (ARM64, 128 MB, 15 min timeout)                   |
-| Compactor Lambda  | Node.js 24 (ARM64, 3 GB, 300s timeout)                       |
-| EventBridge rules | Poller (1 min), Hydrator (02:00 UTC), Compactor (03:00 UTC)  |
+| Compactor Lambda  | Node.js 24 (ARM64, 1536 MB, 300s timeout)                    |
+| EventBridge rules | Poller (15 min), Hydrator (02:00 UTC), Compactor (03:00 UTC) |
 
 ## Environment Variables
 
@@ -180,5 +182,5 @@ mise run //infrastructure:deploy-scraper
 | ------------------------- | ------------------------------------------------------------ |
 | `SCRAPER_TABLE_NAME`      | DynamoDB table for scrape schedule (injected by CDK)         |
 | `SCRAPER_BUCKET_NAME`     | S3 bucket for Parquet price data (injected by CDK)           |
-| `HYDRATOR_LOOKAHEAD_DAYS` | How many days ahead to seed (default: 90)                    |
+| `HYDRATOR_LOOKAHEAD_DAYS` | How many days ahead to seed (default: 60)                    |
 | `AWS_ENDPOINT_URL`        | Local endpoint URL for Floci development (set by mise tasks) |

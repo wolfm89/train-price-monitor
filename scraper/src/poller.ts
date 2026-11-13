@@ -348,11 +348,22 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         observedAt
       );
       const allRows = [...rows2nd, ...rows1st];
+      const pricedRows = allRows.filter((row) => row.fare_lowest_eur !== null).length;
+      const unpricedRows = allRows.length - pricedRows;
 
       if (allRows.length === 0) {
-        logger.warn('No priced rows returned', { route_id: target.route_id, departure_date: target.departure_date });
+        logger.warn('No journeys returned', { route_id: target.route_id, departure_date: target.departure_date });
       } else {
         allBatchRows.push(...allRows);
+        if (pricedRows === 0) {
+          // A day where DB returned connections but no fare at all: the pricing
+          // backend may be degraded. Distinct from "no journeys".
+          logger.warn('No priced journeys in target', {
+            route_id: target.route_id,
+            departure_date: target.departure_date,
+            rows: allRows.length,
+          });
+        }
       }
 
       // Reschedule only after the batch is safely in S3 (see below), so a crash
@@ -365,6 +376,8 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         departure_date: target.departure_date,
         rows2nd: rows2nd.length,
         rows1st: rows1st.length,
+        pricedRows,
+        unpricedRows,
         newTier,
       });
     } catch (err) {

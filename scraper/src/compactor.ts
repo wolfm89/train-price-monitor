@@ -277,6 +277,6 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
     partition: prefix,
     originalFilesCleaned: oldFiles.length,
     consolidatedFile: newKey,
-    totalRowsSaved: expectedRowCount,
+    totalRowsSaved: deduplicatedRows.length,
   });
 };
