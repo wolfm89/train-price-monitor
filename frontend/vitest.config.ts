@@ -7,5 +7,7 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/setupTests.ts'],
+    // MUI + Testing Library component tests can exceed the 5 s default on CI.
+    testTimeout: 15000,
   },
 });
