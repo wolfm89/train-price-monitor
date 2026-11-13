@@ -158,7 +158,7 @@ async function writeToS3(rows: ParquetRow[], observedAt: Date): Promise<void> {
  * Update the DynamoDB schedule item after a successful scrape.
  */
 async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Promise<void> {
-  const nextScrapeAt = computeNextScrapeAt(newTier, now);
+  const nextScrapeAt = computeNextScrapeAt(newTier, now, item.departure_date);
   // Rank by the tier the target will be in *when it becomes due*, not the tier it
   // is in now: a MID target scraped eight days before departure becomes due on
   // departure day, where it must sort ahead of MID/FAR work.

@@ -204,8 +204,9 @@ export const handler = async (): Promise<void> => {
       const departureDateStr = departureDate.toISOString().slice(0, 10);
 
       const tier = computeTtdTier(departureDateStr, now);
-      // Spread initial scrapes randomly across the first interval window
-      const nextScrapeAt = computeNextScrapeAt(tier, now);
+      // Spread initial scrapes randomly across the first interval window, clamped
+      // so a full seed cannot place the first scrape at/after departure.
+      const nextScrapeAt = computeNextScrapeAt(tier, now, departureDateStr);
       // Priority is ordered by the tier at the time the item becomes due.
       const dueTier = computeTtdTier(departureDateStr, nextScrapeAt);
 
