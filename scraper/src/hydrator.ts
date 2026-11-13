@@ -204,8 +204,9 @@ export const handler = async (): Promise<void> => {
       const departureDateStr = departureDate.toISOString().slice(0, 10);
 
       const tier = computeTtdTier(departureDateStr, now);
-      // Spread initial scrapes randomly across the first interval window
-      const nextScrapeAt = computeNextScrapeAt(tier, now);
+      // Spread initial scrapes randomly across the first interval window, clamped
+      // so a full seed cannot place the first scrape at/after departure.
+      const nextScrapeAt = computeNextScrapeAt(tier, now, departureDateStr);
       // Priority is ordered by the tier at the time the item becomes due.
       const dueTier = computeTtdTier(departureDateStr, nextScrapeAt);
 
@@ -223,7 +224,7 @@ export const handler = async (): Promise<void> => {
         status: 'PENDING',
         next_scrape_at: nextScrapeAt.toISOString(),
         due_key: dueKey(dueTier, nextScrapeAt),
-        ttd_tier: tier,
+        ttd_tier: dueTier,
         scrape_count: 0,
         created_at: now.toISOString(),
         ttl,
@@ -236,6 +237,11 @@ export const handler = async (): Promise<void> => {
   const { written, skipped, failed } = await writeAllItems(items);
 
   logger.info('Hydration complete', { written, skipped, failed, totalItems: items.length });
+
+  // Surface partial writes: a clean exit would hide them from Lambda alarms.
+  if (failed > 0) {
+    throw new Error(`Hydration failed for ${failed} of ${items.length} items`);
+  }
 
   if (FULL_SEED) {
     const backfilled = await backfillDueKeys();

@@ -32,7 +32,9 @@ tracks what to scrape and when, and an S3 bucket that stores price observations 
 - Assigns each target a TTD (Time-To-Departure) tier that determines scrape frequency.
 - `HYDRATOR_FULL_SEED=1` also backfills `due_key` on rows seeded before the `ByDue`
   index existed; run it once after deploying a schema change that adds that key,
-  otherwise those rows are invisible to the poller.
+  otherwise those rows are invisible to the poller. A full seed writes ~8,400 items
+  against a 5 WCU table, so raise the table's write capacity for the run or it will
+  exceed the 15-minute timeout. The handler now throws when any write fails.
 
 ### Poller (`src/poller.ts`)
 
@@ -144,7 +146,7 @@ mise run //infrastructure:deploy-scraper
 | DynamoDB table    | `ScraperSchedule` — provisioned (5 RCU / 5 WCU), TTL enabled |
 | S3 bucket         | Parquet price data, transitions to IA after 90 days          |
 | Poller Lambda     | Docker image (ARM64, 256 MB, 60s timeout)                    |
-| Hydrator Lambda   | Node.js 24 (ARM64, 128 MB, 120s timeout)                     |
+| Hydrator Lambda   | Node.js 24 (ARM64, 128 MB, 15 min timeout)                   |
 | Compactor Lambda  | Node.js 24 (ARM64, 3 GB, 300s timeout)                       |
 | EventBridge rules | Poller (1 min), Hydrator (02:00 UTC), Compactor (03:00 UTC)  |
 

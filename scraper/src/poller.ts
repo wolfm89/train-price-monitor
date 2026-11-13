@@ -35,7 +35,7 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * met and the backlog drains. Raise it only while the `transport` counters in the
  * "Poller finished" log stay clean.
  */
-const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 10, logger);
+const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 25, logger);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the function
  * timeout with room for the current target (two parallel calls, each up to two
  * 20 s attempts plus backoff ~= 43 s) and the final S3 upload: 250 + 43 + 1 < 300. */
@@ -47,6 +47,13 @@ const ABORT_THRESHOLD_MS = 250_000;
 const EXPIRED_SCAN_SLACK = 8;
 /** Safety cap on pages read per tier, so a pathological queue cannot spin. */
 const MAX_PAGES_PER_TIER = 5;
+/**
+ * Backoff for a target that failed for a reason other than a 429. Without it the
+ * row stays due with its old timestamp and sorts to the head of the ByDue index,
+ * so a persistent error would occupy a batch slot on every run. A retry also
+ * refreshes the timestamp, which moves the target behind the rest of the queue.
+ */
+const FAILURE_RETRY_MS = 15 * 60 * 1000;
 
 const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 
@@ -95,6 +102,9 @@ function buildRows(
     const depPlanned = firstLeg.plannedDeparture ? new Date(firstLeg.plannedDeparture) : null;
     const arrPlanned = lastLeg.plannedArrival ? new Date(lastLeg.plannedArrival) : null;
     if (!depPlanned || !arrPlanned) continue;
+    // The day's response can still contain journeys that already left; writing
+    // them would put a negative days_to_departure into the dataset.
+    if (depPlanned.getTime() <= observedAt.getTime()) continue;
 
     const durationMs = arrPlanned.getTime() - depPlanned.getTime();
     const durationMinutes = Math.round(durationMs / 60_000);
@@ -158,7 +168,7 @@ async function writeToS3(rows: ParquetRow[], observedAt: Date): Promise<void> {
  * Update the DynamoDB schedule item after a successful scrape.
  */
 async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Promise<void> {
-  const nextScrapeAt = computeNextScrapeAt(newTier, now);
+  const nextScrapeAt = computeNextScrapeAt(newTier, now, item.departure_date);
   // Rank by the tier the target will be in *when it becomes due*, not the tier it
   // is in now: a MID target scraped eight days before departure becomes due on
   // departure day, where it must sort ahead of MID/FAR work.
@@ -174,7 +184,7 @@ async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Pro
         ':next': nextScrapeAt.toISOString(),
         ':due': dueKey(dueTier, nextScrapeAt),
         ':now': now.toISOString(),
-        ':tier': newTier,
+        ':tier': dueTier,
         ':inc': 1,
         ':zero': 0,
       },
@@ -187,17 +197,34 @@ async function markScraped(item: ScheduleItem, now: Date, newTier: TtdTier): Pro
  */
 async function scheduleRetry(item: ScheduleItem, delayMs: number, now: Date): Promise<void> {
   const retryAt = new Date(now.getTime() + delayMs);
+  // Rank by the tier at the retry time, not the stored tier from the last
+  // scrape: a target that just crossed into NEAR must not queue behind MID work.
+  const retryTier = computeTtdTier(item.departure_date, retryAt);
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { pk: item.pk, sk: 'SCHEDULE' },
-      UpdateExpression: 'SET next_scrape_at = :next, due_key = :due',
+      UpdateExpression: 'SET next_scrape_at = :next, due_key = :due, ttd_tier = :tier',
       ExpressionAttributeValues: {
         ':next': retryAt.toISOString(),
-        ':due': dueKey(item.ttd_tier, retryAt),
+        ':due': dueKey(retryTier, retryAt),
+        ':tier': retryTier,
       },
     })
   );
+}
+
+/** `scheduleRetry` that never aborts the batch: a DDB failure here is logged. */
+async function retryLater(target: ScheduleItem, delayMs: number, now: Date): Promise<void> {
+  try {
+    await scheduleRetry(target, delayMs, now);
+  } catch (err) {
+    logger.error('Failed to reschedule target', {
+      route_id: target.route_id,
+      departure_date: target.departure_date,
+      err: String(err),
+    });
+  }
 }
 
 /**
@@ -322,6 +349,7 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
   }
 
   const allBatchRows: ParquetRow[] = [];
+  const scrapedTargets: Array<{ target: ScheduleItem; newTier: TtdTier }> = [];
 
   for (const target of targets) {
     // Abort if we're approaching the Lambda timeout
@@ -332,7 +360,17 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
 
     const route = routeById.get(target.route_id);
     if (!route) {
-      logger.error('Unknown route_id', { route_id: target.route_id });
+      // The catalog no longer contains this route, so the row can never be
+      // scraped. Delete it instead of leaving it at the head of the due queue.
+      logger.warn('Unknown route_id, deleting schedule row', {
+        route_id: target.route_id,
+        departure_date: target.departure_date,
+      });
+      try {
+        await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: target.pk, sk: 'SCHEDULE' } }));
+      } catch (err) {
+        logger.error('Failed to delete unknown route row', { route_id: target.route_id, err: String(err) });
+      }
       continue;
     }
 
@@ -374,9 +412,10 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         allBatchRows.push(...allRows);
       }
 
-      // Reschedule based on updated TTD
+      // Reschedule only after the batch is safely in S3 (see below), so a crash
+      // between the two does not mark a target scraped whose rows were lost.
       const newTier = computeTtdTier(target.departure_date, observedAt);
-      await markScraped(target, observedAt, newTier);
+      scrapedTargets.push({ target, newTier });
 
       logger.info('Target scraped', {
         route_id: target.route_id,
@@ -397,14 +436,18 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
       const msg = String(err);
       if (msg.includes('429') || msg.toLowerCase().includes('too many requests')) {
         logger.warn('Rate limited by Vendo API', { route_id: target.route_id });
-        await scheduleRetry(target, 5 * 60 * 1000, observedAt); // retry in 5 min
+        await retryLater(target, 5 * 60 * 1000, observedAt); // retry in 5 min
       } else {
-        // Leave next_scrape_at unchanged so the next invocation retries
         logger.error('Failed to scrape target', {
           route_id: target.route_id,
           departure_date: target.departure_date,
           err: msg,
         });
+        // Move the failure behind the rest of the due queue: leaving
+        // next_scrape_at unchanged would pin a persistent failure to the head of
+        // ByDue and cost a batch slot on every run. 15 minutes keeps a transient
+        // failure inside the final scrape window.
+        await retryLater(target, FAILURE_RETRY_MS, observedAt);
       }
       continue;
     }
@@ -412,6 +455,21 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
 
   if (allBatchRows.length > 0) {
     await writeToS3(allBatchRows, now);
+  }
+
+  // Mark only after the Parquet file is in S3. If a mark fails, the target is
+  // scraped again next run (a duplicate observation at a new time), which is
+  // cheaper than losing the rows it produced.
+  for (const { target, newTier } of scrapedTargets) {
+    try {
+      await markScraped(target, now, newTier);
+    } catch (err) {
+      logger.error('Failed to update schedule after upload', {
+        route_id: target.route_id,
+        departure_date: target.departure_date,
+        err: String(err),
+      });
+    }
   }
   return true;
 }

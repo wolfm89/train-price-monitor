@@ -11,7 +11,7 @@ export interface ScheduleItem {
   next_scrape_at: string; // ISO 8601 UTC
   due_key: string; // `<tier rank>#<next_scrape_at>`; sort key of the ByDue index
   last_scraped_at?: string; // ISO 8601 UTC
-  ttd_tier: TtdTier;
+  ttd_tier: TtdTier; // tier at next_scrape_at (matches the due_key rank), not at last_scraped_at
   scrape_count: number;
   created_at: string; // ISO 8601 UTC
   ttl: number; // Unix epoch seconds for DynamoDB TTL
