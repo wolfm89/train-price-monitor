@@ -49,10 +49,11 @@ const EXPIRED_SCAN_SLACK = 8;
 const MAX_PAGES_PER_TIER = 5;
 /**
  * Backoff for a target that failed for a reason other than a 429. Without it the
- * row stays due and sorts to the head of the ByDue index, so a persistent error
- * would occupy a batch slot on every run.
+ * row stays due with its old timestamp and sorts to the head of the ByDue index,
+ * so a persistent error would occupy a batch slot on every run. A retry also
+ * refreshes the timestamp, which moves the target behind the rest of the queue.
  */
-const FAILURE_RETRY_MS = 60 * 60 * 1000;
+const FAILURE_RETRY_MS = 15 * 60 * 1000;
 
 const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 
@@ -442,9 +443,10 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
           departure_date: target.departure_date,
           err: msg,
         });
-        // Move the failure behind the rest of the due queue. Leaving
+        // Move the failure behind the rest of the due queue: leaving
         // next_scrape_at unchanged would pin a persistent failure to the head of
-        // ByDue and cost a batch slot on every run.
+        // ByDue and cost a batch slot on every run. 15 minutes keeps a transient
+        // failure inside the final scrape window.
         await retryLater(target, FAILURE_RETRY_MS, observedAt);
       }
       continue;
