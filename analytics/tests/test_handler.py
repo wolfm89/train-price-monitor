@@ -16,6 +16,8 @@ from tpm_analytics.silver.storage import LocalObjectStore
 
 def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bronze_glob: str) -> None:
     bucket = tmp_path / "bucket"
+    (bucket / "prices").mkdir(parents=True)
+    (bucket / "prices" / "a.parquet").write_bytes(b"x")
     real_run_build = run_build
     seen: dict[str, Any] = {}
 
@@ -27,7 +29,7 @@ def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path:
         return real_run_build(bronze_glob, target, **kwargs)
 
     monkeypatch.setattr(handler_module, "run_build", fake_run_build)
-    monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name: LocalObjectStore(bucket))
+    monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name, **kwargs: LocalObjectStore(bucket))
     monkeypatch.setattr(
         handler_module,
         "aws_secret",
@@ -45,7 +47,7 @@ def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path:
     # The credentials reach the build: without this the first real run fails on read_parquet.
     assert isinstance(seen["s3"], S3Secret)
     assert seen["s3"].region == "eu-central-1"
-    assert seen["source"] == "s3://test-bucket/prices/**/*.parquet"
+    assert seen["source"] == ("s3://test-bucket/prices/a.parquet",)
     assert seen.get("verify", True) is True
     pointer = Pointer.from_json((bucket / pointer_key("silver")).read_bytes())
     assert pointer.build_id == result["build_id"]
@@ -64,7 +66,10 @@ def test_handler_ignores_the_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         return real_run_build(bronze_glob, target, **kwargs)
 
     monkeypatch.setattr(handler_module, "run_build", fake_run_build)
-    monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name: LocalObjectStore(tmp_path / "bucket"))
+    bucket = tmp_path / "bucket"
+    (bucket / "prices").mkdir(parents=True)
+    (bucket / "prices" / "a.parquet").write_bytes(b"x")
+    monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name, **kwargs: LocalObjectStore(bucket))
     monkeypatch.setattr(
         handler_module,
         "aws_secret",
@@ -74,7 +79,7 @@ def test_handler_ignores_the_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     handler_module.handler({"source": "s3://evil/prices/", "verify": False}, None)
 
-    assert seen["source"] == "s3://test-bucket/prices/**/*.parquet"
+    assert seen["source"] == ("s3://test-bucket/prices/a.parquet",)
     assert seen.get("verify", True) is True
 
 

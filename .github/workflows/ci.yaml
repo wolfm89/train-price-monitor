@@ -34,6 +34,7 @@ permissions:
 
 jobs:
   frontend:
+    timeout-minutes: 15
     name: Frontend
     runs-on: ubuntu-24.04
     steps:
@@ -62,6 +63,7 @@ jobs:
         working-directory: frontend
 
   backend:
+    timeout-minutes: 15
     name: Backend
     runs-on: ubuntu-24.04
     steps:
@@ -97,6 +99,7 @@ jobs:
         working-directory: backend
 
   scraper:
+    timeout-minutes: 15
     name: Scraper
     runs-on: ubuntu-24.04
     steps:
@@ -125,6 +128,7 @@ jobs:
         working-directory: scraper
 
   infrastructure:
+    timeout-minutes: 15
     name: Infrastructure
     runs-on: ubuntu-24.04
     steps:
@@ -150,18 +154,27 @@ jobs:
       - run: npm test
         working-directory: infrastructure
   pre-commit:
+    timeout-minutes: 15
     name: Pre-commit
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: '0.13.8'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
       # One job for every fast, file-scoped hook (formatting, YAML/JSON, ruff, lockfile).
       # Project-scoped checks (tsc, tests, builds, images) stay in their module jobs.
       - run: uvx pre-commit@4.7.0 run --all-files --show-diff-on-failure
 
   analytics:
+    timeout-minutes: 20
     name: Analytics
     runs-on: ubuntu-24.04
     steps:
@@ -192,6 +205,7 @@ jobs:
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/stations.json'
 
   artifacts:
+    timeout-minutes: 45
     name: Build & synth
     # Only on pull requests: a deploy performs the equivalent work itself.
     if: github.event_name == 'pull_request'
@@ -273,6 +287,7 @@ jobs:
           cache-to: type=gha,scope=analytics,mode=max
 
   deploy:
+    timeout-minutes: 60
     name: Deploy
     # Never on pull requests, and only once every module job is green.
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')

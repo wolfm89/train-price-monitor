@@ -16,6 +16,7 @@ from tpm_analytics.silver.storage import LocalObjectStore, ObjectStore
 def stats_for(rows: int = 6, *, verified: bool = True) -> BuildStats:
     return BuildStats(
         source="/data/prices/**/*.parquet",
+        source_files=("prices/a.parquet",),
         target="/tmp/silver",
         rows_in=rows,
         rows_out=rows,
@@ -145,14 +146,52 @@ def test_retention_keeps_the_newest_builds_and_the_pointer(build, tmp_path: Path
 def test_retention_never_deletes_the_pointed_at_build(build, tmp_path: Path) -> None:
     built = build()
     store = LocalObjectStore(tmp_path / "bucket")
-    publish_one(store, built, "20260101T000000Z-aaaaaaaa")
-    # A foreign key that sorts after every timestamp: it must not push the pointer target out.
-    store.put_bytes(b"junk", "silver/builds/zzz/data.parquet")
-    publish_one(store, built, "20260102T000000Z-bbbbbbbb", keep=1)
+    ids = [f"2026010{index}T000000Z-{index:08x}" for index in range(1, 5)]
+    for build_id in ids:
+        publish_one(store, built, build_id, keep=4)
 
-    pointer = Pointer.from_json(store.get_bytes(pointer_key("silver")))
-    assert pointer.build_id == "20260102T000000Z-bbbbbbbb"
-    assert pointer.build_id in build_ids(store, "silver")
+    # A reader pinned to the oldest build must keep working: point at it, then retain.
+    store.put_bytes(
+        Pointer(build_id=ids[0], manifest=manifest_key("silver", ids[0]), updated_at="2026-01-01T00:00:00Z").to_json(),
+        pointer_key("silver"),
+    )
+    deleted = retain(store, prefix="silver", keep=2)
+
+    assert ids[0] in build_ids(store, "silver")
+    assert deleted == (ids[1],)
+
+
+def test_foreign_or_incomplete_prefixes_are_not_builds(build, tmp_path: Path) -> None:
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    # A stray id with a manifest that names no files, and an id that does not match the format.
+    store.put_bytes(
+        BuildManifest(
+            manifest_version=1,
+            build_id="zzz",
+            created_at="2026-01-01T00:00:00Z",
+            source="x",
+            source_files=(),
+            bucket="b",
+            prefix="silver",
+            rows_in=0,
+            rows_out=0,
+            duplicates_removed=0,
+            partitions=0,
+            duration_seconds=0.0,
+            transform_version="t",
+            duckdb_version="2.0.0",
+            sql_sha256="0" * 64,
+            stations_sha256="0" * 64,
+            files=(),
+        ).to_json(),
+        "silver/builds/zzz/_manifest.json",
+    )
+    publish_one(store, built, "20260101T000000Z-aaaaaaaa")
+    publish_one(store, built, "20260102T000000Z-bbbbbbbb")
+    publish_one(store, built, "20260103T000000Z-cccccccc")
+
+    assert build_ids(store, "silver") == ["20260103T000000Z-cccccccc", "20260102T000000Z-bbbbbbbb"]
 
 
 def test_abandoned_prefixes_do_not_count_as_builds(build, tmp_path: Path) -> None:

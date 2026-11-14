@@ -12,6 +12,7 @@ good build out.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -111,13 +112,14 @@ def publish(
     transform_version: str,
     duckdb_version: str,
     keep: int = DEFAULT_KEEP,
+    warnings: Sequence[str] = (),
 ) -> PublishResult:
     """Upload ``local_dir`` under ``<prefix>/builds/<build_id>/`` and move the pointer."""
     root = Path(local_dir)
     prefix = normalise_prefix(prefix)
     validate_build_id(build_id)
-    if keep < 1:
-        raise ValueError("keep must be at least 1")
+    if keep < 2:
+        raise ValueError("keep must be at least 2; a reader must survive one cycle")
     if not stats.verified:
         raise ValueError("refusing to publish a build whose quality gate did not run")
     parquet_files = sorted(path for path in root.rglob("*.parquet"))
@@ -136,6 +138,7 @@ def publish(
         raise ValueError(f"build {current.build_id} is already newer than {build_id}")
 
     sql_sha, stations_sha = asset_hashes()
+    transform_version = transform_version or f"sql-{sql_sha[:12]}"
     uploaded: list[BuildFile] = []
     written_keys: list[str] = []
     pointer_attempted = False
@@ -175,7 +178,8 @@ def publish(
         pointer_attempted = True
         store.put_bytes(pointer.to_json(), pointer_key(prefix), content_type="application/json")
     except BaseException:
-        if not (pointer_attempted and _pointer_names(store, prefix, build_id)):
+        # After the pointer PUT has been attempted the build may be live, even if the PUT raised.
+        if not pointer_attempted:
             _delete_quietly(store, written_keys)
         raise
 
@@ -217,14 +221,23 @@ def build_ids(store: ObjectStore, prefix: str) -> list[str]:
     root = f"{prefix}/{BUILD_ROOT}/"
     keys = set(store.list_keys(root))
     candidates = {key[len(root) :].split("/")[0] for key in keys if key.startswith(root)}
-    complete = [build_id for build_id in candidates if manifest_key(prefix, build_id) in keys]
+    complete: list[str] = []
+    for build_id in candidates:
+        if not BUILD_ID_PATTERN.match(build_id):
+            continue
+        try:
+            manifest = BuildManifest.from_json(store.get_bytes(manifest_key(prefix, build_id)))
+        except FileNotFoundError, ClientError, ValueError:
+            continue
+        if manifest.build_id == build_id and manifest.files:
+            complete.append(build_id)
     return sorted(complete, reverse=True)
 
 
 def retain(store: ObjectStore, *, prefix: str, keep: int) -> tuple[str, ...]:
     """Delete every build older than the newest ``keep``; the pointed-at build is never deleted."""
-    if keep < 1:
-        raise ValueError("keep must be at least 1")
+    if keep < 2:
+        raise ValueError("keep must be at least 2")
     prefix = normalise_prefix(prefix)
     pointer = _read_pointer(store, prefix)
     protected = {pointer.build_id} if pointer is not None else set()

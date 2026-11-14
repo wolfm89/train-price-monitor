@@ -24,6 +24,8 @@ Shipped here:
 
 The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
 `handler.py`). Not here yet: the `AnalyticsStack`, the scheduled trigger and the deployment.
+The handler lists the bronze keys once and builds from that snapshot, so the poller's 15-minute
+appends cannot change the corpus under a nine-minute build.
 
 The CLI still writes to a local directory. Reading `s3://` requires S3 credentials passed to
 `run_build`; the Lambda handler supplies them from its execution role.
@@ -102,14 +104,17 @@ silver/builds/<build id>/_manifest.json
 silver/_latest.json
 ```
 
-- The **manifest** records `build_id`, source, rows in/out, duplicates removed, partitions,
-  duration, transform version, DuckDB version and every file with its size.
+- The **manifest** records `build_id`, the source glob and the exact object list that was read,
+  rows in/out, duplicates removed, partitions, duration, transform version, DuckDB version,
+  SHA-256 of the SQL and station dimension, and every output file with its size. An empty
+  `TRANSFORM_VERSION` falls back to the SQL hash, so provenance is never blank.
 - The **pointer** is written last, after the manifest is read back and every file is present with
   the recorded size. The pointer write is the commit point: an exception before it deletes the
   half-written build; a pointer PUT that errors is assumed to have landed and the build is kept.
   A killed process (timeout, OOM) cannot clean up: it leaves a prefix without a manifest, which
   retention ignores and which can be deleted by hand.
-- **Retention** keeps the newest two builds (`SILVER_KEEP`), only considers builds with a
+- **Retention** keeps the newest two builds (`SILVER_KEEP`, minimum 2 so one cycle of readers
+  always survives), only counts ids that match the build-id format and have a non-empty
   manifest, and never deletes the build the pointer names.
 - The handler ignores the event: source, bucket, prefix and sizing come from the environment
   (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,

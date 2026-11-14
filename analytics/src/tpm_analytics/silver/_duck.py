@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -108,12 +109,19 @@ def scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
     return int(rows[0][0])
 
 
-def read_parquet(path_glob: str, *, hive_partitioning: bool = False) -> str:
-    """Build a read_parquet table expression for a glob.
+def read_parquet(paths: str | Sequence[str], *, hive_partitioning: bool = False) -> str:
+    """Build a read_parquet table expression for a glob or an explicit file list.
+
+    An explicit list is what the handler passes: it is the snapshot the build reads, so a poller
+    or compactor run that lands mid-build cannot change the corpus under it.
 
     ``hive_partitioning`` is always passed explicitly: DuckDB auto-detects
     ``key=value`` directories, and bronze is laid out as ``year=/month=/day=``,
     which must never become columns.
     """
+    if isinstance(paths, str):
+        target = f"'{sql_string(paths)}'"
+    else:
+        target = "[" + ", ".join(f"'{sql_string(path)}'" for path in paths) + "]"
     options = f"union_by_name = true, hive_partitioning = {'true' if hive_partitioning else 'false'}"
-    return f"read_parquet('{sql_string(path_glob)}', {options})"
+    return f"read_parquet({target}, {options})"
