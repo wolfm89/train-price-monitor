@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---------------------------------------------------------------------------
-# Silver builder image: AWS Lambda Python 3.13 + the pinned DuckDB wheel.
+# Silver builder image: AWS Lambda Python 3.14 + the pinned DuckDB wheel.
 #
 # Everything the build needs lives inside analytics/, so unlike backend/ and
 # scraper/ the bundle is not built on the host first.
@@ -36,4 +36,5 @@ ENV DUCKDB_EXTENSION_DIR=/opt/duckdb/extensions
 RUN mkdir -p "${DUCKDB_EXTENSION_DIR}" && \
     python -c "import duckdb; c = duckdb.connect(); c.execute(\"SET extension_directory = '${DUCKDB_EXTENSION_DIR}'\"); c.execute('INSTALL httpfs'); c.execute('LOAD httpfs'); print(c.execute(\"SELECT extension_name, loaded FROM duckdb_extensions() WHERE extension_name = 'httpfs'\").fetchall())"
 
-CMD ["tpm_analytics.silver.handler.handler"]
+# No CMD yet: the Lambda handler ships with the S3 publisher. The image is built in CI so the
+# toolchain and packaged assets stay honest, but nothing deploys it until AnalyticsStack lands.

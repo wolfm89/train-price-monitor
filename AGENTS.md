@@ -16,7 +16,7 @@ through a `mise` monorepo.
   `cross-fetch` to. It has no `node_modules` of its own: each consuming module type-checks it
   via its own tsconfig (`include` + its own `paths` entries) and bundles it with esbuild.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
-- `analytics/` – Python 3.13 silver-layer builds (DuckDB) over the scraper's bronze Parquet. The only
+- `analytics/` – Python 3.14 silver-layer builds (DuckDB) over the scraper's bronze Parquet. The only
   non-TypeScript module; see `analytics/README.md`.
 - `.mise.toml` / `mise.tasks.toml` – Monorepo task definitions shared across modules.
 - `eslint.config.cjs` – Shared ESLint v10 flat config.
@@ -85,7 +85,7 @@ mise run //infrastructure:deploy   # Deploy all CDK stacks
 ```
 
 ```bash
-# Analytics (Python 3.13, uv, DuckDB)
+# Analytics (Python 3.14, uv, DuckDB)
 cd analytics
 uv sync --frozen       # Create .venv from uv.lock (uv manages the interpreter)
 uv run pytest          # Fixture tests over v1/v2/mixed bronze files
