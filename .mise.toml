@@ -2,11 +2,12 @@ min_version = "2024.9.5"
 monorepo_root = true
 
 [monorepo]
-config_roots = ["frontend", "backend", "infrastructure", "scraper"]
+config_roots = ["frontend", "backend", "infrastructure", "scraper", "analytics"]
 
 [tools]
 node    = "24"
 aws-cli = "2"
+uv      = "0.13.8"
 
 [env]
 _.file = '.env'
@@ -40,7 +41,7 @@ depends = ["//...:build"]
 
 [tasks.lint]
 alias = "l"
-description = "Run ESLint on all modules"
+description = "Run linters on all modules"
 depends = ["//...:lint"]
 
 [tasks.test]

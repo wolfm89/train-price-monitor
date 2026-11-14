@@ -1,0 +1,35 @@
+[tasks.install]
+description = "Create the uv environment from the lockfile"
+run = "uv sync --frozen"
+
+[tasks.build]
+description = "Build the wheel and sdist (assets included)"
+run = "uv build"
+
+[tasks.typecheck]
+description = "Type check with ty"
+run = "uv run --frozen ty check"
+
+[tasks.test]
+description = "Run the fixture tests"
+run = "uv run --frozen pytest"
+
+[tasks.lint]
+description = "Lint with ruff"
+run = "uv run --frozen ruff check . && uv run --frozen ruff format --check ."
+
+[tasks.format]
+description = "Format with ruff"
+run = "uv run --frozen ruff format ."
+
+[tasks.image]
+description = "Build the Lambda container image"
+run = "docker build -t train-price-monitor-analytics:dev ."
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf dist .pytest_cache .ruff_cache"
+
+[tasks."silver:local"]
+description = "Build silver from a local bronze glob; pass --source <glob> --target <dir> after --"
+run = "uv run --frozen python -m tpm_analytics.silver.build"
