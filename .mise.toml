@@ -41,7 +41,7 @@ depends = ["//...:build"]
 
 [tasks.lint]
 alias = "l"
-description = "Run ESLint on all modules"
+description = "Run linters on all modules"
 depends = ["//...:lint"]
 
 [tasks.test]

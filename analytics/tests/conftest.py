@@ -126,8 +126,9 @@ def default_rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             route_id=f"{HAMBURG[0]}-{MUNICH[0]}",
             origin_eva=HAMBURG[0],
             origin_name=HAMBURG[1],
-            departure_planned=datetime(2026, 12, 12, 23, 30),
-            arrival_planned=datetime(2026, 12, 13, 6, 0),
+            # 22:30 Berlin on the 12th: the last departure before the timetable change.
+            departure_planned=datetime(2026, 12, 12, 21, 30),
+            arrival_planned=datetime(2026, 12, 13, 4, 0),
             load_factor="very-high",
             load_factor_ordinal=3,
             journey_id="journey-b",
@@ -138,7 +139,9 @@ def default_rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             route_id=f"{HAMBURG[0]}-{MUNICH[0]}",
             origin_eva=HAMBURG[0],
             origin_name=HAMBURG[1],
-            departure_planned=datetime(2026, 12, 13, 0, 30),
+            # 23:30 UTC on the 12th is 00:30 Berlin on the 13th: the first departure under the
+            # new timetable, and the case a UTC-derived date gets wrong.
+            departure_planned=datetime(2026, 12, 12, 23, 30),
             arrival_planned=datetime(2026, 12, 13, 7, 0),
             load_factor="low-to-medium",
             load_factor_ordinal=1,

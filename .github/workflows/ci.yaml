@@ -4,7 +4,7 @@ name: CI/CD
 # request are the same ones that gate a deploy. Previously deploying ran no
 # checks at all: a push to main went straight to build-and-deploy.
 #
-# On a pull request: the four module jobs plus an image build.
+# On a pull request: the five module jobs plus an image build.
 # On a push to main: the same module jobs, then deploy.
 #
 # The image build is pull-request-only because a deploy builds and publishes
@@ -168,6 +168,9 @@ jobs:
       - run: uv run --frozen ty check --output-format github
         working-directory: analytics
       - run: uv run --frozen pytest
+        working-directory: analytics
+      # The package ships sql/ and data/ inside the module; this fails if they stop being packaged.
+      - run: uv build
         working-directory: analytics
 
   artifacts:

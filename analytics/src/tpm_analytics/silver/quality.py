@@ -1,8 +1,8 @@
 """Quality gates for the silver layer.
 
-A build is published only when every check here passes. The gates encode the invariants the
-transform is supposed to guarantee, so a schema change that silently breaks one of them fails the
-build instead of poisoning the training data.
+A build is published only when every check here passes. The checks encode the invariants the
+transform is supposed to guarantee, so a schema change or a bad join fails the build instead of
+poisoning the training data. Every check is a count of offending rows, evaluated in one scan.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "train_type",
     "train_number",
     "train_numbers",
-    "transfers",
+    "transfers_raw",
     "duration_minutes",
     "days_to_departure",
     "fare_lowest_eur",
@@ -54,51 +54,77 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "departure_month",
 )
 
-COUNT_CHECKS: tuple[tuple[str, str], ...] = (
-    (
-        "schema_version null",
-        "SELECT count(*) FROM silver WHERE schema_version IS NULL",
-    ),
-    (
-        "journey_id set on a v1 row",
-        "SELECT count(*) FROM silver WHERE schema_version = 1 AND journey_id IS NOT NULL",
-    ),
-    (
-        "journey_id missing on a v2 row",
-        "SELECT count(*) FROM silver WHERE schema_version = 2 AND journey_id IS NULL",
-    ),
-    (
-        "null fare on a v1 row",
-        "SELECT count(*) FROM silver WHERE schema_version = 1 AND fare_lowest_eur IS NULL",
-    ),
+LOAD_FACTOR_RANK_SQL = """
+    CASE load_factor
+        WHEN 'low' THEN 1
+        WHEN 'low-to-medium' THEN 1
+        WHEN 'high' THEN 2
+        WHEN 'very-high' THEN 3
+        WHEN 'exceptionally-high' THEN 4
+    END
+"""
+
+# The last departure date the timetable boundary in silver.sql covers. DB changes timetable in
+# mid-December and mid-June; when data reaches this date, review the boundary and bump it.
+TIMETABLE_REVIEW_AFTER = "2027-06-13"
+
+# (name, predicate over a row of silver). A non-zero count is a violation.
+ROW_CHECKS: tuple[tuple[str, str], ...] = (
+    ("schema_version outside {1,2}", "schema_version IS NULL OR schema_version NOT IN (1, 2)"),
+    ("journey_id set on a v1 row", "schema_version = 1 AND journey_id IS NOT NULL"),
+    ("journey_id missing on a v2 row", "schema_version = 2 AND journey_id IS NULL"),
+    ("null fare on a v1 row", "schema_version = 1 AND fare_lowest_eur IS NULL"),
     (
         "load_factor_ordinal out of sync with load_factor",
-        "SELECT count(*) FROM silver WHERE (load_factor IS NULL) <> (load_factor_ordinal IS NULL)",
+        "(load_factor IS NULL) <> (load_factor_ordinal IS NULL)",
     ),
     (
-        "null timetable_period",
-        "SELECT count(*) FROM silver WHERE timetable_period IS NULL",
+        "load_factor_ordinal does not match load_factor",
+        f"load_factor_ordinal IS NOT NULL AND load_factor_ordinal <> {LOAD_FACTOR_RANK_SQL}",
     ),
     (
-        "null observation_era",
-        "SELECT count(*) FROM silver WHERE observation_era IS NULL",
+        "unknown load_factor value",
+        f"load_factor IS NOT NULL AND ({LOAD_FACTOR_RANK_SQL}) IS NULL",
     ),
     (
-        "negative transfers_actual",
-        "SELECT count(*) FROM silver WHERE transfers_actual < 0",
+        "null required field",
+        "observed_at IS NULL OR departure_planned IS NULL OR arrival_planned IS NULL "
+        "OR route_id IS NULL OR origin_eva IS NULL OR dest_eva IS NULL",
     ),
+    ("service_class outside {1,2}", "service_class NOT IN (1, 2)"),
+    ("non-positive duration_minutes", "duration_minutes <= 0"),
+    ("non-positive fare", "fare_lowest_eur <= 0"),
+    ("negative transfers_actual", "transfers_actual < 0"),
+    ("odd transfers on a v1 row", "schema_version = 1 AND transfers_raw % 2 <> 0"),
+    # Before #141 the poller wrote journeys that had already left; that is history, not a
+    # regression. Only rows observed after the fix have to satisfy the invariant.
     (
-        "negative days_to_departure",
-        "SELECT count(*) FROM silver WHERE days_to_departure < 0",
+        "negative days_to_departure after the fix",
+        "observed_at >= TIMESTAMP '2026-11-13 18:15:49' AND days_to_departure < 0",
     ),
+    ("station missing from the dimension", "origin_state IS NULL OR dest_state IS NULL"),
+    ("distance_km missing or implausible", "distance_km IS NULL OR distance_km <= 0 OR distance_km > 1500"),
+    ("scrapes_per_route_day missing", "scrapes_per_route_day IS NULL OR scrapes_per_route_day < 1"),
     (
-        "station missing from the dimension",
-        "SELECT count(*) FROM silver WHERE origin_state IS NULL OR dest_state IS NULL",
+        "partition does not match departure_date",
+        "EXTRACT(year FROM departure_date) <> departure_year OR EXTRACT(month FROM departure_date) <> departure_month",
     ),
+    # The timetable_period boundary in silver.sql is hand-maintained. Departures past the end of
+    # the reviewed period mean the boundary is stale: fail the build rather than mislabel a year.
     (
-        "null scrapes_per_route_day",
-        "SELECT count(*) FROM silver WHERE scrapes_per_route_day IS NULL",
+        "departure beyond the reviewed timetable period",
+        f"departure_date >= DATE '{TIMETABLE_REVIEW_AFTER}'",
     ),
+)
+
+# Bronze columns that silver carries under a clearer name. Anything else missing from silver is
+# a schema drift the explicit projection would otherwise drop silently.
+RENAMED_COLUMNS: dict[str, str] = {"transfers": "transfers_raw"}
+
+# The compactor's own de-duplication key (scraper/src/rows.ts, parquetRowKey).
+DUPLICATE_KEY = (
+    "observed_at, route_id, service_class, departure_planned, arrival_planned, "
+    "train_numbers, fare_lowest_eur, journey_id"
 )
 
 
@@ -121,41 +147,58 @@ def _silver_source(silver_glob: str) -> str:
     return read_parquet(silver_glob, hive_partitioning=True)
 
 
+def _columns(connection: duckdb.DuckDBPyConnection, source: str) -> set[str]:
+    return {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
+
+
+def _row_violations(connection: duckdb.DuckDBPyConnection, silver: str) -> tuple[list[Violation], int]:
+    projection = ", ".join(
+        f"count(*) FILTER (WHERE {predicate}) AS c{index}" for index, (_, predicate) in enumerate(ROW_CHECKS)
+    )
+    row = connection.execute(f"SELECT {projection}, count(*) AS total FROM {silver}").fetchone()
+    if row is None:
+        raise RuntimeError("silver scan returned no row")
+    violations = [Violation(name, f"{row[index]} rows") for index, (name, _) in enumerate(ROW_CHECKS) if row[index]]
+    return violations, int(row[-1])
+
+
+def _duplicate_violation(connection: duckdb.DuckDBPyConnection, silver: str) -> list[Violation]:
+    duplicates = scalar(
+        connection,
+        "SELECT coalesce(sum(n - 1), 0) FROM ("
+        f"SELECT count(*) AS n FROM {silver} GROUP BY {DUPLICATE_KEY} HAVING count(*) > 1)",
+    )
+    return [] if duplicates == 0 else [Violation("duplicate observations", f"{duplicates} extra rows")]
+
+
 def check(
     connection: duckdb.DuckDBPyConnection,
     *,
     bronze_glob: str,
     silver_glob: str,
-    expected_rows: int | None = None,
+    rows_in: int | None = None,
 ) -> list[Violation]:
     """Return every invariant violation in the built silver layer."""
     silver = _silver_source(silver_glob)
-    actual_columns = {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM {silver}").fetchall()}
-    missing = [column for column in REQUIRED_COLUMNS if column not in actual_columns]
+    silver_columns = _columns(connection, silver)
+    missing = [column for column in REQUIRED_COLUMNS if column not in silver_columns]
     if missing:
         return [Violation("missing columns", ", ".join(missing))]
 
-    bronze_rows = scalar(connection, f"SELECT count(*) FROM {read_parquet(bronze_glob)}")
-    silver_rows = scalar(connection, f"SELECT count(*) FROM {silver}")
+    # A bronze column that silver does not carry is a schema drift the explicit projection
+    # would otherwise drop silently.
+    bronze = read_parquet(bronze_glob)
+    dropped = sorted(_columns(connection, bronze) - silver_columns - set(RENAMED_COLUMNS))
+    violations = [Violation("bronze column dropped by the transform", ", ".join(dropped))] if dropped else []
 
-    violations: list[Violation] = []
-    if expected_rows is not None and bronze_rows != expected_rows:
-        violations.append(Violation("bronze row count changed mid-build", f"{expected_rows} -> {bronze_rows}"))
-    if bronze_rows != silver_rows:
-        violations.append(Violation("row count bronze != silver", f"{bronze_rows} != {silver_rows}"))
+    row_violations, rows_out = _row_violations(connection, silver)
+    violations.extend(row_violations)
+    violations.extend(_duplicate_violation(connection, silver))
 
-    for name, sql in COUNT_CHECKS:
-        offending = scalar(connection, sql.replace("FROM silver", f"FROM {silver}"))
-        if offending:
-            violations.append(Violation(name, f"{offending} rows"))
-
-    empty_partitions = scalar(
-        connection,
-        f"SELECT count(*) FROM (SELECT departure_year, departure_month, count(*) AS n FROM {silver} "
-        "GROUP BY 1, 2 HAVING n = 0)",
-    )
-    if empty_partitions:
-        violations.append(Violation("empty partition", f"{empty_partitions} partitions"))
+    if rows_in is None:
+        rows_in = scalar(connection, f"SELECT count(*) FROM {bronze}")
+    if rows_in != rows_out:
+        violations.append(Violation("row count bronze != silver", f"{rows_in} != {rows_out}"))
 
     return violations
 

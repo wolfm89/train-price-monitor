@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ANALYTICS_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = ANALYTICS_ROOT.parent
+from tpm_analytics.silver._duck import asset_dir
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load(path: Path) -> dict:
@@ -14,7 +15,7 @@ def load(path: Path) -> dict:
 
 
 def dimension() -> list[dict]:
-    return load(ANALYTICS_ROOT / "data" / "stations.json")["stations"]
+    return load(asset_dir("data") / "stations.json")["stations"]
 
 
 def scraper_catalogue() -> list[dict]:
@@ -34,10 +35,16 @@ def test_evas_are_unique() -> None:
 
 
 def test_dimension_has_the_full_field_set() -> None:
+    problems = []
     for station in dimension():
-        assert set(station) == {"eva", "name", "lat", "lon", "state", "category"}
-        assert station["eva"].isdigit()
-        assert 47 < station["lat"] < 55
-        assert 5 < station["lon"] < 15
-        assert 1 <= station["category"] <= 7
-        assert station["state"]
+        if set(station) != {"eva", "name", "lat", "lon", "state", "category"}:
+            problems.append(f"{station.get('name')}: unexpected fields {sorted(station)}")
+        if not str(station["eva"]).isdigit():
+            problems.append(f"{station['name']}: eva {station['eva']} is not numeric")
+        if not 47 < station["lat"] < 55 or not 5 < station["lon"] < 15:
+            problems.append(f"{station['name']}: coordinates outside Germany")
+        if not 1 <= station["category"] <= 7:
+            problems.append(f"{station['name']}: category {station['category']} outside 1..7")
+        if not station["state"]:
+            problems.append(f"{station['name']}: empty state")
+    assert not problems, "\n".join(problems)

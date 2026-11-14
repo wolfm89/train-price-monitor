@@ -158,6 +158,11 @@ flowchart LR
   `unavailable` instead of failing.
 - **Scraper** is fully decoupled: EventBridge schedules drive the Hydrator (seed targets), Poller
   (scrape prices), and Compactor (consolidate Parquet). See `scraper/README.md` for details.
+- **Analytics** turns bronze into silver with DuckDB: v1/v2 rows are normalised (`transfers_raw` and
+  `transfers_actual`, load-factor ordinals, backfilled v1 defaults), station context is joined, and
+  all calendar fields plus `timetable_period` use Berlin local time. The timetable boundary in
+  `analytics/src/tpm_analytics/sql/silver.sql` is a hand-maintained constant; `TIMETABLE_REVIEW_AFTER`
+  in `quality.py` fails the build once departures reach the end of the reviewed period.
 
 ## Testing Strategy
 

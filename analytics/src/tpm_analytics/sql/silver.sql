@@ -5,17 +5,16 @@
 --   {{STATIONS_PATH}}  station dimension JSON
 --   {{TARGET}}         output directory for this build
 --
--- One row in, one row out: the transform never filters. Every derived column is documented in
+-- One row in, one row out: the transform never filters. The column contract is documented in
 -- analytics/README.md and asserted by tpm_analytics.silver.quality.
+--
+-- All calendar attributes (date, weekday, hour, timetable period, partition) are Berlin wall time.
+-- The DB timetable runs on local time, and a 00:30 CET departure is 23:30 UTC on the previous day,
+-- so deriving them from the UTC timestamp would put night trains in the wrong day, week and month.
 
 COPY (
     WITH bronze AS (
         SELECT * FROM {{BRONZE_SOURCE}}
-    ),
-
-    stations_raw AS (
-        SELECT unnest(stations) AS station
-        FROM read_json_auto('{{STATIONS_PATH}}')
     ),
 
     stations AS (
@@ -25,24 +24,30 @@ COPY (
             station.lon::DOUBLE AS lon,
             station.state::VARCHAR AS state,
             station.category::INTEGER AS category
-        FROM stations_raw
-    ),
-
-    -- Scrapes are keyed by route and departure day; every row of that pair shares the count.
-    route_day_density AS (
-        SELECT
-            route_id,
-            CAST(departure_planned AS DATE) AS departure_date,
-            COUNT(DISTINCT observed_at) AS scrapes_per_route_day
-        FROM bronze
-        GROUP BY route_id, departure_date
+        FROM (SELECT unnest(stations) AS station FROM read_json_auto('{{STATIONS_PATH}}'))
     ),
 
     normalised AS (
         SELECT
-            b.* EXCLUDE (schema_version),
-            COALESCE(b.schema_version, 1) AS schema_version
+            b.* EXCLUDE (schema_version, train_numbers, source_profile, query_mode),
+            COALESCE(b.schema_version, 1) AS schema_version,
+            -- v1 files predate these columns; the compactor fills the same values for v1 rows.
+            COALESCE(NULLIF(b.train_numbers, ''), b.train_number) AS train_numbers,
+            COALESCE(NULLIF(b.source_profile, ''), 'dbweb') AS source_profile,
+            COALESCE(NULLIF(b.query_mode, ''), 'bestprice') AS query_mode,
+            timezone('Europe/Berlin', b.departure_planned AT TIME ZONE 'UTC') AS departure_local
         FROM bronze b
+    ),
+
+    -- Scrapes are keyed by route and the scraper's local departure day; every row of that pair
+    -- shares the count. Bucketing by the UTC date would mix two target days around midnight.
+    route_day_density AS (
+        SELECT
+            route_id,
+            CAST(departure_local AS DATE) AS departure_date,
+            COUNT(DISTINCT observed_at) AS scrapes_per_route_day
+        FROM normalised
+        GROUP BY route_id, departure_date
     ),
 
     enriched AS (
@@ -61,12 +66,9 @@ COPY (
                     WHEN 'exceptionally-high' THEN 4
                 END
             ) AS load_factor_ordinal_filled,
-            CAST(n.departure_planned AS DATE) AS departure_date,
-            CAST(dayofweek(n.departure_planned) AS INTEGER) AS departure_weekday,
-            CAST(
-                EXTRACT(hour FROM timezone('Europe/Berlin', n.departure_planned AT TIME ZONE 'UTC'))
-                AS INTEGER
-            ) AS departure_hour_local,
+            CAST(n.departure_local AS DATE) AS departure_date,
+            CAST(dayofweek(n.departure_local) AS INTEGER) AS departure_weekday,
+            CAST(EXTRACT(hour FROM n.departure_local) AS INTEGER) AS departure_hour_local,
             o.lat AS origin_lat,
             o.lon AS origin_lon,
             o.state AS origin_state,
@@ -93,7 +95,7 @@ COPY (
         train_type,
         train_number,
         train_numbers,
-        transfers,
+        transfers AS transfers_raw,
         duration_minutes,
         days_to_departure,
         fare_lowest_eur,
@@ -121,12 +123,12 @@ COPY (
         origin_station_category,
         dest_station_category,
         CASE
-            WHEN departure_planned < TIMESTAMP '2026-12-13 00:00:00' THEN '2025-12'
+            WHEN departure_local < TIMESTAMP '2026-12-13 00:00:00' THEN '2025-12'
             ELSE '2026-12'
         END AS timetable_period,
         CASE
             WHEN observed_at < TIMESTAMP '2026-09-01 00:00:00' THEN 'dense'
-            WHEN observed_at < TIMESTAMP '2026-11-13 18:00:00' THEN 'sparse'
+            WHEN observed_at < TIMESTAMP '2026-11-13 18:15:49' THEN 'sparse'
             ELSE 'post-fix'
         END AS observation_era,
         density.scrapes_per_route_day,

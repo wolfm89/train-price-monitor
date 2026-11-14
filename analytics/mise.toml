@@ -3,8 +3,8 @@ description = "Create the uv environment from the lockfile"
 run = "uv sync --frozen"
 
 [tasks.build]
-description = "Install runtime dependencies only, as the Lambda image does"
-run = "uv sync --frozen --no-dev"
+description = "Build the wheel and sdist (assets included)"
+run = "uv build"
 
 [tasks.typecheck]
 description = "Type check with ty"
@@ -21,6 +21,10 @@ run = "uv run --frozen ruff check ."
 [tasks.format]
 description = "Format with ruff"
 run = "uv run --frozen ruff format ."
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf dist .pytest_cache .ruff_cache"
 
 [tasks."silver:local"]
 description = "Build silver from a local bronze glob; pass --source <glob> --target <dir> after --"

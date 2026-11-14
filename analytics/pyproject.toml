@@ -3,6 +3,7 @@ name = "tpm-analytics"
 version = "0.1.0"
 description = "Silver-layer builds for the Train Price Monitor price dataset"
 readme = "README.md"
+license = "GPL-3.0-only"
 requires-python = ">=3.13"
 dependencies = ["duckdb==1.5.3"]
 
@@ -15,7 +16,9 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.26,<0.12.0"]
+# Bounded on purpose: uv warns that an unbounded backend breaks when 0.12 lands. Bump this and
+# the uv pin in .mise.toml / CI together.
+requires = ["uv_build>=0.11.26,<0.12"]
 build-backend = "uv_build"
 
 [tool.ruff]
@@ -23,7 +26,7 @@ line-length = 120
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "PT", "RUF"]
 
 [tool.ty.environment]
 python-version = "3.13"
@@ -33,3 +36,4 @@ include = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["error"]
