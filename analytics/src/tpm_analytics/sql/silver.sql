@@ -52,7 +52,6 @@ COPY (
             PARTITION BY
                 observed_at, route_id, service_class, departure_planned, arrival_planned,
                 train_numbers, fare_lowest_eur, journey_id
-            ORDER BY observed_at
         ) = 1
     ),
 

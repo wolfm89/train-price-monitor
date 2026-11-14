@@ -70,6 +70,24 @@ refused: an existing target, a failed gate, an empty corpus, a URI instead of a 
 DuckDB/OS error. argparse also exits 2 for a usage error. Linux and macOS are supported;
 Windows is untested.
 
+## Scale (measured 2026-11-14)
+
+The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2.9 GB of silver in
+8 departure-month partitions. On a workstation with 8 GB for DuckDB and 4 threads the build takes
+8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
+
+That is far above the 10M rows the first cost model assumed, so the Lambda is sized for it:
+10,240 MB memory, 10,240 MB ephemeral storage, 900 s, `memory_limit=8GB`, `threads=6`. If a future
+corpus no longer fits, split the build by departure month instead of raising the limits.
+
+```bash
+uv run python -m tpm_analytics.silver.build \
+  --source '/data/prices/**/*.parquet' --target /data/silver \
+  --threads 4 --memory-limit 8GB
+```
+
+Re-run this before an engine upgrade and before the stack lands. It is not part of CI.
+
 ## Column contract
 
 Silver has the 22 bronze columns plus the columns below. Each file carries 35 columns; the
