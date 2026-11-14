@@ -70,7 +70,7 @@ def _build_prefix(prefix: str, build_id: str) -> str:
 def _read_pointer(store: ObjectStore, prefix: str) -> Pointer | None:
     try:
         return Pointer.from_json(store.get_bytes(pointer_key(prefix)))
-    except (FileNotFoundError, ClientError, ValueError):
+    except FileNotFoundError, ClientError, ValueError:
         return None
 
 
