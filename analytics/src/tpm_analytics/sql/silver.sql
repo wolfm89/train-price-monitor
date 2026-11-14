@@ -5,7 +5,7 @@
 --   {{STATIONS_PATH}}  station dimension JSON
 --   {{TARGET}}         output directory for this build
 --
--- One row in, one row out: the transform never filters. The column contract is documented in
+-- The transform drops duplicate observations and otherwise never filters. The column contract is documented in
 -- analytics/README.md and asserted by tpm_analytics.silver.quality.
 --
 -- All calendar attributes (date, weekday, hour, timetable period, partition) are Berlin wall time.
@@ -42,6 +42,20 @@ COPY (
         FROM bronze b
     ),
 
+    -- The compactor de-duplicates by this key, but a day that was compacted twice, or whose
+    -- batch files outlived the daily file, can still contain repeats. Silver is the deduplicated
+    -- layer, so the first observation of a key wins and the rest are reported by the build.
+    deduplicated AS (
+        SELECT *
+        FROM normalised
+        QUALIFY row_number() OVER (
+            PARTITION BY
+                observed_at, route_id, service_class, departure_planned, arrival_planned,
+                train_numbers, fare_lowest_eur, journey_id
+            ORDER BY observed_at
+        ) = 1
+    ),
+
     -- Scrapes are keyed by route and the scraper's local departure day; every row of that pair
     -- shares the count. Bucketing by the UTC date would mix two target days around midnight.
     -- Reads bronze directly so `normalised` stays single-use and is inlined, not materialised.
@@ -57,9 +71,17 @@ COPY (
     enriched AS (
         SELECT
             n.*,
-            -- v1 counted every vehicle leg, footways included, so it is always even.
-            CAST(CASE WHEN n.schema_version = 1 THEN n.transfers // 2 ELSE n.transfers END AS INTEGER)
-                AS transfers_actual,
+            -- v1 counted legs, footways included. Even values are exactly 2x the changes; odd
+            -- values (370 rows in the historical corpus) do not identify the change count, so the
+            -- derived column is NULL rather than half a guess.
+            CAST(
+                CASE
+                    WHEN n.schema_version = 1 AND n.transfers % 2 = 0 THEN n.transfers // 2
+                    WHEN n.schema_version = 1 THEN NULL
+                    ELSE n.transfers
+                END
+                AS INTEGER
+            ) AS transfers_actual,
             COALESCE(
                 n.load_factor_ordinal,
                 CASE n.load_factor
@@ -81,7 +103,7 @@ COPY (
             d.lon AS dest_lon,
             d.state AS dest_state,
             d.category AS dest_station_category
-        FROM normalised n
+        FROM deduplicated n
         LEFT JOIN stations o ON o.eva = n.origin_eva
         LEFT JOIN stations d ON d.eva = n.dest_eva
     )

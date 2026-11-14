@@ -10,7 +10,8 @@ dataset that matches neither version. Silver is the conformed snapshot the model
 typed, with v1/v2 semantics normalised, station context joined and departure-month partitions.
 Every run rebuilds it from scratch, so the same input produces the same rows; row order and file
 split are not stable, and each build needs its own target directory and room on disk for the output
-plus the spill directory (both live next to the target).
+plus the spill directory (both live next to the target). Duplicate observations are removed using
+the compactor's key and reported in the build stats.
 
 ## Scope of this module (v1)
 
@@ -122,6 +123,10 @@ never forgets them, and a missing row fails every future rebuild.
 - `journey_id` is null for every v1 row; it is never re-derived. `train_numbers`, `source_profile`
   and `query_mode` are backfilled for v1 rows with the same defaults the compactor uses
   (`train_number`, `dbweb`, `bestprice`).
+- Duplicate observations (same compactor key) are collapsed to one row. The historical corpus has
+  1,146 such rows, from days whose batch files outlived their daily file.
+- Odd v1 `transfers` values (370 rows in the historical corpus) become a NULL `transfers_actual`:
+  the old poller counted every leg including footways, and an odd count cannot be halved exactly.
 - `timetable_period` is derived from the departure date, not from the deploy. `TIMETABLE_BOUNDARY`
   and `TIMETABLE_REVIEW_AFTER` both live in `silver/constants.py`; the build fails once departures
   reach the end of the reviewed period, so a forgotten December or June edit cannot silently

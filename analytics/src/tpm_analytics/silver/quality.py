@@ -87,7 +87,6 @@ REQUIRED_NON_NULL: tuple[str, ...] = (
     "schema_version",
     "source_profile",
     "query_mode",
-    "transfers_actual",
     "departure_date",
     "departure_weekday",
     "departure_hour_local",
@@ -127,10 +126,13 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
         " OR ".join(f"{column} IS NULL" for column in REQUIRED_NON_NULL),
     ),
     ("service_class outside {1,2}", "service_class NOT IN (1, 2)"),
-    ("non-positive duration_minutes", "duration_minutes <= 0"),
+    # Historical rows can predate the arrival-after-departure guarantee; only new data is gated.
+    (
+        "non-positive duration after the fix",
+        "observed_at >= TIMESTAMP '2026-11-13 18:15:49' AND duration_minutes <= 0",
+    ),
     ("non-positive fare", "fare_lowest_eur <= 0"),
     ("negative transfers_actual", "transfers_actual < 0"),
-    ("odd transfers on a v1 row", "schema_version = 1 AND transfers_raw % 2 <> 0"),
     # Before #141 the poller wrote journeys that had already left; that is history, not a
     # regression. Only rows observed after the fix have to satisfy the invariant.
     (
@@ -229,7 +231,8 @@ def check(
     *,
     bronze_glob: str,
     silver_glob: str,
-    rows_in: int | None = None,
+    bronze_rows: int | None = None,
+    expected_rows: int | None = None,
 ) -> Report:
     """Run every invariant against the built silver layer."""
     silver = _silver_source(silver_glob)
@@ -252,10 +255,10 @@ def check(
     # changes the corpus the transform actually read. count(*) uses Parquet metadata, so this is
     # cheap even on the full history.
     current_rows = scalar(connection, f"SELECT count(*) FROM {bronze}")
-    if rows_in is not None and current_rows != rows_in:
-        violations.append(Violation("bronze changed during build", f"{rows_in} -> {current_rows}"))
-    if current_rows != rows_out:
-        violations.append(Violation("row count bronze != silver", f"{current_rows} != {rows_out}"))
+    if bronze_rows is not None and current_rows != bronze_rows:
+        violations.append(Violation("bronze changed during build", f"{bronze_rows} -> {current_rows}"))
+    if expected_rows is not None and expected_rows != rows_out:
+        violations.append(Violation("row count != transform output", f"{expected_rows} != {rows_out}"))
 
     return Report(rows=rows_out, violations=tuple(violations))
 

@@ -25,7 +25,8 @@ def violations_for(connection: duckdb.DuckDBPyConnection, built: Built, source: 
         connection,
         bronze_glob=source,
         silver_glob=str(built.target / "**" / "*.parquet"),
-        rows_in=built.stats.rows_in,
+        bronze_rows=built.stats.rows_in,
+        expected_rows=built.stats.rows_out,
     )
     return list(report.violations)
 
@@ -54,12 +55,15 @@ def test_v2_journey_id_is_required(tmp_path: Path, duck) -> None:
     assert "journey_id missing on a v2 row" in names(violations_for(duck, built, source))
 
 
-def test_duplicate_observations_are_rejected(tmp_path: Path, duck) -> None:
+def test_duplicate_observations_are_removed(tmp_path: Path, duck) -> None:
     root = tmp_path / "duplicates"
     write_bronze(root / "day=01", [bronze_row(), bronze_row()], schema_version=2)
     source = str(root / "**" / "*.parquet")
-    built = unchecked(source, tmp_path / "silver-duplicates")
-    assert "duplicate observations" in names(violations_for(duck, built, source))
+    built = Built(stats=run_build(source, tmp_path / "silver-duplicates"), target=tmp_path / "silver-duplicates")
+    assert built.stats.rows_in == 2
+    assert built.stats.rows_out == 1
+    assert built.stats.duplicates_removed == 1
+    assert violations_for(duck, built, source) == []
 
 
 def test_negative_days_are_history_before_the_fix(tmp_path: Path, duck) -> None:
@@ -86,12 +90,19 @@ def test_negative_days_are_rejected_after_the_fix(tmp_path: Path, duck) -> None:
     assert "negative days_to_departure after the fix" in names(violations_for(duck, built, source))
 
 
-def test_odd_v1_transfers_are_rejected(tmp_path: Path, duck) -> None:
+def test_odd_v1_transfers_become_null(tmp_path: Path, duck) -> None:
+    """An odd v1 value does not identify the change count, so silver refuses to guess."""
     root = tmp_path / "odd-transfers"
     write_bronze(root / "day=01", [v1_row(transfers=3)], schema_version=1)
     source = str(root / "**" / "*.parquet")
     built = unchecked(source, tmp_path / "silver-odd")
-    assert "odd transfers on a v1 row" in names(violations_for(duck, built, source))
+    assert violations_for(duck, built, source) == []
+    (actual,) = duck.execute(
+        "SELECT transfers_actual FROM read_parquet(?, union_by_name = true, hive_partitioning = true)".replace(
+            "?", "'" + str(built.target / "**" / "*.parquet") + "'"
+        )
+    ).fetchone()
+    assert actual is None
 
 
 def test_unknown_load_factor_is_rejected(tmp_path: Path, duck) -> None:
@@ -177,7 +188,7 @@ def test_departure_beyond_the_reviewed_timetable_is_rejected(tmp_path: Path, duc
 
 def test_missing_columns_are_reported(duck, bronze_glob: str) -> None:
     """Pointing the gate at bronze (which lacks the derived columns) must fail loudly."""
-    report = quality.check(duck, bronze_glob=bronze_glob, silver_glob=bronze_glob, rows_in=6)
+    report = quality.check(duck, bronze_glob=bronze_glob, silver_glob=bronze_glob, bronze_rows=6)
     assert names(list(report.violations)) == ["missing columns"]
     assert "distance_km" in report.violations[0].detail
 
@@ -212,12 +223,19 @@ def test_unknown_schema_version_is_rejected(tmp_path: Path, duck) -> None:
     assert "schema_version outside {1,2}" in names(violations_for(duck, built, source))
 
 
-def test_duplicate_violation_names_a_sample(tmp_path: Path, duck) -> None:
-    root = tmp_path / "duplicates-sample"
-    write_bronze(root / "day=01", [bronze_row(), bronze_row()], schema_version=2)
-    source = str(root / "**" / "*.parquet")
-    built = unchecked(source, tmp_path / "silver-duplicates-sample")
-    details = [violation.detail for violation in violations_for(duck, built, source)]
+def test_duplicate_rows_in_silver_are_still_detected(build, duck, bronze_glob: str, tmp_path: Path) -> None:
+    """Deduplication happens in the transform; the gate still catches a regression that bypasses it."""
+    built = build()
+    source_file = next(built.target.glob("departure_year=2026/departure_month=11/*.parquet"))
+    table = pq.read_table(source_file)
+    duplicate_dir = tmp_path / "silver-regressed" / "departure_year=2026" / "departure_month=11"
+    duplicate_dir.mkdir(parents=True)
+    pq.write_table(table, duplicate_dir / "a.parquet")
+    pq.write_table(table, duplicate_dir / "b.parquet")
+    glob = str(tmp_path / "silver-regressed" / "**" / "*.parquet")
+    report = quality.check(duck, bronze_glob=bronze_glob, silver_glob=glob)
+    assert "duplicate observations" in names(list(report.violations))
+    details = [violation.detail for violation in report.violations]
     assert any("sample" in detail for detail in details)
 
 
@@ -228,6 +246,7 @@ def test_bronze_changing_mid_build_is_rejected(build, duck, bronze_glob: str) ->
         duck,
         bronze_glob=bronze_glob,
         silver_glob=str(built.target / "**" / "*.parquet"),
-        rows_in=built.stats.rows_in + 1,
+        bronze_rows=built.stats.rows_in + 1,
+        expected_rows=built.stats.rows_out,
     )
     assert "bronze changed during build" in names(list(report.violations))

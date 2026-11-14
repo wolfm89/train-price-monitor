@@ -74,6 +74,7 @@ class BuildStats:
     target: str
     rows_in: int
     rows_out: int
+    duplicates_removed: int
     partitions: int
     duration_seconds: float
 
@@ -182,7 +183,8 @@ def run_build(
                 connection,
                 bronze_glob=source,
                 silver_glob=silver_glob,
-                rows_in=rows_in,
+                bronze_rows=rows_in,
+                expected_rows=rows_out,
             )
             violations = list(report.violations)
             if report.rows != rows_out:
@@ -209,6 +211,7 @@ def run_build(
         target=str(final_target),
         rows_in=rows_in,
         rows_out=rows_out,
+        duplicates_removed=rows_in - rows_out,
         partitions=partitions,
         duration_seconds=round(time.perf_counter() - started, 3),
     )
