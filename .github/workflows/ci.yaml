@@ -251,6 +251,15 @@ jobs:
           cache-from: type=gha,scope=scraper
           cache-to: type=gha,scope=scraper,mode=max
 
+      - name: Build analytics image
+        uses: docker/build-push-action@v7
+        with:
+          context: analytics
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=analytics
+          cache-to: type=gha,scope=analytics,mode=max
+
   deploy:
     name: Deploy
     # Never on pull requests, and only once every module job is green.

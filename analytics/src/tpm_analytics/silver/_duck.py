@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import duckdb
@@ -28,12 +29,19 @@ def asset_dir(name: str) -> Path:
     return path
 
 
+def extension_directory() -> Path | None:
+    """The image bakes httpfs into DUCKDB_EXTENSION_DIR; local runs leave it unset."""
+    configured = os.environ.get("DUCKDB_EXTENSION_DIR")
+    return Path(configured) if configured else None
+
+
 def connect(
     *,
     temp_directory: Path,
     threads: int = DEFAULT_THREADS,
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     max_temp_size: str = DEFAULT_MAX_TEMP_SIZE,
+    extensions: Path | None = None,
 ) -> duckdb.DuckDBPyConnection:
     """Open an in-memory DuckDB session tuned for a batch build."""
     connection = duckdb.connect()
@@ -49,6 +57,10 @@ def connect(
         connection.execute(f"SET temp_directory = '{sql_string(temp_directory.as_posix())}'")
         connection.execute("SET preserve_insertion_order = false")
         connection.execute(f"SET threads = {int(threads)}")
+        bundled = extensions if extensions is not None else extension_directory()
+        if bundled is not None:
+            connection.execute(f"SET extension_directory = '{sql_string(bundled.as_posix())}'")
+            connection.execute("LOAD httpfs")
     except Exception:
         connection.close()
         raise

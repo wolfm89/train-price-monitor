@@ -22,6 +22,10 @@ run = "uv run --frozen ruff check . && uv run --frozen ruff format --check ."
 description = "Format with ruff"
 run = "uv run --frozen ruff format ."
 
+[tasks.image]
+description = "Build the Lambda container image"
+run = "docker build -t train-price-monitor-analytics:dev ."
+
 [tasks.clean]
 description = "Remove build artifacts"
 run = "rm -rf dist .pytest_cache .ruff_cache"
