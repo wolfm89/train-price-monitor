@@ -16,9 +16,9 @@ name: CI/CD
 # main and broke the deploy.
 
 on:
+  # Every pull request, not just those targeting main: stacked PRs need checks too, and the
+  # deploy job never runs on a pull_request.
   pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
