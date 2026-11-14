@@ -28,6 +28,7 @@ from tpm_analytics.silver._duck import (
     DEFAULT_MAX_TEMP_SIZE,
     DEFAULT_MEMORY_LIMIT,
     DEFAULT_THREADS,
+    S3Secret,
     asset_dir,
     connect,
     read_parquet,
@@ -137,11 +138,14 @@ def run_build(
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     max_temp_size: str = DEFAULT_MAX_TEMP_SIZE,
     verify: bool = True,
+    s3: S3Secret | None = None,
 ) -> BuildStats:
     """Build silver from ``source`` into the new directory ``target``."""
     started = time.perf_counter()
-    if "://" in source:
-        raise UnsupportedLocationError(f"source {source!r} is a URI; silver builds only support local paths")
+    if "://" in source and not (source.startswith("s3://") and s3 is not None):
+        raise UnsupportedLocationError(
+            f"source {source!r} is a URI; pass S3 credentials to read from s3:// or use a local path"
+        )
     sql_path = Path(sql_path) if sql_path is not None else asset_dir("sql") / "silver.sql"
     stations_path = Path(stations_path) if stations_path is not None else asset_dir("data") / "stations.json"
     final_target = local_path(target, role="target")
@@ -161,6 +165,7 @@ def run_build(
             threads=threads,
             memory_limit=memory_limit,
             max_temp_size=max_temp_size,
+            secret=s3,
         )
         source_sql = bronze_source(connection, source)
         rows_in = scalar(connection, f"SELECT count(*) FROM {source_sql}")

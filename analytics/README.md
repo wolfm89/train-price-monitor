@@ -22,9 +22,11 @@ Shipped here:
 - `src/tpm_analytics/silver/quality.py` — the gates that must pass before a build is published.
 - `tests/` — fixture-based tests over v1-only, v2-only and mixed bronze files.
 
-Not here yet: the S3 writer, the build manifest and `_latest.json` pointer, the Lambda handler, the
-`AnalyticsStack`, and the Dockerfile. Until then the module reads **local paths only** — it cannot
-open `s3://`.
+The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
+`handler.py`). Not here yet: the `AnalyticsStack`, the scheduled trigger and the deployment.
+
+The CLI still writes to a local directory. Reading `s3://` requires S3 credentials passed to
+`run_build`; the Lambda handler supplies them from its execution role.
 
 The SQL and the station dimension live inside the package (`src/tpm_analytics/{sql,data}`), so a
 built wheel is self-contained and the future image only has to copy `tpm_analytics/`.
@@ -87,6 +89,29 @@ uv run python -m tpm_analytics.silver.build \
 ```
 
 Re-run this before an engine upgrade and before the stack lands. It is not part of CI.
+
+## Publishing
+
+The Lambda handler builds into a local temp directory, verifies it, and publishes:
+
+```
+silver/builds/<build id>/departure_year=YYYY/departure_month=MM/*.parquet
+silver/builds/<build id>/_manifest.json
+silver/_latest.json
+```
+
+- The **manifest** records `build_id`, source, rows in/out, duplicates removed, partitions,
+  duration, transform version, DuckDB version and every file with its size.
+- The **pointer** is written last, after the manifest is read back and every file is present with
+  the recorded size. A failed publish deletes its half-written build and leaves the pointer on the
+  previous good one.
+- **Retention** keeps the newest two builds (`SILVER_KEEP`).
+- The handler ignores the event: source, bucket, prefix and sizing come from the environment
+  (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,
+  `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
+
+`tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
+`ObjectStore`; nothing is written to AWS yet.
 
 ## Column contract
 
