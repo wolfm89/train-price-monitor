@@ -23,18 +23,18 @@ from uuid import uuid4
 
 import duckdb
 
-from tpm_analytics.silver import quality
+from tpm_analytics.silver import constants, quality
 from tpm_analytics.silver._duck import (
     DEFAULT_MAX_TEMP_SIZE,
     DEFAULT_MEMORY_LIMIT,
     DEFAULT_THREADS,
+    S3Secret,
     asset_dir,
     connect,
     read_parquet,
     scalar,
     sql_string,
 )
-from tpm_analytics.silver.constants import TIMETABLE_BOUNDARY
 
 # Columns introduced by schema v2. A corpus that predates v2 has none of them, and union_by_name
 # cannot invent a column that exists in no file, so the source expression adds them as typed NULLs.
@@ -71,15 +71,17 @@ class BuildStats:
     """What one silver build produced."""
 
     source: str
+    source_files: tuple[str, ...]
     target: str
     rows_in: int
     rows_out: int
     duplicates_removed: int
     partitions: int
     duration_seconds: float
+    verified: bool
 
 
-def bronze_source(connection: duckdb.DuckDBPyConnection, bronze_glob: str) -> str:
+def bronze_source(connection: duckdb.DuckDBPyConnection, bronze_glob: str | Sequence[str]) -> str:
     """Return a table expression over the bronze glob that always has the full v2 schema."""
     source = read_parquet(bronze_glob)
     columns = {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
@@ -98,13 +100,21 @@ def render_sql(
     target: Path,
 ) -> str:
     """Substitute the placeholders in ``silver.sql``."""
-    return (
-        sql_path.read_text(encoding="utf-8")
-        .replace("{{BRONZE_SOURCE}}", bronze_source_sql)
-        .replace("{{STATIONS_PATH}}", sql_string(stations_path.as_posix()))
-        .replace("{{TIMETABLE_BOUNDARY}}", TIMETABLE_BOUNDARY)
-        .replace("{{TARGET}}", sql_string(target.as_posix()))
-    )
+    replacements = {
+        "{{BRONZE_SOURCE}}": bronze_source_sql,
+        "{{STATIONS_PATH}}": sql_string(stations_path.as_posix()),
+        "{{TARGET}}": sql_string(target.as_posix()),
+        "{{TIMETABLE_BOUNDARY}}": constants.TIMETABLE_BOUNDARY,
+        "{{TIMETABLE_PREVIOUS}}": constants.TIMETABLE_PREVIOUS,
+        "{{TIMETABLE_CURRENT}}": constants.TIMETABLE_CURRENT,
+        "{{DENSE_ERA_CUTOFF}}": constants.DENSE_ERA_CUTOFF,
+        "{{OBSERVATION_ERA_CUTOFF}}": constants.OBSERVATION_ERA_CUTOFF,
+        "{{DEDUPE_KEY}}": ", ".join(constants.DEDUPE_KEY),
+    }
+    sql = sql_path.read_text(encoding="utf-8")
+    for placeholder, value in replacements.items():
+        sql = sql.replace(placeholder, value)
+    return sql
 
 
 def parse_copy_stats(
@@ -127,7 +137,7 @@ def parse_copy_stats(
 
 
 def run_build(
-    source: str,
+    source: str | Sequence[str],
     target: str | Path,
     *,
     sql_path: Path | None = None,
@@ -137,11 +147,16 @@ def run_build(
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     max_temp_size: str = DEFAULT_MAX_TEMP_SIZE,
     verify: bool = True,
+    s3: S3Secret | None = None,
 ) -> BuildStats:
     """Build silver from ``source`` into the new directory ``target``."""
     started = time.perf_counter()
-    if "://" in source:
-        raise UnsupportedLocationError(f"source {source!r} is a URI; silver builds only support local paths")
+    if isinstance(source, str) and "://" in source and not (source.startswith("s3://") and s3 is not None):
+        raise UnsupportedLocationError(
+            f"source {source!r} is a URI; pass S3 credentials to read from s3:// or use a local path"
+        )
+    if not isinstance(source, str) and not source:
+        raise EmptyCorpusError("no source files given")
     sql_path = Path(sql_path) if sql_path is not None else asset_dir("sql") / "silver.sql"
     stations_path = Path(stations_path) if stations_path is not None else asset_dir("data") / "stations.json"
     final_target = local_path(target, role="target")
@@ -161,6 +176,7 @@ def run_build(
             threads=threads,
             memory_limit=memory_limit,
             max_temp_size=max_temp_size,
+            secret=s3,
         )
         source_sql = bronze_source(connection, source)
         rows_in = scalar(connection, f"SELECT count(*) FROM {source_sql}")
@@ -177,7 +193,35 @@ def run_build(
         column_names = [column[0] for column in (result.description or [])]
         written = result.fetchall()
         rows_out, partitions = parse_copy_stats(column_names, written)
+        duplicates_removed = rows_in - rows_out
         silver_glob = str(partial / "**" / "*.parquet")
+        allowed = max(constants.MAX_DUPLICATE_ABSOLUTE, int(rows_in * constants.MAX_DUPLICATE_SHARE))
+        if verify and rows_in and duplicates_removed > allowed:
+            raise quality.QualityError(
+                [
+                    quality.Violation(
+                        "too many duplicates removed",
+                        f"{duplicates_removed} of {rows_in} rows; the dedupe key may be too coarse",
+                    )
+                ]
+            )
+        if verify and duplicates_removed:
+            # Removed rows must be duplicates, not silently dropped unique observations.
+            expected_duplicates = scalar(
+                connection,
+                "SELECT coalesce(sum(n - 1), 0) FROM ("
+                f"SELECT count(*) AS n FROM {source_sql} "
+                f"GROUP BY {', '.join(constants.DEDUPE_KEY)} HAVING count(*) > 1)",
+            )
+            if expected_duplicates != duplicates_removed:
+                raise quality.QualityError(
+                    [
+                        quality.Violation(
+                            "removed rows != duplicate rows",
+                            f"{duplicates_removed} removed, {expected_duplicates} duplicates in bronze",
+                        )
+                    ]
+                )
         if verify:
             report = quality.check(
                 connection,
@@ -207,13 +251,15 @@ def run_build(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     return BuildStats(
-        source=source,
+        source=source if isinstance(source, str) else f"{len(source)} files",
+        source_files=() if isinstance(source, str) else tuple(source),
         target=str(final_target),
         rows_in=rows_in,
         rows_out=rows_out,
-        duplicates_removed=rows_in - rows_out,
+        duplicates_removed=duplicates_removed,
         partitions=partitions,
         duration_seconds=round(time.perf_counter() - started, 3),
+        verified=verify,
     )
 
 

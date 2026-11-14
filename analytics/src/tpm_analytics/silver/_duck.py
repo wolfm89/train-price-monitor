@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
@@ -14,6 +16,29 @@ DEFAULT_MAX_TEMP_SIZE = "4GB"
 # The sql/ and data/ directories live inside the package, so a wheel built from
 # analytics/ is self-contained and the Lambda image only has to copy tpm_analytics/.
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
+
+
+@dataclass(frozen=True)
+class S3Secret:
+    """Credentials from the execution role, handed to DuckDB as a temporary secret."""
+
+    access_key: str
+    secret_key: str = field(repr=False)
+    session_token: str = field(repr=False)
+    region: str
+
+
+def create_secret_sql(secret: S3Secret) -> str:
+    """Build the CREATE SECRET statement; values are escaped, never interpolated raw."""
+    parts = [
+        "CREATE OR REPLACE SECRET silver_s3 (TYPE s3, PROVIDER config",
+        f"KEY_ID '{sql_string(secret.access_key)}'",
+        f"SECRET '{sql_string(secret.secret_key)}'",
+        f"REGION '{sql_string(secret.region)}'",
+    ]
+    if secret.session_token:
+        parts.append(f"SESSION_TOKEN '{sql_string(secret.session_token)}'")
+    return ", ".join(parts) + ")"
 
 
 def sql_string(value: str) -> str:
@@ -42,6 +67,7 @@ def connect(
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     max_temp_size: str = DEFAULT_MAX_TEMP_SIZE,
     extensions: Path | None = None,
+    secret: S3Secret | None = None,
 ) -> duckdb.DuckDBPyConnection:
     """Open an in-memory DuckDB session tuned for a batch build."""
     connection = duckdb.connect()
@@ -61,6 +87,14 @@ def connect(
         if bundled is not None:
             connection.execute(f"SET extension_directory = '{sql_string(bundled.as_posix())}'")
             connection.execute("LOAD httpfs")
+        if secret is not None:
+            if bundled is None:
+                raise RuntimeError("S3 reads need the httpfs extension; set DUCKDB_EXTENSION_DIR")
+            try:
+                connection.execute(create_secret_sql(secret))
+            except duckdb.Error:
+                # DuckDB error text echoes the statement, which contains the credentials.
+                raise RuntimeError("could not create the DuckDB S3 secret (statement redacted)") from None
     except Exception:
         connection.close()
         raise
@@ -75,12 +109,19 @@ def scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
     return int(rows[0][0])
 
 
-def read_parquet(path_glob: str, *, hive_partitioning: bool = False) -> str:
-    """Build a read_parquet table expression for a glob.
+def read_parquet(paths: str | Sequence[str], *, hive_partitioning: bool = False) -> str:
+    """Build a read_parquet table expression for a glob or an explicit file list.
+
+    An explicit list is what the handler passes: it is the snapshot the build reads, so a poller
+    or compactor run that lands mid-build cannot change the corpus under it.
 
     ``hive_partitioning`` is always passed explicitly: DuckDB auto-detects
     ``key=value`` directories, and bronze is laid out as ``year=/month=/day=``,
     which must never become columns.
     """
+    if isinstance(paths, str):
+        target = f"'{sql_string(paths)}'"
+    else:
+        target = "[" + ", ".join(f"'{sql_string(path)}'" for path in paths) + "]"
     options = f"union_by_name = true, hive_partitioning = {'true' if hive_partitioning else 'false'}"
-    return f"read_parquet('{sql_string(path_glob)}', {options})"
+    return f"read_parquet({target}, {options})"

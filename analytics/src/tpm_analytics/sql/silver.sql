@@ -49,9 +49,7 @@ COPY (
         SELECT *
         FROM normalised
         QUALIFY row_number() OVER (
-            PARTITION BY
-                observed_at, route_id, service_class, departure_planned, arrival_planned,
-                train_numbers, fare_lowest_eur, journey_id
+            PARTITION BY {{DEDUPE_KEY}}
             ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes, load_factor, fare_lowest_eur
         ) = 1
     ),
@@ -149,12 +147,12 @@ COPY (
         origin_station_category,
         dest_station_category,
         CASE
-            WHEN departure_local < TIMESTAMP '{{TIMETABLE_BOUNDARY}} 00:00:00' THEN '2025-12'
-            ELSE '2026-12'
+            WHEN departure_local < TIMESTAMP '{{TIMETABLE_BOUNDARY}} 00:00:00' THEN '{{TIMETABLE_PREVIOUS}}'
+            ELSE '{{TIMETABLE_CURRENT}}'
         END AS timetable_period,
         CASE
-            WHEN observed_at < TIMESTAMP '2026-09-01 00:00:00' THEN 'dense'
-            WHEN observed_at < TIMESTAMP '2026-11-13 18:15:49' THEN 'sparse'
+            WHEN observed_at < TIMESTAMP '{{DENSE_ERA_CUTOFF}}' THEN 'dense'
+            WHEN observed_at < TIMESTAMP '{{OBSERVATION_ERA_CUTOFF}}' THEN 'sparse'
             ELSE 'post-fix'
         END AS observation_era,
         density.scrapes_per_route_day,

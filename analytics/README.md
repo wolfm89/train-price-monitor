@@ -22,9 +22,13 @@ Shipped here:
 - `src/tpm_analytics/silver/quality.py` — the gates that must pass before a build is published.
 - `tests/` — fixture-based tests over v1-only, v2-only and mixed bronze files.
 
-Not here yet: the S3 writer, the build manifest and `_latest.json` pointer, the Lambda handler, the
-`AnalyticsStack`, and the Dockerfile. Until then the module reads **local paths only** — it cannot
-open `s3://`.
+The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
+`handler.py`). Not here yet: the `AnalyticsStack`, the scheduled trigger and the deployment.
+The handler lists the bronze keys once and builds from that snapshot, so the poller's 15-minute
+appends cannot change the corpus under a nine-minute build.
+
+The CLI still writes to a local directory. Reading `s3://` requires S3 credentials passed to
+`run_build`; the Lambda handler supplies them from its execution role.
 
 The SQL and the station dimension live inside the package (`src/tpm_analytics/{sql,data}`), so a
 built wheel is self-contained and the future image only has to copy `tpm_analytics/`.
@@ -77,8 +81,10 @@ The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2
 8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
 
 That is far above the 10M rows the first cost model assumed, so the Lambda is sized for it:
-10,240 MB memory, 10,240 MB ephemeral storage, 900 s, `memory_limit=8GB`, `threads=6`. If a future
-corpus no longer fits, split the build by departure month instead of raising the limits.
+10,240 MB memory, 10,240 MB ephemeral storage, 900 s, `memory_limit=8GB`, `threads=6`,
+`SILVER_MAX_TEMP_SIZE=5GB` so spill and output share the 10 GB `/tmp` without colliding. Those
+numbers come from a workstation run: the first Lambda run must be measured before the schedule
+is trusted. If a future corpus no longer fits, split the build by departure month.
 
 ```bash
 uv run python -m tpm_analytics.silver.build \
@@ -87,6 +93,36 @@ uv run python -m tpm_analytics.silver.build \
 ```
 
 Re-run this before an engine upgrade and before the stack lands. It is not part of CI.
+
+## Publishing
+
+The Lambda handler builds into a local temp directory, verifies it, and publishes:
+
+```
+silver/builds/<build id>/departure_year=YYYY/departure_month=MM/*.parquet
+silver/builds/<build id>/_manifest.json
+silver/_latest.json
+```
+
+- The **manifest** records `build_id`, the source glob and the exact object list that was read,
+  rows in/out, duplicates removed, partitions, duration, transform version, DuckDB version,
+  SHA-256 of the SQL and station dimension, and every output file with its size. An empty
+  `TRANSFORM_VERSION` falls back to the SQL hash, so provenance is never blank.
+- The **pointer** is written last, after the manifest is read back and every file is present with
+  the recorded size. The pointer write is the commit point: an exception before it deletes the
+  half-written build; a pointer PUT that errors is assumed to have landed and the build is kept.
+  A killed process (timeout, OOM) cannot clean up: it leaves a prefix without a manifest, which
+  retention ignores and which can be deleted by hand.
+- **Retention** keeps the newest two builds (`SILVER_KEEP`, minimum 2 so one cycle of readers
+  always survives), only counts ids that match the build-id format and have a non-empty
+  manifest, and never deletes the build the pointer names.
+- The handler ignores the event: source, bucket, prefix and sizing come from the environment
+  (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,
+  `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
+
+`tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
+`ObjectStore`, and `tests/test_storage.py` covers the S3 implementation with botocore's
+`Stubber`. Nothing is written to AWS yet.
 
 ## Column contract
 

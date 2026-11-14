@@ -8,13 +8,13 @@ second pass with a hash aggregate.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 import duckdb
 
 from tpm_analytics.silver._duck import read_parquet, scalar
-from tpm_analytics.silver.constants import TIMETABLE_REVIEW_AFTER
+from tpm_analytics.silver.constants import DEDUPE_KEY, OBSERVATION_ERA_CUTOFF, TIMETABLE_REVIEW_AFTER
 
 REQUIRED_COLUMNS: tuple[str, ...] = (
     "observed_at",
@@ -129,7 +129,7 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
     # Historical rows can predate the arrival-after-departure guarantee; only new data is gated.
     (
         "non-positive duration after the fix",
-        "observed_at >= TIMESTAMP '2026-11-13 18:15:49' AND duration_minutes <= 0",
+        f"observed_at >= TIMESTAMP '{OBSERVATION_ERA_CUTOFF}' AND duration_minutes <= 0",
     ),
     ("non-positive fare", "fare_lowest_eur <= 0"),
     ("negative transfers_actual", "transfers_actual < 0"),
@@ -137,7 +137,7 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
     # regression. Only rows observed after the fix have to satisfy the invariant.
     (
         "negative days_to_departure after the fix",
-        "observed_at >= TIMESTAMP '2026-11-13 18:15:49' AND days_to_departure < 0",
+        f"observed_at >= TIMESTAMP '{OBSERVATION_ERA_CUTOFF}' AND days_to_departure < 0",
     ),
     ("station missing from the dimension", "origin_state IS NULL OR dest_state IS NULL"),
     ("distance_km missing or implausible", "distance_km IS NULL OR distance_km <= 0 OR distance_km > 1500"),
@@ -158,11 +158,7 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
 # a schema drift the explicit projection would otherwise drop silently.
 RENAMED_COLUMNS: dict[str, str] = {"transfers": "transfers_raw"}
 
-# The compactor's own de-duplication key (scraper/src/rows.ts, parquetRowKey).
-DUPLICATE_KEY = (
-    "observed_at, route_id, service_class, departure_planned, arrival_planned, "
-    "train_numbers, fare_lowest_eur, journey_id"
-)
+DUPLICATE_KEY = ", ".join(DEDUPE_KEY)
 
 
 @dataclass(frozen=True)
@@ -229,7 +225,7 @@ def _duplicate_violation(connection: duckdb.DuckDBPyConnection, silver: str) -> 
 def check(
     connection: duckdb.DuckDBPyConnection,
     *,
-    bronze_glob: str,
+    bronze_glob: str | Sequence[str],
     silver_glob: str,
     bronze_rows: int | None = None,
     expected_rows: int | None = None,
