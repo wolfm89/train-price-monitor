@@ -37,7 +37,6 @@ BUILD_BUDGET_SECONDS = 600
 class Settings:
     bucket: str
     prefix: str
-    bronze_prefix: str
     source: str
     region: str
     threads: int
@@ -52,7 +51,6 @@ def load_settings() -> Settings:
     return Settings(
         bucket=bucket,
         prefix=os.environ.get("SILVER_PREFIX", "silver"),
-        bronze_prefix=os.environ.get("BRONZE_PREFIX", "prices/"),
         source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/prices/**/*.parquet"),
         region=os.environ.get("AWS_REGION", "eu-central-1"),
         threads=int(os.environ.get("SILVER_THREADS", "6")),
@@ -61,6 +59,17 @@ def load_settings() -> Settings:
         keep=int(os.environ.get("SILVER_KEEP", "2")),
         transform_version=os.environ.get("TRANSFORM_VERSION", ""),
     )
+
+
+def bronze_prefix_for(source: str) -> str:
+    """The object prefix the glob actually covers, so the snapshot cannot disagree with the read."""
+    if not source.startswith("s3://"):
+        raise ValueError(f"BRONZE_SOURCE must be an s3:// glob, got {source!r}")
+    _, _, path = source[len("s3://") :].partition("/")
+    prefix = path.split("**")[0].rstrip("/")
+    if not prefix:
+        raise ValueError(f"BRONZE_SOURCE {source!r} has no prefix before the wildcard")
+    return prefix + "/"
 
 
 def aws_secret(region: str) -> S3Secret:
@@ -118,9 +127,12 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     store = S3ObjectStore(settings.bucket, region=settings.region)
     # One snapshot of the corpus: the build reads exactly these objects and the manifest records
     # them. The poller appends a batch every 15 minutes, so a live glob would change mid-build.
-    snapshot = tuple(f"s3://{settings.bucket}/{key}" for key in store.list_keys(settings.bronze_prefix))
+    prefix_in_source = bronze_prefix_for(settings.source)
+    if settings.source.split("/")[2] != settings.bucket:
+        raise ValueError(f"BRONZE_SOURCE names a different bucket than SILVER_BUCKET ({settings.bucket})")
+    snapshot = tuple(f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source))
     if not snapshot:
-        raise EmptyCorpusError(f"no bronze objects under {settings.bronze_prefix!r}")
+        raise EmptyCorpusError(f"no bronze objects under {prefix_in_source!r}")
     LOGGER.info("silver source snapshot files=%s", len(snapshot))
 
     with tempfile.TemporaryDirectory(prefix="silver-") as workspace:
@@ -138,7 +150,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
             raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
-        after = {f"s3://{settings.bucket}/{key}" for key in store.list_keys(settings.bronze_prefix)}
+        after = {f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source)}
         warnings: list[str] = []
         if after != set(snapshot):
             warnings.append(

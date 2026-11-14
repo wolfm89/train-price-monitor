@@ -307,3 +307,61 @@ def test_store_protocol_can_be_satisfied_by_the_local_store(tmp_path: Path) -> N
     assert store.list_keys("a/") == ["a/b.txt"]
     store.delete(["a/b.txt"])
     assert store.list_keys("a/") == []
+
+
+def test_warnings_from_the_caller_are_preserved(build, tmp_path: Path) -> None:
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    result = publish(
+        store,
+        build_id="20260101T000000Z-aaaaaaaa",
+        local_dir=built.target,
+        stats=built.stats,
+        source="s3://bucket/prices/**/*.parquet",
+        source_files=(),
+        bucket="test-bucket",
+        prefix="silver",
+        transform_version="test",
+        duckdb_version="2.0.0",
+        warnings=("bronze changed during the build",),
+    )
+    assert "bronze changed during the build" in result.warnings
+
+
+def test_a_newer_build_during_upload_blocks_the_pointer(build, tmp_path: Path) -> None:
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    newer = "20260102T000000Z-bbbbbbbb"
+    pointer_written = {"done": False}
+
+    class RacingStore(LocalObjectStore):
+        def put_file(self, local_path: Path, key: str) -> int:
+            size = super().put_file(local_path, key)
+            if not pointer_written["done"]:
+                super().put_bytes(
+                    Pointer(
+                        build_id=newer, manifest=manifest_key("silver", newer), updated_at="2026-01-02T00:00:00Z"
+                    ).to_json(),
+                    pointer_key("silver"),
+                )
+                pointer_written["done"] = True
+            return size
+
+    with pytest.raises(ValueError, match="newer build"):
+        publish(
+            RacingStore(store._root),
+            build_id="20260101T000000Z-aaaaaaaa",
+            local_dir=built.target,
+            stats=built.stats,
+            source="s3://bucket/prices/**/*.parquet",
+            source_files=(),
+            bucket="test-bucket",
+            prefix="silver",
+            transform_version="test",
+            duckdb_version="2.0.0",
+        )
+
+    pointer = Pointer.from_json(store.get_bytes(pointer_key("silver")))
+    assert pointer.build_id == newer
+    # Our build was deleted; the newer id has no manifest in this fixture, so it is not a build.
+    assert build_ids(store, "silver") == []

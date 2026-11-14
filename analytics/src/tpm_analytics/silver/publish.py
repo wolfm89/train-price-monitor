@@ -170,11 +170,16 @@ def publish(
             files=tuple(uploaded),
         )
         key = manifest_key(prefix, build_id)
-        store.put_bytes(manifest.to_json(), key, content_type="application/json")
+        # Append before the PUT: if the response is lost the object may exist, and cleanup must
+        # remove it too.
         written_keys.append(key)
+        store.put_bytes(manifest.to_json(), key, content_type="application/json")
         verify_upload(store, manifest)
 
         pointer = Pointer(build_id=build_id, manifest=key, updated_at=utc_now().isoformat())
+        latest = _read_pointer(store, prefix)
+        if latest is not None and timestamp_of(latest.build_id) > timestamp_of(build_id):
+            raise ValueError(f"a newer build ({latest.build_id}) was published while this one was uploading")
         pointer_attempted = True
         store.put_bytes(pointer.to_json(), pointer_key(prefix), content_type="application/json")
     except BaseException:
@@ -183,27 +188,19 @@ def publish(
             _delete_quietly(store, written_keys)
         raise
 
-    warnings: list[str] = []
+    emitted = list(warnings)
     try:
         deleted = retain(store, prefix=prefix, keep=keep)
     except Exception as error:
         deleted = ()
-        warnings.append(f"retention failed: {error}")
+        emitted.append(f"retention failed: {error}")
 
     return PublishResult(
         manifest=manifest,
         uploaded_bytes=manifest.total_bytes,
         deleted_builds=deleted,
-        warnings=tuple(warnings),
+        warnings=tuple(emitted),
     )
-
-
-def _pointer_names(store: ObjectStore, prefix: str, build_id: str) -> bool:
-    try:
-        current = _read_pointer(store, prefix)
-    except Exception:
-        return True
-    return current is not None and current.build_id == build_id
 
 
 def _delete_quietly(store: ObjectStore, keys: list[str]) -> None:
