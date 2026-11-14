@@ -17,9 +17,12 @@ from tpm_analytics.silver.storage import LocalObjectStore
 def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bronze_glob: str) -> None:
     bucket = tmp_path / "bucket"
     real_run_build = run_build
+    seen: dict[str, Any] = {}
 
     def fake_run_build(source: str, target: Path, **kwargs: Any) -> object:
         # The handler passes S3 credentials and an s3:// source; the test swaps in the fixture.
+        seen.update(kwargs)
+        seen["source"] = source
         kwargs.pop("s3", None)
         return real_run_build(bronze_glob, target, **kwargs)
 
@@ -39,6 +42,11 @@ def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert result["rows_in"] == 6
     assert result["rows_out"] == 6
     assert result["duplicates_removed"] == 0
+    # The credentials reach the build: without this the first real run fails on read_parquet.
+    assert isinstance(seen["s3"], S3Secret)
+    assert seen["s3"].region == "eu-central-1"
+    assert seen["source"] == "s3://test-bucket/prices/**/*.parquet"
+    assert seen.get("verify", True) is True
     pointer = Pointer.from_json((bucket / pointer_key("silver")).read_bytes())
     assert pointer.build_id == result["build_id"]
     assert (bucket / pointer.manifest).is_file()
@@ -67,7 +75,7 @@ def test_handler_ignores_the_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     handler_module.handler({"source": "s3://evil/prices/", "verify": False}, None)
 
     assert seen["source"] == "s3://test-bucket/prices/**/*.parquet"
-    assert seen["verify"] is True
+    assert seen.get("verify", True) is True
 
 
 def test_secret_sql_escapes_values() -> None:

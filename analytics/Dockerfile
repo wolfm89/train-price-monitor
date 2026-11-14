@@ -20,8 +20,8 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv export --frozen --no-dev --no-emit-project -o requirements.txt && \
-    uv pip install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
+    uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt && \
+    uv pip install -r /tmp/requirements.txt --target "${LAMBDA_TASK_ROOT}"
 
 FROM public.ecr.aws/lambda/python:3.14
 
@@ -36,5 +36,18 @@ ENV DUCKDB_EXTENSION_DIR=/opt/duckdb/extensions
 RUN mkdir -p "${DUCKDB_EXTENSION_DIR}" && \
     python -c "import duckdb; c = duckdb.connect(); c.execute(\"SET extension_directory = '${DUCKDB_EXTENSION_DIR}'\"); c.execute('INSTALL httpfs'); c.execute('LOAD httpfs'); print(c.execute(\"SELECT extension_name, loaded FROM duckdb_extensions() WHERE extension_name = 'httpfs'\").fetchall())"
 
-# No CMD yet: the Lambda handler ships with the S3 publisher. The image is built in CI so the
-# toolchain and packaged assets stay honest, but nothing deploys it until AnalyticsStack lands.
+# Validate the entrypoint, both packaged assets and the DuckDB secret statement at build time.
+RUN python -c "\
+from tpm_analytics.silver.handler import handler; \
+from tpm_analytics.silver._duck import S3Secret, asset_dir, create_secret_sql; \
+import duckdb; \
+assert callable(handler); \
+assert (asset_dir('sql') / 'silver.sql').is_file(); \
+assert (asset_dir('data') / 'stations.json').is_file(); \
+c = duckdb.connect(); \
+c.execute(\"SET extension_directory = '/opt/duckdb/extensions'\"); \
+c.execute('LOAD httpfs'); \
+c.execute(create_secret_sql(S3Secret('a', 'b', '', 'eu-central-1'))); \
+print('image smoke test ok')"
+
+CMD ["tpm_analytics.silver.handler.handler"]

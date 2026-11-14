@@ -79,8 +79,10 @@ The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2
 8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
 
 That is far above the 10M rows the first cost model assumed, so the Lambda is sized for it:
-10,240 MB memory, 10,240 MB ephemeral storage, 900 s, `memory_limit=8GB`, `threads=6`. If a future
-corpus no longer fits, split the build by departure month instead of raising the limits.
+10,240 MB memory, 10,240 MB ephemeral storage, 900 s, `memory_limit=8GB`, `threads=6`,
+`SILVER_MAX_TEMP_SIZE=5GB` so spill and output share the 10 GB `/tmp` without colliding. Those
+numbers come from a workstation run: the first Lambda run must be measured before the schedule
+is trusted. If a future corpus no longer fits, split the build by departure month.
 
 ```bash
 uv run python -m tpm_analytics.silver.build \
@@ -103,15 +105,19 @@ silver/_latest.json
 - The **manifest** records `build_id`, source, rows in/out, duplicates removed, partitions,
   duration, transform version, DuckDB version and every file with its size.
 - The **pointer** is written last, after the manifest is read back and every file is present with
-  the recorded size. A failed publish deletes its half-written build and leaves the pointer on the
-  previous good one.
-- **Retention** keeps the newest two builds (`SILVER_KEEP`).
+  the recorded size. The pointer write is the commit point: an exception before it deletes the
+  half-written build; a pointer PUT that errors is assumed to have landed and the build is kept.
+  A killed process (timeout, OOM) cannot clean up: it leaves a prefix without a manifest, which
+  retention ignores and which can be deleted by hand.
+- **Retention** keeps the newest two builds (`SILVER_KEEP`), only considers builds with a
+  manifest, and never deletes the build the pointer names.
 - The handler ignores the event: source, bucket, prefix and sizing come from the environment
   (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,
   `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
 
 `tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
-`ObjectStore`; nothing is written to AWS yet.
+`ObjectStore`, and `tests/test_storage.py` covers the S3 implementation with botocore's
+`Stubber`. Nothing is written to AWS yet.
 
 ## Column contract
 

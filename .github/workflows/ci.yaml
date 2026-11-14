@@ -275,7 +275,7 @@ jobs:
   deploy:
     name: Deploy
     # Never on pull requests, and only once every module job is green.
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: [frontend, backend, scraper, infrastructure, analytics, pre-commit]
     runs-on: ubuntu-24.04
     steps:

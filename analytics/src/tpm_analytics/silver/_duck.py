@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
@@ -22,8 +22,8 @@ class S3Secret:
     """Credentials from the execution role, handed to DuckDB as a temporary secret."""
 
     access_key: str
-    secret_key: str
-    session_token: str
+    secret_key: str = field(repr=False)
+    session_token: str = field(repr=False)
     region: str
 
 
@@ -89,7 +89,11 @@ def connect(
         if secret is not None:
             if bundled is None:
                 raise RuntimeError("S3 reads need the httpfs extension; set DUCKDB_EXTENSION_DIR")
-            connection.execute(create_secret_sql(secret))
+            try:
+                connection.execute(create_secret_sql(secret))
+            except duckdb.Error:
+                # DuckDB error text echoes the statement, which contains the credentials.
+                raise RuntimeError("could not create the DuckDB S3 secret (statement redacted)") from None
     except Exception:
         connection.close()
         raise
