@@ -76,6 +76,7 @@ class BuildStats:
     duplicates_removed: int
     partitions: int
     duration_seconds: float
+    verified: bool
 
 
 def bronze_source(connection: duckdb.DuckDBPyConnection, bronze_glob: str) -> str:
@@ -217,6 +218,7 @@ def run_build(
         duplicates_removed=rows_in - rows_out,
         partitions=partitions,
         duration_seconds=round(time.perf_counter() - started, 3),
+        verified=verify,
     )
 
 

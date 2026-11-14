@@ -6,6 +6,7 @@ publish logic (ordering, verification, pointer, retention) testable against a lo
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,7 +19,7 @@ class ObjectStore(Protocol):
     def put_file(self, local_path: Path, key: str) -> int:
         """Upload a file and return its size in bytes."""
 
-    def put_bytes(self, data: bytes, key: str) -> None: ...
+    def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None: ...
 
     def get_bytes(self, key: str) -> bytes: ...
 
@@ -30,7 +31,7 @@ class ObjectStore(Protocol):
 
 
 class LocalObjectStore:
-    """A directory pretending to be a bucket; used by the tests and by ``--target s3`` dry runs."""
+    """A directory pretending to be a bucket. Simplified: no multipart, no ETags, no per-key errors."""
 
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -42,16 +43,18 @@ class LocalObjectStore:
             raise ValueError(f"key {key!r} escapes the store root")
         return path
 
-    def put_file(self, local_path: Path, key: str) -> int:
-        destination = self._path(key)
+    def _write(self, destination: Path, data: bytes) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(local_path.read_bytes())
-        return destination.stat().st_size
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_bytes(data)
+        os.replace(temporary, destination)
 
-    def put_bytes(self, data: bytes, key: str) -> None:
-        destination = self._path(key)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(data)
+    def put_file(self, local_path: Path, key: str) -> int:
+        self._write(self._path(key), local_path.read_bytes())
+        return self._path(key).stat().st_size
+
+    def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None:
+        self._write(self._path(key), data)
 
     def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
@@ -83,8 +86,8 @@ class S3ObjectStore:
         self._client.upload_file(str(local_path), self.bucket, key)
         return local_path.stat().st_size
 
-    def put_bytes(self, data: bytes, key: str) -> None:
-        self._client.put_object(Bucket=self.bucket, Key=key, Body=data)
+    def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None:
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
     def get_bytes(self, key: str) -> bytes:
         response = self._client.get_object(Bucket=self.bucket, Key=key)
@@ -105,4 +108,10 @@ class S3ObjectStore:
     def delete(self, keys: list[str]) -> None:
         for start in range(0, len(keys), 1000):
             batch = keys[start : start + 1000]
-            self._client.delete_objects(Bucket=self.bucket, Delete={"Objects": [{"Key": key} for key in batch]})
+            response = self._client.delete_objects(
+                Bucket=self.bucket, Delete={"Objects": [{"Key": key} for key in batch]}
+            )
+            errors = response.get("Errors") or []
+            if errors:
+                detail = ", ".join(f"{item.get('Key')}: {item.get('Code')}" for item in errors)
+                raise RuntimeError(f"S3 refused to delete {len(errors)} key(s): {detail}")

@@ -8,12 +8,17 @@ back and checked first.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from uuid import uuid4
 
 MANIFEST_NAME = "_manifest.json"
 POINTER_NAME = "_latest.json"
 MANIFEST_VERSION = 1
+
+# 20261114T173000Z-a1b2c3d4: sortable by time, unique within a second.
+BUILD_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,7 @@ class BuildManifest:
     build_id: str
     created_at: str
     source: str
+    source_files: tuple[str, ...]
     bucket: str
     prefix: str
     rows_in: int
@@ -39,6 +45,8 @@ class BuildManifest:
     duration_seconds: float
     transform_version: str
     duckdb_version: str
+    sql_sha256: str
+    stations_sha256: str
     files: tuple[BuildFile, ...]
 
     @property
@@ -53,7 +61,11 @@ class BuildManifest:
     @classmethod
     def from_json(cls, data: bytes) -> BuildManifest:
         payload = json.loads(data)
+        version = payload.get("manifest_version")
+        if version != MANIFEST_VERSION:
+            raise ValueError(f"unsupported manifest version {version!r}; this reader knows {MANIFEST_VERSION}")
         files = tuple(BuildFile(key=item["key"], bytes=int(item["bytes"])) for item in payload.pop("files"))
+        payload["source_files"] = tuple(payload.get("source_files", ()))
         return cls(**payload, files=files)
 
 
@@ -72,14 +84,17 @@ class Pointer:
 
 
 def utc_now() -> datetime:
-    from datetime import UTC
-
     return datetime.now(UTC)
 
 
 def build_id_for(moment: datetime) -> str:
-    """Sortable id: ``20261114T173000Z``."""
-    return moment.strftime("%Y%m%dT%H%M%SZ")
+    """Sortable and collision-free: ``20261114T173000Z-a1b2c3d4``."""
+    return f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
+
+
+def timestamp_of(build_id: str) -> str:
+    """The sortable time part of a build id, used to compare two builds."""
+    return build_id[:16]
 
 
 def manifest_key(prefix: str, build_id: str) -> str:
