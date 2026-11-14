@@ -34,6 +34,7 @@ permissions:
 
 jobs:
   frontend:
+    timeout-minutes: 15
     name: Frontend
     runs-on: ubuntu-26.04
     steps:
@@ -62,6 +63,7 @@ jobs:
         working-directory: frontend
 
   backend:
+    timeout-minutes: 15
     name: Backend
     runs-on: ubuntu-26.04
     steps:
@@ -97,6 +99,7 @@ jobs:
         working-directory: backend
 
   scraper:
+    timeout-minutes: 15
     name: Scraper
     runs-on: ubuntu-26.04
     steps:
@@ -125,6 +128,7 @@ jobs:
         working-directory: scraper
 
   infrastructure:
+    timeout-minutes: 15
     name: Infrastructure
     runs-on: ubuntu-26.04
     steps:
@@ -149,7 +153,9 @@ jobs:
         working-directory: infrastructure
       - run: npm test
         working-directory: infrastructure
+
   analytics:
+    timeout-minutes: 20
     name: Analytics
     runs-on: ubuntu-26.04
     defaults:
@@ -177,6 +183,7 @@ jobs:
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/stations.json'
 
   artifacts:
+    timeout-minutes: 45
     name: Build & synth
     # Only on pull requests: a deploy performs the equivalent work itself.
     if: github.event_name == 'pull_request'
@@ -258,6 +265,7 @@ jobs:
           cache-to: type=gha,scope=analytics,mode=max
 
   deploy:
+    timeout-minutes: 60
     name: Deploy
     # Never on pull requests, and only once every module job is green.
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')

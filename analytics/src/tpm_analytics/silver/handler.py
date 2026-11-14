@@ -20,7 +20,7 @@ import boto3
 import duckdb
 
 from tpm_analytics.silver._duck import S3Secret
-from tpm_analytics.silver.build import run_build
+from tpm_analytics.silver.build import EmptyCorpusError, run_build
 from tpm_analytics.silver.manifest import build_id_for, utc_now
 from tpm_analytics.silver.publish import publish
 from tpm_analytics.silver.storage import S3ObjectStore
@@ -29,6 +29,8 @@ LOGGER = logging.getLogger(__name__)
 
 # Leave enough time to upload a 3 GB build and move the pointer.
 PUBLISH_RESERVE_SECONDS = 180
+# The measured full build is ~525 s; do not start one that cannot finish.
+BUILD_BUDGET_SECONDS = 600
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,7 @@ def load_settings() -> Settings:
         memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", "8GB"),
         max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", "5GB"),
         keep=int(os.environ.get("SILVER_KEEP", "2")),
-        transform_version=os.environ.get("TRANSFORM_VERSION", "unknown"),
+        transform_version=os.environ.get("TRANSFORM_VERSION", ""),
     )
 
 
@@ -94,8 +96,14 @@ def remaining_seconds(context: object) -> float | None:
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     started = time.perf_counter()
+    LOGGER.setLevel(logging.INFO)
     settings = load_settings()
+    if not settings.source.startswith("s3://"):
+        raise ValueError("BRONZE_SOURCE must be an s3:// glob in the handler")
     build_id = build_id_for(utc_now())
+    remaining = remaining_seconds(context)
+    if remaining is not None and remaining < BUILD_BUDGET_SECONDS + PUBLISH_RESERVE_SECONDS:
+        raise RuntimeError(f"only {remaining:.0f}s left before the deadline; not starting a build")
     swept = sweep_workspace()
     LOGGER.info(
         "silver build starting build_id=%s bucket=%s prefix=%s threads=%s memory_limit=%s max_temp_size=%s",
@@ -107,11 +115,19 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         settings.max_temp_size,
     )
 
+    store = S3ObjectStore(settings.bucket, region=settings.region)
+    # One snapshot of the corpus: the build reads exactly these objects and the manifest records
+    # them. The poller appends a batch every 15 minutes, so a live glob would change mid-build.
+    snapshot = tuple(f"s3://{settings.bucket}/{key}" for key in store.list_keys(settings.bronze_prefix))
+    if not snapshot:
+        raise EmptyCorpusError(f"no bronze objects under {settings.bronze_prefix!r}")
+    LOGGER.info("silver source snapshot files=%s", len(snapshot))
+
     with tempfile.TemporaryDirectory(prefix="silver-") as workspace:
         workdir = Path(workspace)
         target = workdir / build_id
         stats = run_build(
-            settings.source,
+            snapshot,
             target,
             s3=aws_secret(settings.region),
             temp_directory=workdir / "duckdb",
@@ -119,22 +135,28 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             memory_limit=settings.memory_limit,
             max_temp_size=settings.max_temp_size,
         )
-        store = S3ObjectStore(settings.bucket)
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
             raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
+        after = {f"s3://{settings.bucket}/{key}" for key in store.list_keys(settings.bronze_prefix)}
+        warnings: list[str] = []
+        if after != set(snapshot):
+            warnings.append(
+                f"bronze changed during the build: {len(after)} objects now vs {len(snapshot)} in the snapshot"
+            )
         result = publish(
             store,
             build_id=build_id,
             local_dir=target,
             stats=stats,
             source=settings.source,
-            source_files=tuple(store.list_keys(settings.bronze_prefix)),
+            source_files=snapshot,
             bucket=settings.bucket,
             prefix=settings.prefix,
             transform_version=settings.transform_version,
             duckdb_version=duckdb.__version__,
             keep=settings.keep,
+            warnings=tuple(warnings),
         )
 
     duration = round(time.perf_counter() - started, 3)
