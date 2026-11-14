@@ -278,3 +278,95 @@ def test_missing_station_is_flagged(tmp_path: Path) -> None:
     write_bronze(root / "day=01", [bronze_row(origin_eva="9999999")], schema_version=2)
     with pytest.raises(quality.QualityError, match="station missing from the dimension"):
         run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-unknown")
+
+
+def test_stats_match_the_files_on_disk(build) -> None:
+    """Rows and partitions reported by RETURN_STATS must match what landed on disk."""
+    built = build()
+    files = list(built.target.glob("departure_year=*/departure_month=*/*.parquet"))
+    assert files
+    on_disk = sum(pq.ParquetFile(path).metadata.num_rows for path in files)
+    assert on_disk == built.stats.rows_out
+    partitions = {(path.parent.parent.name, path.parent.name) for path in files}
+    assert len(partitions) == built.stats.partitions
+
+
+def test_copy_stats_are_parsed_by_column_name() -> None:
+    from tpm_analytics.silver.build import parse_copy_stats
+
+    names = [
+        "filename",
+        "count",
+        "file_size_bytes",
+        "footer_size_bytes",
+        "column_statistics",
+        "partition_keys",
+        "extra_info",
+    ]
+    written = [
+        ("/out/a.parquet", 3, 1, 2, {}, {"departure_year": "2026", "departure_month": "11"}, {}),
+        ("/out/b.parquet", 4, 1, 2, {}, {"departure_year": "2026", "departure_month": "12"}, {}),
+        ("/out/c.parquet", 5, 1, 2, {}, {"departure_year": "2026", "departure_month": "11"}, {}),
+    ]
+    assert parse_copy_stats(names, written) == (12, 2)
+
+    # The engine could insert a column; parsing by name must survive a reordering.
+    reordered = [
+        "extra_info",
+        "partition_keys",
+        "count",
+        "filename",
+        "file_size_bytes",
+        "footer_size_bytes",
+        "column_statistics",
+    ]
+    rewritten = [(row[6], row[5], row[1], row[0], row[2], row[3], row[4]) for row in written]
+    assert parse_copy_stats(reordered, rewritten) == (12, 2)
+
+
+def test_zero_row_corpus_is_rejected(tmp_path: Path) -> None:
+    from tpm_analytics.silver.build import EmptyCorpusError
+
+    root = tmp_path / "empty-day"
+    write_bronze(root / "day=01", [], schema_version=2)
+    with pytest.raises(EmptyCorpusError):
+        run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-zero")
+
+
+def test_exact_timetable_boundary(tmp_path: Path, duck) -> None:
+    """23:59 local is still the old timetable; 00:00 is the new one."""
+    root = tmp_path / "boundary"
+    write_bronze(
+        root / "day=01",
+        [
+            # 2026-12-12 23:59 Berlin == 22:59 UTC.
+            bronze_row(
+                departure_planned=datetime(2026, 12, 12, 22, 59),
+                arrival_planned=datetime(2026, 12, 13, 6, 0),
+                journey_id="last-old",
+            ),
+            # 2026-12-13 00:00 Berlin == 23:00 UTC on the 12th.
+            bronze_row(
+                departure_planned=datetime(2026, 12, 12, 23, 0),
+                arrival_planned=datetime(2026, 12, 13, 6, 30),
+                journey_id="first-new",
+            ),
+        ],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-boundary")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / "silver-boundary"),
+        "SELECT journey_id, timetable_period FROM {silver} ORDER BY departure_planned",
+    )
+    assert result == [("last-old", "2025-12"), ("first-new", "2026-12")]
+
+
+def test_uri_paths_are_rejected(tmp_path: Path) -> None:
+    from tpm_analytics.silver.build import UnsupportedLocationError
+
+    with pytest.raises(UnsupportedLocationError, match="target"):
+        run_build(str(tmp_path / "x" / "**" / "*.parquet"), "s3://bucket/silver")
+    with pytest.raises(UnsupportedLocationError, match="source"):
+        run_build("s3://bucket/prices/**/*.parquet", tmp_path / "silver-s3")

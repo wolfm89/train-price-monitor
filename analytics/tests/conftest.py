@@ -95,10 +95,21 @@ def v1_row(**overrides: object) -> dict[str, object]:
     return bronze_row(**defaults)
 
 
-def write_bronze(directory: Path, rows: list[dict[str, object]], *, schema_version: int) -> Path:
-    """Write one bronze batch file under ``directory``."""
+def write_bronze(
+    directory: Path,
+    rows: list[dict[str, object]],
+    *,
+    schema_version: int,
+    nullable: dict[str, bool] | None = None,
+) -> Path:
+    """Write one bronze batch file under ``directory``.
+
+    ``nullable`` overrides a column's nullability, so a test can write a row the writer would
+    never produce (a corrupt file) and prove the gate rejects it.
+    """
     fields = V1_FIELDS if schema_version == 1 else V1_FIELDS + V2_FIELDS
-    schema = pa.schema([pa.field(name, kind, nullable=nullable) for name, kind, nullable in fields])
+    overrides = nullable or {}
+    schema = pa.schema([pa.field(name, kind, nullable=overrides.get(name, default)) for name, kind, default in fields])
     names = {field.name for field in schema}
     filtered = [{key: value for key, value in row.items() if key in names} for row in rows]
     directory.mkdir(parents=True, exist_ok=True)

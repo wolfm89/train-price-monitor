@@ -2,7 +2,8 @@
 
 A build is published only when every check here passes. The checks encode the invariants the
 transform is supposed to guarantee, so a schema change or a bad join fails the build instead of
-poisoning the training data. Every check is a count of offending rows, evaluated in one scan.
+poisoning the training data. The row checks are evaluated in one scan; the duplicate check is a
+second pass with a hash aggregate.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 import duckdb
 
 from tpm_analytics.silver._duck import read_parquet, scalar
+from tpm_analytics.silver.constants import TIMETABLE_REVIEW_AFTER
 
 REQUIRED_COLUMNS: tuple[str, ...] = (
     "observed_at",
@@ -64,9 +66,43 @@ LOAD_FACTOR_RANK_SQL = """
     END
 """
 
-# The last departure date the timetable boundary in silver.sql covers. DB changes timetable in
-# mid-December and mid-June; when data reaches this date, review the boundary and bump it.
-TIMETABLE_REVIEW_AFTER = "2027-06-13"
+# Columns that must never be NULL. A NULL silently defeats range checks (`x < 0` is NULL, not
+# true), so they are asserted explicitly instead of relying on each predicate.
+REQUIRED_NON_NULL: tuple[str, ...] = (
+    "observed_at",
+    "service_class",
+    "route_id",
+    "origin_eva",
+    "origin_name",
+    "dest_eva",
+    "dest_name",
+    "departure_planned",
+    "arrival_planned",
+    "train_type",
+    "train_number",
+    "train_numbers",
+    "transfers_raw",
+    "duration_minutes",
+    "days_to_departure",
+    "schema_version",
+    "source_profile",
+    "query_mode",
+    "transfers_actual",
+    "departure_date",
+    "departure_weekday",
+    "departure_hour_local",
+    "is_weekend",
+    "distance_km",
+    "origin_state",
+    "dest_state",
+    "origin_station_category",
+    "dest_station_category",
+    "timetable_period",
+    "observation_era",
+    "scrapes_per_route_day",
+    "departure_year",
+    "departure_month",
+)
 
 # (name, predicate over a row of silver). A non-zero count is a violation.
 ROW_CHECKS: tuple[tuple[str, str], ...] = (
@@ -88,8 +124,7 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
     ),
     (
         "null required field",
-        "observed_at IS NULL OR departure_planned IS NULL OR arrival_planned IS NULL "
-        "OR route_id IS NULL OR origin_eva IS NULL OR dest_eva IS NULL",
+        " OR ".join(f"{column} IS NULL" for column in REQUIRED_NON_NULL),
     ),
     ("service_class outside {1,2}", "service_class NOT IN (1, 2)"),
     ("non-positive duration_minutes", "duration_minutes <= 0"),
@@ -134,6 +169,18 @@ class Violation:
     detail: str
 
 
+@dataclass(frozen=True)
+class Report:
+    """Result of one gate run: how many rows the gate saw, and what is wrong with them."""
+
+    rows: int
+    violations: tuple[Violation, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.violations
+
+
 class QualityError(RuntimeError):
     """Raised when one or more silver invariants do not hold."""
 
@@ -168,7 +215,13 @@ def _duplicate_violation(connection: duckdb.DuckDBPyConnection, silver: str) -> 
         "SELECT coalesce(sum(n - 1), 0) FROM ("
         f"SELECT count(*) AS n FROM {silver} GROUP BY {DUPLICATE_KEY} HAVING count(*) > 1)",
     )
-    return [] if duplicates == 0 else [Violation("duplicate observations", f"{duplicates} extra rows")]
+    if duplicates == 0:
+        return []
+    sample = connection.execute(
+        f"SELECT {DUPLICATE_KEY}, count(*) AS n FROM {silver} "
+        f"GROUP BY {DUPLICATE_KEY} HAVING count(*) > 1 ORDER BY n DESC LIMIT 3"
+    ).fetchall()
+    return [Violation("duplicate observations", f"{duplicates} extra rows; sample {sample[:3]}")]
 
 
 def check(
@@ -177,13 +230,13 @@ def check(
     bronze_glob: str,
     silver_glob: str,
     rows_in: int | None = None,
-) -> list[Violation]:
-    """Return every invariant violation in the built silver layer."""
+) -> Report:
+    """Run every invariant against the built silver layer."""
     silver = _silver_source(silver_glob)
     silver_columns = _columns(connection, silver)
     missing = [column for column in REQUIRED_COLUMNS if column not in silver_columns]
     if missing:
-        return [Violation("missing columns", ", ".join(missing))]
+        return Report(rows=0, violations=(Violation("missing columns", ", ".join(missing)),))
 
     # A bronze column that silver does not carry is a schema drift the explicit projection
     # would otherwise drop silently.
@@ -195,12 +248,16 @@ def check(
     violations.extend(row_violations)
     violations.extend(_duplicate_violation(connection, silver))
 
-    if rows_in is None:
-        rows_in = scalar(connection, f"SELECT count(*) FROM {bronze}")
-    if rows_in != rows_out:
-        violations.append(Violation("row count bronze != silver", f"{rows_in} != {rows_out}"))
+    # Count bronze again after the COPY: a compactor run that swaps a day's files mid-build
+    # changes the corpus the transform actually read. count(*) uses Parquet metadata, so this is
+    # cheap even on the full history.
+    current_rows = scalar(connection, f"SELECT count(*) FROM {bronze}")
+    if rows_in is not None and current_rows != rows_in:
+        violations.append(Violation("bronze changed during build", f"{rows_in} -> {current_rows}"))
+    if current_rows != rows_out:
+        violations.append(Violation("row count bronze != silver", f"{current_rows} != {rows_out}"))
 
-    return violations
+    return Report(rows=rows_out, violations=tuple(violations))
 
 
 def raise_for_violations(violations: Iterable[Violation]) -> None:

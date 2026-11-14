@@ -16,7 +16,7 @@ run = "uv run --frozen pytest"
 
 [tasks.lint]
 description = "Lint with ruff"
-run = "uv run --frozen ruff check ."
+run = "uv run --frozen ruff check . && uv run --frozen ruff format --check ."
 
 [tasks.format]
 description = "Format with ruff"

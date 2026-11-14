@@ -5,7 +5,7 @@ session settings, resolves the input glob, and exposes the result as a :class:`B
 
 A build writes into a hidden sibling directory, verifies it, and only then renames it into place.
 A rejected build therefore never leaves a plausible-looking target behind, and a retry into the
-same path is always possible.
+same path is possible as long as no earlier build succeeded there.
 """
 
 from __future__ import annotations
@@ -15,8 +15,10 @@ import json
 import shutil
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import duckdb
@@ -32,6 +34,7 @@ from tpm_analytics.silver._duck import (
     scalar,
     sql_string,
 )
+from tpm_analytics.silver.constants import TIMETABLE_BOUNDARY
 
 # Columns introduced by schema v2. A corpus that predates v2 has none of them, and union_by_name
 # cannot invent a column that exists in no file, so the source expression adds them as typed NULLs.
@@ -43,6 +46,24 @@ V2_COLUMN_DEFAULTS: dict[str, str] = {
     "source_profile": "CAST(NULL AS VARCHAR)",
     "query_mode": "CAST(NULL AS VARCHAR)",
 }
+
+
+class EmptyCorpusError(ValueError):
+    """Raised when the source glob matches no rows at all."""
+
+
+class UnsupportedLocationError(NotImplementedError):
+    """Raised for an S3 or other URI, which this build does not support yet."""
+
+
+def local_path(value: str | Path, *, role: str) -> Path:
+    """Reject URIs so a future S3 caller cannot silently write into a local ``s3:/`` directory."""
+    text = str(value)
+    if "://" in text:
+        raise UnsupportedLocationError(
+            f"{role} {text!r} is a URI; silver builds only support local paths until the S3 writer lands"
+        )
+    return Path(text)
 
 
 @dataclass(frozen=True)
@@ -80,8 +101,28 @@ def render_sql(
         sql_path.read_text(encoding="utf-8")
         .replace("{{BRONZE_SOURCE}}", bronze_source_sql)
         .replace("{{STATIONS_PATH}}", sql_string(stations_path.as_posix()))
+        .replace("{{TIMETABLE_BOUNDARY}}", TIMETABLE_BOUNDARY)
         .replace("{{TARGET}}", sql_string(target.as_posix()))
     )
+
+
+def parse_copy_stats(
+    column_names: Sequence[str],
+    written: Sequence[Sequence[object]],
+) -> tuple[int, int]:
+    """Read rows and partition count from a ``COPY … RETURN_STATS`` result.
+
+    Parsed by column name: the result is a seven-column internal contract and a future release
+    could insert a column without notice.
+    """
+    try:
+        count_at = column_names.index("count")
+        partition_at = column_names.index("partition_keys")
+    except ValueError as error:
+        raise RuntimeError(f"unexpected COPY RETURN_STATS columns: {column_names}") from error
+    rows_out = sum(int(cast("int | str", row[count_at])) for row in written)
+    partitions = len({tuple(sorted(cast("dict[str, object]", row[partition_at]).items())) for row in written})
+    return rows_out, partitions
 
 
 def run_build(
@@ -98,9 +139,11 @@ def run_build(
 ) -> BuildStats:
     """Build silver from ``source`` into the new directory ``target``."""
     started = time.perf_counter()
+    if "://" in source:
+        raise UnsupportedLocationError(f"source {source!r} is a URI; silver builds only support local paths")
     sql_path = Path(sql_path) if sql_path is not None else asset_dir("sql") / "silver.sql"
     stations_path = Path(stations_path) if stations_path is not None else asset_dir("data") / "stations.json"
-    final_target = Path(target)
+    final_target = local_path(target, role="target")
     if final_target.exists():
         raise FileExistsError(f"target {final_target} already exists; silver builds never overwrite")
 
@@ -120,26 +163,37 @@ def run_build(
         )
         source_sql = bronze_source(connection, source)
         rows_in = scalar(connection, f"SELECT count(*) FROM {source_sql}")
-        written = connection.execute(
+        if rows_in == 0:
+            raise EmptyCorpusError(f"source {source!r} matched no rows")
+        result = connection.execute(
             render_sql(
                 sql_path,
                 bronze_source_sql=source_sql,
                 stations_path=stations_path,
                 target=partial,
             )
-        ).fetchall()
-        rows_out = sum(int(row[1]) for row in written)
-        partitions = len({tuple(sorted(row[5].items())) for row in written}) if written else 0
+        )
+        column_names = [column[0] for column in (result.description or [])]
+        written = result.fetchall()
+        rows_out, partitions = parse_copy_stats(column_names, written)
         silver_glob = str(partial / "**" / "*.parquet")
         if verify:
-            quality.raise_for_violations(
-                quality.check(
-                    connection,
-                    bronze_glob=source,
-                    silver_glob=silver_glob,
-                    rows_in=rows_in,
-                )
+            report = quality.check(
+                connection,
+                bronze_glob=source,
+                silver_glob=silver_glob,
+                rows_in=rows_in,
             )
+            violations = list(report.violations)
+            if report.rows != rows_out:
+                violations.append(quality.Violation("writer count != gate count", f"{rows_out} != {report.rows}"))
+            on_disk = len(list(partial.glob("departure_year=*/departure_month=*")))
+            if on_disk != partitions:
+                violations.append(quality.Violation("partition count != directories", f"{partitions} != {on_disk}"))
+            quality.raise_for_violations(violations)
+        # Close the engine before touching the directory tree: Windows keeps a handle on open files.
+        connection.close()
+        connection = None
         partial.rename(final_target)
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
@@ -176,6 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-verify", action="store_true", help="skip the quality gate (debug only)")
     args = parser.parse_args(argv)
 
+    if args.no_verify:
+        print("warning: quality gate disabled (--no-verify); this output is not publishable", file=sys.stderr)
+
     try:
         stats = run_build(
             args.source,
@@ -188,8 +245,15 @@ def main(argv: list[str] | None = None) -> int:
             max_temp_size=args.max_temp_size,
             verify=not args.no_verify,
         )
-    except (FileExistsError, quality.QualityError, duckdb.Error) as error:
-        print(f"error: {error}", file=sys.stderr)
+    except (
+        EmptyCorpusError,
+        FileExistsError,
+        OSError,
+        quality.QualityError,
+        UnsupportedLocationError,
+        duckdb.Error,
+    ) as error:
+        print(f"error: silver build of {args.source} -> {args.target} failed: {error}", file=sys.stderr)
         return 2
 
     print(json.dumps(asdict(stats), indent=2))

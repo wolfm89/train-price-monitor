@@ -172,6 +172,11 @@ jobs:
       # The package ships sql/ and data/ inside the module; this fails if they stop being packaged.
       - run: uv build
         working-directory: analytics
+      - name: Verify the wheel ships the SQL and station dimension
+        working-directory: analytics
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/sql/silver.sql'
+          python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/stations.json'
 
   artifacts:
     name: Build & synth

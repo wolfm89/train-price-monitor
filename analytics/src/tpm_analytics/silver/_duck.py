@@ -7,8 +7,8 @@ from pathlib import Path
 import duckdb
 
 DEFAULT_THREADS = 2
-DEFAULT_MEMORY_LIMIT = "900MB"
-DEFAULT_MAX_TEMP_SIZE = "1GB"
+DEFAULT_MEMORY_LIMIT = "700MB"
+DEFAULT_MAX_TEMP_SIZE = "4GB"
 
 # The sql/ and data/ directories live inside the package, so a wheel built from
 # analytics/ is self-contained and the Lambda image only has to copy tpm_analytics/.
@@ -35,11 +35,15 @@ def connect(
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     max_temp_size: str = DEFAULT_MAX_TEMP_SIZE,
 ) -> duckdb.DuckDBPyConnection:
-    """Open an in-memory DuckDB session tuned for a single-pass batch build."""
+    """Open an in-memory DuckDB session tuned for a batch build."""
     connection = duckdb.connect()
     try:
         temp_directory.mkdir(parents=True, exist_ok=True)
         connection.execute("SET timezone = 'UTC'")
+        # The wheel bundles parquet, json and icu. Refuse to reach the network for an extension:
+        # in the Lambda image a missing one must fail fast, not stall on a download.
+        connection.execute("SET autoinstall_known_extensions = false")
+        connection.execute("SET autoload_known_extensions = false")
         connection.execute(f"SET memory_limit = '{sql_string(memory_limit)}'")
         connection.execute(f"SET max_temp_directory_size = '{sql_string(max_temp_size)}'")
         connection.execute(f"SET temp_directory = '{sql_string(temp_directory.as_posix())}'")
@@ -53,10 +57,10 @@ def connect(
 
 def scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
     """Run a single-value query."""
-    row = connection.execute(sql).fetchone()
-    if row is None:
+    rows = connection.execute(sql).fetchall()
+    if not rows:
         raise RuntimeError("query returned no rows")
-    return int(row[0])
+    return int(rows[0][0])
 
 
 def read_parquet(path_glob: str, *, hive_partitioning: bool = False) -> str:

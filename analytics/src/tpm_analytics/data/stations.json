@@ -1,5 +1,5 @@
 {
-  "source": "db-stations 5.0.2 (Deutsche Bahn station master data), CC-BY-4.0 / ODbL",
+  "source": "db-stations 5.0.2, derived from Deutsche Bahn station data published under CC-BY-4.0; subset of 14 stations, fields renamed, category and federal state extracted",
   "generated": "2026-11-14",
   "stations": [
     {

@@ -21,12 +21,13 @@ def unchecked(source: str, target: Path) -> Built:
 
 
 def violations_for(connection: duckdb.DuckDBPyConnection, built: Built, source: str) -> list[quality.Violation]:
-    return quality.check(
+    report = quality.check(
         connection,
         bronze_glob=source,
         silver_glob=str(built.target / "**" / "*.parquet"),
         rows_in=built.stats.rows_in,
     )
+    return list(report.violations)
 
 
 def names(violations: list[quality.Violation]) -> list[str]:
@@ -176,9 +177,9 @@ def test_departure_beyond_the_reviewed_timetable_is_rejected(tmp_path: Path, duc
 
 def test_missing_columns_are_reported(duck, bronze_glob: str) -> None:
     """Pointing the gate at bronze (which lacks the derived columns) must fail loudly."""
-    found = quality.check(duck, bronze_glob=bronze_glob, silver_glob=bronze_glob, rows_in=6)
-    assert names(found) == ["missing columns"]
-    assert "distance_km" in found[0].detail
+    report = quality.check(duck, bronze_glob=bronze_glob, silver_glob=bronze_glob, rows_in=6)
+    assert names(list(report.violations)) == ["missing columns"]
+    assert "distance_km" in report.violations[0].detail
 
 
 def test_raise_for_violations_is_a_runtime_error(duck, build, bronze_glob: str) -> None:
@@ -187,3 +188,46 @@ def test_raise_for_violations_is_a_runtime_error(duck, build, bronze_glob: str) 
 
     with pytest.raises(quality.QualityError):
         quality.raise_for_violations([quality.Violation("row count bronze != silver", "6 != 5")])
+
+
+def test_null_required_field_is_rejected(tmp_path: Path, duck) -> None:
+    """A NULL defeats range checks; the gate asserts nullability explicitly."""
+    root = tmp_path / "null-field"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(service_class=None)],
+        schema_version=2,
+        nullable={"service_class": True},
+    )
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-null-field")
+    assert "null required field" in names(violations_for(duck, built, source))
+
+
+def test_unknown_schema_version_is_rejected(tmp_path: Path, duck) -> None:
+    root = tmp_path / "schema-v3"
+    write_bronze(root / "day=01", [bronze_row(schema_version=3)], schema_version=2)
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-schema-v3")
+    assert "schema_version outside {1,2}" in names(violations_for(duck, built, source))
+
+
+def test_duplicate_violation_names_a_sample(tmp_path: Path, duck) -> None:
+    root = tmp_path / "duplicates-sample"
+    write_bronze(root / "day=01", [bronze_row(), bronze_row()], schema_version=2)
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-duplicates-sample")
+    details = [violation.detail for violation in violations_for(duck, built, source)]
+    assert any("sample" in detail for detail in details)
+
+
+def test_bronze_changing_mid_build_is_rejected(build, duck, bronze_glob: str) -> None:
+    """The gate re-counts bronze: a corpus that moved between transform and publish fails."""
+    built = build()
+    report = quality.check(
+        duck,
+        bronze_glob=bronze_glob,
+        silver_glob=str(built.target / "**" / "*.parquet"),
+        rows_in=built.stats.rows_in + 1,
+    )
+    assert "bronze changed during build" in names(list(report.violations))

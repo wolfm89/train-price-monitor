@@ -86,7 +86,7 @@ mise run //infrastructure:deploy   # Deploy all CDK stacks
 ```bash
 # Analytics (Python 3.13, uv, DuckDB)
 cd analytics
-uv sync                # Create .venv from uv.lock (uv manages the interpreter)
+uv sync --frozen       # Create .venv from uv.lock (uv manages the interpreter)
 uv run pytest          # Fixture tests over v1/v2/mixed bronze files
 uv run ty check        # Type check (Astral ty)
 uv run ruff check .    # Lint

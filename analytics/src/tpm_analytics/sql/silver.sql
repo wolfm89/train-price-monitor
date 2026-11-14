@@ -13,7 +13,10 @@
 -- so deriving them from the UTC timestamp would put night trains in the wrong day, week and month.
 
 COPY (
-    WITH bronze AS (
+    -- NOT MATERIALIZED on purpose: DuckDB 2.0 materialises a CTE that is referenced more than
+    -- once, and materialising bronze or normalised would spill the whole corpus to disk. Inlining
+    -- trades that for a second column-pruned scan of bronze.
+    WITH bronze AS NOT MATERIALIZED (
         SELECT * FROM {{BRONZE_SOURCE}}
     ),
 
@@ -41,12 +44,13 @@ COPY (
 
     -- Scrapes are keyed by route and the scraper's local departure day; every row of that pair
     -- shares the count. Bucketing by the UTC date would mix two target days around midnight.
+    -- Reads bronze directly so `normalised` stays single-use and is inlined, not materialised.
     route_day_density AS (
         SELECT
             route_id,
-            CAST(departure_local AS DATE) AS departure_date,
+            CAST(timezone('Europe/Berlin', departure_planned AT TIME ZONE 'UTC') AS DATE) AS departure_date,
             COUNT(DISTINCT observed_at) AS scrapes_per_route_day
-        FROM normalised
+        FROM bronze
         GROUP BY route_id, departure_date
     ),
 
@@ -123,7 +127,7 @@ COPY (
         origin_station_category,
         dest_station_category,
         CASE
-            WHEN departure_local < TIMESTAMP '2026-12-13 00:00:00' THEN '2025-12'
+            WHEN departure_local < TIMESTAMP '{{TIMETABLE_BOUNDARY}} 00:00:00' THEN '2025-12'
             ELSE '2026-12'
         END AS timetable_period,
         CASE
