@@ -49,3 +49,12 @@ backend/src/stations/
 
 # Generated SDL bundled into the Lambda (see backend/scripts/build-schema.mjs)
 backend/src/schema/schema.generated.json
+
+# analytics (Python)
+analytics/.venv/
+analytics/**/__pycache__/
+analytics/.pytest_cache/
+analytics/.ruff_cache/
+analytics/.ty_cache/
+analytics/dist/
+analytics/**/*.egg-info/

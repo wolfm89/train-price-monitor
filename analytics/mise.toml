@@ -1,0 +1,27 @@
+[tasks.install]
+description = "Create the uv environment from the lockfile"
+run = "uv sync --frozen"
+
+[tasks.build]
+description = "Install runtime dependencies only, as the Lambda image does"
+run = "uv sync --frozen --no-dev"
+
+[tasks.typecheck]
+description = "Type check with ty"
+run = "uv run --frozen ty check"
+
+[tasks.test]
+description = "Run the fixture tests"
+run = "uv run --frozen pytest"
+
+[tasks.lint]
+description = "Lint with ruff"
+run = "uv run --frozen ruff check ."
+
+[tasks.format]
+description = "Format with ruff"
+run = "uv run --frozen ruff format ."
+
+[tasks."silver:local"]
+description = "Build silver from a local bronze glob; pass --source <glob> --target <dir> after --"
+run = "uv run --frozen python -m tpm_analytics.silver.build"

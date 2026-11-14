@@ -34,3 +34,23 @@ repos:
           - 'typescript@5.9.3'
           - 'globals@17.14.0'
           - 'eslint-plugin-awscdk@4.4.4'
+
+  # analytics/ is the only Python module. ruff replaces both eslint and prettier there, and the
+  # lockfile check keeps analytics/uv.lock in step with pyproject.toml (CI runs `uv sync --frozen`).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 'v0.17.5'
+    hooks:
+      - id: ruff
+        args: ['--fix']
+        files: ^analytics/
+      - id: ruff-format
+        files: ^analytics/
+
+  - repo: local
+    hooks:
+      - id: uv-lock
+        name: uv lock (analytics)
+        entry: bash -c 'cd analytics && uv lock --check'
+        language: system
+        files: ^analytics/(pyproject\.toml|uv\.lock)$
+        pass_filenames: false

@@ -2,11 +2,12 @@ min_version = "2024.9.5"
 monorepo_root = true
 
 [monorepo]
-config_roots = ["frontend", "backend", "infrastructure", "scraper"]
+config_roots = ["frontend", "backend", "infrastructure", "scraper", "analytics"]
 
 [tools]
 node    = "24"
 aws-cli = "2"
+uv      = "0.11.26"
 
 [env]
 _.file = '.env'

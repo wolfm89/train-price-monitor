@@ -149,6 +149,27 @@ jobs:
         working-directory: infrastructure
       - run: npm test
         working-directory: infrastructure
+  analytics:
+    name: Analytics
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # uv provisions the interpreter too: analytics/.python-version pins 3.13.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.11.26'
+          enable-cache: true
+      - run: uv sync --frozen
+        working-directory: analytics
+      - run: uv run --frozen ruff check .
+        working-directory: analytics
+      - run: uv run --frozen ruff format --check .
+        working-directory: analytics
+      - run: uv run --frozen ty check --output-format github
+        working-directory: analytics
+      - run: uv run --frozen pytest
+        working-directory: analytics
+
   artifacts:
     name: Build & synth
     # Only on pull requests: a deploy performs the equivalent work itself.
@@ -225,7 +246,7 @@ jobs:
     name: Deploy
     # Never on pull requests, and only once every module job is green.
     if: github.event_name != 'pull_request'
-    needs: [frontend, backend, scraper, infrastructure]
+    needs: [frontend, backend, scraper, infrastructure, analytics]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
