@@ -205,6 +205,23 @@ def run_build(
                     )
                 ]
             )
+        if verify and duplicates_removed:
+            # Removed rows must be duplicates, not silently dropped unique observations.
+            expected_duplicates = scalar(
+                connection,
+                "SELECT coalesce(sum(n - 1), 0) FROM ("
+                f"SELECT count(*) AS n FROM {source_sql} "
+                f"GROUP BY {', '.join(constants.DEDUPE_KEY)} HAVING count(*) > 1)",
+            )
+            if expected_duplicates != duplicates_removed:
+                raise quality.QualityError(
+                    [
+                        quality.Violation(
+                            "removed rows != duplicate rows",
+                            f"{duplicates_removed} removed, {expected_duplicates} duplicates in bronze",
+                        )
+                    ]
+                )
         if verify:
             report = quality.check(
                 connection,
