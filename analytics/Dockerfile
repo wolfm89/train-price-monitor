@@ -7,9 +7,9 @@
 # scraper/ the bundle is not built on the host first.
 # ---------------------------------------------------------------------------
 
-FROM ghcr.io/astral-sh/uv:0.11.26 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
 
-FROM public.ecr.aws/lambda/python:3.13 AS builder
+FROM public.ecr.aws/lambda/python:3.14 AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_NO_INSTALLER_METADATA=1 \
@@ -23,7 +23,7 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
     uv export --frozen --no-dev --no-emit-project -o requirements.txt && \
     uv pip install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
 
-FROM public.ecr.aws/lambda/python:3.13
+FROM public.ecr.aws/lambda/python:3.14
 
 COPY --from=builder ${LAMBDA_TASK_ROOT} ${LAMBDA_TASK_ROOT}
 COPY src/tpm_analytics ${LAMBDA_TASK_ROOT}/tpm_analytics

@@ -18,17 +18,17 @@ repos:
         args: ['--allow-missing-credentials']
 
   - repo: https://github.com/34j/mirrors-prettier
-    rev: 'v3.9.10'
+    rev: 'v3.10.1'
     hooks:
       - id: prettier
 
   - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: 'v10.14.0'
+    rev: 'v10.15.0'
     hooks:
       - id: eslint
         args: ['--max-warnings=0', '--config', 'eslint.config.cjs']
         additional_dependencies:
-          - 'eslint@10.14.0'
+          - 'eslint@10.15.0'
           - '@typescript-eslint/eslint-plugin@8.72.2'
           - '@typescript-eslint/parser@8.72.2'
           - 'typescript@5.9.3'
@@ -45,8 +45,43 @@ repos:
       - id: ruff-format
 
   # Keeps analytics/uv.lock in step with pyproject.toml; CI additionally runs `uv sync --frozen`.
+  # Project-scoped checks are too slow for every commit and need each module's dependencies.
+  # They run in CI and on demand: pre-commit run --all-files --hook-stage manual
+  - repo: local
+    hooks:
+      - id: typecheck-frontend
+        name: tsc (frontend)
+        entry: bash -c 'cd frontend && npm run typecheck'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+      - id: typecheck-backend
+        name: tsc (backend)
+        entry: bash -c 'cd backend && npm run typecheck'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+      - id: typecheck-scraper
+        name: tsc (scraper)
+        entry: bash -c 'cd scraper && npm run typecheck'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+      - id: typecheck-infrastructure
+        name: tsc (infrastructure)
+        entry: bash -c 'cd infrastructure && npm run typecheck'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+      - id: typecheck-analytics
+        name: ty (analytics)
+        entry: bash -c 'cd analytics && uv run --frozen ty check'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: '0.11.26'
+    rev: '0.13.8'
     hooks:
       - id: uv-lock
         args: ['--directory', 'analytics', '--check']

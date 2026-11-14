@@ -149,6 +149,18 @@ jobs:
         working-directory: infrastructure
       - run: npm test
         working-directory: infrastructure
+  pre-commit:
+    name: Pre-commit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: '0.13.8'
+      # One job for every fast, file-scoped hook (formatting, YAML/JSON, ruff, lockfile).
+      # Project-scoped checks (tsc, tests, builds, images) stay in their module jobs.
+      - run: uvx pre-commit@4.7.0 run --all-files --show-diff-on-failure
+
   analytics:
     name: Analytics
     runs-on: ubuntu-24.04
@@ -158,7 +170,7 @@ jobs:
       # setup-uv publishes no moving major tag above v7, so this one is pinned exactly.
       - uses: astral-sh/setup-uv@v10.3.3
         with:
-          version: '0.11.26'
+          version: '0.13.8'
           enable-cache: true
       - run: uv sync --frozen
         working-directory: analytics

@@ -7,7 +7,7 @@ config_roots = ["frontend", "backend", "infrastructure", "scraper", "analytics"]
 [tools]
 node    = "24"
 aws-cli = "2"
-uv      = "0.11.26"
+uv      = "0.13.8"
 
 [env]
 _.file = '.env'

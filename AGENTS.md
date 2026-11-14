@@ -74,7 +74,8 @@ npm run lint           # ESLint check
 
 ```bash
 # Monorepo (mise) — run from any directory
-npx pre-commit run --all-files     # Run all pre-commit hooks
+npx pre-commit run --all-files     # Fast, file-scoped hooks (format, lint, lockfile)
+npx pre-commit run --all-files --hook-stage manual  # + tsc and ty for every module
 mise run //...:build               # Build all modules in parallel
 mise run //...:test                # Run tests across all modules
 mise run //...:lint                # Lint all modules

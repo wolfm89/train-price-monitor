@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Silver-layer builds for the Train Price Monitor price dataset"
 readme = "README.md"
 license = "GPL-3.0-only"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "duckdb==2.0.0",
 ]
@@ -18,20 +18,20 @@ dev = [
 ]
 
 [build-system]
-# Bounded on purpose: uv warns that an unbounded backend breaks when 0.12 lands. Bump this and
-# the uv pin in .mise.toml / CI together.
-requires = ["uv_build>=0.11.26,<0.12"]
+# Bounded on purpose: uv warns that an unbounded backend breaks at the next major. Bump this and
+# the uv pins in .mise.toml, CI, pre-commit and the Dockerfile together.
+requires = ["uv_build>=0.13.8,<0.14"]
 build-backend = "uv_build"
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "PT", "RUF"]
 
 [tool.ty.environment]
-python-version = "3.13"
+python-version = "3.14"
 
 [tool.ty.src]
 include = ["src", "tests"]
