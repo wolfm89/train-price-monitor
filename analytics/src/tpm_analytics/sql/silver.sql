@@ -141,5 +141,8 @@ COPY (
 ) TO '{{TARGET}}' (
     FORMAT parquet,
     PARTITION_BY (departure_year, departure_month),
-    COMPRESSION zstd
+    COMPRESSION zstd,
+    -- DuckDB 2.0: rows written per file, so the build does not have to re-read its own output
+    -- just to count it. The quality gate still reads from disk independently.
+    RETURN_STATS
 );

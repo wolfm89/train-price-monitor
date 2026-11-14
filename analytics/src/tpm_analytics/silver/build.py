@@ -120,21 +120,17 @@ def run_build(
         )
         source_sql = bronze_source(connection, source)
         rows_in = scalar(connection, f"SELECT count(*) FROM {source_sql}")
-        connection.execute(
+        written = connection.execute(
             render_sql(
                 sql_path,
                 bronze_source_sql=source_sql,
                 stations_path=stations_path,
                 target=partial,
             )
-        )
+        ).fetchall()
+        rows_out = sum(int(row[1]) for row in written)
+        partitions = len({tuple(sorted(row[5].items())) for row in written}) if written else 0
         silver_glob = str(partial / "**" / "*.parquet")
-        silver_sql = read_parquet(silver_glob, hive_partitioning=True)
-        rows_out = scalar(connection, f"SELECT count(*) FROM {silver_sql}")
-        partitions = scalar(
-            connection,
-            f"SELECT count(*) FROM (SELECT DISTINCT departure_year, departure_month FROM {silver_sql})",
-        )
         if verify:
             quality.raise_for_violations(
                 quality.check(

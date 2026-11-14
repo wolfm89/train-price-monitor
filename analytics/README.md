@@ -26,6 +26,9 @@ open `s3://`.
 The SQL and the station dimension live inside the package (`src/tpm_analytics/{sql,data}`), so a
 built wheel is self-contained and the future image only has to copy `tpm_analytics/`.
 
+DuckDB is pinned at 2.0.0. The transform uses `COPY … RETURN_STATS`, so the row count and partition
+count come from the writer and are then independently re-counted by the quality gate.
+
 ## Local commands
 
 ```bash
