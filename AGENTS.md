@@ -16,6 +16,8 @@ through a `mise` monorepo.
   `cross-fetch` to. It has no `node_modules` of its own: each consuming module type-checks it
   via its own tsconfig (`include` + its own `paths` entries) and bundles it with esbuild.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
+- `analytics/` – Python 3.14 silver-layer builds (DuckDB) over the scraper's bronze Parquet. The only
+  non-TypeScript module; see `analytics/README.md`.
 - `.mise.toml` / `mise.tasks.toml` – Monorepo task definitions shared across modules.
 - `eslint.config.cjs` – Shared ESLint v10 flat config.
 - `docker-compose.yml` – Local dev services (Floci AWS emulator, backend, frontend).
@@ -72,13 +74,24 @@ npm run lint           # ESLint check
 
 ```bash
 # Monorepo (mise) — run from any directory
-npx pre-commit run --all-files     # Run all pre-commit hooks
+npx pre-commit run --all-files     # Fast, file-scoped hooks (format, lint, lockfile)
+npx pre-commit run --all-files --hook-stage manual  # + tsc and ty for every module
 mise run //...:build               # Build all modules in parallel
 mise run //...:test                # Run tests across all modules
 mise run //...:lint                # Lint all modules
 mise run //frontend:dev            # Start frontend dev server
 mise run //backend:dev             # Start backend local server (sets LOCAL_DEV=1)
 mise run //infrastructure:deploy   # Deploy all CDK stacks
+```
+
+```bash
+# Analytics (Python 3.14, uv, DuckDB)
+cd analytics
+uv sync --frozen       # Create .venv from uv.lock (uv manages the interpreter)
+uv run pytest          # Fixture tests over v1/v2/mixed bronze files
+uv run ty check        # Type check (Astral ty)
+uv run ruff check .    # Lint
+uv run ruff format .   # Format
 ```
 
 For a Coder workspace, run `mise run install` and `mise run //backend:codegen` after `mise install`.
@@ -106,6 +119,8 @@ environment files from `InfrastructureStack` outputs. Do not automate or commit 
   constants SCREAMING_SNAKE_CASE; files kebab-case.
 - **React**: functional components with hooks; named exports for reusable components, default exports
   for pages; props interface named `<Component>Props`, destructured in the signature.
+- **Python (`analytics/` only)**: `uv` + `pyproject.toml` + committed `uv.lock` (never `pip install`
+  ad hoc or a `requirements.txt`); ruff for lint and format at line length 120; `ty` for type checking.
 - **CDK**: extend `cdk.Stack`; descriptive construct IDs; prefer L2 constructs; accept
   `props?: cdk.StackProps`.
 - **Commits**: short imperative subject (e.g. `Add price alert threshold validation`); pre-commit
@@ -144,12 +159,19 @@ flowchart LR
   `unavailable` instead of failing.
 - **Scraper** is fully decoupled: EventBridge schedules drive the Hydrator (seed targets), Poller
   (scrape prices), and Compactor (consolidate Parquet). See `scraper/README.md` for details.
+- **Analytics** turns bronze into silver with DuckDB: v1/v2 rows are normalised (`transfers_raw` and
+  `transfers_actual`, load-factor ordinals, backfilled v1 defaults), station context is joined, and
+  all calendar fields plus `timetable_period` use Berlin local time. The timetable boundary in
+  `analytics/src/tpm_analytics/sql/silver.sql` is a hand-maintained constant; `TIMETABLE_REVIEW_AFTER`
+  in `quality.py` fails the build once departures reach the end of the reviewed period.
 
 ## Testing Strategy
 
 - **Frontend** – Vitest (`*.test.{ts,tsx}`); run `mise run //frontend:test` (or `npm test`).
 - **Infrastructure** – Jest with ts-jest (`*.test.ts`); run `mise run //infrastructure:test`.
   Use descriptive names, e.g. `test('SQS Queue Created')`.
+- **Analytics** – pytest over pyarrow fixtures that reproduce v1-only, v2-only and mixed bronze files;
+  run `mise run //analytics:test`. CI runs it alongside ruff and `ty check`.
 - **Backend** – Node's test runner for the backfill planners and `ts-node` assertion scripts for the
   journey matcher and the privacy helpers (retention, export, upload validation, CORS, log
   redaction); run `npm test` in `backend`. CI runs it alongside `typecheck` + `lint`.
@@ -210,6 +232,8 @@ flowchart LR
 - Infra changes: run `npm run build` and `npm run cdk diff` before any deploy; never `cdk deploy`
   without a human reviewing the diff.
 - Keep `no-console` clean; use the powertools logger in backend/scraper.
+- Python belongs in `analytics/` only. Do not add Python code, dependencies or tooling to
+  `backend/`, `scraper/`, `frontend/` or `shared/`.
 
 **DB transport** (`shared/db-fetch.ts`):
 

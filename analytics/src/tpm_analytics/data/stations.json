@@ -1,0 +1,90 @@
+{
+  "source": "db-stations 5.0.2, derived from Deutsche Bahn station data published under CC-BY-4.0; subset of 14 stations, fields renamed, category and federal state extracted",
+  "generated": "2026-11-14",
+  "stations": [
+    {
+      "eva": "8011160",
+      "name": "Berlin Hauptbahnhof",
+      "lat": 52.525592,
+      "lon": 13.369545,
+      "state": "Berlin",
+      "category": 1
+    },
+    { "eva": "8000261", "name": "München Hbf", "lat": 48.140232, "lon": 11.558335, "state": "Bayern", "category": 1 },
+    { "eva": "8002549", "name": "Hamburg Hbf", "lat": 53.552736, "lon": 10.006909, "state": "Hamburg", "category": 1 },
+    {
+      "eva": "8000105",
+      "name": "Frankfurt (Main) Hbf",
+      "lat": 50.107145,
+      "lon": 8.663789,
+      "state": "Hessen",
+      "category": 1
+    },
+    {
+      "eva": "8000207",
+      "name": "Köln Hbf",
+      "lat": 50.94303,
+      "lon": 6.958729,
+      "state": "Nordrhein-Westfalen",
+      "category": 1
+    },
+    {
+      "eva": "8000096",
+      "name": "Stuttgart Hbf",
+      "lat": 48.784084,
+      "lon": 9.181635,
+      "state": "Baden-Württemberg",
+      "category": 1
+    },
+    {
+      "eva": "8000085",
+      "name": "Düsseldorf Hbf",
+      "lat": 51.219962,
+      "lon": 6.794319,
+      "state": "Nordrhein-Westfalen",
+      "category": 1
+    },
+    {
+      "eva": "8010205",
+      "name": "Leipzig Hbf",
+      "lat": 51.3454712,
+      "lon": 12.3820639,
+      "state": "Sachsen",
+      "category": 1
+    },
+    {
+      "eva": "8000152",
+      "name": "Hannover Hbf",
+      "lat": 52.376761,
+      "lon": 9.741021,
+      "state": "Niedersachsen",
+      "category": 1
+    },
+    { "eva": "8000284", "name": "Nürnberg Hbf", "lat": 49.445616, "lon": 11.082989, "state": "Bayern", "category": 1 },
+    { "eva": "8000050", "name": "Bremen Hbf", "lat": 53.083481, "lon": 8.813834, "state": "Bremen", "category": 2 },
+    {
+      "eva": "8000244",
+      "name": "Mannheim Hbf",
+      "lat": 49.479354,
+      "lon": 8.468921,
+      "state": "Baden-Württemberg",
+      "category": 1
+    },
+    {
+      "eva": "8000080",
+      "name": "Dortmund Hbf",
+      "lat": 51.517896,
+      "lon": 7.45929,
+      "state": "Nordrhein-Westfalen",
+      "category": 1
+    },
+    {
+      "eva": "8000191",
+      "name": "Karlsruhe Hbf",
+      "lat": 48.993515,
+      "lon": 8.402181,
+      "state": "Baden-Württemberg",
+      "category": 1
+    }
+  ]
+}
