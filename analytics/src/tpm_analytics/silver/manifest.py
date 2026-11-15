@@ -5,8 +5,6 @@ resolve. Both are written by the publisher, and the pointer always names a manif
 back and checked first.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -19,7 +17,7 @@ POINTER_NAME = "_latest.json"
 MANIFEST_VERSION = 2
 
 # 20261114T173000Z-a1b2c3d4: sortable by time, unique within a second.
-BUILD_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
+BUILD_ID_PATTERN = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 
 
 @dataclass(frozen=True)
@@ -28,7 +26,7 @@ class BuildFile:
     bytes: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class BuildManifest:
     """Everything needed to reproduce and audit one build."""
 

@@ -415,3 +415,146 @@ def test_iso_calendar_columns(
         "SELECT departure_weekday, departure_iso_week, departure_iso_year, is_weekend FROM {silver}",
     )
     assert result == [(weekday, iso_week, iso_year, weekday >= 5)]
+
+
+def test_v1_rows_that_differ_only_in_train_number_are_not_duplicates(tmp_path: Path) -> None:
+    """The dedupe key is normalised; two trains on the same route/time are different rows."""
+    root = tmp_path / "v1-trains"
+    write_bronze(
+        root / "day=01",
+        [v1_row(train_number="1001"), v1_row(train_number="1003")],
+        schema_version=1,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-v1-trains")
+    assert built.rows_out == 2
+    assert built.duplicates_removed == 0
+
+
+def test_identical_v1_rows_are_deduplicated(tmp_path: Path) -> None:
+    root = tmp_path / "v1-dupes"
+    write_bronze(root / "day=01", [v1_row(), v1_row()], schema_version=1)
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-v1-dupes")
+    assert built.rows_out == 1
+    assert built.duplicates_removed == 1
+
+
+def test_compacted_v1_layout_is_backfilled(tmp_path: Path, duck) -> None:
+    """The compactor writes v1 rows with all 22 columns and empty strings."""
+    root = tmp_path / "compacted-v1"
+    write_bronze(root / "day=01", [v1_row()], schema_version=1, compacted=True)
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-compacted-v1")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / "silver-compacted-v1"),
+        "SELECT train_numbers, source_profile, query_mode, schema_version FROM {silver}",
+    )
+    assert result == [("1001", "dbweb", "bestprice", 1)]
+
+
+def test_explicit_file_list_is_a_supported_source(bronze_root: Path, tmp_path: Path) -> None:
+    files = tuple(sorted(str(path) for path in bronze_root.glob("**/*.parquet")))
+    built = run_build(list(files), tmp_path / "silver-list")
+    assert built.rows_in == 6
+    assert built.rows_out == 6
+    assert built.source_files == files
+
+
+def test_empty_file_list_is_rejected(tmp_path: Path) -> None:
+    from tpm_analytics.silver.build import EmptyCorpusError
+
+    with pytest.raises(EmptyCorpusError):
+        run_build([], tmp_path / "silver-empty-list")
+
+
+def test_cli_success_prints_json(bronze_glob: str, tmp_path: Path, capsys) -> None:
+    import json
+
+    exit_code = main(["--source", bronze_glob, "--target", str(tmp_path / "silver-cli")])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rows_out"] == 6
+
+
+def test_cli_no_verify_warns_and_succeeds(bronze_glob: str, tmp_path: Path, capsys) -> None:
+    exit_code = main(["--source", bronze_glob, "--target", str(tmp_path / "silver-cli-nv"), "--no-verify"])
+    assert exit_code == 0
+    assert "quality gate disabled" in capsys.readouterr().err
+
+
+def test_dedupe_survivor_is_thread_independent(tmp_path: Path, duck) -> None:
+    """Two rows sharing the key but differing in transfers: the same one must survive."""
+    root = tmp_path / "ties"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(transfers=0, train_number="1001"), bronze_row(transfers=2, train_number="1001")],
+        schema_version=2,
+    )
+    source = str(root / "**" / "*.parquet")
+    one = run_build(source, tmp_path / "silver-ties-1", threads=1)
+    four = run_build(source, tmp_path / "silver-ties-4", threads=4)
+    assert one.rows_out == four.rows_out == 1
+
+    def survivor(target: Path) -> tuple[object, ...]:
+        glob = f"{target}/**/*.parquet"
+        return duck.execute(
+            f"SELECT transfers_raw FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=true)"
+        ).fetchone()
+
+    assert survivor(tmp_path / "silver-ties-1") == survivor(tmp_path / "silver-ties-4")
+    left = f"read_parquet('{tmp_path}/silver-ties-1/**/*.parquet', hive_partitioning=true)"
+    right = f"read_parquet('{tmp_path}/silver-ties-4/**/*.parquet', hive_partitioning=true)"
+    assert duck.execute(f"SELECT count(*) FROM (SELECT * FROM {left} EXCEPT ALL SELECT * FROM {right})").fetchone() == (
+        0,
+    )
+    assert duck.execute(f"SELECT count(*) FROM (SELECT * FROM {right} EXCEPT ALL SELECT * FROM {left})").fetchone() == (
+        0,
+    )
+
+
+EXPECTED_SILVER_COLUMNS = (
+    "observed_at",
+    "service_class",
+    "route_id",
+    "origin_eva",
+    "origin_name",
+    "dest_eva",
+    "dest_name",
+    "departure_planned",
+    "arrival_planned",
+    "train_type",
+    "train_number",
+    "train_numbers",
+    "transfers_raw",
+    "duration_minutes",
+    "days_to_departure",
+    "fare_lowest_eur",
+    "load_factor",
+    "load_factor_ordinal",
+    "journey_id",
+    "schema_version",
+    "source_profile",
+    "query_mode",
+    "transfers_actual",
+    "departure_date",
+    "departure_weekday",
+    "departure_hour_local",
+    "departure_iso_week",
+    "departure_iso_year",
+    "is_weekend",
+    "distance_km",
+    "origin_state",
+    "dest_state",
+    "origin_station_category",
+    "dest_station_category",
+    "timetable_period",
+    "observation_era",
+    "scrapes_per_route_day_final",
+    "departure_year",
+    "departure_month",
+)
+
+
+def test_output_columns_are_exactly_the_contract(build) -> None:
+    built = build()
+    table = pq.read_table(built.target, partitioning="hive")
+    assert tuple(table.column_names) == EXPECTED_SILVER_COLUMNS

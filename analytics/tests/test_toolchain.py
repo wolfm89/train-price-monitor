@@ -1,7 +1,5 @@
 """The same tool must be pinned to the same version in every place that names it."""
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 

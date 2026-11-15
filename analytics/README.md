@@ -138,9 +138,9 @@ The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 ## Column contract
 
-Silver has the 22 bronze columns plus the columns below. Each file carries 35 columns; the
+Silver has the 22 bronze columns plus the columns below. Each file carries 37 columns; the
 partition columns `departure_year`/`departure_month` exist only in the directory path, so a hive read
-yields 37.
+yields 39.
 
 | Column                                             | Rule                                                                                                                                                                                    |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -146,8 +146,8 @@ def run_build(
         if not source:
             raise EmptyCorpusError("no source files given")
         for item in source:
-            if "://" in item and not item.startswith("s3://"):
-                raise UnsupportedLocationError(f"source file {item!r} is not an s3:// URI")
+            if "://" in item and not (item.startswith("s3://") and s3 is not None):
+                raise UnsupportedLocationError(f"source file {item!r} is a URI; pass S3 credentials to read from s3://")
     sql_path = Path(sql_path) if sql_path is not None else asset_dir("sql") / "silver.sql"
     stations_path = Path(stations_path) if stations_path is not None else asset_dir("data") / "stations.json"
     final_target = local_path(target, role="target")
@@ -198,12 +198,20 @@ def run_build(
                 ]
             )
         if verify and duplicates_removed:
-            # Removed rows must be duplicates, not silently dropped unique observations.
+            # Removed rows must be duplicates, not silently dropped unique observations. The key
+            # has to be normalised exactly like the transform's, or a v1 corpus with a NULL
+            # train_numbers would look coarser here than in the dedupe.
+            key_sql = ", ".join(
+                "COALESCE(NULLIF(train_numbers, ''), train_number) AS train_numbers"
+                if name == "train_numbers"
+                else name
+                for name in constants.DEDUPE_KEY
+            )
             expected_duplicates = scalar(
                 connection,
                 "SELECT coalesce(sum(n - 1), 0) FROM ("
-                f"SELECT count(*) AS n FROM {source_sql} "
-                f"GROUP BY {', '.join(constants.DEDUPE_KEY)} HAVING count(*) > 1)",
+                f"SELECT count(*) AS n FROM (SELECT {key_sql} FROM {source_sql}) "
+                "GROUP BY ALL HAVING count(*) > 1)",
             )
             if expected_duplicates != duplicates_removed:
                 raise quality.QualityError(

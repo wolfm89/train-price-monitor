@@ -1,7 +1,5 @@
 """Publishing: upload order, manifest, pointer, retention and failure cleanup."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -423,3 +421,56 @@ def test_malformed_pointer_is_ignored(build, tmp_path: Path) -> None:
 
     pointer = Pointer.from_json(store.get_bytes(pointer_key("silver")))
     assert pointer.build_id == "20260101T000000Z-aaaaaaaa"
+
+
+def test_corpus_shrink_is_refused(build, tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    publish(
+        store,
+        build_id="20260101T000000Z-aaaaaaaa",
+        local_dir=built.target,
+        stats=replace(built.stats, rows_in=200, rows_out=200),
+        source="s3://bucket/prices/**/*.parquet",
+        source_files=(),
+        prefix="silver",
+        transform_version="test",
+        duckdb_version="2.0.0",
+    )
+    with pytest.raises(ValueError, match="corpus shrank"):
+        publish(
+            store,
+            build_id="20260102T000000Z-bbbbbbbb",
+            local_dir=built.target,
+            stats=replace(built.stats, rows_in=100, rows_out=100),
+            source="s3://bucket/prices/**/*.parquet",
+            source_files=(),
+            prefix="silver",
+            transform_version="test",
+            duckdb_version="2.0.0",
+        )
+
+
+def test_complete_builds_are_kept_for_a_day(build, tmp_path: Path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from tpm_analytics.silver import publish as publish_module
+
+    fixed = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(publish_module, "utc_now", lambda: fixed)
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    for build_id in (
+        "20261113T120000Z-dddddddd",  # two days old
+        "20261115T095959Z-cccccccc",  # two hours and a second old
+        "20261115T100000Z-bbbbbbbb",  # two hours old
+        "20261115T120000Z-aaaaaaaa",  # now
+    ):
+        publish_one(store, built, build_id)
+
+    # The two-day-old build is past the age window and outside keep=2.
+    assert "20261113T120000Z-dddddddd" not in build_ids(store, "silver")
+    # The two-hour-old build is outside keep=2 but younger than a day: a reader may still be on it.
+    assert "20261115T095959Z-cccccccc" in build_ids(store, "silver")

@@ -5,8 +5,6 @@ source, a bucket or whether the gate runs. A retry after a crash is safe because
 new build id and only the pointer moves.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import shutil
@@ -15,6 +13,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import boto3
 import duckdb
@@ -25,6 +24,8 @@ from tpm_analytics.silver.manifest import build_id_for, utc_now
 from tpm_analytics.silver.publish import publish
 from tpm_analytics.silver.storage import S3ObjectStore
 
+# Lambda installs no root handler; without one, INFO would never be emitted.
+logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 # Leave enough time to upload a 3 GB build and move the pointer.
@@ -61,15 +62,15 @@ def load_settings() -> Settings:
     )
 
 
-def bronze_prefix_for(source: str) -> str:
-    """The object prefix the glob actually covers, so the snapshot cannot disagree with the read."""
-    if not source.startswith("s3://"):
+def parse_bronze_source(source: str) -> tuple[str, str]:
+    """Return (bucket, prefix) for the glob, so the snapshot cannot disagree with the read."""
+    parsed = urlsplit(source)
+    if parsed.scheme != "s3" or not parsed.netloc:
         raise ValueError(f"BRONZE_SOURCE must be an s3:// glob, got {source!r}")
-    _, _, path = source[len("s3://") :].partition("/")
-    prefix = path.split("**")[0].rstrip("/")
+    prefix = parsed.path.lstrip("/").split("**")[0].rstrip("/")
     if not prefix:
         raise ValueError(f"BRONZE_SOURCE {source!r} has no prefix before the wildcard")
-    return prefix + "/"
+    return parsed.netloc, prefix + "/"
 
 
 def aws_secret(region: str) -> S3Secret:
@@ -105,7 +106,6 @@ def remaining_seconds(context: object) -> float | None:
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     started = time.perf_counter()
-    LOGGER.setLevel(logging.INFO)
     settings = load_settings()
     if not settings.source.startswith("s3://"):
         raise ValueError("BRONZE_SOURCE must be an s3:// glob in the handler")
@@ -127,8 +127,8 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     store = S3ObjectStore(settings.bucket, region=settings.region)
     # One snapshot of the corpus: the build reads exactly these objects and the manifest records
     # them. The poller appends a batch every 15 minutes, so a live glob would change mid-build.
-    prefix_in_source = bronze_prefix_for(settings.source)
-    if settings.source.split("/")[2] != settings.bucket:
+    source_bucket, prefix_in_source = parse_bronze_source(settings.source)
+    if source_bucket != settings.bucket:
         raise ValueError(f"BRONZE_SOURCE names a different bucket than SILVER_BUCKET ({settings.bucket})")
     silver_prefix = settings.prefix.strip("/") + "/"
     if prefix_in_source.startswith(silver_prefix) or silver_prefix.startswith(prefix_in_source):

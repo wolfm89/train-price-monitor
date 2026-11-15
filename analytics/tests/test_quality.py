@@ -248,3 +248,58 @@ def test_bronze_changing_mid_build_is_rejected(build, duck, bronze_glob: str) ->
         expected_rows=built.stats.rows_out,
     )
     assert "bronze changed during build" in names(list(report.violations))
+
+
+def test_v1_journey_id_is_rejected(tmp_path: Path, duck) -> None:
+    root = tmp_path / "v1-with-id"
+    write_bronze(root / "day=01", [v1_row(journey_id="legacy")], schema_version=1, compacted=True)
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-v1-with-id")
+    assert "journey_id set on a v1 row" in names(violations_for(duck, built, source))
+
+
+def test_ordinal_parity_is_rejected(tmp_path: Path, duck) -> None:
+    root = tmp_path / "ordinal-parity"
+    write_bronze(root / "day=01", [bronze_row(load_factor=None, load_factor_ordinal=2)], schema_version=2)
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-ordinal-parity")
+    assert "load_factor_ordinal out of sync with load_factor" in names(violations_for(duck, built, source))
+
+
+def test_invalid_service_class_is_rejected(tmp_path: Path, duck) -> None:
+    root = tmp_path / "service-class"
+    write_bronze(root / "day=01", [bronze_row(service_class=3)], schema_version=2)
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-service-class")
+    assert "service_class outside {1,2}" in names(violations_for(duck, built, source))
+
+
+def test_zero_duration_is_rejected_after_the_fix(tmp_path: Path, duck) -> None:
+    root = tmp_path / "zero-duration"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(observed_at=datetime(2026, 11, 14, 8, 0), duration_minutes=0)],
+        schema_version=2,
+    )
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-zero-duration")
+    assert "non-positive duration after the fix" in names(violations_for(duck, built, source))
+
+
+def test_negative_v1_transfers_are_rejected(tmp_path: Path, duck) -> None:
+    root = tmp_path / "negative-transfers"
+    write_bronze(root / "day=01", [v1_row(transfers=-2)], schema_version=1)
+    source = str(root / "**" / "*.parquet")
+    built = unchecked(source, tmp_path / "silver-negative-transfers")
+    assert "negative transfers_actual" in names(violations_for(duck, built, source))
+
+
+def test_duplicate_share_is_enforced(tmp_path: Path, monkeypatch, duck) -> None:
+    from tpm_analytics.silver import constants
+
+    monkeypatch.setattr(constants, "MAX_DUPLICATE_ABSOLUTE", 0)
+    monkeypatch.setattr(constants, "MAX_DUPLICATE_SHARE", 0.0)
+    root = tmp_path / "too-many-duplicates"
+    write_bronze(root / "day=01", [bronze_row(), bronze_row()], schema_version=2)
+    with pytest.raises(quality.QualityError, match="too many duplicates removed"):
+        run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-too-many-duplicates")

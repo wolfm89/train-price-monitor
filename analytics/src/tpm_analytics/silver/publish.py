@@ -57,7 +57,7 @@ def normalise_prefix(prefix: str) -> str:
 
 
 def validate_build_id(build_id: str) -> None:
-    if not BUILD_ID_PATTERN.match(build_id):
+    if not BUILD_ID_PATTERN.fullmatch(build_id):
         raise ValueError(f"invalid build id {build_id!r}")
 
 
@@ -88,7 +88,7 @@ def _read_pointer(store: ObjectStore, prefix: str) -> Pointer | None:
     except TypeError, ValueError:
         LOGGER.warning("ignoring malformed pointer")
         return None
-    if not BUILD_ID_PATTERN.match(pointer.build_id):
+    if not BUILD_ID_PATTERN.fullmatch(pointer.build_id):
         LOGGER.warning("ignoring pointer with malformed build_id=%r", pointer.build_id[:32])
         return None
     try:
@@ -279,7 +279,7 @@ def _scan_builds(store: ObjectStore, prefix: str) -> tuple[list[str], list[str]]
     complete: list[str] = []
     orphans: list[str] = []
     for build_id in candidates:
-        if not BUILD_ID_PATTERN.match(build_id):
+        if not BUILD_ID_PATTERN.fullmatch(build_id):
             continue
         key = manifest_key(prefix, build_id)
         if key not in keys:

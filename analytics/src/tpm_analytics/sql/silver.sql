@@ -50,7 +50,10 @@ COPY (
         FROM normalised
         QUALIFY row_number() OVER (
             PARTITION BY {{DEDUPE_KEY}}
-            ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes, load_factor, fare_lowest_eur
+            ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes,
+                load_factor, fare_lowest_eur, transfers, train_type, train_number,
+                origin_name, dest_name, days_to_departure, load_factor_ordinal,
+                source_profile, query_mode, schema_version
         ) = 1
     ),
 

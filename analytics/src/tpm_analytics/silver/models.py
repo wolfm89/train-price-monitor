@@ -1,11 +1,9 @@
 """Shared result types, so the publisher does not depend on the DuckDB engine."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class BuildStats:
     """What one silver build produced."""
 

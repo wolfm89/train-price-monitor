@@ -99,13 +99,16 @@ def write_bronze(
     *,
     schema_version: int,
     nullable: dict[str, bool] | None = None,
+    compacted: bool = False,
 ) -> Path:
     """Write one bronze batch file under ``directory``.
 
     ``nullable`` overrides a column's nullability, so a test can write a row the writer would
     never produce (a corrupt file) and prove the gate rejects it.
     """
-    fields = V1_FIELDS if schema_version == 1 else V1_FIELDS + V2_FIELDS
+    # `compacted` reproduces the compactor's v1 output: full 22-column schema with
+    # schema_version = 1 and empty strings where the old writer had no value.
+    fields = V1_FIELDS if (schema_version == 1 and not compacted) else V1_FIELDS + V2_FIELDS
     overrides = nullable or {}
     schema = pa.schema([pa.field(name, kind, nullable=overrides.get(name, default)) for name, kind, default in fields])
     names = {field.name for field in schema}

@@ -5,6 +5,7 @@ publish logic (ordering, verification, pointer, retention) testable against a lo
 """
 
 import os
+from itertools import batched
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -107,8 +108,7 @@ class S3ObjectStore:
         return sorted(keys)
 
     def delete(self, keys: list[str]) -> None:
-        for start in range(0, len(keys), 1000):
-            batch = keys[start : start + 1000]
+        for batch in batched(keys, 1000, strict=False):
             response = self._client.delete_objects(
                 Bucket=self.bucket, Delete={"Objects": [{"Key": key} for key in batch]}
             )
