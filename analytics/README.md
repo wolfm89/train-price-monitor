@@ -108,19 +108,25 @@ silver/_latest.json
 
 - The **manifest** records `build_id`, the source glob and the exact object list that was read,
   rows in/out, duplicates removed, partitions, duration, transform version, DuckDB version,
-  SHA-256 of the SQL and station dimension, and every output file with its size. An empty
+  SHA-256 of the SQL and station dimension, and every output file with its size. The bucket
+  comes from the store that wrote the bytes, so it cannot disagree with them. An empty
   `TRANSFORM_VERSION` falls back to the SQL hash, so provenance is never blank.
 - The **pointer** is written last, after the manifest is read back and every file is present with
   the recorded size. The pointer write is the commit point: an exception before it deletes the
   half-written build; a pointer PUT that errors is assumed to have landed and the build is kept.
-  A killed process (timeout, OOM) cannot clean up: it leaves a prefix without a manifest, which
-  retention ignores and which can be deleted by hand.
+  A killed process (timeout, OOM) cannot clean up: it leaves a prefix without a manifest.
+  Retention reclaims such a prefix once it is older than an hour, which is long after any
+  in-flight upload could still be running.
 - **Retention** keeps the newest two builds (`SILVER_KEEP`, minimum 2 so one cycle of readers
   always survives), only counts ids that match the build-id format and have a non-empty
   manifest, and never deletes the build the pointer names.
 - The handler ignores the event: source, bucket, prefix and sizing come from the environment
   (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,
   `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
+
+For local S3 reads, install the extension once and point DuckDB at it:
+`mise run //analytics:httpfs`, then `DUCKDB_EXTENSION_DIR=analytics/.duckdb-extensions`.
+The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 `tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
 `ObjectStore`, and `tests/test_storage.py` covers the S3 implementation with botocore's

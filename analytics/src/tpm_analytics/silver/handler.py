@@ -87,9 +87,9 @@ def aws_secret(region: str) -> S3Secret:
 
 
 def sweep_workspace() -> list[str]:
-    """Remove ``silver-*`` directories left behind by a killed invocation in this sandbox."""
+    """Remove this module's own workspaces left behind by a killed invocation."""
     removed: list[str] = []
-    for path in Path(tempfile.gettempdir()).glob("silver-*"):
+    for path in Path(tempfile.gettempdir()).glob("silver-lambda-*"):
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
             removed.append(path.name)
@@ -135,7 +135,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         raise EmptyCorpusError(f"no bronze objects under {prefix_in_source!r}")
     LOGGER.info("silver source snapshot files=%s", len(snapshot))
 
-    with tempfile.TemporaryDirectory(prefix="silver-") as workspace:
+    with tempfile.TemporaryDirectory(prefix="silver-lambda-") as workspace:
         workdir = Path(workspace)
         target = workdir / build_id
         stats = run_build(
@@ -163,7 +163,6 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             stats=stats,
             source=settings.source,
             source_files=snapshot,
-            bucket=settings.bucket,
             prefix=settings.prefix,
             transform_version=settings.transform_version,
             duckdb_version=duckdb.__version__,

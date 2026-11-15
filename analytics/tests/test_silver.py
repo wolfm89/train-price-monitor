@@ -368,3 +368,24 @@ def test_uri_paths_are_rejected(tmp_path: Path) -> None:
         run_build(str(tmp_path / "x" / "**" / "*.parquet"), "s3://bucket/silver")
     with pytest.raises(UnsupportedLocationError, match="source"):
         run_build("s3://bucket/prices/**/*.parquet", tmp_path / "silver-s3")
+
+
+@pytest.mark.parametrize(
+    ("load_factor", "ordinal"),
+    [("low", 1), ("low-to-medium", 1), ("high", 2), ("very-high", 3), ("exceptionally-high", 4)],
+)
+def test_load_factor_ladder_matches_the_sql(tmp_path: Path, duck, load_factor: str, ordinal: int) -> None:
+    """The gate and the transform must agree on every value the DB can emit."""
+    root = tmp_path / f"lf-{ordinal}-{load_factor}"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(load_factor=load_factor, load_factor_ordinal=None, journey_id=f"j-{load_factor}")],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / f"silver-lf-{ordinal}-{load_factor}")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / f"silver-lf-{ordinal}-{load_factor}"),
+        "SELECT load_factor_ordinal FROM {silver}",
+    )
+    assert result == [(ordinal,)]

@@ -25,6 +25,10 @@ run = "uv run ruff check . && uv run ruff format --check ."
 description = "Format with ruff"
 run = "uv run ruff format ."
 
+[tasks.httpfs]
+description = "Install DuckDB httpfs into .duckdb-extensions for local S3 reads"
+run = "uv run python scripts/install_httpfs.py"
+
 [tasks.image]
 description = "Build the Lambda container image"
 run = "docker build -t train-price-monitor-analytics:dev ."

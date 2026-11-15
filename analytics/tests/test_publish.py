@@ -35,7 +35,6 @@ def publish_one(store: LocalObjectStore, built: Built, build_id: str, *, keep: i
         stats=built.stats,
         source=built.stats.source,
         source_files=("prices/a.parquet", "prices/b.parquet"),
-        bucket="test-bucket",
         prefix="silver",
         transform_version="test",
         duckdb_version="2.0.0",
@@ -225,7 +224,6 @@ def test_publish_refuses_an_unverified_build(build, tmp_path: Path) -> None:
             stats=stats_for(verified=False),
             source="s3://bucket/prices/**/*.parquet",
             source_files=(),
-            bucket="test-bucket",
             prefix="silver",
             transform_version="test",
             duckdb_version="2.0.0",
@@ -242,7 +240,6 @@ def test_publish_refuses_an_invalid_build_id(build, tmp_path: Path) -> None:
             stats=stats_for(),
             source="s3://bucket/prices/**/*.parquet",
             source_files=(),
-            bucket="test-bucket",
             prefix="silver",
             transform_version="test",
             duckdb_version="2.0.0",
@@ -259,7 +256,6 @@ def test_prefix_is_normalised(build, tmp_path: Path) -> None:
         stats=built.stats,
         source="s3://bucket/prices/**/*.parquet",
         source_files=(),
-        bucket="test-bucket",
         prefix="/silver/",
         transform_version="test",
         duckdb_version="2.0.0",
@@ -286,7 +282,6 @@ def test_publish_rejects_an_empty_directory(tmp_path: Path) -> None:
             stats=stats_for(),
             source="s3://bucket/prices/**/*.parquet",
             source_files=(),
-            bucket="test-bucket",
             prefix="silver",
             transform_version="test",
             duckdb_version="2.0.0",
@@ -319,7 +314,6 @@ def test_warnings_from_the_caller_are_preserved(build, tmp_path: Path) -> None:
         stats=built.stats,
         source="s3://bucket/prices/**/*.parquet",
         source_files=(),
-        bucket="test-bucket",
         prefix="silver",
         transform_version="test",
         duckdb_version="2.0.0",
@@ -355,7 +349,6 @@ def test_a_newer_build_during_upload_blocks_the_pointer(build, tmp_path: Path) -
             stats=built.stats,
             source="s3://bucket/prices/**/*.parquet",
             source_files=(),
-            bucket="test-bucket",
             prefix="silver",
             transform_version="test",
             duckdb_version="2.0.0",
@@ -365,3 +358,42 @@ def test_a_newer_build_during_upload_blocks_the_pointer(build, tmp_path: Path) -
     assert pointer.build_id == newer
     # Our build was deleted; the newer id has no manifest in this fixture, so it is not a build.
     assert build_ids(store, "silver") == []
+
+
+def test_old_manifestless_prefixes_are_reclaimed(build, tmp_path: Path) -> None:
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    old = "20200101T000000Z-deadbeef"
+    store.put_bytes(b"partial", f"silver/builds/{old}/data_0.parquet")
+    publish_one(store, built, "20260101T000000Z-aaaaaaaa")
+    publish_one(store, built, "20260102T000000Z-bbbbbbbb")
+
+    assert store.list_keys(f"silver/builds/{old}/") == []
+    assert build_ids(store, "silver") == ["20260102T000000Z-bbbbbbbb", "20260101T000000Z-aaaaaaaa"]
+
+
+def test_fresh_manifestless_prefix_is_left_alone(build, tmp_path: Path) -> None:
+    """An upload in flight is younger than the grace period and must survive retention."""
+    from tpm_analytics.silver.manifest import build_id_for, utc_now
+
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    in_flight = build_id_for(utc_now())
+    store.put_bytes(b"partial", f"silver/builds/{in_flight}/data_0.parquet")
+    publish_one(store, built, "20260101T000000Z-aaaaaaaa")
+
+    assert store.list_keys(f"silver/builds/{in_flight}/") != []
+
+
+def test_malformed_pointer_is_ignored(build, tmp_path: Path) -> None:
+    built = build()
+    store = LocalObjectStore(tmp_path / "bucket")
+    store.put_bytes(
+        b'{"build_id": "zzz", "manifest": "x", "updated_at": "y"}',
+        pointer_key("silver"),
+    )
+
+    publish_one(store, built, "20260101T000000Z-aaaaaaaa")
+
+    pointer = Pointer.from_json(store.get_bytes(pointer_key("silver")))
+    assert pointer.build_id == "20260101T000000Z-aaaaaaaa"

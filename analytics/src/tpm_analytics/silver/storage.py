@@ -14,6 +14,8 @@ import boto3
 class ObjectStore(Protocol):
     """The subset of S3 the publisher needs."""
 
+    bucket: str
+
     def put_file(self, local_path: Path, key: str) -> int:
         """Upload a file and return its size in bytes."""
 
@@ -31,7 +33,8 @@ class ObjectStore(Protocol):
 class LocalObjectStore:
     """A directory pretending to be a bucket. Simplified: no multipart, no ETags, no per-key errors."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, bucket: str = "local") -> None:
+        self.bucket = bucket
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
 

@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+BUILD_ROOT = "builds"
 MANIFEST_NAME = "_manifest.json"
 POINTER_NAME = "_latest.json"
 MANIFEST_VERSION = 1
@@ -97,8 +98,12 @@ def timestamp_of(build_id: str) -> str:
     return build_id[:16]
 
 
+def build_prefix(prefix: str, build_id: str) -> str:
+    return f"{prefix}/{BUILD_ROOT}/{build_id}"
+
+
 def manifest_key(prefix: str, build_id: str) -> str:
-    return f"{prefix}/builds/{build_id}/{MANIFEST_NAME}"
+    return f"{build_prefix(prefix, build_id)}/{MANIFEST_NAME}"
 
 
 def pointer_key(prefix: str) -> str:

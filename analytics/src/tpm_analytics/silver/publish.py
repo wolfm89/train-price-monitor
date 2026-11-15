@@ -10,29 +10,34 @@ good build out.
 """
 
 import hashlib
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from botocore.exceptions import ClientError
 
 from tpm_analytics.silver._duck import asset_dir
-from tpm_analytics.silver.build import BuildStats
 from tpm_analytics.silver.manifest import (
     BUILD_ID_PATTERN,
+    BUILD_ROOT,
     MANIFEST_VERSION,
     BuildFile,
     BuildManifest,
     Pointer,
+    build_prefix,
     manifest_key,
     pointer_key,
     timestamp_of,
     utc_now,
 )
+from tpm_analytics.silver.models import BuildStats
 from tpm_analytics.silver.storage import ObjectStore
 
 DEFAULT_KEEP = 2
-BUILD_ROOT = "builds"
+ORPHAN_GRACE_SECONDS = 3600
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -62,23 +67,29 @@ def asset_hashes() -> tuple[str, str]:
     return hashlib.sha256(sql).hexdigest(), hashlib.sha256(stations).hexdigest()
 
 
-def _build_prefix(prefix: str, build_id: str) -> str:
-    return f"{prefix}/{BUILD_ROOT}/{build_id}"
-
-
 def _read_pointer(store: ObjectStore, prefix: str) -> Pointer | None:
+    """A missing pointer is None; a malformed one is ignored with a warning; other errors surface."""
     try:
-        return Pointer.from_json(store.get_bytes(pointer_key(prefix)))
-    except FileNotFoundError, ClientError, ValueError:
+        data = store.get_bytes(pointer_key(prefix))
+    except FileNotFoundError:
         return None
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") in {"NoSuchKey", "404", "NotFound"}:
+            return None
+        raise
+    pointer = Pointer.from_json(data)
+    if not BUILD_ID_PATTERN.match(pointer.build_id):
+        LOGGER.warning("ignoring pointer with malformed build_id=%r", pointer.build_id[:32])
+        return None
+    return pointer
 
 
 def verify_upload(store: ObjectStore, manifest: BuildManifest) -> None:
     """The upload is only usable if every file is there with the recorded size."""
-    build_prefix = _build_prefix(manifest.prefix, manifest.build_id) + "/"
+    prefix_root = build_prefix(manifest.prefix, manifest.build_id) + "/"
     for file in manifest.files:
-        if not file.key.startswith(build_prefix):
-            raise ValueError(f"file {file.key} is outside {build_prefix}")
+        if not file.key.startswith(prefix_root):
+            raise ValueError(f"file {file.key} is outside {prefix_root}")
         try:
             size = store.size(file.key)
         except ClientError as error:
@@ -92,7 +103,7 @@ def verify_upload(store: ObjectStore, manifest: BuildManifest) -> None:
         raise ValueError("manifest read back from the store does not match the one written")
 
     expected = {file.key for file in manifest.files} | {manifest_key(manifest.prefix, manifest.build_id)}
-    present = set(store.list_keys(build_prefix))
+    present = set(store.list_keys(prefix_root))
     if present != expected:
         raise ValueError(f"build prefix contains unexpected keys: {sorted(present - expected)}")
 
@@ -105,7 +116,6 @@ def publish(
     stats: BuildStats,
     source: str,
     source_files: tuple[str, ...],
-    bucket: str,
     prefix: str,
     transform_version: str,
     duckdb_version: str,
@@ -126,9 +136,9 @@ def publish(
     if len(parquet_files) < stats.partitions:
         raise ValueError(f"{len(parquet_files)} files for {stats.partitions} partitions")
 
-    build_prefix = _build_prefix(prefix, build_id)
-    if store.list_keys(build_prefix + "/"):
-        raise ValueError(f"build prefix {build_prefix} already exists")
+    prefix_root = build_prefix(prefix, build_id)
+    if store.list_keys(prefix_root + "/"):
+        raise ValueError(f"build prefix {prefix_root} already exists")
 
     # A slower, older run must not move the pointer backwards over a newer build.
     current = _read_pointer(store, prefix)
@@ -142,8 +152,14 @@ def publish(
     pointer_attempted = False
     manifest: BuildManifest | None = None
     try:
+        LOGGER.info(
+            "publishing build_id=%s files=%s bytes=%s",
+            build_id,
+            len(parquet_files),
+            sum(p.stat().st_size for p in parquet_files),
+        )
         for path in parquet_files:
-            key = f"{build_prefix}/{path.relative_to(root).as_posix()}"
+            key = f"{prefix_root}/{path.relative_to(root).as_posix()}"
             size = store.put_file(path, key)
             uploaded.append(BuildFile(key=key, bytes=size))
             written_keys.append(key)
@@ -154,7 +170,7 @@ def publish(
             created_at=utc_now().isoformat(),
             source=source,
             source_files=tuple(source_files),
-            bucket=bucket,
+            bucket=store.bucket,
             prefix=prefix,
             rows_in=stats.rows_in,
             rows_out=stats.rows_out,
@@ -180,6 +196,7 @@ def publish(
             raise ValueError(f"a newer build ({latest.build_id}) was published while this one was uploading")
         pointer_attempted = True
         store.put_bytes(pointer.to_json(), pointer_key(prefix), content_type="application/json")
+        LOGGER.info("pointer moved build_id=%s", build_id)
     except BaseException:
         # After the pointer PUT has been attempted the build may be live, even if the PUT raised.
         if not pointer_attempted:
@@ -208,6 +225,10 @@ def _delete_quietly(store: ObjectStore, keys: list[str]) -> None:
         store.delete(keys)
     except Exception:
         return
+
+
+def _build_time(build_id: str) -> datetime:
+    return datetime.strptime(build_id[:16], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
 
 
 def build_ids(store: ObjectStore, prefix: str) -> list[str]:
@@ -240,6 +261,23 @@ def retain(store: ObjectStore, *, prefix: str, keep: int) -> tuple[str, ...]:
     ordered = build_ids(store, prefix)
     keep_set = set(ordered[:keep]) | protected
     stale = [build_id for build_id in ordered if build_id not in keep_set]
+
+    # A killed run leaves a prefix without a manifest. It is not a build, so retention above
+    # ignores it, and nothing else would ever collect its ~3 GB. Age makes it safe: an upload
+    # that is still in flight is younger than the grace period.
+    now = utc_now()
+    root = f"{prefix}/{BUILD_ROOT}/"
+    ids = {key[len(root) :].split("/")[0] for key in store.list_keys(root) if key.startswith(root)}
+    orphans = [
+        build_id
+        for build_id in ids
+        if BUILD_ID_PATTERN.match(build_id)
+        and build_id not in ordered
+        and (now - _build_time(build_id)).total_seconds() > ORPHAN_GRACE_SECONDS
+    ]
+    if orphans:
+        LOGGER.warning("reclaiming abandoned build prefixes: %s", sorted(orphans))
+    stale = stale + orphans
     if not stale:
         return ()
 

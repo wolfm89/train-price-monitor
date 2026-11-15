@@ -10,11 +10,12 @@ same path is possible as long as no earlier build succeeded there.
 
 import argparse
 import json
+import logging
 import shutil
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -33,6 +34,9 @@ from tpm_analytics.silver._duck import (
     scalar,
     sql_string,
 )
+from tpm_analytics.silver.models import BuildStats
+
+LOGGER = logging.getLogger(__name__)
 
 # Columns introduced by schema v2. A corpus that predates v2 has none of them, and union_by_name
 # cannot invent a column that exists in no file, so the source expression adds them as typed NULLs.
@@ -62,21 +66,6 @@ def local_path(value: str | Path, *, role: str) -> Path:
             f"{role} {text!r} is a URI; silver builds only support local paths until the S3 writer lands"
         )
     return Path(text)
-
-
-@dataclass(frozen=True)
-class BuildStats:
-    """What one silver build produced."""
-
-    source: str
-    source_files: tuple[str, ...]
-    target: str
-    rows_in: int
-    rows_out: int
-    duplicates_removed: int
-    partitions: int
-    duration_seconds: float
-    verified: bool
 
 
 def bronze_source(connection: duckdb.DuckDBPyConnection, bronze_glob: str | Sequence[str]) -> str:
@@ -178,6 +167,7 @@ def run_build(
         )
         source_sql = bronze_source(connection, source)
         rows_in = scalar(connection, f"SELECT count(*) FROM {source_sql}")
+        LOGGER.info("build scan rows_in=%s", rows_in)
         if rows_in == 0:
             raise EmptyCorpusError(f"source {source!r} matched no rows")
         result = connection.execute(
@@ -235,6 +225,12 @@ def run_build(
             if on_disk != partitions:
                 violations.append(quality.Violation("partition count != directories", f"{partitions} != {on_disk}"))
             quality.raise_for_violations(violations)
+            LOGGER.info(
+                "build verified rows_out=%s duplicates_removed=%s partitions=%s",
+                rows_out,
+                duplicates_removed,
+                partitions,
+            )
         # Close the engine before touching the directory tree: Windows keeps a handle on open files.
         connection.close()
         connection = None
