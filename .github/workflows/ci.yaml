@@ -35,7 +35,7 @@ permissions:
 jobs:
   frontend:
     name: Frontend
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -63,7 +63,7 @@ jobs:
 
   backend:
     name: Backend
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -98,7 +98,7 @@ jobs:
 
   scraper:
     name: Scraper
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -126,7 +126,7 @@ jobs:
 
   infrastructure:
     name: Infrastructure
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -149,21 +149,14 @@ jobs:
         working-directory: infrastructure
       - run: npm test
         working-directory: infrastructure
-  pre-commit:
-    name: Pre-commit
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-        with:
-          version: '0.13.8'
-      # One job for every fast, file-scoped hook (formatting, YAML/JSON, ruff, lockfile).
-      # Project-scoped checks (tsc, tests, builds, images) stay in their module jobs.
-      - run: uvx pre-commit@4.7.0 run --all-files --show-diff-on-failure
-
   analytics:
     name: Analytics
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: analytics
+    env:
+      UV_FROZEN: '1'
     steps:
       - uses: actions/checkout@v7
       # uv provisions the interpreter too: analytics/.python-version pins 3.14.
@@ -172,21 +165,13 @@ jobs:
         with:
           version: '0.13.8'
           enable-cache: true
-      - run: uv sync --frozen
-        working-directory: analytics
-      - run: uv run --frozen ruff check .
-        working-directory: analytics
-      - run: uv run --frozen ruff format --check .
-        working-directory: analytics
-      - run: uv run --frozen ty check --output-format github
-        working-directory: analytics
-      - run: uv run --frozen pytest
-        working-directory: analytics
+      - run: uv sync
+      # ruff and ruff-format run in pre-commit.ci; only project-scoped checks stay here.
+      - run: uv run ty check --output-format github
+      - run: uv run pytest
       # The package ships sql/ and data/ inside the module; this fails if they stop being packaged.
       - run: uv build
-        working-directory: analytics
       - name: Verify the wheel ships the SQL and station dimension
-        working-directory: analytics
         run: |
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/sql/silver.sql'
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/stations.json'
@@ -195,7 +180,7 @@ jobs:
     name: Build & synth
     # Only on pull requests: a deploy performs the equivalent work itself.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -276,8 +261,8 @@ jobs:
     name: Deploy
     # Never on pull requests, and only once every module job is green.
     if: github.event_name != 'pull_request'
-    needs: [frontend, backend, scraper, infrastructure, analytics, pre-commit]
-    runs-on: ubuntu-24.04
+    needs: [frontend, backend, scraper, infrastructure, analytics]
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

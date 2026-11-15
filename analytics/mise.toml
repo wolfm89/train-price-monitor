@@ -1,6 +1,9 @@
+[env]
+UV_FROZEN = "1"
+
 [tasks.install]
 description = "Create the uv environment from the lockfile"
-run = "uv sync --frozen"
+run = "uv sync"
 
 [tasks.build]
 description = "Build the wheel and sdist (assets included)"
@@ -8,19 +11,19 @@ run = "uv build"
 
 [tasks.typecheck]
 description = "Type check with ty"
-run = "uv run --frozen ty check"
+run = "uv run ty check"
 
 [tasks.test]
 description = "Run the fixture tests"
-run = "uv run --frozen pytest"
+run = "uv run pytest"
 
 [tasks.lint]
 description = "Lint with ruff"
-run = "uv run --frozen ruff check . && uv run --frozen ruff format --check ."
+run = "uv run ruff check . && uv run ruff format --check ."
 
 [tasks.format]
 description = "Format with ruff"
-run = "uv run --frozen ruff format ."
+run = "uv run ruff format ."
 
 [tasks.image]
 description = "Build the Lambda container image"
@@ -32,4 +35,4 @@ run = "rm -rf dist .pytest_cache .ruff_cache"
 
 [tasks."silver:local"]
 description = "Build silver from a local bronze glob; pass --source <glob> --target <dir> after --"
-run = "uv run --frozen python -m tpm_analytics.silver.build"
+run = "uv run python -m tpm_analytics.silver.build"

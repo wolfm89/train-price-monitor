@@ -1,7 +1,5 @@
 """Semantics of the bronze → silver transform."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
@@ -214,7 +212,7 @@ def test_pyarrow_reads_the_output(build) -> None:
     table = pq.read_table(built.target, partitioning="hive")
     assert table.num_rows == 6
     schema = table.schema
-    assert schema.field("observed_at").type == pa.timestamp("us")
+    assert schema.field("observed_at").type == pa.timestamp("ms")
     assert schema.field("schema_version").type == pa.int32()
     assert schema.field("transfers_actual").type == pa.int32()
     assert schema.field("departure_date").type == pa.date32()

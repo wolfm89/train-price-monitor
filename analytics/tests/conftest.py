@@ -1,7 +1,5 @@
 """Fixtures: bronze Parquet written the way the scraper writes it."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime

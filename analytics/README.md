@@ -4,9 +4,9 @@ Silver-layer builds for the Train Price Monitor price dataset.
 
 Bronze (`s3://<scraper-bucket>/prices/`) is the scraper's Parquet output, partitioned by observation
 day. The compactor rewrites a day's `batch_*` files into one `daily_*` file, so bronze is
-append-and-rewrite, not immutable. The build counts bronze before the transform and again before
-publishing, so a compactor run that swaps files mid-build fails the run instead of producing a
-dataset that matches neither version. Silver is the conformed snapshot the model work reads:
+append-and-rewrite, not immutable. The build lists the objects once and reads exactly that
+snapshot, so a batch the poller appends mid-build is simply not part of that build; the manifest
+records the same list. Silver is the conformed snapshot the model work reads:
 typed, with v1/v2 semantics normalised, station context joined and departure-month partitions.
 Every run rebuilds it from scratch, so the same input produces the same rows; row order and file
 split are not stable, and each build needs its own target directory and room on disk for the output
@@ -62,7 +62,10 @@ uv run python -m tpm_analytics.silver.build \
   --target /tmp/silver
 ```
 
-The output is Hive-partitioned by `departure_year`/`departure_month`, ZSTD-compressed. The build
+The output is Hive-partitioned by `departure_year`/`departure_month`, ZSTD-compressed. ZSTD is the
+measured choice: on a 4.4M-row partition it produced 127 MB against 169 MB for snappy, 142 MB for
+gzip and 171 MB for lz4, at 5.9 s write time versus 4.6 s for snappy; full-column reads were equal
+within noise. Storage and upload dominate a weekly batch, so the smaller file wins. The build
 writes into a hidden sibling directory, runs the quality gate, and only then renames it into place,
 so a rejected build leaves no target behind. `--stations` overrides the station dimension and
 `--no-verify` skips the gate (debug only, prints a warning). Exit code 2 means the build was
@@ -76,9 +79,9 @@ The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2
 8 departure-month partitions. On a workstation with 8 GB for DuckDB and 4 threads the build takes
 8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
 
-That is far above the 10M rows the first cost model assumed, so the Lambda is sized for it:
-10,240 MB memory, 10,240 MB ephemeral storage, 900 s, `memory_limit=8GB`, `threads=6`. If a future
-corpus no longer fits, split the build by departure month instead of raising the limits.
+The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s,
+`memory_limit=8GB`, `threads=6`. If the corpus outgrows it, split the build by departure month
+instead of raising the limits.
 
 ```bash
 uv run python -m tpm_analytics.silver.build \
@@ -112,8 +115,8 @@ yields 37.
 
 `departure_local` is `timezone('Europe/Berlin', departure_planned AT TIME ZONE 'UTC')`. Every
 calendar attribute and the timetable period use it, because the DB timetable runs on local time: a
-00:30 CET departure is 23:30 UTC the day before. Silver timestamps are microsecond precision
-(DuckDB's `TIMESTAMP`); bronze is millisecond.
+00:30 CET departure is 23:30 UTC the day before. Silver timestamps are millisecond precision
+(`TIMESTAMP_MS`), matching bronze; the data is minute-scale, so finer precision buys nothing.
 
 ## Station dimension
 

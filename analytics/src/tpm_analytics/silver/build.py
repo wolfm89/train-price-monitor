@@ -8,8 +8,6 @@ A rejected build therefore never leaves a plausible-looking target behind, and a
 same path is possible as long as no earlier build succeeded there.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import shutil
@@ -52,7 +50,7 @@ class EmptyCorpusError(ValueError):
     """Raised when the source glob matches no rows at all."""
 
 
-class UnsupportedLocationError(NotImplementedError):
+class UnsupportedLocationError(ValueError):
     """Raised for an S3 or other URI, which this build does not support yet."""
 
 

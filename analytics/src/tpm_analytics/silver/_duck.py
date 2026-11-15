@@ -1,7 +1,5 @@
 """DuckDB session and path helpers shared by the silver build and its checks."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 

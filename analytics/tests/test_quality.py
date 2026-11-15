@@ -1,7 +1,5 @@
 """The quality gate must accept good builds and reject each broken invariant."""
 
-from __future__ import annotations
-
 import shutil
 from datetime import datetime
 from pathlib import Path

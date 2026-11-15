@@ -109,15 +109,15 @@ COPY (
     )
 
     SELECT
-        observed_at,
+        CAST(observed_at AS TIMESTAMP_MS) AS observed_at,
         service_class,
         enriched.route_id,
         origin_eva,
         origin_name,
         dest_eva,
         dest_name,
-        departure_planned,
-        arrival_planned,
+        CAST(departure_planned AS TIMESTAMP_MS) AS departure_planned,
+        CAST(arrival_planned AS TIMESTAMP_MS) AS arrival_planned,
         train_type,
         train_number,
         train_numbers,

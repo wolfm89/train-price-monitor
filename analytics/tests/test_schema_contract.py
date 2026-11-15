@@ -5,8 +5,6 @@ reorders them, changes a type or flips nullability, the transform keeps passing 
 silently dropping or coercing data, so the copy is checked against the TypeScript source.
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 

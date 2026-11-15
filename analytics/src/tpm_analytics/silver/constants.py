@@ -5,8 +5,6 @@ Two hand-maintained dates that used to live in separate files: the SQL labels a 
 Keeping them in one module means updating the boundary cannot silently leave the guard behind.
 """
 
-from __future__ import annotations
-
 # The DB timetable changed at local midnight on this date. Departures before it are 2025-12.
 TIMETABLE_BOUNDARY = "2026-12-13"
 

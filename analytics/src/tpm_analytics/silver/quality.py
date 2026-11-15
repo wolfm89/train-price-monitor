@@ -6,8 +6,6 @@ poisoning the training data. The row checks are evaluated in one scan; the dupli
 second pass with a hash aggregate.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from dataclasses import dataclass
 

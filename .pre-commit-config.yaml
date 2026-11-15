@@ -51,34 +51,27 @@ repos:
     hooks:
       - id: typecheck-frontend
         name: tsc (frontend)
-        entry: bash -c 'cd frontend && npm run typecheck'
-        language: system
-        pass_filenames: false
-        stages: [manual]
+        entry: npm --prefix frontend run typecheck
+        <<: &typecheck
+          language: system
+          pass_filenames: false
+          stages: [manual]
       - id: typecheck-backend
         name: tsc (backend)
-        entry: bash -c 'cd backend && npm run typecheck'
-        language: system
-        pass_filenames: false
-        stages: [manual]
+        entry: npm --prefix backend run typecheck
+        <<: *typecheck
       - id: typecheck-scraper
         name: tsc (scraper)
-        entry: bash -c 'cd scraper && npm run typecheck'
-        language: system
-        pass_filenames: false
-        stages: [manual]
+        entry: npm --prefix scraper run typecheck
+        <<: *typecheck
       - id: typecheck-infrastructure
         name: tsc (infrastructure)
-        entry: bash -c 'cd infrastructure && npm run typecheck'
-        language: system
-        pass_filenames: false
-        stages: [manual]
+        entry: npm --prefix infrastructure run typecheck
+        <<: *typecheck
       - id: typecheck-analytics
         name: ty (analytics)
-        entry: bash -c 'cd analytics && uv run --frozen ty check'
-        language: system
-        pass_filenames: false
-        stages: [manual]
+        entry: uv run --directory analytics ty check
+        <<: *typecheck
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: '0.13.8'
