@@ -9,8 +9,6 @@ only considers builds that have a manifest, so prefixes abandoned by a killed ru
 good build out.
 """
 
-from __future__ import annotations
-
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass

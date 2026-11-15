@@ -4,8 +4,6 @@ The publisher never talks to S3 directly: it takes an :class:`ObjectStore`, whic
 publish logic (ordering, verification, pointer, retention) testable against a local directory.
 """
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 from typing import Any, Protocol
