@@ -53,7 +53,7 @@ def load_settings() -> Settings:
         prefix=os.environ.get("SILVER_PREFIX", "silver"),
         source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/prices/**/*.parquet"),
         region=os.environ.get("AWS_REGION", "eu-central-1"),
-        threads=int(os.environ.get("SILVER_THREADS", "6")),
+        threads=int(os.environ.get("SILVER_THREADS", "4")),
         memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", "8GB"),
         max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", "5GB"),
         keep=int(os.environ.get("SILVER_KEEP", "2")),
@@ -130,7 +130,12 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     prefix_in_source = bronze_prefix_for(settings.source)
     if settings.source.split("/")[2] != settings.bucket:
         raise ValueError(f"BRONZE_SOURCE names a different bucket than SILVER_BUCKET ({settings.bucket})")
-    snapshot = tuple(f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source))
+    silver_prefix = settings.prefix.strip("/") + "/"
+    if prefix_in_source.startswith(silver_prefix) or silver_prefix.startswith(prefix_in_source):
+        raise ValueError("BRONZE_SOURCE must not point at the silver prefix")
+    snapshot = tuple(
+        f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source) if key.endswith(".parquet")
+    )
     if not snapshot:
         raise EmptyCorpusError(f"no bronze objects under {prefix_in_source!r}")
     LOGGER.info("silver source snapshot files=%s", len(snapshot))
@@ -138,6 +143,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="silver-lambda-") as workspace:
         workdir = Path(workspace)
         target = workdir / build_id
+        build_started = time.perf_counter()
         stats = run_build(
             snapshot,
             target,
@@ -147,6 +153,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             memory_limit=settings.memory_limit,
             max_temp_size=settings.max_temp_size,
         )
+        build_seconds = round(time.perf_counter() - build_started, 3)
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
             raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
@@ -156,6 +163,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             warnings.append(
                 f"bronze changed during the build: {len(after)} objects now vs {len(snapshot)} in the snapshot"
             )
+        publish_started = time.perf_counter()
         result = publish(
             store,
             build_id=build_id,
@@ -169,8 +177,17 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             keep=settings.keep,
             warnings=tuple(warnings),
         )
+        publish_seconds = round(time.perf_counter() - publish_started, 3)
+        usage = shutil.disk_usage(workspace)
 
     duration = round(time.perf_counter() - started, 3)
+    LOGGER.info(
+        "silver phases build_seconds=%s publish_seconds=%s tmp_used_bytes=%s tmp_free_bytes=%s",
+        build_seconds,
+        publish_seconds,
+        usage.used,
+        usage.free,
+    )
     LOGGER.info(
         "silver build finished build_id=%s rows_in=%s rows_out=%s duplicates_removed=%s "
         "partitions=%s uploaded_bytes=%s deleted_builds=%s warnings=%s duration_seconds=%s",
@@ -194,5 +211,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         "deleted_builds": list(result.deleted_builds),
         "warnings": list(result.warnings),
         "swept_workspaces": swept,
+        "build_seconds": build_seconds,
+        "publish_seconds": publish_seconds,
         "duration_seconds": duration,
     }

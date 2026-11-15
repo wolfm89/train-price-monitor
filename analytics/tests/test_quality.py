@@ -124,7 +124,7 @@ def test_non_positive_fare_is_rejected(tmp_path: Path, duck) -> None:
     write_bronze(root / "day=01", [bronze_row(fare_lowest_eur=0.0)], schema_version=2)
     source = str(root / "**" / "*.parquet")
     built = unchecked(source, tmp_path / "silver-zero-fare")
-    assert "non-positive fare" in names(violations_for(duck, built, source))
+    assert "fare outside a plausible range" in names(violations_for(duck, built, source))
 
 
 def test_partition_mismatch_is_rejected(build, duck, bronze_glob: str) -> None:

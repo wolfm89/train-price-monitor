@@ -142,8 +142,12 @@ def run_build(
         raise UnsupportedLocationError(
             f"source {source!r} is a URI; pass S3 credentials to read from s3:// or use a local path"
         )
-    if not isinstance(source, str) and not source:
-        raise EmptyCorpusError("no source files given")
+    if not isinstance(source, str):
+        if not source:
+            raise EmptyCorpusError("no source files given")
+        for item in source:
+            if "://" in item and not item.startswith("s3://"):
+                raise UnsupportedLocationError(f"source file {item!r} is not an s3:// URI")
     sql_path = Path(sql_path) if sql_path is not None else asset_dir("sql") / "silver.sql"
     stations_path = Path(stations_path) if stations_path is not None else asset_dir("data") / "stations.json"
     final_target = local_path(target, role="target")

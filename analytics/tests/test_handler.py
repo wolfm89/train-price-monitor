@@ -85,7 +85,7 @@ def test_handler_ignores_the_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 def test_secret_sql_escapes_values() -> None:
     sql = create_secret_sql(S3Secret(access_key="AK'IA", secret_key="s'ecret", session_token="", region="eu-central-1"))
-    assert sql.startswith("CREATE OR REPLACE SECRET silver_s3")
+    assert sql.startswith("CREATE OR REPLACE TEMPORARY SECRET silver_s3")
     assert "KEY_ID 'AK''IA'" in sql
     assert "SECRET 's''ecret'" in sql
     assert "SESSION_TOKEN" not in sql

@@ -16,7 +16,7 @@ from uuid import uuid4
 BUILD_ROOT = "builds"
 MANIFEST_NAME = "_manifest.json"
 POINTER_NAME = "_latest.json"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 # 20261114T173000Z-a1b2c3d4: sortable by time, unique within a second.
 BUILD_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
@@ -48,6 +48,8 @@ class BuildManifest:
     duckdb_version: str
     sql_sha256: str
     stations_sha256: str
+    constants_sha256: str
+    warnings: tuple[str, ...]
     files: tuple[BuildFile, ...]
 
     @property
@@ -67,6 +69,7 @@ class BuildManifest:
             raise ValueError(f"unsupported manifest version {version!r}; this reader knows {MANIFEST_VERSION}")
         files = tuple(BuildFile(key=item["key"], bytes=int(item["bytes"])) for item in payload.pop("files"))
         payload["source_files"] = tuple(payload.get("source_files", ()))
+        payload["warnings"] = tuple(payload.get("warnings", ()))
         return cls(**payload, files=files)
 
 

@@ -86,8 +86,8 @@ def test_departure_context(build, duck) -> None:
         "SELECT departure_weekday, departure_hour_local, is_weekend FROM {silver} "
         "WHERE journey_id IN ('journey-a', 'journey-d') ORDER BY journey_id",
     )
-    # Sunday 2026-11-15 10:00 UTC -> 11:00 CET; Monday 2026-11-16 07:30 UTC -> 08:30 CET.
-    assert result == [(0, 11, True), (1, 8, False)]
+    # ISO: 0 = Monday … 6 = Sunday. Sunday 2026-11-15 -> 6, Monday 2026-11-16 -> 0.
+    assert result == [(6, 11, True), (0, 8, False)]
 
 
 def test_dst_summer_time(tmp_path: Path, duck) -> None:
@@ -104,7 +104,7 @@ def test_dst_summer_time(tmp_path: Path, duck) -> None:
         Built(stats=built, target=tmp_path / "silver-summer"),
         "SELECT departure_hour_local, departure_date, departure_weekday FROM {silver}",
     )
-    expected_weekday = (date(2026, 7, 15).weekday() + 1) % 7  # DuckDB: 0 = Sunday
+    expected_weekday = date(2026, 7, 15).weekday()  # ISO: 0 = Monday
     assert result == [(12, date(2026, 7, 15), expected_weekday)]
 
 
@@ -130,7 +130,7 @@ def test_scrapes_per_route_day(build, duck) -> None:
     result = rows(
         duck,
         built,
-        "SELECT journey_id, scrapes_per_route_day FROM {silver} "
+        "SELECT journey_id, scrapes_per_route_day_final FROM {silver} "
         "WHERE journey_id IN ('journey-a', 'journey-b') ORDER BY journey_id",
     )
     # Route Berlin->München, local departure 2026-11-15: two August scrapes plus the November one.

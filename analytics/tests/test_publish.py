@@ -8,7 +8,7 @@ import pytest
 
 from tests.conftest import Built
 from tpm_analytics.silver.build import BuildStats
-from tpm_analytics.silver.manifest import BuildManifest, Pointer, manifest_key, pointer_key
+from tpm_analytics.silver.manifest import BuildFile, BuildManifest, Pointer, manifest_key, pointer_key
 from tpm_analytics.silver.publish import build_ids, publish, retain
 from tpm_analytics.silver.storage import LocalObjectStore, ObjectStore
 
@@ -182,6 +182,8 @@ def test_foreign_or_incomplete_prefixes_are_not_builds(build, tmp_path: Path) ->
             duckdb_version="2.0.0",
             sql_sha256="0" * 64,
             stations_sha256="0" * 64,
+            constants_sha256="0" * 64,
+            warnings=(),
             files=(),
         ).to_json(),
         "silver/builds/zzz/_manifest.json",
@@ -333,6 +335,30 @@ def test_a_newer_build_during_upload_blocks_the_pointer(build, tmp_path: Path) -
             size = super().put_file(local_path, key)
             if not pointer_written["done"]:
                 super().put_bytes(
+                    BuildManifest(
+                        manifest_version=2,
+                        build_id=newer,
+                        created_at="2026-01-02T00:00:00Z",
+                        source="s3://bucket/prices/**/*.parquet",
+                        source_files=(),
+                        bucket="local",
+                        prefix="silver",
+                        rows_in=1,
+                        rows_out=1,
+                        duplicates_removed=0,
+                        partitions=1,
+                        duration_seconds=0.0,
+                        transform_version="t",
+                        duckdb_version="2.0.0",
+                        sql_sha256="0" * 64,
+                        stations_sha256="0" * 64,
+                        constants_sha256="0" * 64,
+                        warnings=(),
+                        files=(BuildFile(key=f"silver/builds/{newer}/data.parquet", bytes=1),),
+                    ).to_json(),
+                    manifest_key("silver", newer),
+                )
+                super().put_bytes(
                     Pointer(
                         build_id=newer, manifest=manifest_key("silver", newer), updated_at="2026-01-02T00:00:00Z"
                     ).to_json(),
@@ -356,8 +382,8 @@ def test_a_newer_build_during_upload_blocks_the_pointer(build, tmp_path: Path) -
 
     pointer = Pointer.from_json(store.get_bytes(pointer_key("silver")))
     assert pointer.build_id == newer
-    # Our build was deleted; the newer id has no manifest in this fixture, so it is not a build.
-    assert build_ids(store, "silver") == []
+    # Our build was deleted; the newer one is a valid build.
+    assert build_ids(store, "silver") == [newer]
 
 
 def test_old_manifestless_prefixes_are_reclaimed(build, tmp_path: Path) -> None:

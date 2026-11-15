@@ -20,7 +20,7 @@ PACKAGE_DIR = Path(__file__).resolve().parents[1]
 class S3Secret:
     """Credentials from the execution role, handed to DuckDB as a temporary secret."""
 
-    access_key: str
+    access_key: str = field(repr=False)
     secret_key: str = field(repr=False)
     session_token: str = field(repr=False)
     region: str
@@ -29,7 +29,7 @@ class S3Secret:
 def create_secret_sql(secret: S3Secret) -> str:
     """Build the CREATE SECRET statement; values are escaped, never interpolated raw."""
     parts = [
-        "CREATE OR REPLACE SECRET silver_s3 (TYPE s3, PROVIDER config",
+        "CREATE OR REPLACE TEMPORARY SECRET silver_s3 (TYPE s3, PROVIDER config",
         f"KEY_ID '{sql_string(secret.access_key)}'",
         f"SECRET '{sql_string(secret.secret_key)}'",
         f"REGION '{sql_string(secret.region)}'",
@@ -80,6 +80,7 @@ def connect(
         connection.execute(f"SET max_temp_directory_size = '{sql_string(max_temp_size)}'")
         connection.execute(f"SET temp_directory = '{sql_string(temp_directory.as_posix())}'")
         connection.execute("SET preserve_insertion_order = false")
+        connection.execute("SET enable_object_cache = true")
         connection.execute(f"SET threads = {int(threads)}")
         bundled = extensions if extensions is not None else extension_directory()
         if bundled is not None:

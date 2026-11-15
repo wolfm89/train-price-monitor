@@ -41,6 +41,8 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "departure_date",
     "departure_weekday",
     "departure_hour_local",
+    "departure_iso_week",
+    "departure_iso_year",
     "is_weekend",
     "distance_km",
     "origin_state",
@@ -49,7 +51,7 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "dest_station_category",
     "timetable_period",
     "observation_era",
-    "scrapes_per_route_day",
+    "scrapes_per_route_day_final",
     "departure_year",
     "departure_month",
 )
@@ -88,6 +90,8 @@ REQUIRED_NON_NULL: tuple[str, ...] = (
     "departure_date",
     "departure_weekday",
     "departure_hour_local",
+    "departure_iso_week",
+    "departure_iso_year",
     "is_weekend",
     "distance_km",
     "origin_state",
@@ -96,7 +100,7 @@ REQUIRED_NON_NULL: tuple[str, ...] = (
     "dest_station_category",
     "timetable_period",
     "observation_era",
-    "scrapes_per_route_day",
+    "scrapes_per_route_day_final",
     "departure_year",
     "departure_month",
 )
@@ -127,9 +131,9 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
     # Historical rows can predate the arrival-after-departure guarantee; only new data is gated.
     (
         "non-positive duration after the fix",
-        f"observed_at >= TIMESTAMP '{OBSERVATION_ERA_CUTOFF}' AND duration_minutes <= 0",
+        f"observed_at >= TIMESTAMP '{OBSERVATION_ERA_CUTOFF}' AND (duration_minutes <= 0 OR duration_minutes > 3000)",
     ),
-    ("non-positive fare", "fare_lowest_eur <= 0"),
+    ("fare outside a plausible range", "fare_lowest_eur <= 0 OR fare_lowest_eur > 1000"),
     ("negative transfers_actual", "transfers_actual < 0"),
     # Before #141 the poller wrote journeys that had already left; that is history, not a
     # regression. Only rows observed after the fix have to satisfy the invariant.
@@ -139,7 +143,10 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
     ),
     ("station missing from the dimension", "origin_state IS NULL OR dest_state IS NULL"),
     ("distance_km missing or implausible", "distance_km IS NULL OR distance_km <= 0 OR distance_km > 1500"),
-    ("scrapes_per_route_day missing", "scrapes_per_route_day IS NULL OR scrapes_per_route_day < 1"),
+    (
+        "scrapes_per_route_day_final outside a plausible range",
+        "scrapes_per_route_day_final IS NULL OR scrapes_per_route_day_final < 1 OR scrapes_per_route_day_final > 200",
+    ),
     (
         "partition does not match departure_date",
         "EXTRACT(year FROM departure_date) <> departure_year OR EXTRACT(month FROM departure_date) <> departure_month",
