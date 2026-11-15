@@ -389,3 +389,29 @@ def test_load_factor_ladder_matches_the_sql(tmp_path: Path, duck, load_factor: s
         "SELECT load_factor_ordinal FROM {silver}",
     )
     assert result == [(ordinal,)]
+
+
+@pytest.mark.parametrize(
+    ("departure", "weekday", "iso_week", "iso_year"),
+    [
+        (datetime(2026, 11, 15, 10, 0), 6, 46, 2026),  # Sunday
+        (datetime(2026, 11, 16, 9, 0), 0, 47, 2026),  # Monday
+        (datetime(2027, 1, 1, 9, 0), 4, 53, 2026),  # ISO week-year differs from the calendar year
+    ],
+)
+def test_iso_calendar_columns(
+    tmp_path: Path, duck, departure: datetime, weekday: int, iso_week: int, iso_year: int
+) -> None:
+    root = tmp_path / f"iso-{weekday}"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(departure_planned=departure, arrival_planned=departure)],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / f"silver-iso-{weekday}")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / f"silver-iso-{weekday}"),
+        "SELECT departure_weekday, departure_iso_week, departure_iso_year, is_weekend FROM {silver}",
+    )
+    assert result == [(weekday, iso_week, iso_year, weekday >= 5)]
