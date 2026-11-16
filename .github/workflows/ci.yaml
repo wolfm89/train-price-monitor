@@ -165,7 +165,7 @@ jobs:
       UV_FROZEN: '1'
     steps:
       - uses: actions/checkout@v7
-      # uv provisions the interpreter too: analytics/.python-version pins 3.14.
+      # uv provisions the interpreter too: analytics/.python-version pins 3.15.
       # setup-uv publishes no moving major tag above v7, so this one is pinned exactly.
       - uses: astral-sh/setup-uv@v10.3.3
         with:

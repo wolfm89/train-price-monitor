@@ -1,6 +1,8 @@
 """Facts about the source data that the transform and the gate must agree on."""
 
 # The DB timetable changed at local midnight on this date. Departures before it are 2025-12.
+# Not configuration: moving it changes the meaning of the data, and TIMETABLE_REVIEW_AFTER
+# fails the build once departures reach the end of the reviewed window.
 TIMETABLE_BOUNDARY = "2026-12-13"
 TIMETABLE_PREVIOUS = "2025-12"
 TIMETABLE_CURRENT = "2026-12"
@@ -10,6 +12,7 @@ TIMETABLE_CURRENT = "2026-12"
 TIMETABLE_REVIEW_AFTER = "2027-06-13"
 
 # Observation-era cutoffs. `dense` is the pre-fix era that scraped whole days every minute;
+# not configuration for the same reason: these describe what happened, not what we prefer.
 # `sparse` runs until the poller fix deployed; `post-fix` starts with the first batch it wrote.
 DENSE_ERA_CUTOFF = "2026-09-01 00:00:00"
 OBSERVATION_ERA_CUTOFF = "2026-11-13 18:15:49"

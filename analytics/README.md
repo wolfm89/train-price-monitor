@@ -41,7 +41,7 @@ against the directory tree.
 
 ```bash
 cd analytics
-uv sync --frozen        # create .venv from the lockfile (uv also provisions Python 3.14)
+uv sync --frozen        # create .venv from the lockfile (uv also provisions Python 3.15)
 uv run pytest           # fixture tests
 uv run ruff check .     # lint
 uv run ruff format .    # format

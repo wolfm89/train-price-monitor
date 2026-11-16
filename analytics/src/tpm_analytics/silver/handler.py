@@ -74,7 +74,13 @@ def parse_bronze_source(source: str) -> tuple[str, str]:
 
 
 def aws_secret(region: str) -> S3Secret:
-    """Turn the execution role's credentials into a DuckDB secret payload."""
+    """Turn the execution role's credentials into a DuckDB secret payload.
+
+    DuckDB could read the same role through `PROVIDER credential_chain`, which resolves the
+    AWS_* variables Lambda injects, but that needs the `aws` extension baked into the image and
+    would not remove boto3 (it is still the S3 client). One credential path, no second native
+    extension.
+    """
     credentials = boto3.Session().get_credentials()
     if credentials is None:
         raise RuntimeError("no AWS credentials available for the DuckDB secret")

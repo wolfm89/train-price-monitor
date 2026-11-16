@@ -40,14 +40,16 @@ LOGGER = logging.getLogger(__name__)
 
 # Columns introduced by schema v2. A corpus that predates v2 has none of them, and union_by_name
 # cannot invent a column that exists in no file, so the source expression adds them as typed NULLs.
-V2_COLUMN_DEFAULTS: dict[str, str] = {
-    "train_numbers": "CAST(NULL AS VARCHAR)",
-    "load_factor_ordinal": "CAST(NULL AS INTEGER)",
-    "journey_id": "CAST(NULL AS VARCHAR)",
-    "schema_version": "CAST(NULL AS INTEGER)",
-    "source_profile": "CAST(NULL AS VARCHAR)",
-    "query_mode": "CAST(NULL AS VARCHAR)",
-}
+V2_COLUMN_DEFAULTS: frozendict[str, str] = frozendict(
+    {
+        "train_numbers": "CAST(NULL AS VARCHAR)",
+        "load_factor_ordinal": "CAST(NULL AS INTEGER)",
+        "journey_id": "CAST(NULL AS VARCHAR)",
+        "schema_version": "CAST(NULL AS INTEGER)",
+        "source_profile": "CAST(NULL AS VARCHAR)",
+        "query_mode": "CAST(NULL AS VARCHAR)",
+    }
+)
 
 
 class EmptyCorpusError(ValueError):

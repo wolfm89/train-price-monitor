@@ -1,8 +1,10 @@
-"""Install DuckDB's httpfs into analytics/.duckdb-extensions for local S3 reads."""
+"""Install DuckDB's httpfs into DUCKDB_EXTENSION_DIR (default: analytics/.duckdb-extensions)."""
+
+import os
 
 import duckdb
 
-TARGET = ".duckdb-extensions"
+TARGET = os.environ.get("DUCKDB_EXTENSION_DIR", ".duckdb-extensions")
 
 connection = duckdb.connect()
 connection.execute(f"SET extension_directory = '{TARGET}'")

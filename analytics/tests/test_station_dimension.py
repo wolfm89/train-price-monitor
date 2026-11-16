@@ -18,7 +18,7 @@ def dimension() -> list[dict]:
 
 def scraper_catalogue() -> list[dict]:
     catalogue = load(REPO_ROOT / "scraper" / "stations.json")
-    return [station for tier in catalogue.values() for station in tier]
+    return [*tier for tier in catalogue.values()]
 
 
 def test_every_scraper_station_has_a_dimension_row() -> None:
