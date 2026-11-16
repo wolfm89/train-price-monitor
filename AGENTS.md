@@ -297,6 +297,10 @@ flowchart LR
 - **Pause switch.** `CDK_SCRAPER_PAUSED=1` (repo variable) disables the poller and hydrator schedules
   in CDK; unlike a manual console change it survives deploys. It also disables the alarm actions of
   the poller alarms, so a deliberate pause never pages anyone.
+- **Analytics pause.** `CDK_ANALYTICS_PAUSED=1` disables the weekly silver Scheduler schedule; it
+  stays deployed, so a later deploy without the variable re-enables it. `CDK_TRANSFORM_VERSION`
+  (CI sets the commit SHA) is recorded in the silver manifest; an empty value falls back to
+  `sql-<hash>`.
 
 **Monitoring** (`infrastructure/lib/alerting.ts`, alarms in `backend.ts` and `scraper-stack.ts`):
 
@@ -305,6 +309,14 @@ flowchart LR
   priority with the siren sound (bypasses quiet hours), recovery at normal priority, with a link to
   the alarm in the console. SNS cannot deliver to Pushover directly — it requires an HTTPS endpoint
   that answers its `SubscriptionConfirmation` handshake.
+- **Analytics and budget alerts** use the same topic. The weekly silver build publishes a
+  `silver_build_failed` JSON message on any handler exception (no new alarm); the forwarder links
+  to the analytics log group and includes the build id and stage. The account budget
+  `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 % and FORECASTED 100 %
+  notifications; AWS Budgets are USD-only, so $1.00 is the deliberately conservative €1 guardrail
+  (≈ €0.86). Budget messages are plain text, so the forwarder branches on the `AWS Budgets:`
+  subject before JSON parsing. The manual `Zero-Spend Budget` is an email backstop until the CDK
+  budget is verified.
 - **Credentials** live in two SSM SecureStrings (`/train-price-monitor/pushover-token`,
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
@@ -395,6 +407,8 @@ Environment variables (never commit values):
 | `DECODO_API_KEY`               | Backend             | Decodo key, literal (local dev; wins over `_PARAM`)                                                         |
 | `DECODO_API_KEY_PARAM`         | Backend             | SSM SecureString name holding the Decodo key (injected by CDK)                                              |
 | `DECODO_KEY_TTL_MS`            | Backend             | How long a resolved Decodo key is cached (default 15 min)                                                   |
+| `ALERT_TOPIC_ARN`              | Analytics Lambda    | SNS topic for silver build failures (injected by CDK)                                                       |
+| `LOG_GROUP_NAME`               | Analytics Lambda    | CloudWatch log group name used in failure links (injected by CDK)                                           |
 | `REACT_APP_GRAPHQL_ENDPOINT`   | Frontend            | API Gateway base URL                                                                                        |
 | `CDK_APP_NAME`                 | Infrastructure      | Application name (overrides CDK context)                                                                    |
 | `CDK_DOMAIN_NAME`              | Infrastructure      | Custom domain name for the deployment                                                                       |
@@ -405,6 +419,8 @@ Environment variables (never commit values):
 | `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda     | SSM parameter name for the Pushover app token (injected by CDK)                                             |
 | `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
 | `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
+| `CDK_ANALYTICS_PAUSED`         | Infrastructure      | `1` disables the weekly silver Scheduler schedule                                                           |
+| `CDK_TRANSFORM_VERSION`        | Infrastructure      | Commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`                                |
 | `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
 | `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
 | `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |

@@ -4,11 +4,12 @@ AWS CDK v2 TypeScript stacks for the Train Price Monitor.
 
 ## Stacks
 
-| Stack                 | Description                                                              |
-| --------------------- | ------------------------------------------------------------------------ |
-| `InfrastructureStack` | Main application stack: API Gateway, backend Lambda, Cognito, S3, SQS    |
-| `CertificateStack`    | ACM certificate in us-east-1 for the custom domain                       |
-| `ScraperStack`        | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions |
+| Stack                 | Description                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `InfrastructureStack` | Main application stack: API Gateway, backend Lambda, Cognito, S3, SQS           |
+| `CertificateStack`    | ACM certificate in us-east-1 for the custom domain                              |
+| `ScraperStack`        | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions        |
+| `AnalyticsStack`      | Weekly silver build: image Lambda, EventBridge Scheduler, IAM, SNS failure path |
 
 ## Commands
 

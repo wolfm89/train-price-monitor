@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { AlertingStack } from '../lib/alerting';
+import { AnalyticsStack } from '../lib/analytics-stack';
 import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { CertificateStack } from '../lib/certificate-stack';
 import { ScraperStack } from '../lib/scraper-stack';
@@ -17,6 +18,8 @@ if (process.env.CDK_DECODO_API_KEY_PARAM)
   app.node.setContext('decodo_api_key_param', process.env.CDK_DECODO_API_KEY_PARAM);
 // `1` disables the scraper's poller and hydrator schedules (they stay deployed).
 if (process.env.CDK_SCRAPER_PAUSED) app.node.setContext('scraper_paused', process.env.CDK_SCRAPER_PAUSED);
+// `1` disables the weekly silver schedule (it stays deployed).
+if (process.env.CDK_ANALYTICS_PAUSED) app.node.setContext('analytics_paused', process.env.CDK_ANALYTICS_PAUSED);
 // `1` once SES production access is granted: turns off the sandbox-only
 // per-user recipient identities.
 if (process.env.CDK_SES_PRODUCTION_ACCESS)
@@ -55,10 +58,24 @@ new InfrastructureStack(
   }
 );
 
-new ScraperStack(app, 'ScraperStack', {
+const scraperStack = new ScraperStack(app, 'ScraperStack', {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
   },
   alertTopicArn: alertingStack.topic.topicArn,
+});
+
+// Short form matches the handler's sql-<hash> fallback. CI sets GITHUB_SHA; a manual
+// deploy can override with CDK_TRANSFORM_VERSION.
+const transformVersion = (process.env.CDK_TRANSFORM_VERSION || process.env.GITHUB_SHA || '').slice(0, 12);
+
+new AnalyticsStack(app, 'AnalyticsStack', {
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+  dataBucket: scraperStack.bucket,
+  alertTopic: alertingStack.topic,
+  transformVersion,
 });

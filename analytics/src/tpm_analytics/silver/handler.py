@@ -5,6 +5,7 @@ source, a bucket or whether the gate runs. A retry after a crash is safe because
 new build id and only the pointer moves.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -110,12 +111,50 @@ def remaining_seconds(context: object) -> float | None:
     return float(getter()) / 1000.0
 
 
-def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
+def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str, str]:
+    """The structured message the Pushover forwarder turns into a notification."""
+    return {
+        "event": "silver_build_failed",
+        "build_id": build_id,
+        "stage": stage,
+        "error_type": type(error).__name__,
+        "error": str(error)[:500],
+        "function": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "local"),
+        "region": os.environ.get("AWS_REGION", "eu-central-1"),
+        # LOG_GROUP_NAME is set by CDK; AWS_LAMBDA_LOG_GROUP_NAME covers a manual run.
+        "log_group": os.environ.get("LOG_GROUP_NAME") or os.environ.get("AWS_LAMBDA_LOG_GROUP_NAME", ""),
+    }
+
+
+def notify_failure(build_id: str, error: BaseException, stage: str, *, client: Any | None = None) -> None:
+    """Publish a build failure without masking the original exception."""
+    topic_arn = os.environ.get("ALERT_TOPIC_ARN")
+    if not topic_arn:
+        # Local runs and tests have no topic; the build error must still surface.
+        LOGGER.warning("ALERT_TOPIC_ARN is not set; build failure was not published")
+        return
+    sns = client if client is not None else boto3.client("sns")
+    try:
+        sns.publish(
+            TopicArn=topic_arn,
+            Subject="Silver build failed",
+            Message=json.dumps(failure_message(build_id, error, stage)),
+        )
+    except Exception:
+        # Never mask the build failure with a notification failure.
+        LOGGER.exception("could not publish the build failure to SNS")
+
+
+def _run_build(
+    event: dict[str, Any],
+    context: object,
+    build_id: str,
+    progress: dict[str, str],
+) -> dict[str, Any]:
     started = time.perf_counter()
     settings = load_settings()
     if not settings.source.startswith("s3://"):
         raise ValueError("BRONZE_SOURCE must be an s3:// glob in the handler")
-    build_id = build_id_for(utc_now())
     remaining = remaining_seconds(context)
     if remaining is not None and remaining < BUILD_BUDGET_SECONDS + PUBLISH_RESERVE_SECONDS:
         raise RuntimeError(f"only {remaining:.0f}s left before the deadline; not starting a build")
@@ -130,6 +169,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         settings.max_temp_size,
     )
 
+    progress["stage"] = "snapshot"
     store = S3ObjectStore(settings.bucket, region=settings.region)
     # One snapshot of the corpus: the build reads exactly these objects and the manifest records
     # them. The poller appends a batch every 15 minutes, so a live glob would change mid-build.
@@ -146,6 +186,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         raise EmptyCorpusError(f"no bronze objects under {prefix_in_source!r}")
     LOGGER.info("silver source snapshot files=%s", len(snapshot))
 
+    progress["stage"] = "build"
     with tempfile.TemporaryDirectory(prefix="silver-lambda-") as workspace:
         workdir = Path(workspace)
         target = workdir / build_id
@@ -171,6 +212,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             warnings.append(
                 f"bronze changed during the build: {len(after)} objects now vs {len(snapshot)} in the snapshot"
             )
+        progress["stage"] = "publish"
         publish_started = time.perf_counter()
         result = publish(
             store,
@@ -223,3 +265,13 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         "publish_seconds": publish_seconds,
         "duration_seconds": duration,
     }
+
+
+def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
+    build_id = build_id_for(utc_now())
+    progress = {"stage": "settings"}
+    try:
+        return _run_build(event, context, build_id, progress)
+    except Exception as error:
+        notify_failure(build_id, error, progress["stage"])
+        raise

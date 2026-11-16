@@ -89,4 +89,19 @@ describe('ScraperStack', () => {
     const alarms = Object.values(template.findResources('AWS::CloudWatch::Alarm'));
     expect(alarms.every((alarm) => alarm.Properties.ActionsEnabled === false)).toBe(true);
   });
+
+  test('aborts incomplete silver multipart uploads', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
+            Prefix: 'silver/',
+            Status: 'Enabled',
+          }),
+        ]),
+      },
+    });
+  });
 });

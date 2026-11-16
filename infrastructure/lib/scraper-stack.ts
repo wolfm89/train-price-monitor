@@ -23,6 +23,9 @@ interface ScraperStackProps extends cdk.StackProps {
 }
 
 export class ScraperStack extends cdk.Stack {
+  /** Passed to AnalyticsStack: read prices/, own silver/. */
+  readonly bucket: s3.IBucket;
+
   constructor(scope: Construct, id: string, props?: ScraperStackProps) {
     super(scope, id, props);
 
@@ -70,8 +73,18 @@ export class ScraperStack extends cdk.Stack {
             },
           ],
         },
+        {
+          // The analytics publisher uploads ~60 MB parquet files in multipart chunks.
+          // A killed invocation leaves parts that bill forever; one day is far longer
+          // than the 900 s Lambda timeout.
+          id: 'AbortIncompleteSilverMultipartUploads',
+          prefix: 'silver/',
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        },
       ],
     });
+    // AnalyticsStack reads prices/ and owns silver/ without duplicating the bucket.
+    this.bucket = bucket;
     // -------------------------------------------------------------------------
     // Shared Lambda log groups (retain 2 weeks)
     // -------------------------------------------------------------------------
