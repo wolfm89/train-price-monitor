@@ -59,7 +59,7 @@ async function credentials() {
 
 function safeRegion(value) {
   const region = String(value || '');
-  return /^[a-z]{2}(-gov)?-[a-z]+-\d$/.test(region) ? region : 'eu-central-1';
+  return /^[a-z]{2}(-gov)?-[a-z]+-\\d$/.test(region) ? region : 'eu-central-1';
 }
 
 function format(payload) {

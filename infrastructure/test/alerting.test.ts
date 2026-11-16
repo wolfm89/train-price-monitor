@@ -192,12 +192,29 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     ],
   });
 
-  expect(calls).toHaveLength(3);
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_build_failed',
+            build_id: 'b2',
+            stage: 'build',
+            error: 'boom',
+            region: 'us-east-1',
+          }),
+        },
+      },
+    ],
+  });
+
+  expect(calls).toHaveLength(4);
   expect(calls[0].title).toContain('AWS Budgets:');
   expect(calls[0].priority).toBe('0');
   expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
   expect(calls[1].priority).toBe('1');
   expect(calls[1].url).toContain('https://eu-central-1.console.aws.amazon.com/');
+  expect(calls[3].url).toContain('https://us-east-1.console.aws.amazon.com/');
   expect(calls[2].title).toBe('ALARM: PollerErrors');
   expect(calls[2].priority).toBe('1');
 });
