@@ -184,14 +184,16 @@ Verify `silver/_latest.json` and `silver/builds/<id>/_manifest.json`, record dur
 and partitions, then set the repository variable `CDK_ANALYTICS_PAUSED=0` and push to main to
 enable the schedule. For the forced
 failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
-invoke once, confirm the Pushover alert and the unchanged pointer, then restore the previous
+invoke once with `--invocation-type Event` (on-failure destinations apply only to asynchronous
+invocations), wait for the retry and alert, confirm the unchanged pointer, then restore the previous
 `Environment.Variables` JSON; a CDK deploy also restores it.
 
 A failed attempt raises a `silver_build_failed` payload with the build id and stage; Lambda retries
 once, and the on-failure destination publishes exactly one notification only after every attempt
 fails. A retry that succeeds is silent. If the container is killed or the retry is exhausted, the
-same destination publishes the invocation failure (a timeout pages after roughly 16 minutes). The pointer is
-only moved by a verified build; if the pointer PUT itself errors, check `silver/_latest.json` before
+same destination publishes the invocation failure (if both attempts time out, expect the page after
+roughly 31 minutes). The pointer is only moved by a verified build; if the pointer PUT itself errors,
+check `silver/_latest.json` before
 rolling anything back. A bad pointer can be rolled back to the previous build (kept for at least a
 day). Config files are loaded at import, so a missing or invalid config fails Lambda INIT; the
 Docker build imports the handler and catches that before deploy. A manual compactor run that deletes

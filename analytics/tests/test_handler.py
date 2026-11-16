@@ -228,14 +228,22 @@ def test_failure_raises_build_id_stage_and_error(monkeypatch, tmp_path: Path) ->
 
 def test_failure_does_not_create_an_sns_client(monkeypatch, tmp_path: Path) -> None:
     _empty_bucket(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        handler_module.boto3,
-        "client",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("handler must not publish SNS")),
-    )
+    calls: list[str] = []
+
+    class ForbiddenClient:
+        def publish(self, **kwargs: Any) -> None:
+            calls.append("publish")
+
+    def client(service: str, **kwargs: Any) -> ForbiddenClient:
+        calls.append(service)
+        return ForbiddenClient()
+
+    monkeypatch.setattr(handler_module.boto3, "client", client)
 
     with pytest.raises(RuntimeError):
         handler_module.handler({}, None)
+
+    assert calls == []
 
 
 def test_failure_in_build_reports_build_stage(monkeypatch, tmp_path: Path, bronze_glob: str) -> None:
