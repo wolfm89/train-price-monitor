@@ -19,6 +19,7 @@ from pathlib import Path
 from botocore.exceptions import ClientError
 
 from tpm_analytics.silver._duck import asset_dir
+from tpm_analytics.silver.config import load_config
 from tpm_analytics.silver.manifest import (
     BUILD_ID_PATTERN,
     BUILD_ROOT,
@@ -35,9 +36,9 @@ from tpm_analytics.silver.manifest import (
 from tpm_analytics.silver.models import BuildStats
 from tpm_analytics.silver.storage import ObjectStore
 
-DEFAULT_KEEP = 2
-ORPHAN_GRACE_SECONDS = 3600
-MIN_BUILD_AGE_SECONDS = 86400
+DEFAULT_KEEP = load_config().keep
+ORPHAN_GRACE_SECONDS = load_config().orphan_grace_seconds
+MIN_BUILD_AGE_SECONDS = load_config().min_build_age_seconds
 LOGGER = logging.getLogger(__name__)
 
 

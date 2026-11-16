@@ -111,7 +111,7 @@ The output-to-environment mappings are maintained in [`scripts/generate-local-en
 | `CDK_SES_PRODUCTION_ACCESS`  | Infrastructure    | `1` once SES production access is granted (see `docs/privacy.md`)                |
 | `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB table for scrape schedule (injected by CDK)                             |
 | `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet price data (injected by CDK)                               |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 90)                                        |
+| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 60)                                        |
 
 ## Usage
 

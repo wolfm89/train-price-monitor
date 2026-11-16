@@ -1,8 +1,12 @@
 // Retention rules for items written before the table had a TTL attribute.
-// Same rules as src/lib/retention.ts; keep both in sync.
+// Same rules as src/lib/retention.ts; both read shared/runtime-config.json.
+import { readFileSync } from 'node:fs';
 
-export const NOTIFICATION_RETENTION_DAYS = 90;
-export const JOURNEY_TTL_MARGIN_DAYS = 7;
+const RUNTIME_CONFIG = JSON.parse(readFileSync(new URL('../../shared/runtime-config.json', import.meta.url), 'utf8'));
+const RETENTION = RUNTIME_CONFIG.retention;
+
+export const NOTIFICATION_RETENTION_DAYS = RETENTION.notification_retention_days;
+export const JOURNEY_TTL_MARGIN_DAYS = RETENTION.journey_ttl_margin_days;
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const JOURNEY_PREFIX = 'JOURNEY#';

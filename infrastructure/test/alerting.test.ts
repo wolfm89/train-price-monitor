@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { AlertingStack, PUSHOVER_FORWARDER_SOURCE } from '../lib/alerting';
+import { MONTHLY_BUDGET_NAME } from '../lib/config';
 
 function synth(): Template {
   const app = new cdk.App();
@@ -50,7 +51,7 @@ describe('AlertingStack', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Budgets::Budget', {
       Budget: {
-        BudgetName: 'TrainPriceMonitor-Monthly',
+        BudgetName: MONTHLY_BUDGET_NAME,
         BudgetType: 'COST',
         TimeUnit: 'MONTHLY',
         BudgetLimit: { Amount: 1, Unit: 'USD' },
@@ -152,8 +153,8 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     Records: [
       {
         Sns: {
-          Subject: 'AWS Budgets: TrainPriceMonitor-Monthly has exceeded your alert threshold',
-          Message: 'Budget Name: TrainPriceMonitor-Monthly\nAlert Type: ACTUAL',
+          Subject: `AWS Budgets: ${MONTHLY_BUDGET_NAME} has exceeded your alert threshold`,
+          Message: `Budget Name: ${MONTHLY_BUDGET_NAME}\nAlert Type: ACTUAL`,
         },
       },
     ],

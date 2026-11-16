@@ -145,12 +145,15 @@ The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 ## Deployment
 
-`AnalyticsStack` deploys `analytics/Dockerfile` as an x86_64 Lambda: 10,240 MB memory, 900 s,
-10,240 MB `/tmp`, no VPC, reserved concurrency 1. EventBridge Scheduler runs it every Sunday at
+`AnalyticsStack` deploys `analytics/Dockerfile` as an x86_64 Lambda. Sizing, retention and the
+scheduler retry/max-age policy live in `analytics/src/tpm_analytics/data/silver-config.json`, which
+`infrastructure/lib/config.ts` reads at synth time: 10,240 MB memory, 900 s, 10,240 MB `/tmp`, no
+VPC, reserved concurrency 1. The weekday, UTC timezone and 30-minute compactor offset stay in
+`infrastructure/lib/config.ts` and `analytics-stack.ts`. EventBridge Scheduler runs it every Sunday at
 03:30 UTC, after the 03:00 compactor. It reads bronze from `prices/`, writes `silver/` and keeps the
 newest two builds. IAM is prefix-scoped: list `prices/*` and `silver/*`, read `prices/*`,
-read/write/delete/abort on `silver/*`, and publish to the alert topic; it cannot write or delete
-bronze.
+read/write on `silver/*`, delete/abort on `silver/builds/*`, and publish to the alert topic; it
+cannot write or delete bronze.
 
 The function environment is set by CDK: `SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`,
 `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
@@ -176,7 +179,8 @@ cat /tmp/silver.json
 repository secrets).
 
 Verify `silver/_latest.json` and `silver/builds/<id>/_manifest.json`, record duration, memory, rows
-and partitions, then deploy without `CDK_ANALYTICS_PAUSED` to enable the schedule. For the forced
+and partitions, then set the repository variable `CDK_ANALYTICS_PAUSED=0` and push to main to
+enable the schedule. For the forced
 failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
 invoke once, confirm the Pushover alert and the unchanged pointer, then restore the previous
 `Environment.Variables` JSON; a CDK deploy also restores it.
@@ -184,11 +188,12 @@ invoke once, confirm the Pushover alert and the unchanged pointer, then restore 
 A handled failure publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`.
 The pointer is only moved by a verified build; if the pointer PUT itself errors, check
 `silver/_latest.json` before rolling anything back. A bad pointer can be rolled back to the previous
-build (kept for at least a day). A Lambda timeout or OOM cannot run the handler and is the known
-residual gap: time the first run and revisit with an on-failure destination if it happens. The deploy
-workflow runs `cdk gc --unstable=gc --type=ecr --action=full --rollback-buffer-days=30` after every
-successful main deploy, including the bootstrap asset repository; run it manually with
-`--action=print` only when you want to inspect the candidate set.
+build (kept for at least a day). Config files are loaded at import, so a missing or invalid config
+fails Lambda INIT; the Docker build imports the handler and catches that before deploy. A Lambda
+timeout or OOM cannot run the handler and remains the known residual gap: time the first run and
+revisit with an on-failure destination if it happens.
+`InfrastructureStack` runs `ToolkitCleaner` daily, which removes unused CDK ECR and S3 assets after
+checking deployed CloudFormation templates; unused assets younger than 10 days are retained.
 
 ## Column contract
 

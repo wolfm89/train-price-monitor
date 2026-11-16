@@ -11,6 +11,7 @@ import { positiveIntFromEnv } from './env.js';
 import { fetchDayJourneys } from './client.js';
 import { ROUTE_CATALOG } from './routes.js';
 import { DbThrottledError, takeDbTransportStats } from '../../shared/db-fetch.js';
+import runtimeConfig from '../../shared/runtime-config.json' with { type: 'json' };
 
 const logger = new Logger({ serviceName: 'scraper-poller' });
 
@@ -35,11 +36,13 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * met and the backlog drains. Raise it only while the `transport` counters in the
  * "Poller finished" log stay clean.
  */
-const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', 25, logger);
+const scraperConfig = runtimeConfig.scraper;
+const BRONZE_PREFIX = runtimeConfig.bronze_prefix;
+const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', scraperConfig.batch_size, logger);
 /** Abort if elapsed exceeds this many milliseconds. Must stay below the function
  * timeout with room for the current target (two parallel calls, each up to two
  * 20 s attempts plus backoff ~= 43 s) and the final S3 upload: 250 + 43 + 1 < 300. */
-const ABORT_THRESHOLD_MS = 250_000;
+const ABORT_THRESHOLD_MS = scraperConfig.abort_threshold_ms;
 /**
  * Extra rows to read per tier when selecting a batch, so a run of expired rows
  * (or a tier that is short of targets) does not leave the batch half empty.
@@ -63,7 +66,7 @@ const routeById = new Map(ROUTE_CATALOG.map((r) => [r.id, r]));
 
 /**
  * Write an aggregated Parquet batch file to S3.
- * Key layout: prices/year=YYYY/month=MM/day=DD/batch_{epoch}_{random}.parquet
+ * Key layout: <bronze_prefix>/year=YYYY/month=MM/day=DD/batch_{epoch}_{random}.parquet
  */
 async function writeToS3(rows: ParquetRow[], observedAt: Date): Promise<void> {
   const buffer = rowsToParquet(rows);
@@ -73,7 +76,7 @@ async function writeToS3(rows: ParquetRow[], observedAt: Date): Promise<void> {
   const d = String(observedAt.getUTCDate()).padStart(2, '0');
   const epoch = Math.floor(observedAt.getTime() / 1000);
   const randomSuffix = Math.floor(Math.random() * 1000000).toString(36);
-  const key = `prices/year=${y}/month=${m}/day=${d}/batch_${epoch}_${randomSuffix}.parquet`;
+  const key = `${BRONZE_PREFIX}/year=${y}/month=${m}/day=${d}/batch_${epoch}_${randomSuffix}.parquet`;
 
   await s3.send(
     new PutObjectCommand({

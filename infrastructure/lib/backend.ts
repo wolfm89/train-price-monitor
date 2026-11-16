@@ -18,6 +18,7 @@ import {
 import { tableDefinitions } from './dynamodb-tables';
 import { decodoApiKeyParamName, grantDecodoApiKeyRead } from './decodo';
 import { DASHBOARD_START, appWidgets } from './dashboards';
+import { DASHBOARD_NAMES, METRIC_NAMESPACE } from './config';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
@@ -95,7 +96,6 @@ export class Backend extends Construct {
       SES_FROM_EMAIL: sesFromEmail,
       SES_SANDBOX: sesSandbox ? 'true' : 'false',
       NODE_OPTIONS: '--enable-source-maps',
-      DEPLOY_VERSION: 'v15',
       // Start with the profile that is currently accepted; the transport still
       // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
       DB_TLS_PROFILE: 'tls13',
@@ -315,9 +315,9 @@ export class Backend extends Construct {
     });
 
     tables.forEach((table: dynamodb.Table) => {
-      let tableName = table.tableName.toLowerCase();
-      tableName = tableName.charAt(0).toUpperCase() + tableName.slice(1);
-      new cdk.CfnOutput(this, `${tableName}TableName`, {
+      // Use the construct ID, not the token-valued tableName: a token in a construct
+      // ID makes the synthesized template (and its asset hash) change between runs.
+      new cdk.CfnOutput(this, `${table.node.id}TableName`, {
         value: table.tableName,
       });
     });
@@ -342,7 +342,7 @@ export class Backend extends Construct {
     new logs.MetricFilter(this, 'SearchFallbackFilter', {
       logGroup: apiLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL response'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'SearchFallbackOk',
       metricValue: '$.transport.fallbackOk',
       defaultValue: 0,
@@ -355,7 +355,7 @@ export class Backend extends Construct {
     new logs.MetricFilter(this, 'RefresherFallbackFilter', {
       logGroup: refresherLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processed'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'SearchFallbackOk',
       metricValue: '$.transport.fallbackOk',
       defaultValue: 0,
@@ -366,7 +366,7 @@ export class Backend extends Construct {
     new logs.MetricFilter(this, 'SearchFallbackFailureFilter', {
       logGroup: apiLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL request failed'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'SearchFallbackOk',
       metricValue: '$.transport.fallbackOk',
       defaultValue: 0,
@@ -377,7 +377,7 @@ export class Backend extends Construct {
     new logs.MetricFilter(this, 'RefresherFallbackFailureFilter', {
       logGroup: refresherLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processing failed'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'SearchFallbackOk',
       metricValue: '$.transport.fallbackOk',
       defaultValue: 0,
@@ -389,14 +389,14 @@ export class Backend extends Construct {
     new logs.MetricFilter(this, 'SearchErrorLogFilter', {
       logGroup: apiLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.level', '=', 'ERROR'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'SearchErrorLogs',
       metricValue: '1',
     });
     new logs.MetricFilter(this, 'RefresherErrorLogFilter', {
       logGroup: refresherLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.level', '=', 'ERROR'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'RefresherErrorLogs',
       metricValue: '1',
     });
@@ -405,7 +405,7 @@ export class Backend extends Construct {
       alarmName: 'TPM-App-SearchErrors',
       alarmDescription: 'The GraphQL API returned errors (search is failing for the user).',
       metric: new cloudwatch.Metric({
-        namespace: 'TrainPriceMonitor',
+        namespace: METRIC_NAMESPACE,
         metricName: 'SearchErrorLogs',
         period: cdk.Duration.minutes(5),
         statistic: 'Sum',
@@ -420,7 +420,7 @@ export class Backend extends Construct {
       alarmName: 'TPM-App-UsingDecodoFallback',
       alarmDescription: 'The DB direct transport is degraded: search or refresher requests are falling back to Decodo.',
       metric: new cloudwatch.Metric({
-        namespace: 'TrainPriceMonitor',
+        namespace: METRIC_NAMESPACE,
         metricName: 'SearchFallbackOk',
         period: cdk.Duration.hours(1),
         statistic: 'Sum',
@@ -435,7 +435,7 @@ export class Backend extends Construct {
       alarmName: 'TPM-App-RefresherErrors',
       alarmDescription: 'The hourly watchlist refresh failed (journeys stay stale and alerts are late).',
       metric: new cloudwatch.Metric({
-        namespace: 'TrainPriceMonitor',
+        namespace: METRIC_NAMESPACE,
         metricName: 'RefresherErrorLogs',
         period: cdk.Duration.hours(1),
         statistic: 'Sum',
@@ -486,7 +486,7 @@ export class Backend extends Construct {
     // Keeps the previous dashboard's construct id so CloudFormation replaces the
     // resource in place; only the displayed name changes (Backend -> App).
     new cloudwatch.Dashboard(this, 'BackendDashboard', {
-      dashboardName: 'TrainPriceMonitor-App',
+      dashboardName: DASHBOARD_NAMES.app,
       start: DASHBOARD_START,
       widgets: appWidgets({
         api,

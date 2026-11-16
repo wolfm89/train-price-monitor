@@ -1,17 +1,19 @@
+import runtimeConfig from '../../../shared/runtime-config.json';
+
 /**
  * Retention periods enforced through the table's DynamoDB TTL attribute
  * (`ttl`, epoch seconds). DynamoDB deletes expired items in the background,
- * usually within a few days. scripts/backfill-ttl-lib.mjs applies the same
- * rules to items written before TTL existed; keep both in sync.
+ * usually within a few days. scripts/backfill-ttl-lib.mjs imports the same
+ * JSON file.
  */
-export const NOTIFICATION_RETENTION_DAYS = 90;
+export const NOTIFICATION_RETENTION_DAYS = runtimeConfig.retention.notification_retention_days;
 
 /**
  * Safety margin after a journey's expiry. The hourly refresher normally deletes
  * expired journeys itself (and notifies the user); TTL only catches journeys
  * the refresher never reached.
  */
-export const JOURNEY_TTL_MARGIN_DAYS = 7;
+export const JOURNEY_TTL_MARGIN_DAYS = runtimeConfig.retention.journey_ttl_margin_days;
 
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
@@ -34,7 +36,7 @@ export function notificationTtl(createdAt: Date, journeyExpires?: Date): number 
 }
 
 /** Sign-ups that are not confirmed within this period are deleted from Cognito by a daily job. */
-export const UNCONFIRMED_SIGNUP_RETENTION_DAYS = 7;
+export const UNCONFIRMED_SIGNUP_RETENTION_DAYS = runtimeConfig.retention.unconfirmed_signup_retention_days;
 
 /** The usernames of unconfirmed sign-ups older than the retention period. */
 export function expiredSignups(signups: { username: string; createdAt?: Date }[], now: Date = new Date()): string[] {

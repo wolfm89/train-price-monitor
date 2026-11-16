@@ -10,6 +10,7 @@ import {
   aws_scheduler_targets as schedulerTargets,
   aws_sns as sns,
 } from 'aws-cdk-lib';
+import { ANALYTICS_SCHEDULE_NAME, SCHEDULES, SILVER_CONFIG } from './config';
 
 export interface AnalyticsStackProps extends cdk.StackProps {
   /** Scraper bucket: bronze under prices/, silver under silver/. */
@@ -48,23 +49,23 @@ export class AnalyticsStack extends cdk.Stack {
         ignoreMode: cdk.IgnoreMode.DOCKER,
       }),
       architecture: lambda.Architecture.X86_64,
-      memorySize: 10240,
-      timeout: cdk.Duration.seconds(900),
-      ephemeralStorageSize: cdk.Size.mebibytes(10240),
+      memorySize: SILVER_CONFIG.lambda.memory_mib,
+      timeout: cdk.Duration.seconds(SILVER_CONFIG.lambda.timeout_seconds),
+      ephemeralStorageSize: cdk.Size.mebibytes(SILVER_CONFIG.lambda.ephemeral_mib),
       reservedConcurrentExecutions: 1,
       // One attempt. Function errors are deterministic (gate/refusal); throttle retries
       // are capped by maxEventAge so a run queued behind a manual build is dropped.
       retryAttempts: 0,
-      maxEventAge: cdk.Duration.minutes(15),
+      maxEventAge: cdk.Duration.minutes(SILVER_CONFIG.lambda.max_event_age_minutes),
       logGroup,
       environment: {
         SILVER_BUCKET: props.dataBucket.bucketName,
-        SILVER_PREFIX: 'silver',
-        BRONZE_SOURCE: `s3://${props.dataBucket.bucketName}/prices/**/*.parquet`,
-        SILVER_THREADS: '4',
-        SILVER_MEMORY_LIMIT: '8GB',
-        SILVER_MAX_TEMP_SIZE: '5GB',
-        SILVER_KEEP: '2',
+        SILVER_PREFIX: SILVER_CONFIG.prefix,
+        BRONZE_SOURCE: `s3://${props.dataBucket.bucketName}/${SILVER_CONFIG.bronze_prefix}/**/*.parquet`,
+        SILVER_THREADS: String(SILVER_CONFIG.lambda.threads),
+        SILVER_MEMORY_LIMIT: SILVER_CONFIG.lambda.duckdb_memory_limit,
+        SILVER_MAX_TEMP_SIZE: SILVER_CONFIG.lambda.duckdb_max_temp_size,
+        SILVER_KEEP: String(SILVER_CONFIG.keep),
         // Empty (manual deploy) lets the handler record sql-<hash>; CI supplies the SHA.
         TRANSFORM_VERSION: (props.transformVersion || '').slice(0, 12),
         ALERT_TOPIC_ARN: props.alertTopic.topicArn,
@@ -83,7 +84,11 @@ export class AnalyticsStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ['s3:ListBucket'],
         resources: [bucketArn],
-        conditions: { StringLike: { 's3:prefix': ['prices/*', 'silver/*'] } },
+        conditions: {
+          StringLike: {
+            's3:prefix': [`${SILVER_CONFIG.bronze_prefix}/*`, `${SILVER_CONFIG.prefix}/*`],
+          },
+        },
       })
     );
 
@@ -92,7 +97,7 @@ export class AnalyticsStack extends cdk.Stack {
     silverFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['s3:GetObject'],
-        resources: [`${bucketArn}/prices/*`],
+        resources: [`${bucketArn}/${SILVER_CONFIG.bronze_prefix}/*`],
       })
     );
 
@@ -102,28 +107,33 @@ export class AnalyticsStack extends cdk.Stack {
     silverFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['s3:GetObject', 's3:PutObject'],
-        resources: [`${bucketArn}/silver/*`],
+        resources: [`${bucketArn}/${SILVER_CONFIG.prefix}/*`],
       })
     );
     silverFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['s3:DeleteObject', 's3:AbortMultipartUpload'],
-        resources: [`${bucketArn}/silver/builds/*`],
+        resources: [`${bucketArn}/${SILVER_CONFIG.prefix}/${SILVER_CONFIG.builds_root}/*`],
       })
     );
 
     props.alertTopic.grantPublish(silverFunction);
 
     const analyticsPaused = String(this.node.tryGetContext('analytics_paused') ?? '') === '1';
+    const analyticsSchedule = SCHEDULES.analytics;
     const schedule = new scheduler.Schedule(this, 'SilverSchedule', {
-      scheduleName: 'tpm-silver-weekly',
-      description: 'Weekly silver rebuild (Sunday 03:30 UTC), after the 03:00 compactor.',
+      scheduleName: ANALYTICS_SCHEDULE_NAME,
+      description: `Weekly silver rebuild (Sunday ${String(analyticsSchedule.hour).padStart(2, '0')}:${String(
+        analyticsSchedule.minute
+      ).padStart(2, '0')} UTC), after the ${String(SCHEDULES.compactor.hour).padStart(2, '0')}:${String(
+        SCHEDULES.compactor.minute
+      ).padStart(2, '0')} compactor.`,
       enabled: !analyticsPaused,
       // UTC on purpose: the compactor runs at 03:00 UTC. A Europe/Berlin schedule would
       // drift to 02:30 UTC in summer and read bronze before the compactor has run.
       schedule: scheduler.ScheduleExpression.cron({
-        minute: '30',
-        hour: '3',
+        minute: String(analyticsSchedule.minute),
+        hour: String(analyticsSchedule.hour),
         weekDay: 'SUN',
         timeZone: cdk.TimeZone.ETC_UTC,
       }),
@@ -131,8 +141,8 @@ export class AnalyticsStack extends cdk.Stack {
         // Scheduler's retry policy only covers the Invoke API: a 202 means the function
         // already started. Two retries handle transient throttling/5xx without repeating
         // a build; the short max age prevents a very late duplicate.
-        retryAttempts: 2,
-        maxEventAge: cdk.Duration.minutes(5),
+        retryAttempts: SILVER_CONFIG.schedule.retry_attempts,
+        maxEventAge: cdk.Duration.minutes(SILVER_CONFIG.schedule.max_event_age_minutes),
       }),
     });
 
@@ -140,7 +150,7 @@ export class AnalyticsStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SilverScheduleName', { value: schedule.scheduleName });
     new cdk.CfnOutput(this, 'SilverLogGroupName', { value: logGroup.logGroupName });
     new cdk.CfnOutput(this, 'SilverPointer', {
-      value: `s3://${props.dataBucket.bucketName}/silver/_latest.json`,
+      value: `s3://${props.dataBucket.bucketName}/${SILVER_CONFIG.prefix}/${SILVER_CONFIG.pointer_name}`,
     });
   }
 }

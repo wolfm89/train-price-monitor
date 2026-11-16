@@ -8,6 +8,15 @@ import {
   aws_sns_subscriptions as subs,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import {
+  ALERT_TOPIC_NAME,
+  APP_DISPLAY_NAME,
+  MONTHLY_BUDGET_ACTUAL_THRESHOLD,
+  MONTHLY_BUDGET_FORECAST_THRESHOLD,
+  MONTHLY_BUDGET_NAME,
+  MONTHLY_BUDGET_USD,
+  SILVER_FAILURE_EVENT,
+} from './config';
 
 /**
  * Name of the SSM SecureStrings holding the Pushover credentials. Like the
@@ -63,7 +72,7 @@ function safeRegion(value) {
 }
 
 function format(payload) {
-  if (payload && payload.event === 'silver_build_failed') {
+  if (payload && payload.event === '${SILVER_FAILURE_EVENT}') {
     const region = safeRegion(payload.region);
     const logGroup = payload.log_group;
     const url = logGroup
@@ -154,8 +163,8 @@ export class AlertingStack extends cdk.Stack {
     super(scope, id, props);
 
     this.topic = new sns.Topic(this, 'Alerts', {
-      topicName: 'TrainPriceMonitorAlerts',
-      displayName: 'Train Price Monitor',
+      topicName: ALERT_TOPIC_NAME,
+      displayName: APP_DISPLAY_NAME,
     });
 
     // CloudWatch publishes alarm state changes as the cloudwatch.amazonaws.com
@@ -173,10 +182,10 @@ export class AlertingStack extends cdk.Stack {
     // ceiling. The first two budgets and their notifications are free.
     new budgets.CfnBudget(this, 'MonthlyBudget', {
       budget: {
-        budgetName: 'TrainPriceMonitor-Monthly',
+        budgetName: MONTHLY_BUDGET_NAME,
         budgetType: 'COST',
         timeUnit: 'MONTHLY',
-        budgetLimit: { amount: 1, unit: 'USD' },
+        budgetLimit: { amount: MONTHLY_BUDGET_USD, unit: 'USD' },
         metrics: ['UnblendedCost'],
         filterExpression: {
           not: { dimensions: { key: 'RECORD_TYPE', values: ['Credit', 'Refund'] } },
@@ -187,7 +196,7 @@ export class AlertingStack extends cdk.Stack {
           notification: {
             notificationType: 'ACTUAL',
             comparisonOperator: 'GREATER_THAN',
-            threshold: 50,
+            threshold: MONTHLY_BUDGET_ACTUAL_THRESHOLD,
             thresholdType: 'PERCENTAGE',
           },
           subscribers: [{ subscriptionType: 'SNS', address: this.topic.topicArn }],
@@ -196,7 +205,7 @@ export class AlertingStack extends cdk.Stack {
           notification: {
             notificationType: 'FORECASTED',
             comparisonOperator: 'GREATER_THAN',
-            threshold: 100,
+            threshold: MONTHLY_BUDGET_FORECAST_THRESHOLD,
             thresholdType: 'PERCENTAGE',
           },
           subscribers: [{ subscriptionType: 'SNS', address: this.topic.topicArn }],
@@ -255,6 +264,6 @@ export class AlertingStack extends cdk.Stack {
     this.topic.addSubscription(new subs.LambdaSubscription(forwarder));
 
     new cdk.CfnOutput(this, 'AlertTopicArn', { value: this.topic.topicArn });
-    new cdk.CfnOutput(this, 'MonthlyBudgetName', { value: 'TrainPriceMonitor-Monthly' });
+    new cdk.CfnOutput(this, 'MonthlyBudgetName', { value: MONTHLY_BUDGET_NAME });
   }
 }

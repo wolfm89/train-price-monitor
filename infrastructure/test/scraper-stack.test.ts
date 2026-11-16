@@ -3,6 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScraperStack } from '../lib/scraper-stack';
+import { SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
 
 // The stack bundles the pre-built scraper output as Lambda assets. The CDK tests
 // do not need real bundles, only that the (gitignored) directories exist.
@@ -36,9 +37,13 @@ describe('ScraperStack', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
-      Timeout: 300,
+      Timeout: SCRAPER_CONFIG.poller_timeout_seconds,
       Environment: {
-        Variables: Match.objectLike({ SCRAPER_BATCH_SIZE: '25', DB_MIN_GAP_MS: '2500', DB_MAX_IN_FLIGHT: '2' }),
+        Variables: Match.objectLike({
+          SCRAPER_BATCH_SIZE: String(SCRAPER_CONFIG.batch_size),
+          DB_MIN_GAP_MS: '2500',
+          DB_MAX_IN_FLIGHT: '2',
+        }),
       },
     });
     const poller = Object.values(template.findResources('AWS::Lambda::Function')).find(
@@ -97,10 +102,22 @@ describe('ScraperStack', () => {
         Rules: Match.arrayWith([
           Match.objectLike({
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
-            Prefix: 'silver/',
+            Prefix: `${SILVER_CONFIG.prefix}/`,
             Status: 'Enabled',
           }),
         ]),
+      },
+    });
+  });
+
+  test('hydrator receives the shared lookahead and seed window', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          HYDRATOR_LOOKAHEAD_DAYS: String(SCRAPER_CONFIG.lookahead_days),
+          HYDRATOR_SEED_WINDOW_DAYS: String(SCRAPER_CONFIG.seed_window_days),
+        }),
       },
     });
   });

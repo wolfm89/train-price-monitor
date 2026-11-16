@@ -7,6 +7,7 @@ import {
   aws_sqs as sqs,
 } from 'aws-cdk-lib';
 import { appWidgets, scraperWidgets } from '../lib/dashboards';
+import { DASHBOARD_NAMES, SCRAPER_CONFIG } from '../lib/config';
 
 function synth(): Template {
   const app = new cdk.App();
@@ -24,10 +25,10 @@ function synth(): Template {
   });
 
   new cdk.aws_cloudwatch.Dashboard(stack, 'ScraperDashboard', {
-    dashboardName: 'TrainPriceMonitor-Scraper',
+    dashboardName: DASHBOARD_NAMES.scraper,
     start: '-PT48H',
     widgets: scraperWidgets({
-      batchSize: 25,
+      batchSize: SCRAPER_CONFIG.batch_size,
       pollerFunction: fn,
       hydratorFunction: fn,
       compactorFunction: fn,
@@ -43,7 +44,7 @@ function synth(): Template {
   api.root.addMethod('GET', new apigateway.MockIntegration());
 
   new cdk.aws_cloudwatch.Dashboard(stack, 'BackendDashboard', {
-    dashboardName: 'TrainPriceMonitor-App',
+    dashboardName: DASHBOARD_NAMES.app,
     start: '-PT48H',
     widgets: appWidgets({
       api,
@@ -82,7 +83,7 @@ describe('Dashboards', () => {
       ])
     );
 
-    const scraper = bodies.get('TrainPriceMonitor-Scraper') ?? '';
+    const scraper = bodies.get(DASHBOARD_NAMES.scraper) ?? '';
     for (const title of [
       'Latency — poller, hydrator and compactor duration',
       'Traffic — scrapes per run',
@@ -102,7 +103,7 @@ describe('Dashboards', () => {
     expect(scraper).toContain('200000');
     expect(scraper).toContain('250000');
 
-    const app = bodies.get('TrainPriceMonitor-App') ?? '';
+    const app = bodies.get(DASHBOARD_NAMES.app) ?? '';
     for (const title of [
       'Latency — API percentiles',
       'Traffic — requests',

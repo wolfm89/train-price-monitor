@@ -1,6 +1,6 @@
-/** Used when CORS_ALLOWED_ORIGINS is unset, i.e. the local dev server. */
-const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+import { DEFAULT_ALLOWED_ORIGINS } from './devDefaults';
 
+/** Used when CORS_ALLOWED_ORIGINS is unset, i.e. the local dev server. */
 export const CORS_METHODS = ['GET', 'POST', 'OPTIONS'];
 export const CORS_ALLOWED_HEADERS = ['Content-Type', 'Authorization', 'X-Api-Key'];
 

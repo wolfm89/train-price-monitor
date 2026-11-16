@@ -68,7 +68,7 @@ const scraperStack = new ScraperStack(app, 'ScraperStack', {
 
 // Short form matches the handler's sql-<hash> fallback. CI sets GITHUB_SHA; a manual
 // deploy can override with CDK_TRANSFORM_VERSION.
-const transformVersion = (process.env.CDK_TRANSFORM_VERSION || process.env.GITHUB_SHA || '').slice(0, 12);
+const transformVersion = process.env.CDK_TRANSFORM_VERSION || process.env.GITHUB_SHA || '';
 
 new AnalyticsStack(app, 'AnalyticsStack', {
   env: {
