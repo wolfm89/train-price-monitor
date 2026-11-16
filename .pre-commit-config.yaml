@@ -26,6 +26,8 @@ repos:
     rev: 'v10.15.0'
     hooks:
       - id: eslint
+        types: [file]
+        types_or: [javascript, jsx, ts, tsx]
         args: ['--max-warnings=0', '--config', 'eslint.config.cjs']
         additional_dependencies:
           - 'eslint@10.15.0'

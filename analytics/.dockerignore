@@ -6,4 +6,5 @@ tests/
 .ruff_cache/
 .ty_cache/
 .duckdb-extensions/
+.env*
 *.egg-info/

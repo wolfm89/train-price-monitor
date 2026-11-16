@@ -9,7 +9,7 @@ import pytest
 from tpm_analytics.silver import handler as handler_module
 from tpm_analytics.silver._duck import S3Secret, create_secret_sql
 from tpm_analytics.silver.build import EmptyCorpusError, run_build
-from tpm_analytics.silver.manifest import Pointer, pointer_key
+from tpm_analytics.silver.manifest import BuildManifest, Pointer, pointer_key
 from tpm_analytics.silver.storage import LocalObjectStore
 
 
@@ -59,6 +59,8 @@ def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path:
     pointer = Pointer.from_json((bucket / pointer_key("silver")).read_bytes())
     assert pointer.build_id == result["build_id"]
     assert (bucket / pointer.manifest).is_file()
+    manifest = BuildManifest.from_json((bucket / pointer.manifest).read_bytes())
+    assert manifest.transform_version == "test-sha"
 
 
 def test_handler_ignores_the_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bronze_glob: str) -> None:
@@ -337,3 +339,16 @@ def test_failure_message_uses_lambda_log_group(monkeypatch) -> None:
     monkeypatch.setenv("AWS_LAMBDA_LOG_GROUP_NAME", "/aws/lambda/analytics")
     message = handler_module.failure_message("build-id", RuntimeError("boom"), "build")
     assert message["log_group"] == "/aws/lambda/analytics"
+
+
+def test_failure_before_settings_reports_settings_stage(monkeypatch) -> None:
+    monkeypatch.delenv("SILVER_BUCKET", raising=False)
+    monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")
+    sns = FakeSnsClient()
+    monkeypatch.setattr(handler_module.boto3, "client", lambda service, **kwargs: sns)
+
+    with pytest.raises(KeyError):
+        handler_module.handler({}, None)
+
+    payload = json.loads(sns.calls[0]["Message"])
+    assert payload["stage"] == "settings"

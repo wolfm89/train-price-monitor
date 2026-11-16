@@ -92,7 +92,7 @@ describe('AlertingStack', () => {
             Principal: { Service: 'budgets.amazonaws.com' },
             Condition: {
               StringEquals: { 'aws:SourceAccount': '111111111111' },
-              ArnLike: { 'aws:SourceArn': 'arn:aws:budgets::111111111111:' },
+              ArnLike: { 'aws:SourceArn': 'arn:aws:budgets::111111111111:*' },
             },
           }),
         ]),
@@ -105,4 +105,99 @@ describe('AlertingStack', () => {
     expect(PUSHOVER_FORWARDER_SOURCE).toContain('AWS Budgets:');
     expect(PUSHOVER_FORWARDER_SOURCE).toContain('billing/home#/budgets');
   });
+});
+
+test('forwarder handles budget, silver failure and alarm records', async () => {
+  const calls: Record<string, string>[] = [];
+  const ssm = {
+    SSMClient: class {
+      async send() {
+        return { Parameter: { Value: 'x' } };
+      }
+    },
+    GetParameterCommand: class {},
+  };
+  const exportsObject: Record<string, unknown> = {};
+  const run = new Function(
+    'require',
+    'process',
+    'URLSearchParams',
+    'fetch',
+    'exports',
+    `${PUSHOVER_FORWARDER_SOURCE}; return exports;`
+  ) as (
+    require: (name: string) => unknown,
+    process: { env: Record<string, string> },
+    urlSearchParams: typeof URLSearchParams,
+    fetch: typeof globalThis.fetch,
+    exports: Record<string, unknown>
+  ) => { handler: (event: unknown) => Promise<void> };
+
+  const fetchStub = async (_url: string, init?: { body?: URLSearchParams }) => {
+    calls.push(Object.fromEntries(init?.body ?? new URLSearchParams()));
+    return { ok: true, text: async () => '' };
+  };
+  const forwarder = run(
+    (name: string) => {
+      if (name === '@aws-sdk/client-ssm') return ssm;
+      throw new Error(`unexpected require ${name}`);
+    },
+    { env: { PUSHOVER_TOKEN_PARAM: 'token', PUSHOVER_USER_PARAM: 'user' } },
+    URLSearchParams,
+    fetchStub as unknown as typeof globalThis.fetch,
+    exportsObject
+  );
+
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Subject: 'AWS Budgets: TrainPriceMonitor-Monthly has exceeded your alert threshold',
+          Message: 'Budget Name: TrainPriceMonitor-Monthly\nAlert Type: ACTUAL',
+        },
+      },
+    ],
+  });
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_build_failed',
+            build_id: 'b1',
+            stage: 'snapshot',
+            error_type: 'EmptyCorpusError',
+            error: 'no bronze',
+            function: 'fn',
+            region: 'evil.example/',
+            log_group: '/aws/lambda/fn',
+          }),
+        },
+      },
+    ],
+  });
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            AlarmName: 'PollerErrors',
+            NewStateValue: 'ALARM',
+            NewStateReason: 'threshold',
+            StateChangeTime: '2026-11-16T12:00:00Z',
+            AlarmArn: 'arn:aws:cloudwatch:eu-central-1:111111111111:alarm:PollerErrors',
+          }),
+        },
+      },
+    ],
+  });
+
+  expect(calls).toHaveLength(3);
+  expect(calls[0].title).toContain('AWS Budgets:');
+  expect(calls[0].priority).toBe('0');
+  expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
+  expect(calls[1].priority).toBe('1');
+  expect(calls[1].url).toContain('https://eu-central-1.console.aws.amazon.com/');
+  expect(calls[2].title).toBe('ALARM: PollerErrors');
+  expect(calls[2].priority).toBe('1');
 });

@@ -24,7 +24,8 @@ Shipped here:
 
 The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
 `handler.py`). The `AnalyticsStack` adds the image Lambda, the weekly EventBridge Scheduler trigger,
-the least-privilege IAM, the failure SNS path and the `silver/` lifecycle rule; see [Deployment](#deployment).
+the least-privilege IAM and the failure SNS path; `ScraperStack` adds the `silver/` multipart-abort
+rule. See [Deployment](#deployment).
 The handler lists the bronze keys once and builds from that snapshot, so the poller's 15-minute
 appends cannot change the corpus under a nine-minute build.
 
@@ -154,15 +155,19 @@ bronze.
 The function environment is set by CDK: `SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`,
 `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
 `ALERT_TOPIC_ARN` and `LOG_GROUP_NAME`. `AWS_REGION` is reserved by Lambda. CI sets
-`TRANSFORM_VERSION` to the commit SHA; an empty value records `sql-<hash>`.
+`TRANSFORM_VERSION` to the short commit SHA; an empty value records `sql-<hash>`.
+
+Set the repository variable `CDK_ANALYTICS_PAUSED=0` only after the manual checks; CI defaults to
+paused when the variable is unset, so the first main deploy cannot start an unverified run.
 
 Deploy paused first, so the first run cannot race verification:
 
 ```bash
 cd ../infrastructure
-CDK_ANALYTICS_PAUSED=1 npx cdk deploy AnalyticsStack
+CDK_ANALYTICS_PAUSED=1 CDK_TRANSFORM_VERSION="$(git rev-parse HEAD)" npx cdk deploy AnalyticsStack
 aws lambda invoke --function-name "$(aws cloudformation describe-stacks --stack-name AnalyticsStack \
   --query "Stacks[0].Outputs[?OutputKey=='SilverFunctionName'].OutputValue" --output text)" \
+  --cli-read-timeout 900 --cli-connect-timeout 10 \
   --payload '{}' --cli-binary-format raw-in-base64-out /tmp/silver.json
 cat /tmp/silver.json
 ```
@@ -172,14 +177,18 @@ repository secrets).
 
 Verify `silver/_latest.json` and `silver/builds/<id>/_manifest.json`, record duration, memory, rows
 and partitions, then deploy without `CDK_ANALYTICS_PAUSED` to enable the schedule. For the forced
-failure, temporarily point `BRONZE_SOURCE` at an empty prefix, invoke once, confirm the Pushover
-alert and the unchanged pointer, then restore the environment.
+failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
+invoke once, confirm the Pushover alert and the unchanged pointer, then restore the previous
+`Environment.Variables` JSON; a CDK deploy also restores it.
 
-A failed run publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`. The
-pointer is only moved by a verified build; if the pointer PUT itself errors, check
+A handled failure publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`.
+The pointer is only moved by a verified build; if the pointer PUT itself errors, check
 `silver/_latest.json` before rolling anything back. A bad pointer can be rolled back to the previous
-build (kept for at least a day). From `infrastructure/`, run `cdk gc --unstable=gc --type=ecr` at
-least monthly so tagged image assets do not accumulate in ECR.
+build (kept for at least a day). A Lambda timeout or OOM cannot run the handler and is the known
+residual gap: time the first run and revisit with an on-failure destination if it happens. From
+`infrastructure/`, run `cdk gc --unstable=gc --type=ecr --action=print` first, then without
+`--action=print` with `--rollback-buffer-days=14` at least monthly; it covers the bootstrap asset
+repository, so tagged image assets do not accumulate in ECR.
 
 ## Column contract
 

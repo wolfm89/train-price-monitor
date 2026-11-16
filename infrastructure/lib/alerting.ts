@@ -57,9 +57,14 @@ async function credentials() {
   return cached;
 }
 
+function safeRegion(value) {
+  const region = String(value || '');
+  return /^[a-z]{2}(-gov)?-[a-z]+-\d$/.test(region) ? region : 'eu-central-1';
+}
+
 function format(payload) {
   if (payload && payload.event === 'silver_build_failed') {
-    const region = payload.region || 'eu-central-1';
+    const region = safeRegion(payload.region);
     const logGroup = payload.log_group;
     const url = logGroup
       ? 'https://' + region + '.console.aws.amazon.com/cloudwatch/home?region=' + region +
@@ -86,13 +91,15 @@ function format(payload) {
 
   const alarming = payload.NewStateValue === 'ALARM';
   // The Region field carries a display name ("EU (Frankfurt)"); the ARN has the id.
-  const region = String(payload.AlarmArn || '').split(':')[3] || payload.Region || 'eu-central-1';
+  const region = safeRegion(String(payload.AlarmArn || '').split(':')[3] || payload.Region);
+  const parsed = Date.parse(payload.StateChangeTime);
+  const timestamp = Number.isFinite(parsed) ? parsed : Date.now();
   return {
-    title: (alarming ? 'ALARM: ' : 'OK: ') + payload.AlarmName,
-    message: payload.NewStateReason || '',
+    title: ((alarming ? 'ALARM: ' : 'OK: ') + payload.AlarmName).slice(0, 100),
+    message: String(payload.NewStateReason || '').slice(0, 1000),
     priority: alarming ? '1' : '0',
     sound: alarming ? 'siren' : 'pushover',
-    timestamp: String(Math.floor(new Date(payload.StateChangeTime).getTime() / 1000)),
+    timestamp: String(Math.floor(timestamp / 1000)),
     url:
       'https://' + region + '.console.aws.amazon.com/cloudwatch/home?region=' + region +
       '#alarmsV2:alarm/' + encodeURIComponent(payload.AlarmName),
@@ -206,7 +213,7 @@ export class AlertingStack extends cdk.Stack {
         resources: [this.topic.topicArn],
         conditions: {
           StringEquals: { 'aws:SourceAccount': this.account },
-          ArnLike: { 'aws:SourceArn': `arn:aws:budgets::${this.account}:` },
+          ArnLike: { 'aws:SourceArn': `arn:aws:budgets::${this.account}:*` },
         },
       })
     );

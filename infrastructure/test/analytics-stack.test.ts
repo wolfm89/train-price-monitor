@@ -10,7 +10,10 @@ function synth(context: Record<string, string> = {}): Template {
   });
   // Keep the helper template non-empty; it only holds the imported bucket/topic.
   new cdk.CfnResource(helper, 'Placeholder', { type: 'AWS::CloudFormation::WaitConditionHandle' });
-  const bucket = s3.Bucket.fromBucketName(helper, 'DataBucket', 'test-bucket');
+  const bucket = s3.Bucket.fromBucketAttributes(helper, 'DataBucket', {
+    bucketName: 'test-bucket',
+    bucketArn: 'arn:aws:s3:::test-bucket',
+  });
   const topic = sns.Topic.fromTopicArn(
     helper,
     'AlertTopic',
@@ -70,6 +73,10 @@ describe('AnalyticsStack', () => {
     });
     expect(fn.Properties.Environment.Variables).toHaveProperty('LOG_GROUP_NAME');
     expect(fn.Properties.Environment.Variables).not.toHaveProperty('AWS_REGION');
+    const groups = template.findResources('AWS::Logs::LogGroup');
+    const logGroupId = Object.keys(groups)[0];
+    expect(fn.Properties.Environment.Variables.LOG_GROUP_NAME).toEqual({ Ref: logGroupId });
+    expect(fn.Properties.LoggingConfig.LogGroup).toEqual({ Ref: logGroupId });
   });
 
   test('schedules a weekly Sunday 03:30 UTC rebuild', () => {
@@ -82,7 +89,9 @@ describe('AnalyticsStack', () => {
     });
 
     const schedule = Object.values(template.findResources('AWS::Scheduler::Schedule'))[0];
-    expect(schedule.Properties.Target.RetryPolicy.MaximumRetryAttempts).toBe(0);
+    expect(Object.values(template.findResources('AWS::Scheduler::Schedule'))).toHaveLength(1);
+    expect(schedule.Properties.Target.RetryPolicy.MaximumRetryAttempts).toBe(2);
+    expect(schedule.Properties.Target.RetryPolicy.MaximumEventAgeInSeconds).toBe(300);
     expect(schedule.Properties.Target.DeadLetterConfig).toBeUndefined();
     expect(schedule.Properties.Target.RoleArn).toBeDefined();
     expect(schedule.Properties.Target.Arn).toBeDefined();
@@ -134,8 +143,26 @@ describe('AnalyticsStack', () => {
       const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
       return actions.includes('s3:ListBucket');
     })!;
-    expect(JSON.stringify(list.Resource)).toContain('test-bucket');
+    const listResources = Array.isArray(list.Resource) ? list.Resource : [list.Resource];
+    expect(listResources).toEqual(['arn:aws:s3:::test-bucket']);
     expect(list.Condition?.StringLike?.['s3:prefix']).toEqual(expect.arrayContaining(['prices/*', 'silver/*']));
+
+    const writes = policies.filter((statement) => {
+      const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+      return actions.some((action: string) =>
+        ['s3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'].includes(action)
+      );
+    });
+    expect(writes).toHaveLength(2);
+    const writeResources = writes.flatMap((statement) =>
+      Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]
+    );
+    expect(writeResources).toEqual(
+      expect.arrayContaining(['arn:aws:s3:::test-bucket/silver/*', 'arn:aws:s3:::test-bucket/silver/builds/*'])
+    );
+    expect(
+      writeResources.every((resource: string) => String(resource).startsWith('arn:aws:s3:::test-bucket/silver/'))
+    ).toBe(true);
 
     const bronzeWrites = policies.filter((statement) => {
       const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
@@ -168,4 +195,21 @@ describe('AnalyticsStack', () => {
     expect(group.Properties.RetentionInDays).toBe(14);
     expect(group.DeletionPolicy).toBe('Delete');
   });
+});
+
+test('imports the real bucket and topic across stacks', () => {
+  const app = new cdk.App();
+  const env = { account: '111111111111', region: 'eu-central-1' };
+  const producer = new cdk.Stack(app, 'ProducerStack', { env });
+  const bucket = new s3.Bucket(producer, 'DataBucket');
+  const topic = new sns.Topic(producer, 'AlertTopic');
+  const analytics = new AnalyticsStack(app, 'ConsumerStack', {
+    env,
+    dataBucket: bucket,
+    alertTopic: topic,
+  });
+
+  const template = Template.fromStack(analytics);
+  expect(JSON.stringify(template.toJSON())).toContain('Fn::ImportValue');
+  expect(JSON.stringify(Template.fromStack(producer).toJSON())).toContain('ExportsOutput');
 });

@@ -298,9 +298,10 @@ flowchart LR
   in CDK; unlike a manual console change it survives deploys. It also disables the alarm actions of
   the poller alarms, so a deliberate pause never pages anyone.
 - **Analytics pause.** `CDK_ANALYTICS_PAUSED=1` disables the weekly silver Scheduler schedule; it
-  stays deployed, so a later deploy without the variable re-enables it. `CDK_TRANSFORM_VERSION`
-  (CI sets the commit SHA) is recorded in the silver manifest; an empty value falls back to
-  `sql-<hash>`.
+  stays deployed. CI defaults to paused when the repository variable is unset, so the first main
+  deploy cannot start an unverified run; set `CDK_ANALYTICS_PAUSED=0` after the manual checks to
+  enable it. `CDK_TRANSFORM_VERSION` (CI sets the short commit SHA) is recorded in the silver
+  manifest; an empty value falls back to `sql-<hash>`.
 
 **Monitoring** (`infrastructure/lib/alerting.ts`, alarms in `backend.ts` and `scraper-stack.ts`):
 
@@ -310,13 +311,14 @@ flowchart LR
   the alarm in the console. SNS cannot deliver to Pushover directly — it requires an HTTPS endpoint
   that answers its `SubscriptionConfirmation` handshake.
 - **Analytics and budget alerts** use the same topic. The weekly silver build publishes a
-  `silver_build_failed` JSON message on any handler exception (no new alarm); the forwarder links
-  to the analytics log group and includes the build id and stage. The account budget
-  `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 % and FORECASTED 100 %
-  notifications; AWS Budgets are USD-only, so $1.00 is the deliberately conservative €1 guardrail
-  (≈ €0.86). Budget messages are plain text, so the forwarder branches on the `AWS Budgets:`
-  subject before JSON parsing. The manual `Zero-Spend Budget` is an email backstop until the CDK
-  budget is verified.
+  `silver_build_failed` JSON message on any handled exception (no new alarm); the forwarder links
+  to the analytics log group and includes the build id and stage. A Lambda timeout or OOM cannot
+  run the handler and remains the known residual gap; time the first run before enabling the
+  schedule. The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 %
+  and FORECASTED 100 % notifications; AWS Budgets are USD-only, so $1.00 is the deliberately
+  conservative €1 guardrail (≈ €0.86). Budget messages are plain text, so the forwarder branches on
+  the `AWS Budgets:` subject before JSON parsing. The manual `Zero-Spend Budget` is an email
+  backstop until the CDK budget is verified with a real Budgets notification.
 - **Credentials** live in two SSM SecureStrings (`/train-price-monitor/pushover-token`,
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
@@ -420,7 +422,7 @@ Environment variables (never commit values):
 | `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
 | `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
 | `CDK_ANALYTICS_PAUSED`         | Infrastructure      | `1` disables the weekly silver Scheduler schedule                                                           |
-| `CDK_TRANSFORM_VERSION`        | Infrastructure      | Commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`                                |
+| `CDK_TRANSFORM_VERSION`        | Infrastructure      | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`                          |
 | `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
 | `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
 | `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |

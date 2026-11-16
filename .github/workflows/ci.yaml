@@ -384,6 +384,10 @@ jobs:
         working-directory: infrastructure
         run: npm run build
 
+      # The analytics asset pins linux/amd64 and therefore uses Buildx. The
+      # GitHub runner ships it, but make the dependency explicit for the deploy.
+      - uses: docker/setup-buildx-action@v4
+
       - name: Synthesize with AWS CDK and show diff
         working-directory: infrastructure
         run: npm run cdk diff
@@ -393,7 +397,7 @@ jobs:
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
-          CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED }}
+          CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}
           CDK_SES_PRODUCTION_ACCESS: ${{ vars.CDK_SES_PRODUCTION_ACCESS }}
 
@@ -406,7 +410,7 @@ jobs:
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
-          CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED }}
+          CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}
           CDK_SES_PRODUCTION_ACCESS: ${{ vars.CDK_SES_PRODUCTION_ACCESS }}
 

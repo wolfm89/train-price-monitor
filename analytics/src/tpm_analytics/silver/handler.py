@@ -171,6 +171,7 @@ def _run_build(
     settings = load_settings()
     if not settings.source.startswith("s3://"):
         raise ValueError("BRONZE_SOURCE must be an s3:// glob in the handler")
+    progress["stage"] = "preflight"
     remaining = remaining_seconds(context)
     if remaining is not None and remaining < BUILD_BUDGET_SECONDS + PUBLISH_RESERVE_SECONDS:
         raise RuntimeError(f"only {remaining:.0f}s left before the deadline; not starting a build")
@@ -217,6 +218,7 @@ def _run_build(
             max_temp_size=settings.max_temp_size,
         )
         build_seconds = round(time.perf_counter() - build_started, 3)
+        progress["stage"] = "publish"
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
             raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
@@ -228,7 +230,6 @@ def _run_build(
             warnings.append(
                 f"bronze changed during the build: {len(after)} objects now vs {len(snapshot)} in the snapshot"
             )
-        progress["stage"] = "publish"
         publish_started = time.perf_counter()
         result = publish(
             store,

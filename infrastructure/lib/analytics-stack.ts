@@ -96,12 +96,19 @@ export class AnalyticsStack extends cdk.Stack {
       })
     );
 
-    // Silver: upload, read back for verification, delete expired builds, abort multipart
-    // uploads. boto3 upload_file uses multipart for the ~60 MB parquet files.
+    // Silver: upload/read back. Deleting and aborting is limited to build prefixes; the
+    // pointer is never deleted by the handler. boto3 upload_file uses multipart for the
+    // ~60 MB parquet files.
     silverFunction.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
+        actions: ['s3:GetObject', 's3:PutObject'],
         resources: [`${bucketArn}/silver/*`],
+      })
+    );
+    silverFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:DeleteObject', 's3:AbortMultipartUpload'],
+        resources: [`${bucketArn}/silver/builds/*`],
       })
     );
 
@@ -121,11 +128,11 @@ export class AnalyticsStack extends cdk.Stack {
         timeZone: cdk.TimeZone.ETC_UTC,
       }),
       target: new schedulerTargets.LambdaInvoke(silverFunction, {
-        // Scheduler's default is 185 retries over 24 h. The Invoke API returning 202 is
-        // success; function failures are Lambda's async retry domain, disabled above.
-        // No DLQ: the handler's SNS message is the signal, and TargetErrorCount stays
-        // visible in the console for Invoke-API problems.
-        retryAttempts: 0,
+        // Scheduler's retry policy only covers the Invoke API: a 202 means the function
+        // already started. Two retries handle transient throttling/5xx without repeating
+        // a build; the short max age prevents a very late duplicate.
+        retryAttempts: 2,
+        maxEventAge: cdk.Duration.minutes(5),
       }),
     });
 
