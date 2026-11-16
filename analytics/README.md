@@ -23,7 +23,9 @@ Shipped here:
 - `tests/` — fixture-based tests over v1-only, v2-only and mixed bronze files.
 
 The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
-`handler.py`). Not here yet: the `AnalyticsStack`, the scheduled trigger and the deployment.
+`handler.py`). The `AnalyticsStack` adds the image Lambda, the weekly EventBridge Scheduler trigger,
+the least-privilege IAM and the failure SNS path; `ScraperStack` adds the `silver/` multipart-abort
+rule. See [Deployment](#deployment).
 The handler lists the bronze keys once and builds from that snapshot, so the poller's 15-minute
 appends cannot change the corpus under a nine-minute build.
 
@@ -31,7 +33,7 @@ The CLI still writes to a local directory. Reading `s3://` requires S3 credentia
 `run_build`; the Lambda handler supplies them from its execution role.
 
 The SQL and the station dimension live inside the package (`src/tpm_analytics/{sql,data}`), so a
-built wheel is self-contained and the future image only has to copy `tpm_analytics/`.
+built wheel is self-contained and the image only has to copy `tpm_analytics/`.
 
 DuckDB is pinned at 2.0.0. The transform uses `COPY … RETURN_STATS`, so the row and partition counts
 come from the writer; the gate then re-counts the rows from disk and checks the partition count
@@ -124,9 +126,13 @@ silver/_latest.json
   build once it is a day old. A manifest that cannot be read is never deleted.
 - **Refusals:** a corpus that shrank by more than 10 % against the pointed-at build, more than
   0.01 % removed rows, or removed rows that are not exactly the duplicates in bronze.
-- The handler ignores the event: source, bucket, prefix and sizing come from the environment
-  (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,
-  `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
+- The handler ignores the event: source, bucket, prefix, sizing and the alert topic come from the
+  environment (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`,
+  `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
+  `ALERT_TOPIC_ARN`, `LOG_GROUP_NAME`), so an invocation cannot disable the gate. `TRANSFORM_VERSION`
+  is the commit SHA in CI; empty falls back to `sql-<hash>`. Any handler exception publishes a
+  `silver_build_failed` message with the build id and stage and is re-raised; a handled failure does
+  not move the pointer.
 
 For local S3 reads, install the extension once and point DuckDB at it:
 from `analytics/`, `mise run //analytics:httpfs` then
@@ -135,7 +141,61 @@ The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 `tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
 `ObjectStore`, and `tests/test_storage.py` covers the S3 implementation with botocore's
-`Stubber`. Nothing is written to AWS yet.
+`Stubber`. The tests never write to AWS.
+
+## Deployment
+
+`AnalyticsStack` deploys `analytics/Dockerfile` as an x86_64 Lambda. Sizing, retention, the Lambda
+async retry and the scheduler retry/max-age policy live in
+`analytics/src/tpm_analytics/data/silver-config.json`, which
+`infrastructure/lib/config.ts` reads at synth time: 10,240 MB memory, 900 s, 10,240 MB `/tmp`, no
+VPC, reserved concurrency 1. The weekday, UTC timezone and 30-minute compactor offset stay in
+`infrastructure/lib/config.ts` and `analytics-stack.ts`. EventBridge Scheduler runs it every Sunday at
+03:30 UTC, after the 03:00 compactor. It reads bronze from `prices/`, writes `silver/` and keeps the
+newest two builds. IAM is prefix-scoped: list `prices/*` and `silver/*`, read `prices/*`,
+read/write on `silver/*`, delete/abort on `silver/builds/*`, and publish to the alert topic; it
+cannot write or delete bronze.
+
+The function environment is set by CDK: `SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`,
+`SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
+`ALERT_TOPIC_ARN` and `LOG_GROUP_NAME`. `AWS_REGION` is reserved by Lambda. CI sets
+`TRANSFORM_VERSION` to the short commit SHA; an empty value records `sql-<hash>`.
+
+Set the repository variable `CDK_ANALYTICS_PAUSED=0` only after the manual checks; CI defaults to
+paused when the variable is unset, so the first main deploy cannot start an unverified run.
+
+Deploy paused first, so the first run cannot race verification:
+
+```bash
+cd ../infrastructure
+CDK_ANALYTICS_PAUSED=1 CDK_TRANSFORM_VERSION="$(git rev-parse HEAD)" npx cdk deploy AnalyticsStack
+aws lambda invoke --function-name "$(aws cloudformation describe-stacks --stack-name AnalyticsStack \
+  --query "Stacks[0].Outputs[?OutputKey=='SilverFunctionName'].OutputValue" --output text)" \
+  --cli-read-timeout 900 --cli-connect-timeout 10 \
+  --payload '{}' --cli-binary-format raw-in-base64-out /tmp/silver.json
+cat /tmp/silver.json
+```
+
+`CDK_APP_NAME`, `CDK_DOMAIN_NAME` and `CDK_SES_FROM_EMAIL` must be set (CI supplies them from
+repository secrets).
+
+Verify `silver/_latest.json` and `silver/builds/<id>/_manifest.json`, record duration, memory, rows
+and partitions, then set the repository variable `CDK_ANALYTICS_PAUSED=0` and push to main to
+enable the schedule. For the forced
+failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
+invoke once, confirm the Pushover alert and the unchanged pointer, then restore the previous
+`Environment.Variables` JSON; a CDK deploy also restores it.
+
+A handled failure publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`.
+Async invocations retry once; if retries are exhausted or the container is killed, Lambda publishes
+the invocation failure to the same topic and the Pushover forwarder raises an alert. The pointer is
+only moved by a verified build; if the pointer PUT itself errors, check `silver/_latest.json` before
+rolling anything back. A bad pointer can be rolled back to the previous build (kept for at least a
+day). Config files are loaded at import, so a missing or invalid config fails Lambda INIT; the
+Docker build imports the handler and catches that before deploy. A manual compactor run that deletes
+a bronze key during the build fails the run, and the retry rebuilds from the new key set.
+`InfrastructureStack` runs `ToolkitCleaner` daily, which removes unused CDK ECR and S3 assets after
+checking deployed CloudFormation templates; unused assets younger than 10 days are retained.
 
 ## Column contract
 

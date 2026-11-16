@@ -12,11 +12,13 @@ import { parquetReadObjects, parquetMetadata } from 'hyparquet';
 import { type ParquetRow } from './types.js';
 import { rowsToParquet } from './parquet.js';
 import { fromParquetRecord, parquetRowKey } from './rows.js';
+import runtimeConfig from '../../shared/runtime-config.json' with { type: 'json' };
 
 const logger = new Logger({ serviceName: 'scraper-compactor' });
 const s3 = new S3Client(process.env.AWS_ENDPOINT_URL ? { forcePathStyle: true } : {});
 
 const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
+const BRONZE_PREFIX = runtimeConfig.bronze_prefix;
 
 /** Full value fingerprint of a row, for content-level verification. */
 function rowFingerprint(row: ParquetRow): string {
@@ -81,7 +83,7 @@ export const handler = async (event?: CompactorEvent): Promise<void> => {
     logger.info('Using default yesterday partition for S3 compaction', { date: `${y}-${m}-${d}` });
   }
 
-  const prefix = `prices/year=${y}/month=${m}/day=${d}/`;
+  const prefix = `${BRONZE_PREFIX}/year=${y}/month=${m}/day=${d}/`;
   logger.info('Scanning S3 partition', { bucket: BUCKET_NAME, prefix });
 
   // 1. List all objects in the daily partition, separating batch_ files and existing daily_ files

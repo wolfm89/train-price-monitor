@@ -86,6 +86,26 @@ def test_pointer_only_moves_after_the_build_is_readable(build, tmp_path: Path) -
     assert build_ids(store, "silver") == ["20260101T000000Z-aaaaaaaa"]
 
 
+def test_malformed_pointer_still_blocks_a_backwards_publish(build, tmp_path: Path) -> None:
+    store = LocalObjectStore(tmp_path / "bucket")
+    built = build()
+    publish_one(store, Built(stats=stats_for(rows=100), target=built.target), "20260102T000000Z-bbbbbbbb")
+    store.put_bytes(b"{not json", pointer_key("silver"))
+
+    with pytest.raises(ValueError, match="already newer"):
+        publish_one(store, Built(stats=stats_for(rows=100), target=built.target), "20260101T000000Z-aaaaaaaa")
+
+
+def test_malformed_pointer_still_blocks_a_corpus_shrink(build, tmp_path: Path) -> None:
+    store = LocalObjectStore(tmp_path / "bucket")
+    built = build()
+    publish_one(store, Built(stats=stats_for(rows=100), target=built.target), "20260102T000000Z-bbbbbbbb")
+    store.put_bytes(b"{not json", pointer_key("silver"))
+
+    with pytest.raises(ValueError, match="corpus shrank"):
+        publish_one(store, Built(stats=stats_for(rows=50), target=built.target), "20260103T000000Z-cccccccc")
+
+
 def test_failed_upload_removes_the_half_written_build(build, tmp_path: Path) -> None:
     built = build()
     store = LocalObjectStore(tmp_path / "bucket")

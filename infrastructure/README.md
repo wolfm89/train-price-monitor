@@ -4,11 +4,20 @@ AWS CDK v2 TypeScript stacks for the Train Price Monitor.
 
 ## Stacks
 
-| Stack                 | Description                                                              |
-| --------------------- | ------------------------------------------------------------------------ |
-| `InfrastructureStack` | Main application stack: API Gateway, backend Lambda, Cognito, S3, SQS    |
-| `CertificateStack`    | ACM certificate in us-east-1 for the custom domain                       |
-| `ScraperStack`        | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions |
+| Stack                 | Description                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `InfrastructureStack` | Main application stack: API Gateway, backend Lambda, Cognito, S3, SQS           |
+| `CertificateStack`    | ACM certificate in us-east-1 for the custom domain                              |
+| `AlertingStack`       | Alert topic, Pushover forwarder and the $1 monthly account budget               |
+| `ScraperStack`        | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions        |
+| `AnalyticsStack`      | Weekly silver build: image Lambda, EventBridge Scheduler, IAM, SNS failure path |
+
+`InfrastructureStack` also runs `ToolkitCleaner` daily: it removes unused CDK ECR and S3 assets
+after checking deployed CloudFormation templates, keeping assets created in the last 10 days.
+
+Scraper sizing/tuning and retention values live in `../shared/runtime-config.json`; analytics sizing
+and schedule policy live in `../analytics/src/tpm_analytics/data/silver-config.json`. Both are read
+by `lib/config.ts` at synth time.
 
 ## Commands
 

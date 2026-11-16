@@ -1,0 +1,20 @@
+{
+  "bronze_prefix": "prices",
+  "scraper": {
+    "batch_size": 25,
+    "abort_threshold_ms": 250000,
+    "poller_timeout_seconds": 300,
+    "poller_memory_mib": 512,
+    "hydrator_memory_mib": 128,
+    "hydrator_timeout_minutes": 15,
+    "compactor_memory_mib": 1536,
+    "compactor_timeout_seconds": 300,
+    "lookahead_days": 60,
+    "seed_window_days": 3
+  },
+  "retention": {
+    "notification_retention_days": 90,
+    "journey_ttl_margin_days": 7,
+    "unconfirmed_signup_retention_days": 7
+  }
+}

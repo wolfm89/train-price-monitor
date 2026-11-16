@@ -7,9 +7,12 @@ from pathlib import Path
 
 import duckdb
 
-DEFAULT_THREADS = 2
-DEFAULT_MEMORY_LIMIT = "700MB"
-DEFAULT_MAX_TEMP_SIZE = "4GB"
+from tpm_analytics.silver.config import load_config
+
+_CONFIG = load_config()
+DEFAULT_THREADS = _CONFIG.local.threads
+DEFAULT_MEMORY_LIMIT = _CONFIG.local.memory_limit
+DEFAULT_MAX_TEMP_SIZE = _CONFIG.local.max_temp_size
 
 # The sql/ and data/ directories live inside the package, so a wheel built from
 # analytics/ is self-contained and the Lambda image only has to copy tpm_analytics/.

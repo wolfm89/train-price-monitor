@@ -46,6 +46,7 @@ import duckdb; \
 assert callable(handler); \
 assert (asset_dir('sql') / 'silver.sql').is_file(); \
 assert (asset_dir('data') / 'stations.json').is_file(); \
+assert (asset_dir('data') / 'silver-config.json').is_file(); \
 c = duckdb.connect(); \
 c.execute(f\"SET extension_directory = '{os.environ['DUCKDB_EXTENSION_DIR']}'\"); \
 c.execute('LOAD httpfs'); \

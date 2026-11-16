@@ -8,6 +8,7 @@ import {
   aws_s3 as s3,
   aws_sqs as sqs,
 } from 'aws-cdk-lib';
+import { METRIC_NAMESPACE } from './config';
 
 /**
  * Dashboards follow Google's Four Golden Signals (SRE book, ch. 6): one block
@@ -104,7 +105,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   // The log filter emits one datapoint per scraped target, so Sum is the target
   // count and Average would always be 1.0. Divide by the number of runs to keep
   // the value meaningful at any dashboard aggregation.
-  const scrapes = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Sum');
+  const scrapes = metric(METRIC_NAMESPACE, 'PollerTargetsScraped', cdk.Duration.minutes(15), 'Sum');
   const pollerInvocations = props.pollerFunction.metricInvocations({
     period: cdk.Duration.minutes(15),
     statistic: 'Sum',
@@ -115,11 +116,11 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     label: 'scrapes per run',
     period: cdk.Duration.minutes(15),
   });
-  const scrapesPerHour = metric('TrainPriceMonitor', 'PollerTargetsScraped', cdk.Duration.hours(1), 'Sum');
-  const failed = metric('TrainPriceMonitor', 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum');
-  const throttled = metric('TrainPriceMonitor', 'PollerThrottled', cdk.Duration.minutes(15), 'Sum');
-  const aborted = metric('TrainPriceMonitor', 'PollerAborted', cdk.Duration.minutes(15), 'Sum');
-  const backlog = metric('TrainPriceMonitor', 'PollerBacklog', cdk.Duration.minutes(15), 'Maximum').with({
+  const scrapesPerHour = metric(METRIC_NAMESPACE, 'PollerTargetsScraped', cdk.Duration.hours(1), 'Sum');
+  const failed = metric(METRIC_NAMESPACE, 'PollerFailedTargets', cdk.Duration.minutes(15), 'Sum');
+  const throttled = metric(METRIC_NAMESPACE, 'PollerThrottled', cdk.Duration.minutes(15), 'Sum');
+  const aborted = metric(METRIC_NAMESPACE, 'PollerAborted', cdk.Duration.minutes(15), 'Sum');
+  const backlog = metric(METRIC_NAMESPACE, 'PollerBacklog', cdk.Duration.minutes(15), 'Maximum').with({
     label: 'backlog (1 = behind)',
   });
   const failedFilled = new cloudwatch.MathExpression({
@@ -140,10 +141,10 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     label: 'batch aborts',
     period: cdk.Duration.minutes(15),
   });
-  const rowsPerRun = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.minutes(15), 'Average').with({
+  const rowsPerRun = metric(METRIC_NAMESPACE, 'PollerRowsWritten', cdk.Duration.minutes(15), 'Average').with({
     label: 'rows per run',
   });
-  const rowsPerHour = metric('TrainPriceMonitor', 'PollerRowsWritten', cdk.Duration.hours(1), 'Sum');
+  const rowsPerHour = metric(METRIC_NAMESPACE, 'PollerRowsWritten', cdk.Duration.hours(1), 'Sum');
 
   // S3 publishes storage metrics once per day. The graph follows the dashboard's
   // selected range (one point per day), so it never shows a different time frame.
@@ -400,16 +401,16 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   const serverErrors = props.api
     .metricServerError({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
     .with({ label: '5xx' });
-  const fallbacks = metric('TrainPriceMonitor', 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum').with({
+  const fallbacks = metric(METRIC_NAMESPACE, 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum').with({
     label: 'DB refused (Decodo)',
   });
   // Yoga returns HTTP 200 with an errors[] payload, so API Gateway's 5xx metric
   // misses resolver failures. The backend logs them at ERROR; the filter metric
   // is already part of the free ten.
-  const graphqlErrors = metric('TrainPriceMonitor', 'SearchErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
+  const graphqlErrors = metric(METRIC_NAMESPACE, 'SearchErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
     label: 'GraphQL errors',
   });
-  const refresherErrors = metric('TrainPriceMonitor', 'RefresherErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
+  const refresherErrors = metric(METRIC_NAMESPACE, 'RefresherErrorLogs', cdk.Duration.minutes(5), 'Sum').with({
     label: 'Refresher errors',
   });
   const graphqlErrorsFilled = new cloudwatch.MathExpression({

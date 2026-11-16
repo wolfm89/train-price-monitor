@@ -1,0 +1,33 @@
+{
+  "prefix": "silver",
+  "bronze_prefix": "prices",
+  "builds_root": "builds",
+  "manifest_name": "_manifest.json",
+  "pointer_name": "_latest.json",
+  "failure_event": "silver_build_failed",
+  "stages": ["settings", "preflight", "snapshot", "build", "publish"],
+  "keep": 2,
+  "lambda": {
+    "memory_mib": 10240,
+    "timeout_seconds": 900,
+    "ephemeral_mib": 10240,
+    "threads": 4,
+    "duckdb_memory_limit": "8GB",
+    "duckdb_max_temp_size": "5GB",
+    "publish_reserve_seconds": 180,
+    "build_budget_seconds": 600,
+    "retry_attempts": 1,
+    "max_event_age_minutes": 45
+  },
+  "local": {
+    "threads": 2,
+    "duckdb_memory_limit": "700MB",
+    "duckdb_max_temp_size": "4GB"
+  },
+  "schedule": {
+    "retry_attempts": 2,
+    "max_event_age_minutes": 5
+  },
+  "orphan_grace_seconds": 3600,
+  "min_build_age_seconds": 86400
+}

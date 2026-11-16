@@ -11,10 +11,12 @@ through a `mise` monorepo.
 - `frontend/` – React 19 SPA (Material-UI v7, urql, Vite); pages, components, hooks, providers.
 - `backend/` – GraphQL Yoga API with a native AWS Lambda handler (API Gateway v1/v2 + SQS).
 - `scraper/` – Independent serverless pipeline collecting DB price data into Parquet on S3.
-- `shared/` – Code shared by more than one module. Currently `db-fetch.ts`, the Node-https
-  `fetch` (with rotating browser-like TLS profiles) both the backend and the scraper alias
-  `cross-fetch` to. It has no `node_modules` of its own: each consuming module type-checks it
-  via its own tsconfig (`include` + its own `paths` entries) and bundles it with esbuild.
+- `shared/` – Code and cross-module values shared by more than one module: `db-fetch.ts`, the
+  Node-https `fetch` (with rotating browser-like TLS profiles) both the backend and the scraper
+  alias `cross-fetch` to, and `runtime-config.json` (bronze prefix, scraper tuning and
+  backend/scraper retention, read by both runtimes and by `infrastructure/lib/config.ts`). It has no
+  `node_modules` of its own: each consuming module type-checks it via its own tsconfig (`include` +
+  its own `paths` entries) and bundles it with esbuild.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
 - `analytics/` – Python 3.15 silver-layer builds (DuckDB) over the scraper's bronze Parquet. The only
   non-TypeScript module; see `analytics/README.md`.
@@ -179,6 +181,9 @@ flowchart LR
   round-trips (`*.test.ts`); run `npm test` in `scraper`. CI runs it alongside `typecheck` + `lint`.
 - **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
   formatting and linting on every commit.
+- **Test memory** – Jest and Vitest are capped at two workers (`infrastructure/jest.config.js`,
+  `frontend/vitest.config.ts`). On a low-memory machine use `MISE_JOBS=1 mise run //:test` so
+  modules run one at a time; concurrent default-worker Jest runs have exhausted a 17.6 GB WSL VM.
 
 ## Security & Compliance
 
@@ -297,6 +302,15 @@ flowchart LR
 - **Pause switch.** `CDK_SCRAPER_PAUSED=1` (repo variable) disables the poller and hydrator schedules
   in CDK; unlike a manual console change it survives deploys. It also disables the alarm actions of
   the poller alarms, so a deliberate pause never pages anyone.
+- **Analytics pause.** `CDK_ANALYTICS_PAUSED=1` disables the weekly silver Scheduler schedule; it
+  stays deployed. CI defaults to paused when the repository variable is unset, so the first main
+  deploy cannot start an unverified run; set `CDK_ANALYTICS_PAUSED=0` after the manual checks to
+  enable it. `CDK_TRANSFORM_VERSION` (CI sets the short commit SHA) is recorded in the silver
+  manifest; an empty value falls back to `sql-<hash>`.
+- **ECR/S3 cleanup.** `InfrastructureStack` runs `ToolkitCleaner` daily. It reads deployed
+  CloudFormation templates and removes unused CDK assets from the bootstrap ECR repository and S3
+  bucket; `retainAssetsNewerThan` keeps assets created in the last 10 days. There is no separate
+  `cdk gc` step.
 
 **Monitoring** (`infrastructure/lib/alerting.ts`, alarms in `backend.ts` and `scraper-stack.ts`):
 
@@ -305,6 +319,18 @@ flowchart LR
   priority with the siren sound (bypasses quiet hours), recovery at normal priority, with a link to
   the alarm in the console. SNS cannot deliver to Pushover directly — it requires an HTTPS endpoint
   that answers its `SubscriptionConfirmation` handshake.
+- **Analytics and budget alerts** use the same topic. The weekly silver build publishes a
+  `silver_build_failed` JSON message on any handled exception (no new alarm); the forwarder links
+  to the analytics log group and includes the build id and stage. Async invocations retry once;
+  when retries are exhausted or the container is killed, Lambda's on-failure destination publishes
+  the invocation failure to the same topic and the forwarder raises an alert. CloudWatch and Budgets
+  publish through source-account/source-ARN conditions; do not add SSE with the AWS-managed
+  `alias/aws/sns` key, because CloudWatch alarms cannot use it, and a customer-managed key would
+  exceed the €1 budget. The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 %
+  and FORECASTED 100 % notifications; AWS Budgets are USD-only, so $1.00 is the deliberately
+  conservative €1 guardrail (≈ €0.86). Budget messages are plain text, so the forwarder branches on
+  the `AWS Budgets:` subject before JSON parsing. The manual `Zero-Spend Budget` is an email
+  backstop until the CDK budget is verified with a real Budgets notification.
 - **Credentials** live in two SSM SecureStrings (`/train-price-monitor/pushover-token`,
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
@@ -395,6 +421,8 @@ Environment variables (never commit values):
 | `DECODO_API_KEY`               | Backend             | Decodo key, literal (local dev; wins over `_PARAM`)                                                         |
 | `DECODO_API_KEY_PARAM`         | Backend             | SSM SecureString name holding the Decodo key (injected by CDK)                                              |
 | `DECODO_KEY_TTL_MS`            | Backend             | How long a resolved Decodo key is cached (default 15 min)                                                   |
+| `ALERT_TOPIC_ARN`              | Analytics Lambda    | SNS topic for silver build failures (injected by CDK)                                                       |
+| `LOG_GROUP_NAME`               | Analytics Lambda    | CloudWatch log group name used in failure links (injected by CDK)                                           |
 | `REACT_APP_GRAPHQL_ENDPOINT`   | Frontend            | API Gateway base URL                                                                                        |
 | `CDK_APP_NAME`                 | Infrastructure      | Application name (overrides CDK context)                                                                    |
 | `CDK_DOMAIN_NAME`              | Infrastructure      | Custom domain name for the deployment                                                                       |
@@ -404,12 +432,15 @@ Environment variables (never commit values):
 | `PUSHOVER_USER_KEY`            | Infrastructure      | Pushover user key (repo secret; CI writes the SSM param)                                                    |
 | `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda     | SSM parameter name for the Pushover app token (injected by CDK)                                             |
 | `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
+| `PUSHOVER_KEY_TTL_MS`          | Alerting Lambda     | How long the resolved Pushover SSM values are cached (default 15 min)                                       |
 | `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
+| `CDK_ANALYTICS_PAUSED`         | Infrastructure      | `1` disables the weekly silver Scheduler schedule                                                           |
+| `CDK_TRANSFORM_VERSION`        | Infrastructure      | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`                          |
 | `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
 | `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
 | `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |
-| `SCRAPER_BATCH_SIZE`           | Scraper             | Targets per poller run (default `10`, CDK sets `25`; 1 = 2 calls)                                           |
-| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper             | Days ahead to seed (default `60`)                                                                           |
+| `SCRAPER_BATCH_SIZE`           | Scraper             | Targets per poller run (shared default `25`; 1 = 2 calls)                                                   |
+| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper             | Days ahead to seed (shared default `60`)                                                                    |
 | `HYDRATOR_SEED_WINDOW_DAYS`    | Scraper             | Newest days re-seeded per nightly run (default `3`)                                                         |
 | `HYDRATOR_FULL_SEED`           | Scraper             | `1` seeds the whole window and prunes beyond it (manual)                                                    |
 | `AWS_ENDPOINT_URL`             | Scraper             | Local Floci endpoint (set by mise tasks)                                                                    |

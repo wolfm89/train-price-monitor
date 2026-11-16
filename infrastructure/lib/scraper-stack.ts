@@ -12,17 +12,21 @@ import {
   aws_sns as sns,
 } from 'aws-cdk-lib';
 import { DASHBOARD_START, scraperWidgets } from './dashboards';
+import { DASHBOARD_NAMES, METRIC_NAMESPACE, SCHEDULES, SCRAPER_CONFIG, SILVER_CONFIG } from './config';
 
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
   bucketName?: string;
-  /** Override the hydrator lookahead window (useful locally; undefined → 90 days in prod). */
+  /** Override the hydrator lookahead window (useful locally; undefined → shared config, 60 days). */
   hydratorLookaheadDays?: number;
   /** ARN of the alert topic (owned by AlertingStack). */
   alertTopicArn?: string;
 }
 
 export class ScraperStack extends cdk.Stack {
+  /** Passed to AnalyticsStack: read prices/, own silver/. */
+  readonly bucket: s3.IBucket;
+
   constructor(scope: Construct, id: string, props?: ScraperStackProps) {
     super(scope, id, props);
 
@@ -70,8 +74,18 @@ export class ScraperStack extends cdk.Stack {
             },
           ],
         },
+        {
+          // The analytics publisher uploads ~60 MB parquet files in multipart chunks.
+          // A killed invocation leaves parts that bill forever; one day is far longer
+          // than the 900 s Lambda timeout.
+          id: 'AbortIncompleteSilverMultipartUploads',
+          prefix: `${SILVER_CONFIG.prefix}/`,
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        },
       ],
     });
+    // AnalyticsStack reads prices/ and owns silver/ without duplicating the bucket.
+    this.bucket = bucket;
     // -------------------------------------------------------------------------
     // Shared Lambda log groups (retain 2 weeks)
     // -------------------------------------------------------------------------
@@ -100,15 +114,15 @@ export class ScraperStack extends cdk.Stack {
     // only needs to hold the route catalog, the AWS SDK and one batch of Parquet
     // rows.
     // -------------------------------------------------------------------------
-    const POLLER_BATCH_SIZE = 25;
+    const POLLER_BATCH_SIZE = SCRAPER_CONFIG.batch_size;
     const pollerFn = new lambda.DockerImageFunction(this, 'ScraperPoller', {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
-      memorySize: 512,
+      memorySize: SCRAPER_CONFIG.poller_memory_mib,
       // A 25-target batch is ~50 paced calls (~125 s), and the p90 run is ~190 s.
       // ABORT_THRESHOLD_MS in scraper/src/poller.ts (250 s) leaves 50 s for the
       // current target's worst case (~43 s) and the final S3 upload.
-      timeout: cdk.Duration.seconds(300),
+      timeout: cdk.Duration.seconds(SCRAPER_CONFIG.poller_timeout_seconds),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
@@ -144,19 +158,18 @@ export class ScraperStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       code: lambda.Code.fromAsset('../scraper/dist/hydrator'),
       handler: 'index.handler',
-      memorySize: 128,
+      memorySize: SCRAPER_CONFIG.hydrator_memory_mib,
       // A normal run only seeds the newest few days (~420 conditional writes,
       // well under a minute at 5 WCU). The generous timeout exists for the
       // manual HYDRATOR_FULL_SEED backfill, which rewrites the whole lookahead
       // window and is bounded by the table's write capacity rather than by CPU.
-      timeout: cdk.Duration.minutes(15),
+      timeout: cdk.Duration.minutes(SCRAPER_CONFIG.hydrator_timeout_minutes),
       logGroup: hydratorLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         POWERTOOLS_SERVICE_NAME: 'scraper-hydrator',
-        ...(props?.hydratorLookaheadDays !== undefined && {
-          HYDRATOR_LOOKAHEAD_DAYS: String(props.hydratorLookaheadDays),
-        }),
+        HYDRATOR_LOOKAHEAD_DAYS: String(props?.hydratorLookaheadDays ?? SCRAPER_CONFIG.lookahead_days),
+        HYDRATOR_SEED_WINDOW_DAYS: String(SCRAPER_CONFIG.seed_window_days),
       },
     });
 
@@ -176,8 +189,8 @@ export class ScraperStack extends cdk.Stack {
       // a day's partition is roughly an order of magnitude smaller. 1536 MB
       // keeps generous headroom over that; re-check Max Memory Used after the
       // first full-day compaction at the new volume before trimming further.
-      memorySize: 1536,
-      timeout: cdk.Duration.seconds(300),
+      memorySize: SCRAPER_CONFIG.compactor_memory_mib,
+      timeout: cdk.Duration.seconds(SCRAPER_CONFIG.compactor_timeout_seconds),
       logGroup: compactorLogGroup,
       environment: {
         SCRAPER_BUCKET_NAME: bucket.bucketName,
@@ -207,20 +220,26 @@ export class ScraperStack extends cdk.Stack {
       // Every 15 minutes with a small batch: ~2,400 scrapes/day, above what the
       // TTD intervals demand. Bigger or more frequent bursts risk getting the
       // Lambda's egress IP throttled by DB.
-      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      schedule: events.Schedule.rate(cdk.Duration.minutes(SCHEDULES.pollerMinutes)),
       targets: [new targets.LambdaFunction(pollerFn)],
     });
 
     new events.Rule(this, 'HydratorSchedule', {
       enabled: !scraperPaused,
       // 02:00 UTC daily
-      schedule: events.Schedule.cron({ minute: '0', hour: '2' }),
+      schedule: events.Schedule.cron({
+        minute: String(SCHEDULES.hydrator.minute),
+        hour: String(SCHEDULES.hydrator.hour),
+      }),
       targets: [new targets.LambdaFunction(hydratorFn)],
     });
 
     new events.Rule(this, 'CompactorSchedule', {
       // 03:00 UTC daily
-      schedule: events.Schedule.cron({ minute: '0', hour: '3' }),
+      schedule: events.Schedule.cron({
+        minute: String(SCHEDULES.compactor.minute),
+        hour: String(SCHEDULES.compactor.hour),
+      }),
       targets: [new targets.LambdaFunction(compactorFn)],
     });
 
@@ -236,14 +255,14 @@ export class ScraperStack extends cdk.Stack {
     new logs.MetricFilter(this, 'PollerDirectOkFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerDirectOk',
       metricValue: '$.transport.directOk',
     });
     new logs.MetricFilter(this, 'PollerThrottledFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerThrottled',
       metricValue: '$.transport.directThrottled',
     });
@@ -253,7 +272,7 @@ export class ScraperStack extends cdk.Stack {
     new logs.MetricFilter(this, 'PollerTargetsFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Target scraped'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerTargetsScraped',
       metricValue: '1',
     });
@@ -262,7 +281,7 @@ export class ScraperStack extends cdk.Stack {
     new logs.MetricFilter(this, 'PollerFailedFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Failed to scrape target'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerFailedTargets',
       metricValue: '1',
     });
@@ -271,7 +290,7 @@ export class ScraperStack extends cdk.Stack {
     new logs.MetricFilter(this, 'PollerRowsFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Parquet written to S3'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerRowsWritten',
       metricValue: '$.rows',
     });
@@ -281,7 +300,7 @@ export class ScraperStack extends cdk.Stack {
     new logs.MetricFilter(this, 'PollerAbortedFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Approaching timeout, aborting batch'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerAborted',
       metricValue: '1',
     });
@@ -290,25 +309,25 @@ export class ScraperStack extends cdk.Stack {
     new logs.MetricFilter(this, 'PollerBacklogFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller started'),
-      metricNamespace: 'TrainPriceMonitor',
+      metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerBacklog',
       metricValue: '$.backlog',
     });
 
     const directOk = new cloudwatch.Metric({
-      namespace: 'TrainPriceMonitor',
+      namespace: METRIC_NAMESPACE,
       metricName: 'PollerDirectOk',
       period: cdk.Duration.minutes(15),
       statistic: 'Sum',
     });
     const throttled = new cloudwatch.Metric({
-      namespace: 'TrainPriceMonitor',
+      namespace: METRIC_NAMESPACE,
       metricName: 'PollerThrottled',
       period: cdk.Duration.minutes(15),
       statistic: 'Sum',
     });
     const aborted = new cloudwatch.Metric({
-      namespace: 'TrainPriceMonitor',
+      namespace: METRIC_NAMESPACE,
       metricName: 'PollerAborted',
       period: cdk.Duration.minutes(15),
       statistic: 'Sum',
@@ -388,7 +407,7 @@ export class ScraperStack extends cdk.Stack {
     // CloudFormation updates this resource instead of creating a second one with
     // the same name.
     new cloudwatch.Dashboard(this, 'ScraperDashboard', {
-      dashboardName: 'TrainPriceMonitor-Scraper',
+      dashboardName: DASHBOARD_NAMES.scraper,
       start: DASHBOARD_START,
       widgets: scraperWidgets({
         batchSize: POLLER_BATCH_SIZE,

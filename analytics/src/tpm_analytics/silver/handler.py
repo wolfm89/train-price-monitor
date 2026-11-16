@@ -5,8 +5,10 @@ source, a bucket or whether the gate runs. A retry after a crash is safe because
 new build id and only the pointer moves.
 """
 
+import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -17,9 +19,11 @@ from urllib.parse import urlsplit
 
 import boto3
 import duckdb
+from botocore.config import Config
 
 from tpm_analytics.silver._duck import S3Secret
 from tpm_analytics.silver.build import EmptyCorpusError, run_build
+from tpm_analytics.silver.config import FAILURE_EVENT, STAGES, load_config
 from tpm_analytics.silver.manifest import build_id_for, utc_now
 from tpm_analytics.silver.publish import publish
 from tpm_analytics.silver.storage import S3ObjectStore
@@ -29,9 +33,17 @@ logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 # Leave enough time to upload a 3 GB build and move the pointer.
-PUBLISH_RESERVE_SECONDS = 180
+_CONFIG = load_config()
+PUBLISH_RESERVE_SECONDS = _CONFIG.lambda_.publish_reserve_seconds
 # The measured full build is ~525 s; do not start one that cannot finish.
-BUILD_BUDGET_SECONDS = 600
+BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
+
+_SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
+
+
+def redact_error(message: str) -> str:
+    """Keep credentials out of the notification even if a future error embeds them."""
+    return _SECRET_FRAGMENT.sub("<redacted>", message)
 
 
 @dataclass(frozen=True)
@@ -49,15 +61,16 @@ class Settings:
 
 def load_settings() -> Settings:
     bucket = os.environ["SILVER_BUCKET"]
+    lambda_config = _CONFIG.lambda_
     return Settings(
         bucket=bucket,
-        prefix=os.environ.get("SILVER_PREFIX", "silver"),
-        source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/prices/**/*.parquet"),
+        prefix=os.environ.get("SILVER_PREFIX", _CONFIG.prefix),
+        source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/{_CONFIG.bronze_prefix}/**/*.parquet"),
         region=os.environ.get("AWS_REGION", "eu-central-1"),
-        threads=int(os.environ.get("SILVER_THREADS", "4")),
-        memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", "8GB"),
-        max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", "5GB"),
-        keep=int(os.environ.get("SILVER_KEEP", "2")),
+        threads=int(os.environ.get("SILVER_THREADS", str(lambda_config.threads))),
+        memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", lambda_config.duckdb_memory_limit),
+        max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", lambda_config.duckdb_max_temp_size),
+        keep=int(os.environ.get("SILVER_KEEP", str(_CONFIG.keep))),
         transform_version=os.environ.get("TRANSFORM_VERSION", ""),
     )
 
@@ -110,12 +123,63 @@ def remaining_seconds(context: object) -> float | None:
     return float(getter()) / 1000.0
 
 
-def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
+def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str, str]:
+    """The structured message the Pushover forwarder turns into a notification."""
+    if stage not in STAGES:
+        # A notification must never be lost because a new stage was not added to the
+        # contract first; report it as unknown instead of raising inside notify_failure.
+        LOGGER.warning("unknown failure stage %r build_id=%s", stage, build_id)
+        stage = "unknown"
+    return {
+        "event": FAILURE_EVENT,
+        "build_id": build_id,
+        "stage": stage,
+        "error_type": type(error).__name__,
+        "error": redact_error(str(error))[:500],
+        "function": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "local"),
+        "region": os.environ.get("AWS_REGION", "eu-central-1"),
+        # LOG_GROUP_NAME is set by CDK; AWS_LAMBDA_LOG_GROUP_NAME covers a manual run.
+        "log_group": os.environ.get("LOG_GROUP_NAME") or os.environ.get("AWS_LAMBDA_LOG_GROUP_NAME", ""),
+    }
+
+
+def notify_failure(build_id: str, error: BaseException, stage: str, *, client: Any | None = None) -> None:
+    """Publish a build failure without masking the original exception."""
+    topic_arn = os.environ.get("ALERT_TOPIC_ARN")
+    if not topic_arn:
+        # Local runs and tests have no topic; the build error must still surface.
+        LOGGER.warning("ALERT_TOPIC_ARN is not set; build failure was not published build_id=%s", build_id)
+        return
+    try:
+        sns = (
+            client
+            if client is not None
+            else boto3.client(
+                "sns",
+                config=Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 2}),
+            )
+        )
+        sns.publish(
+            TopicArn=topic_arn,
+            Subject="Silver build failed",
+            Message=json.dumps(failure_message(build_id, error, stage)),
+        )
+    except Exception:
+        # Never mask the build failure with a notification failure.
+        LOGGER.exception("could not publish the build failure to SNS build_id=%s", build_id)
+
+
+def _run_build(
+    _event: dict[str, Any],
+    context: object,
+    build_id: str,
+    progress: dict[str, str],
+) -> dict[str, Any]:
     started = time.perf_counter()
     settings = load_settings()
     if not settings.source.startswith("s3://"):
         raise ValueError("BRONZE_SOURCE must be an s3:// glob in the handler")
-    build_id = build_id_for(utc_now())
+    progress["stage"] = "preflight"
     remaining = remaining_seconds(context)
     if remaining is not None and remaining < BUILD_BUDGET_SECONDS + PUBLISH_RESERVE_SECONDS:
         raise RuntimeError(f"only {remaining:.0f}s left before the deadline; not starting a build")
@@ -130,6 +194,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         settings.max_temp_size,
     )
 
+    progress["stage"] = "snapshot"
     store = S3ObjectStore(settings.bucket, region=settings.region)
     # One snapshot of the corpus: the build reads exactly these objects and the manifest records
     # them. The poller appends a batch every 15 minutes, so a live glob would change mid-build.
@@ -146,7 +211,8 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         raise EmptyCorpusError(f"no bronze objects under {prefix_in_source!r}")
     LOGGER.info("silver source snapshot files=%s", len(snapshot))
 
-    with tempfile.TemporaryDirectory(prefix="silver-lambda-") as workspace:
+    progress["stage"] = "build"
+    with tempfile.TemporaryDirectory(prefix="silver-lambda-", ignore_cleanup_errors=True) as workspace:
         workdir = Path(workspace)
         target = workdir / build_id
         build_started = time.perf_counter()
@@ -160,6 +226,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             max_temp_size=settings.max_temp_size,
         )
         build_seconds = round(time.perf_counter() - build_started, 3)
+        progress["stage"] = "publish"
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
             raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
@@ -186,15 +253,20 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             warnings=tuple(warnings),
         )
         publish_seconds = round(time.perf_counter() - publish_started, 3)
-        usage = shutil.disk_usage(workspace)
+        try:
+            usage = shutil.disk_usage(workspace)
+            tmp_used, tmp_free = usage.used, usage.free
+        except OSError:
+            # The pointer is already committed; do not turn cosmetic bookkeeping into a page.
+            tmp_used, tmp_free = 0, 0
 
     duration = round(time.perf_counter() - started, 3)
     LOGGER.info(
         "silver phases build_seconds=%s publish_seconds=%s tmp_used_bytes=%s tmp_free_bytes=%s",
         build_seconds,
         publish_seconds,
-        usage.used,
-        usage.free,
+        tmp_used,
+        tmp_free,
     )
     LOGGER.info(
         "silver build finished build_id=%s rows_in=%s rows_out=%s duplicates_removed=%s "
@@ -223,3 +295,14 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         "publish_seconds": publish_seconds,
         "duration_seconds": duration,
     }
+
+
+def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
+    build_id = build_id_for(utc_now())
+    progress = {"stage": "settings"}
+    LOGGER.info("silver handler start build_id=%s", build_id)
+    try:
+        return _run_build(event, context, build_id, progress)
+    except Exception as error:
+        notify_failure(build_id, error, progress["stage"])
+        raise

@@ -29,14 +29,12 @@ export class InfrastructureStack extends cdk.Stack {
     const cognitoAuth = new CognitoAuth(this, 'CognitoAuth', sesFromEmail);
     new Backend(this, 'Backend', cognitoAuth.userPool, frontendProps.domainName, sesFromEmail, alertTopic);
     new Frontend(this, 'Frontend', frontendProps);
-    // Runs daily rather than weekly: every deploy adds a new asset image to the
-    // CDK bootstrap ECR repository. ToolkitCleaner only removes images
-    // no deployed stack still references, so it is safe to run often and keeps
-    // ECR storage from accumulating between runs. Orphaned untagged layers are
-    // handled by a lifecycle policy on the bootstrap repository (see
-    // infrastructure/README.md).
+    // Runs daily: every deploy adds a new asset image to the CDK bootstrap ECR
+    // repository. ToolkitCleaner only removes assets no deployed stack still references;
+    // keep unused assets for 10 days so a deploy/rollback race cannot delete them.
     new ToolkitCleaner(this, 'ToolkitCleaner', {
       scheduleExpression: ScheduleExpression.rate(cdk.Duration.days(1)),
+      retainAssetsNewerThan: cdk.Duration.days(10),
     });
   }
 }
