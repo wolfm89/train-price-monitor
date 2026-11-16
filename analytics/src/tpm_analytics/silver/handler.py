@@ -163,7 +163,9 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
             raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
-        after = {f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source)}
+        after = {
+            f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source) if key.endswith(".parquet")
+        }
         warnings: list[str] = []
         if after != set(snapshot):
             warnings.append(

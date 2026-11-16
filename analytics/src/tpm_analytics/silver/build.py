@@ -212,7 +212,7 @@ def run_build(
             expected_duplicates = scalar(
                 connection,
                 "SELECT coalesce(sum(n - 1), 0) FROM ("
-                f"SELECT count(*) AS n FROM (SELECT {key_sql} FROM {source_sql}) "
+                f"SELECT {key_sql}, count(*) AS n FROM {source_sql} "
                 "GROUP BY ALL HAVING count(*) > 1)",
             )
             if expected_duplicates != duplicates_removed:

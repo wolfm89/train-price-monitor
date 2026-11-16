@@ -93,9 +93,14 @@ def _read_pointer(store: ObjectStore, prefix: str) -> Pointer | None:
         return None
     try:
         manifest = BuildManifest.from_json(store.get_bytes(pointer.manifest))
-    except FileNotFoundError, TypeError, ValueError:
+    except FileNotFoundError, TypeError, ValueError, KeyError:
         LOGGER.warning("ignoring pointer to an unreadable manifest build_id=%s", pointer.build_id)
         return None
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") in {"NoSuchKey", "404", "NotFound"}:
+            LOGGER.warning("ignoring pointer to a missing manifest build_id=%s", pointer.build_id)
+            return None
+        raise
     if manifest.build_id != pointer.build_id:
         LOGGER.warning("ignoring pointer whose manifest names %s", manifest.build_id)
         return None

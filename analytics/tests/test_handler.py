@@ -173,3 +173,10 @@ def test_sweep_only_removes_its_own_workspaces(tmp_path: Path, monkeypatch) -> N
     assert removed == ["silver-lambda-old"]
     assert not (tmp_path / "silver-lambda-old").exists()
     assert (tmp_path / "silver-other").exists()
+
+
+def test_non_parquet_objects_do_not_look_like_drift(monkeypatch, tmp_path: Path, bronze_glob: str) -> None:
+    _calls, bucket = _prepare_handler(monkeypatch, tmp_path, bronze_glob)
+    (bucket / "prices" / "marker.json").write_bytes(b"{}")
+    result = handler_module.handler({}, None)
+    assert not any("bronze changed" in warning for warning in result["warnings"])

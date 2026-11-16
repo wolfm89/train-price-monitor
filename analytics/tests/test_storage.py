@@ -157,3 +157,74 @@ def test_s3_pointer_is_validated_against_its_manifest() -> None:
         )
     with stubber:
         assert _read_pointer(store, "silver") == pointer
+
+
+def test_s3_pointer_to_missing_manifest_is_ignored() -> None:
+    import io
+
+    from botocore.response import StreamingBody
+
+    from tpm_analytics.silver.manifest import Pointer, manifest_key, pointer_key
+    from tpm_analytics.silver.publish import _read_pointer
+
+    build_id = "20260101T000000Z-aaaaaaaa"
+    pointer = Pointer(build_id=build_id, manifest=manifest_key("silver", build_id), updated_at="x")
+    store, stubber = make_store()
+    stubber.add_response(
+        "get_object",
+        {"Body": StreamingBody(io.BytesIO(pointer.to_json()), len(pointer.to_json()))},
+        {"Bucket": "bucket", "Key": pointer_key("silver")},
+    )
+    stubber.add_client_error(
+        "get_object",
+        service_error_code="NoSuchKey",
+        http_status_code=404,
+        expected_params={"Bucket": "bucket", "Key": manifest_key("silver", build_id)},
+    )
+    with stubber:
+        assert _read_pointer(store, "silver") is None
+
+
+def test_s3_pointer_to_malformed_manifest_is_ignored() -> None:
+    import io
+
+    from botocore.response import StreamingBody
+
+    from tpm_analytics.silver.manifest import Pointer, manifest_key, pointer_key
+    from tpm_analytics.silver.publish import _read_pointer
+
+    build_id = "20260101T000000Z-aaaaaaaa"
+    pointer = Pointer(build_id=build_id, manifest=manifest_key("silver", build_id), updated_at="x")
+    body = b'{"manifest_version": 2, "build_id": "' + build_id.encode() + b'"}'
+    store, stubber = make_store()
+    for key, payload in ((pointer_key("silver"), pointer.to_json()), (manifest_key("silver", build_id), body)):
+        stubber.add_response(
+            "get_object",
+            {"Body": StreamingBody(io.BytesIO(payload), len(payload))},
+            {"Bucket": "bucket", "Key": key},
+        )
+    with stubber:
+        assert _read_pointer(store, "silver") is None
+
+
+def test_s3_pointer_manifest_permission_error_propagates() -> None:
+    import io
+
+    import pytest
+    from botocore.exceptions import ClientError
+    from botocore.response import StreamingBody
+
+    from tpm_analytics.silver.manifest import Pointer, manifest_key, pointer_key
+    from tpm_analytics.silver.publish import _read_pointer
+
+    build_id = "20260101T000000Z-aaaaaaaa"
+    pointer = Pointer(build_id=build_id, manifest=manifest_key("silver", build_id), updated_at="x")
+    store, stubber = make_store()
+    stubber.add_response(
+        "get_object",
+        {"Body": StreamingBody(io.BytesIO(pointer.to_json()), len(pointer.to_json()))},
+        {"Bucket": "bucket", "Key": pointer_key("silver")},
+    )
+    stubber.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
+    with stubber, pytest.raises(ClientError):
+        _read_pointer(store, "silver")

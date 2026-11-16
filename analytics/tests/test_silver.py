@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pyarrow as pa
@@ -438,7 +439,7 @@ def test_identical_v1_rows_are_deduplicated(tmp_path: Path) -> None:
     assert built.duplicates_removed == 1
 
 
-def test_compacted_v1_layout_is_backfilled(tmp_path: Path, duck) -> None:
+def test_compacted_v1_empty_strings_fall_back(tmp_path: Path, duck) -> None:
     """The compactor writes v1 rows with all 22 columns and empty strings."""
     root = tmp_path / "compacted-v1"
     write_bronze(root / "day=01", [v1_row()], schema_version=1, compacted=True)
@@ -558,3 +559,50 @@ def test_output_columns_are_exactly_the_contract(build) -> None:
     built = build()
     table = pq.read_table(built.target, partitioning="hive")
     assert tuple(table.column_names) == EXPECTED_SILVER_COLUMNS
+
+
+def test_compacted_v1_layout_keeps_the_compactor_values(tmp_path: Path, duck) -> None:
+    """The compactor backfills v2 columns on v1 rows; silver must not overwrite them."""
+    root = tmp_path / "compacted-v1-values"
+    row = v1_row(train_numbers="1001", load_factor_ordinal=1, source_profile="dbweb", query_mode="bestprice")
+    write_bronze(root / "day=01", [row], schema_version=1, compacted=True)
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-compacted-v1-values")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / "silver-compacted-v1-values"),
+        "SELECT train_numbers, source_profile, query_mode, load_factor_ordinal FROM {silver}",
+    )
+    assert result == [("1001", "dbweb", "bestprice", 1)]
+
+
+def test_duplicate_count_is_exact_with_mixed_rows(tmp_path: Path) -> None:
+    """Three rows, one duplicate pair: the gate must expect one removed row, not two."""
+    root = tmp_path / "mixed-duplicates"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(journey_id="a"), bronze_row(journey_id="a"), bronze_row(journey_id="b")],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-mixed-duplicates")
+    assert built.rows_in == 3
+    assert built.rows_out == 2
+    assert built.duplicates_removed == 1
+
+
+def test_secret_reaches_connect(monkeypatch, bronze_glob: str, tmp_path: Path) -> None:
+    from tpm_analytics.silver import build as build_module
+    from tpm_analytics.silver._duck import S3Secret
+
+    captured: dict[str, object] = {}
+    real_connect = build_module.connect
+
+    def spy(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        kwargs.pop("secret")
+        return real_connect(**kwargs)
+
+    monkeypatch.setattr(build_module, "connect", spy)
+    secret = S3Secret(access_key="a", secret_key="b", session_token="c", region="eu-west-1")
+    run_build(bronze_glob, tmp_path / "silver-secret", s3=secret)
+
+    assert captured["secret"] is secret

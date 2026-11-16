@@ -129,7 +129,8 @@ silver/_latest.json
   `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
 
 For local S3 reads, install the extension once and point DuckDB at it:
-`mise run //analytics:httpfs`, then `DUCKDB_EXTENSION_DIR=analytics/.duckdb-extensions`.
+from `analytics/`, `mise run //analytics:httpfs` then
+`DUCKDB_EXTENSION_DIR=.duckdb-extensions` (the script and the variable are CWD-relative).
 The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 `tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
