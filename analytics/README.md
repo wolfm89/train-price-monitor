@@ -126,13 +126,13 @@ silver/_latest.json
   build once it is a day old. A manifest that cannot be read is never deleted.
 - **Refusals:** a corpus that shrank by more than 10 % against the pointed-at build, more than
   0.01 % removed rows, or removed rows that are not exactly the duplicates in bronze.
-- The handler ignores the event: source, bucket, prefix, sizing and the alert topic come from the
+- The handler ignores the event: source, bucket, prefix, sizing and log group come from the
   environment (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`,
   `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
-  `ALERT_TOPIC_ARN`, `LOG_GROUP_NAME`), so an invocation cannot disable the gate. `TRANSFORM_VERSION`
-  is the commit SHA in CI; empty falls back to `sql-<hash>`. Any handler exception publishes a
-  `silver_build_failed` message with the build id and stage and is re-raised; a handled failure does
-  not move the pointer.
+  `LOG_GROUP_NAME`), so an invocation cannot disable the gate. `TRANSFORM_VERSION` is the commit SHA
+  in CI; empty falls back to `sql-<hash>`. Any handler exception is re-raised with the structured
+  `silver_build_failed` payload as its message; the Lambda on-failure destination publishes it after
+  the retries. A handled failure does not move the pointer.
 
 For local S3 reads, install the extension once and point DuckDB at it:
 from `analytics/`, `mise run //analytics:httpfs` then
@@ -157,9 +157,10 @@ read/write on `silver/*`, delete/abort on `silver/builds/*`, and publish to the 
 cannot write or delete bronze.
 
 The function environment is set by CDK: `SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`,
-`SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
-`ALERT_TOPIC_ARN` and `LOG_GROUP_NAME`. `AWS_REGION` is reserved by Lambda. CI sets
-`TRANSFORM_VERSION` to the short commit SHA; an empty value records `sql-<hash>`.
+`SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`
+and `LOG_GROUP_NAME`. The SNS on-failure destination is configured by CDK, not an environment
+variable. `AWS_REGION` is reserved by Lambda. CI sets `TRANSFORM_VERSION` to the short commit SHA;
+an empty value records `sql-<hash>`.
 
 Set the repository variable `CDK_ANALYTICS_PAUSED=0` only after the manual checks; CI defaults to
 paused when the variable is unset, so the first main deploy cannot start an unverified run.
@@ -183,13 +184,16 @@ Verify `silver/_latest.json` and `silver/builds/<id>/_manifest.json`, record dur
 and partitions, then set the repository variable `CDK_ANALYTICS_PAUSED=0` and push to main to
 enable the schedule. For the forced
 failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
-invoke once, confirm the Pushover alert and the unchanged pointer, then restore the previous
+invoke once with `--invocation-type Event` (on-failure destinations apply only to asynchronous
+invocations), wait for the retry and alert, confirm the unchanged pointer, then restore the previous
 `Environment.Variables` JSON; a CDK deploy also restores it.
 
-A handled failure publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`.
-Async invocations retry once; if retries are exhausted or the container is killed, Lambda publishes
-the invocation failure to the same topic and the Pushover forwarder raises an alert. The pointer is
-only moved by a verified build; if the pointer PUT itself errors, check `silver/_latest.json` before
+A failed attempt raises a `silver_build_failed` payload with the build id and stage; Lambda retries
+once, and the on-failure destination publishes exactly one notification only after every attempt
+fails. A retry that succeeds is silent. If the container is killed or the retry is exhausted, the
+same destination publishes the invocation failure (if both attempts time out, expect the page after
+roughly 31 minutes). The pointer is only moved by a verified build; if the pointer PUT itself errors,
+check `silver/_latest.json` before
 rolling anything back. A bad pointer can be rolled back to the previous build (kept for at least a
 day). Config files are loaded at import, so a missing or invalid config fails Lambda INIT; the
 Docker build imports the handler and catches that before deploy. A manual compactor run that deletes

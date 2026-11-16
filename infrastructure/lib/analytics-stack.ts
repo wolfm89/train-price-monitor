@@ -59,8 +59,8 @@ export class AnalyticsStack extends cdk.Stack {
       // than the timeout so a late first attempt still leaves time for the retry.
       retryAttempts: SILVER_CONFIG.lambda.retry_attempts,
       maxEventAge: cdk.Duration.minutes(SILVER_CONFIG.lambda.max_event_age_minutes),
-      // Retries exhausted or a killed container: Lambda publishes the failure destination;
-      // the handler's own SNS message cannot run after a timeout/OOM.
+      // The handler raises a structured payload; this destination publishes it after the
+      // retries and also covers a timeout/OOM where the handler cannot run.
       onFailure: new lambdaDestinations.SnsDestination(props.alertTopic),
       logGroup,
       environment: {
@@ -73,7 +73,6 @@ export class AnalyticsStack extends cdk.Stack {
         SILVER_KEEP: String(SILVER_CONFIG.keep),
         // Empty (manual deploy) lets the handler record sql-<hash>; CI supplies the SHA.
         TRANSFORM_VERSION: (props.transformVersion || '').slice(0, 12),
-        ALERT_TOPIC_ARN: props.alertTopic.topicArn,
         // Lambda reserves AWS_LAMBDA_LOG_GROUP_NAME; a plain name keeps the failure
         // message's log link deterministic.
         LOG_GROUP_NAME: logGroup.logGroupName,
@@ -122,6 +121,7 @@ export class AnalyticsStack extends cdk.Stack {
       })
     );
 
+    // The async on-failure destination publishes with the function's execution role.
     props.alertTopic.grantPublish(silverFunction);
 
     const analyticsPaused = String(this.node.tryGetContext('analytics_paused') ?? '') === '1';

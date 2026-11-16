@@ -243,7 +243,59 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     ],
   });
 
-  expect(calls).toHaveLength(5);
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            version: '1.0',
+            requestContext: {
+              requestId: 'req-2',
+              functionArn: 'arn:aws:lambda:eu-central-1:111111111111:function:AnalyticsStack-SilverBuildLambda',
+              condition: 'RetriesExhausted',
+              approximateInvokeCount: 2,
+            },
+            responseContext: { statusCode: 200, functionError: 'Unhandled' },
+            responsePayload: {
+              errorType: 'RuntimeError',
+              errorMessage: JSON.stringify({
+                event: 'silver_build_failed',
+                build_id: 'b3',
+                stage: 'publish',
+                error_type: 'OSError',
+                error: 's3 is down',
+                function: 'fn',
+                region: 'eu-central-1',
+                log_group: '/aws/lambda/fn',
+              }),
+            },
+          }),
+        },
+      },
+    ],
+  });
+
+  for (const errorMessage of ['{"event":"other"}', 'null', '{"event":']) {
+    await forwarder.handler({
+      Records: [
+        {
+          Sns: {
+            Message: JSON.stringify({
+              version: '1.0',
+              requestContext: {
+                functionArn: 'arn:aws:lambda:eu-central-1:111111111111:function:AnalyticsStack-SilverBuildLambda',
+                condition: 'RetriesExhausted',
+              },
+              responseContext: { statusCode: 200, functionError: 'Unhandled' },
+              responsePayload: { errorType: 'RuntimeError', errorMessage },
+            }),
+          },
+        },
+      ],
+    });
+  }
+
+  expect(calls).toHaveLength(9);
   expect(calls[0].title).toContain('AWS Budgets:');
   expect(calls[0].priority).toBe('0');
   expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
@@ -256,4 +308,10 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
   expect(calls[4].message).toContain('RetriesExhausted / Unhandled: RuntimeError - boom');
   expect(calls[4].priority).toBe('1');
   expect(calls[4].url).toContain('/functions/AnalyticsStack-SilverBuildLambda');
+  expect(calls[5].title).toBe('Silver build failed');
+  expect(calls[5].message).toContain('[publish] OSError: s3 is down | build b3 | attempts 2');
+  expect(calls[5].url).toContain(encodeURIComponent('/aws/lambda/fn'));
+  for (const index of [6, 7, 8]) {
+    expect(calls[index].title).toBe('Silver build invocation failed');
+  }
 });

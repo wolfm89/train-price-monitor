@@ -89,7 +89,8 @@ function format(payload) {
         (payload.stage ? '[' + payload.stage + '] ' : '') +
         (payload.error_type ? payload.error_type + ': ' : '') +
         (payload.error || 'no error message') +
-        (payload.build_id ? ' | build ' + payload.build_id : ''),
+        (payload.build_id ? ' | build ' + payload.build_id : '') +
+        (payload.attempts ? ' | attempts ' + payload.attempts : ''),
       priority: '1',
       sound: 'siren',
       timestamp: String(Math.floor(Date.now() / 1000)),
@@ -98,9 +99,8 @@ function format(payload) {
     };
   }
 
-  // Lambda async invocation failure (timeout/OOM/retries exhausted). The handler cannot
-  // publish its own silver_build_failed message after a killed container, so this is the
-  // backstop. The shared topic only receives this from the analytics function today.
+  // Lambda async invocation failure (timeout/OOM/retries exhausted). Handled exceptions
+  // carry a JSON failure_message in errorMessage; timeouts fall back to the generic text.
   if (payload && payload.requestContext && payload.requestContext.functionArn) {
     const context = payload.requestContext;
     const response = payload.responseContext || {};
@@ -108,6 +108,20 @@ function format(payload) {
     const region = safeRegion(parts[3] || process.env.AWS_REGION);
     const functionName = parts[6] || 'unknown';
     const error = payload.responsePayload || {};
+    let structured;
+    if (error.errorMessage) {
+      try {
+        structured = JSON.parse(error.errorMessage);
+      } catch {
+        // Timeout/OOM records have no JSON payload; fall through to the generic message.
+      }
+    }
+    if (structured && structured.event === '${SILVER_FAILURE_EVENT}') {
+      if (context.approximateInvokeCount && !structured.attempts) {
+        structured.attempts = context.approximateInvokeCount;
+      }
+      return format(structured);
+    }
     const reason = [context.condition, response.functionError].filter(Boolean).join(' / ') || 'failed';
     return {
       title: 'Silver build invocation failed',

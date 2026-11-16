@@ -319,11 +319,11 @@ flowchart LR
   priority with the siren sound (bypasses quiet hours), recovery at normal priority, with a link to
   the alarm in the console. SNS cannot deliver to Pushover directly — it requires an HTTPS endpoint
   that answers its `SubscriptionConfirmation` handshake.
-- **Analytics and budget alerts** use the same topic. The weekly silver build publishes a
-  `silver_build_failed` JSON message on any handled exception (no new alarm); the forwarder links
-  to the analytics log group and includes the build id and stage. Async invocations retry once;
-  when retries are exhausted or the container is killed, Lambda's on-failure destination publishes
-  the invocation failure to the same topic and the forwarder raises an alert. CloudWatch and Budgets
+- **Analytics and budget alerts** use the same topic. The weekly silver build raises a structured
+  `silver_build_failed` payload when a run fails; Lambda retries once, and the on-failure
+  destination publishes exactly one notification only after every attempt fails (no new alarm). A
+  retry that succeeds is silent. The forwarder links to the analytics log group and includes the
+  build id and stage. A killed container also reaches the same destination. CloudWatch and Budgets
   publish through source-account/source-ARN conditions; do not add SSE with the AWS-managed
   `alias/aws/sns` key, because CloudWatch alarms cannot use it, and a customer-managed key would
   exceed the €1 budget. The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 %
@@ -421,7 +421,6 @@ Environment variables (never commit values):
 | `DECODO_API_KEY`               | Backend             | Decodo key, literal (local dev; wins over `_PARAM`)                                                         |
 | `DECODO_API_KEY_PARAM`         | Backend             | SSM SecureString name holding the Decodo key (injected by CDK)                                              |
 | `DECODO_KEY_TTL_MS`            | Backend             | How long a resolved Decodo key is cached (default 15 min)                                                   |
-| `ALERT_TOPIC_ARN`              | Analytics Lambda    | SNS topic for silver build failures (injected by CDK)                                                       |
 | `LOG_GROUP_NAME`               | Analytics Lambda    | CloudWatch log group name used in failure links (injected by CDK)                                           |
 | `REACT_APP_GRAPHQL_ENDPOINT`   | Frontend            | API Gateway base URL                                                                                        |
 | `CDK_APP_NAME`                 | Infrastructure      | Application name (overrides CDK context)                                                                    |
