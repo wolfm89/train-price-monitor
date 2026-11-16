@@ -9,6 +9,7 @@ import { GraphQLContext, createContext } from './context';
 import logger from './lib/logger';
 import { authClaimsFromRequest } from './lib/auth';
 import { CORS_ALLOWED_HEADERS, CORS_METHODS, corsHeaders, parseAllowedOrigins, requestOrigin } from './lib/cors';
+import { DEFAULT_PORT } from './lib/devDefaults';
 import { graphqlErrorLogEntry, redactEmails } from './lib/redact';
 import { takeDbTransportStats } from '../../shared/db-fetch';
 import typeDefs from './schema/schema.generated.json';
@@ -288,7 +289,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
 };
 
 if (process.env.LOCAL_DEV) {
-  const port = parseInt(process.env.PORT || '4000', 10);
+  const port = parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
 
   const server = createServer(async (req, res) => {
     if (req.url === '/health') {

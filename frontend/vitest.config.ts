@@ -9,5 +9,8 @@ export default defineConfig({
     setupFiles: ['./src/setupTests.ts'],
     // MUI + Testing Library component tests can exceed the 5 s default on CI.
     testTimeout: 15000,
+    // The default is one worker per CPU; cap it so a monorepo test run cannot
+    // exhaust memory alongside the CDK/Jest workers.
+    maxWorkers: 2,
   },
 });

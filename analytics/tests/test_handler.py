@@ -341,6 +341,11 @@ def test_failure_message_uses_lambda_log_group(monkeypatch) -> None:
     assert message["log_group"] == "/aws/lambda/analytics"
 
 
+def test_failure_message_reports_unknown_stage_without_raising() -> None:
+    message = handler_module.failure_message("build-id", RuntimeError("boom"), "new-stage")
+    assert message["stage"] == "unknown"
+
+
 def test_failure_before_settings_reports_settings_stage(monkeypatch) -> None:
     monkeypatch.delenv("SILVER_BUCKET", raising=False)
     monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")

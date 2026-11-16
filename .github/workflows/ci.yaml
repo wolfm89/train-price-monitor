@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
@@ -177,10 +177,11 @@ jobs:
       - run: uv run pytest
       # The package ships sql/ and data/ inside the module; this fails if they stop being packaged.
       - run: uv build
-      - name: Verify the wheel ships the SQL and station dimension
+      - name: Verify the wheel ships the SQL, station dimension and config
         run: |
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/sql/silver.sql'
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/stations.json'
+          python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/silver-config.json'
 
   artifacts:
     timeout-minutes: 45
@@ -192,7 +193,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: '**/package-lock.json'
 
@@ -275,7 +276,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: '**/package-lock.json'
 
@@ -413,17 +414,6 @@ jobs:
           CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}
           CDK_SES_PRODUCTION_ACCESS: ${{ vars.CDK_SES_PRODUCTION_ACCESS }}
-
-      # A 30-day rollback buffer protects images still referenced by a just-deployed
-      # stack; cdk gc checks every stack template before deleting. Preview command,
-      # so do not fail an otherwise successful deploy if cleanup itself breaks.
-      - name: Garbage-collect old CDK images
-        if: success()
-        working-directory: infrastructure
-        run: |
-          npx cdk gc --app cdk.out --unstable=gc --type=ecr \
-            --action=full --created-buffer-days=1 --rollback-buffer-days=30 --confirm=false
-        continue-on-error: true
 
       - name: Invalidate CloudFront cache
         env:

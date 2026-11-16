@@ -11,9 +11,12 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-BUILD_ROOT = "builds"
-MANIFEST_NAME = "_manifest.json"
-POINTER_NAME = "_latest.json"
+from tpm_analytics.silver.config import load_config
+
+_CONFIG = load_config()
+BUILD_ROOT = _CONFIG.builds_root
+MANIFEST_NAME = _CONFIG.manifest_name
+POINTER_NAME = _CONFIG.pointer_name
 MANIFEST_VERSION = 2
 
 # 20261114T173000Z-a1b2c3d4: sortable by time, unique within a second.

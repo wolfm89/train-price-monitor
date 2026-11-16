@@ -12,6 +12,7 @@ import {
 import { ROUTE_CATALOG } from './routes.js';
 import { computeTtdTier, computeNextScrapeAt, dueKey } from './ttd.js';
 import { positiveIntFromEnv } from './env.js';
+import runtimeConfig from '../../shared/runtime-config.json' with { type: 'json' };
 
 const logger = new Logger({ serviceName: 'scraper-hydrator' });
 
@@ -20,7 +21,8 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 });
 
 const TABLE_NAME = process.env.SCRAPER_TABLE_NAME!;
-const LOOKAHEAD_DAYS = positiveIntFromEnv('HYDRATOR_LOOKAHEAD_DAYS', 60, logger);
+const scraperConfig = runtimeConfig.scraper;
+const LOOKAHEAD_DAYS = positiveIntFromEnv('HYDRATOR_LOOKAHEAD_DAYS', scraperConfig.lookahead_days, logger);
 
 /**
  * How many of the furthest-out days to (re-)seed on a normal run.
@@ -34,7 +36,7 @@ const LOOKAHEAD_DAYS = positiveIntFromEnv('HYDRATOR_LOOKAHEAD_DAYS', 60, logger)
  * finishing. Failed conditional writes still consume write capacity, so the
  * 99% of writes that were no-ops were exactly what exhausted the budget.
  */
-const SEED_WINDOW_DAYS = positiveIntFromEnv('HYDRATOR_SEED_WINDOW_DAYS', 3, logger);
+const SEED_WINDOW_DAYS = positiveIntFromEnv('HYDRATOR_SEED_WINDOW_DAYS', scraperConfig.seed_window_days, logger);
 
 /**
  * Seed the whole lookahead window instead of just the newest days, and delete

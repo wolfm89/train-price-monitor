@@ -2,6 +2,7 @@ import { GraphQLContext } from '../context';
 import { JourneyMonitor, User } from '../schema/generated/typeDefs.generated';
 import { GetItemCommand, StoredJourney } from '../model/trainPriceMonitor';
 import { getJourneyMonitor } from './user';
+import { DEFAULT_FRONTEND_URL } from '../lib/devDefaults';
 
 interface NotificationType {
   name: string;
@@ -113,8 +114,8 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
         <p>Hi ${user.givenName},</p>
         <p>The price for your journey from <b>${from}</b> to <b>${to}</b> has changed.</p>
         <p>It is now <b>€${price.toFixed(2)}</b> (your limit price was <b>€${limitPrice.toFixed(2)}</b>).</p>
-        <p>Check it out here: <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/journeys#${journeyId}">${
-          process.env.FRONTEND_URL || 'http://localhost:3000'
+        <p>Check it out here: <a href="${process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL}/journeys#${journeyId}">${
+          process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL
         }/journeys#${journeyId}</a></p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;
@@ -132,8 +133,8 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
       const htmlBody = `
         <p>Hi ${user.givenName},</p>
         <p>Your journey from <b>${from}</b> to <b>${to}</b> has expired and was therefore deleted.<br/>
-        Visit <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/">${
-          process.env.FRONTEND_URL || 'http://localhost:3000'
+        Visit <a href="${process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL}/">${
+          process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL
         }/</a> to monitor a new journey.</p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;
@@ -167,7 +168,7 @@ export const NOTIFICATION_TYPES: { [key: string]: NotificationType } = {
         <p>The train from <b>${from}</b> to <b>${to}</b> that you're monitoring can no longer be tracked.</p>
         <p>This typically happens when the train has been <b>cancelled</b> or its <b>schedule has changed</b>.</p>
         <p>You may want to <a href="${
-          process.env.FRONTEND_URL || 'http://localhost:3000'
+          process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL
         }/journeys#${journeyId}">delete this journey monitor</a> and set one up again once updated schedules are available.</p>
         <p>Best regards,<br/>Train Price Monitor</p>
       `;

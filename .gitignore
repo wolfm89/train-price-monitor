@@ -23,10 +23,12 @@ yarn-error.log*
 
 request.json
 
-.nvmrc
 
 .vscode/launch.json
 .vscode/settings.json
+
+# Only the repo-root Node pin is tracked; module-local pins are local overrides.
+/infrastructure/.nvmrc
 
 # mise
 .mise.local.toml

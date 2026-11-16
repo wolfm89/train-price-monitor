@@ -11,10 +11,12 @@ through a `mise` monorepo.
 - `frontend/` – React 19 SPA (Material-UI v7, urql, Vite); pages, components, hooks, providers.
 - `backend/` – GraphQL Yoga API with a native AWS Lambda handler (API Gateway v1/v2 + SQS).
 - `scraper/` – Independent serverless pipeline collecting DB price data into Parquet on S3.
-- `shared/` – Code shared by more than one module. Currently `db-fetch.ts`, the Node-https
-  `fetch` (with rotating browser-like TLS profiles) both the backend and the scraper alias
-  `cross-fetch` to. It has no `node_modules` of its own: each consuming module type-checks it
-  via its own tsconfig (`include` + its own `paths` entries) and bundles it with esbuild.
+- `shared/` – Code and cross-module values shared by more than one module: `db-fetch.ts`, the
+  Node-https `fetch` (with rotating browser-like TLS profiles) both the backend and the scraper
+  alias `cross-fetch` to, and `runtime-config.json` (bronze prefix, scraper tuning and
+  backend/scraper retention, read by both runtimes and by `infrastructure/lib/config.ts`). It has no
+  `node_modules` of its own: each consuming module type-checks it via its own tsconfig (`include` +
+  its own `paths` entries) and bundles it with esbuild.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
 - `analytics/` – Python 3.15 silver-layer builds (DuckDB) over the scraper's bronze Parquet. The only
   non-TypeScript module; see `analytics/README.md`.
@@ -179,6 +181,9 @@ flowchart LR
   round-trips (`*.test.ts`); run `npm test` in `scraper`. CI runs it alongside `typecheck` + `lint`.
 - **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
   formatting and linting on every commit.
+- **Test memory** – Jest and Vitest are capped at two workers (`infrastructure/jest.config.js`,
+  `frontend/vitest.config.ts`). On a low-memory machine use `MISE_JOBS=1 mise run //:test` so
+  modules run one at a time; concurrent default-worker Jest runs have exhausted a 17.6 GB WSL VM.
 
 ## Security & Compliance
 
@@ -302,10 +307,10 @@ flowchart LR
   deploy cannot start an unverified run; set `CDK_ANALYTICS_PAUSED=0` after the manual checks to
   enable it. `CDK_TRANSFORM_VERSION` (CI sets the short commit SHA) is recorded in the silver
   manifest; an empty value falls back to `sql-<hash>`.
-- **ECR cleanup.** The CI deploy role has an `AllowCdkGarbageCollection` inline policy: read-only
-  CloudFormation template/list access plus ECR list/tag/delete on both bootstrap asset repositories.
-  The deploy job runs `cdk gc --unstable=gc --type=ecr` after every successful main deploy with a
-  30-day rollback buffer; the step is non-blocking.
+- **ECR/S3 cleanup.** `InfrastructureStack` runs `ToolkitCleaner` daily. It reads deployed
+  CloudFormation templates and removes unused CDK assets from the bootstrap ECR repository and S3
+  bucket; `retainAssetsNewerThan` keeps assets created in the last 10 days. There is no separate
+  `cdk gc` step.
 
 **Monitoring** (`infrastructure/lib/alerting.ts`, alarms in `backend.ts` and `scraper-stack.ts`):
 
@@ -430,8 +435,8 @@ Environment variables (never commit values):
 | `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
 | `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
 | `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |
-| `SCRAPER_BATCH_SIZE`           | Scraper             | Targets per poller run (default `10`, CDK sets `25`; 1 = 2 calls)                                           |
-| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper             | Days ahead to seed (default `60`)                                                                           |
+| `SCRAPER_BATCH_SIZE`           | Scraper             | Targets per poller run (shared default `25`; 1 = 2 calls)                                                   |
+| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper             | Days ahead to seed (shared default `60`)                                                                    |
 | `HYDRATOR_SEED_WINDOW_DAYS`    | Scraper             | Newest days re-seeded per nightly run (default `3`)                                                         |
 | `HYDRATOR_FULL_SEED`           | Scraper             | `1` seeds the whole window and prunes beyond it (manual)                                                    |
 | `AWS_ENDPOINT_URL`             | Scraper             | Local Floci endpoint (set by mise tasks)                                                                    |

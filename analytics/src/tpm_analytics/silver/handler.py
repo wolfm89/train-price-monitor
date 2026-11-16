@@ -23,6 +23,7 @@ from botocore.config import Config
 
 from tpm_analytics.silver._duck import S3Secret
 from tpm_analytics.silver.build import EmptyCorpusError, run_build
+from tpm_analytics.silver.config import FAILURE_EVENT, STAGES, load_config
 from tpm_analytics.silver.manifest import build_id_for, utc_now
 from tpm_analytics.silver.publish import publish
 from tpm_analytics.silver.storage import S3ObjectStore
@@ -32,9 +33,10 @@ logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 # Leave enough time to upload a 3 GB build and move the pointer.
-PUBLISH_RESERVE_SECONDS = 180
+_CONFIG = load_config()
+PUBLISH_RESERVE_SECONDS = _CONFIG.lambda_.publish_reserve_seconds
 # The measured full build is ~525 s; do not start one that cannot finish.
-BUILD_BUDGET_SECONDS = 600
+BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
 
 _SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
 
@@ -59,15 +61,16 @@ class Settings:
 
 def load_settings() -> Settings:
     bucket = os.environ["SILVER_BUCKET"]
+    lambda_config = _CONFIG.lambda_
     return Settings(
         bucket=bucket,
-        prefix=os.environ.get("SILVER_PREFIX", "silver"),
-        source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/prices/**/*.parquet"),
+        prefix=os.environ.get("SILVER_PREFIX", _CONFIG.prefix),
+        source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/{_CONFIG.bronze_prefix}/**/*.parquet"),
         region=os.environ.get("AWS_REGION", "eu-central-1"),
-        threads=int(os.environ.get("SILVER_THREADS", "4")),
-        memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", "8GB"),
-        max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", "5GB"),
-        keep=int(os.environ.get("SILVER_KEEP", "2")),
+        threads=int(os.environ.get("SILVER_THREADS", str(lambda_config.threads))),
+        memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", lambda_config.duckdb_memory_limit),
+        max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", lambda_config.duckdb_max_temp_size),
+        keep=int(os.environ.get("SILVER_KEEP", str(_CONFIG.keep))),
         transform_version=os.environ.get("TRANSFORM_VERSION", ""),
     )
 
@@ -122,8 +125,13 @@ def remaining_seconds(context: object) -> float | None:
 
 def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str, str]:
     """The structured message the Pushover forwarder turns into a notification."""
+    if stage not in STAGES:
+        # A notification must never be lost because a new stage was not added to the
+        # contract first; report it as unknown instead of raising inside notify_failure.
+        LOGGER.warning("unknown failure stage %r build_id=%s", stage, build_id)
+        stage = "unknown"
     return {
-        "event": "silver_build_failed",
+        "event": FAILURE_EVENT,
         "build_id": build_id,
         "stage": stage,
         "error_type": type(error).__name__,
