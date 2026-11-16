@@ -185,10 +185,10 @@ A handled failure publishes `silver_build_failed` with the build id and stage to
 The pointer is only moved by a verified build; if the pointer PUT itself errors, check
 `silver/_latest.json` before rolling anything back. A bad pointer can be rolled back to the previous
 build (kept for at least a day). A Lambda timeout or OOM cannot run the handler and is the known
-residual gap: time the first run and revisit with an on-failure destination if it happens. From
-`infrastructure/`, run `cdk gc --unstable=gc --type=ecr --action=print` first, then without
-`--action=print` with `--rollback-buffer-days=14` at least monthly; it covers the bootstrap asset
-repository, so tagged image assets do not accumulate in ECR.
+residual gap: time the first run and revisit with an on-failure destination if it happens. The deploy
+workflow runs `cdk gc --unstable=gc --type=ecr --action=full --rollback-buffer-days=30` after every
+successful main deploy, including the bootstrap asset repository; run it manually with
+`--action=print` only when you want to inspect the candidate set.
 
 ## Column contract
 

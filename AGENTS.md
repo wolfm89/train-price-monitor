@@ -302,6 +302,10 @@ flowchart LR
   deploy cannot start an unverified run; set `CDK_ANALYTICS_PAUSED=0` after the manual checks to
   enable it. `CDK_TRANSFORM_VERSION` (CI sets the short commit SHA) is recorded in the silver
   manifest; an empty value falls back to `sql-<hash>`.
+- **ECR cleanup.** The CI deploy role has an `AllowCdkGarbageCollection` inline policy: read-only
+  CloudFormation template/list access plus ECR list/tag/delete on both bootstrap asset repositories.
+  The deploy job runs `cdk gc --unstable=gc --type=ecr` after every successful main deploy with a
+  30-day rollback buffer; the step is non-blocking.
 
 **Monitoring** (`infrastructure/lib/alerting.ts`, alarms in `backend.ts` and `scraper-stack.ts`):
 

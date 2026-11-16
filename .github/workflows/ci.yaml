@@ -414,6 +414,17 @@ jobs:
           CDK_TRANSFORM_VERSION: ${{ github.sha }}
           CDK_SES_PRODUCTION_ACCESS: ${{ vars.CDK_SES_PRODUCTION_ACCESS }}
 
+      # A 30-day rollback buffer protects images still referenced by a just-deployed
+      # stack; cdk gc checks every stack template before deleting. Preview command,
+      # so do not fail an otherwise successful deploy if cleanup itself breaks.
+      - name: Garbage-collect old CDK images
+        if: success()
+        working-directory: infrastructure
+        run: |
+          npx cdk gc --app cdk.out --unstable=gc --type=ecr \
+            --action=full --created-buffer-days=1 --rollback-buffer-days=30 --confirm=false
+        continue-on-error: true
+
       - name: Invalidate CloudFront cache
         env:
           DISTRIBUTION_ID: ${{ secrets.DISTRIBUTION_ID }}
