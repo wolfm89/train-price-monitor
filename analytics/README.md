@@ -85,10 +85,13 @@ The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2
 8 departure-month partitions. On a workstation with 8 GB for DuckDB and 4 threads the build takes
 8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
 
-The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s,
-`memory_limit=8GB`, `threads=4` (the measured configuration), `SILVER_MAX_TEMP_SIZE=5GB` so spill and output share the 10 GB
-`/tmp` without colliding. Those numbers come from a workstation run; measure the first Lambda run
-before trusting the schedule. If the corpus outgrows it, split the build by departure month.
+The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s.
+The first production invocation (2026-11-16) with `memory_limit=8GB`, `threads=4` and a 5 GB temp
+limit exhausted both Lambda memory (10,231/10,240 MB) and the temp directory (4.6/4.6 GiB) after
+61 s. The deployed profile is therefore `memory_limit=6GB`, `threads=2`, `SILVER_MAX_TEMP_SIZE=6GB`,
+leaving roughly 3 GB for the output and 6 GB of spill inside the 10 GB `/tmp`. Those workstation
+numbers are a starting point, not the Lambda profile; measure the next run. If the corpus outgrows
+it, split the build by departure month.
 
 ```bash
 uv run python -m tpm_analytics.silver.build \
