@@ -31,10 +31,10 @@ from tpm_analytics.silver.storage import S3ObjectStore
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
-# Leave enough time to upload a 3 GB build and move the pointer.
+# Leave enough time to upload a 1.5 GB build and move the pointer.
 _CONFIG = load_config()
 PUBLISH_RESERVE_SECONDS = _CONFIG.lambda_.publish_reserve_seconds
-# The measured full build is ~525 s; do not start one that cannot finish.
+# The measured full build is ~576 s; do not start one that cannot finish.
 BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
 
 _SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET_KEY|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")

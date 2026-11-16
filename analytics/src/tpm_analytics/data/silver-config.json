@@ -15,7 +15,7 @@
     "duckdb_memory_limit": "6GB",
     "duckdb_max_temp_size": "7GB",
     "publish_reserve_seconds": 180,
-    "build_budget_seconds": 600,
+    "build_budget_seconds": 690,
     "retry_attempts": 1,
     "max_event_age_minutes": 45
   },

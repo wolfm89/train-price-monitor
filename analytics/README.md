@@ -82,12 +82,15 @@ Windows is untested.
 ## Scale (measured 2026-11-16)
 
 The full history is 107,337,180 bronze rows in 245 files (1.7 GB) and produces 1.5 GB of silver in
-8 departure-month partitions. The first production invocation with 8 GB DuckDB memory, 4 threads and
-a 5 GB temp limit exhausted both Lambda memory and the temp directory after 61 s. The working local
-profile is 6 GB DuckDB memory, 2 threads and a 7 GB temp limit: the verified build takes 8m04s,
-removes 1,162 duplicate observations and peaks at 3.5 GB of spill. The dedupe now computes a
-null-safe key hash, identifies only the repeating keys and applies the row window to that small set;
-a global window over all rows needs more than 9 GB of spill.
+8 departure-month partitions. The first production invocation with 8 GB DuckDB memory, 4 threads and a 5 GB temp limit failed
+after 66 s when DuckDB's spill cap was exhausted (`5GB` is decimal, 4.7 GiB; the 10,231 MB Max Memory
+reported by Lambda includes `/tmp` page cache, not a Lambda OOM). The working local profile is 6 GB
+DuckDB memory, 2 threads and a 7 GB temp limit (`7GB` = 6.5 GiB): the verified build takes 8m04s,
+removes 1,162 duplicate observations and peaks at 3.5 GB of spill. The dedupe computes a null-safe
+key hash, identifies only the repeating keys and applies the row window to that small set; a global
+window over all rows needs more than 9 GB of spill. The deployed Lambda builds took 576 s / 573 s
+(build phase) and removed 1,164 duplicates; `build_budget_seconds=690` leaves room for the 20 s
+publish.
 
 The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s,
 `memory_limit=6GB`, `threads=2`, `SILVER_MAX_TEMP_SIZE=7GB`. Measure the next production run before
@@ -259,7 +262,7 @@ never forgets them, and a missing row fails every future rebuild.
   and `query_mode` are backfilled for v1 rows with the same defaults the compactor uses
   (`train_number`, `dbweb`, `bestprice`).
 - Duplicate observations (same compactor key) are collapsed to one row. The historical corpus has
-  1,146 such rows, from days whose batch files outlived their daily file.
+  1,164 such rows, from days whose batch files outlived their daily file.
 - Odd v1 `transfers` values (370 rows in the historical corpus) become a NULL `transfers_actual`:
   the old poller counted every leg including footways, and an odd count cannot be halved exactly.
 - `timetable_period` is derived from the departure date, not from the deploy. `TIMETABLE_BOUNDARY`

@@ -15,7 +15,7 @@
 COPY (
     -- NOT MATERIALIZED on purpose: DuckDB 2.0 materialises a CTE that is referenced more than
     -- once, and materialising bronze or normalised would spill the whole corpus to disk. Inlining
-    -- trades that for a second column-pruned scan of bronze.
+    -- trades that for multiple column-pruned scans of bronze (four READ_PARQUET nodes).
     WITH bronze AS NOT MATERIALIZED (
         SELECT * FROM {{BRONZE_SOURCE}}
     ),
@@ -45,6 +45,7 @@ COPY (
     -- Deduplicate only keys that actually repeat. A global window over all ~107M rows spills
     -- more than 9 GB and does not fit the Lambda /tmp; the duplicate set is tiny, so the window
     -- only sees those rows. hash() gives NULL-safe key equality: USING does not match NULL keys.
+    -- A hash collision is caught by the removed-rows-vs-duplicate-rows check, never silent loss.
     dedupe_keys AS (
         SELECT hash({{DEDUPE_KEY}}) AS key_hash
         FROM normalised
@@ -67,7 +68,10 @@ COPY (
         SEMI JOIN dedupe_keys d ON hash({{DEDUPE_KEY}}) = d.key_hash
         QUALIFY row_number() OVER (
             PARTITION BY hash({{DEDUPE_KEY}})
-            ORDER BY observed_at
+            ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes,
+                load_factor, fare_lowest_eur, transfers, train_type, train_number,
+                origin_name, dest_name, days_to_departure, load_factor_ordinal,
+                source_profile, query_mode, schema_version
         ) = 1
     ),
 
