@@ -130,7 +130,8 @@ silver/_latest.json
   `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
   `ALERT_TOPIC_ARN`, `LOG_GROUP_NAME`), so an invocation cannot disable the gate. `TRANSFORM_VERSION`
   is the commit SHA in CI; empty falls back to `sql-<hash>`. Any handler exception publishes a
-  `silver_build_failed` message with the build id and stage and is re-raised; the pointer does not move.
+  `silver_build_failed` message with the build id and stage and is re-raised; a handled failure does
+  not move the pointer.
 
 For local S3 reads, install the extension once and point DuckDB at it:
 from `analytics/`, `mise run //analytics:httpfs` then
@@ -174,10 +175,11 @@ and partitions, then deploy without `CDK_ANALYTICS_PAUSED` to enable the schedul
 failure, temporarily point `BRONZE_SOURCE` at an empty prefix, invoke once, confirm the Pushover
 alert and the unchanged pointer, then restore the environment.
 
-A failed run publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN` and
-does not move the pointer. A bad pointer can be rolled back to the previous build (kept for at least
-a day). From `infrastructure/`, run `cdk gc --unstable=gc --type=ecr` at least monthly so tagged
-image assets do not accumulate in ECR.
+A failed run publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`. The
+pointer is only moved by a verified build; if the pointer PUT itself errors, check
+`silver/_latest.json` before rolling anything back. A bad pointer can be rolled back to the previous
+build (kept for at least a day). From `infrastructure/`, run `cdk gc --unstable=gc --type=ecr` at
+least monthly so tagged image assets do not accumulate in ECR.
 
 ## Column contract
 

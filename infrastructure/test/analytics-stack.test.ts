@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { aws_s3 as s3, aws_sns as sns } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Template } from 'aws-cdk-lib/assertions';
 import { AnalyticsStack } from '../lib/analytics-stack';
 
 function synth(context: Record<string, string> = {}): Template {

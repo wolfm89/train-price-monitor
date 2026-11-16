@@ -8,6 +8,7 @@ new build id and only the pointer moves.
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -18,6 +19,7 @@ from urllib.parse import urlsplit
 
 import boto3
 import duckdb
+from botocore.config import Config
 
 from tpm_analytics.silver._duck import S3Secret
 from tpm_analytics.silver.build import EmptyCorpusError, run_build
@@ -33,6 +35,13 @@ LOGGER = logging.getLogger(__name__)
 PUBLISH_RESERVE_SECONDS = 180
 # The measured full build is ~525 s; do not start one that cannot finish.
 BUILD_BUDGET_SECONDS = 600
+
+_SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
+
+
+def redact_error(message: str) -> str:
+    """Keep credentials out of the notification even if a future error embeds them."""
+    return _SECRET_FRAGMENT.sub("<redacted>", message)
 
 
 @dataclass(frozen=True)
@@ -118,7 +127,7 @@ def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str
         "build_id": build_id,
         "stage": stage,
         "error_type": type(error).__name__,
-        "error": str(error)[:500],
+        "error": redact_error(str(error))[:500],
         "function": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "local"),
         "region": os.environ.get("AWS_REGION", "eu-central-1"),
         # LOG_GROUP_NAME is set by CDK; AWS_LAMBDA_LOG_GROUP_NAME covers a manual run.
@@ -131,10 +140,17 @@ def notify_failure(build_id: str, error: BaseException, stage: str, *, client: A
     topic_arn = os.environ.get("ALERT_TOPIC_ARN")
     if not topic_arn:
         # Local runs and tests have no topic; the build error must still surface.
-        LOGGER.warning("ALERT_TOPIC_ARN is not set; build failure was not published")
+        LOGGER.warning("ALERT_TOPIC_ARN is not set; build failure was not published build_id=%s", build_id)
         return
-    sns = client if client is not None else boto3.client("sns")
     try:
+        sns = (
+            client
+            if client is not None
+            else boto3.client(
+                "sns",
+                config=Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 2}),
+            )
+        )
         sns.publish(
             TopicArn=topic_arn,
             Subject="Silver build failed",
@@ -142,11 +158,11 @@ def notify_failure(build_id: str, error: BaseException, stage: str, *, client: A
         )
     except Exception:
         # Never mask the build failure with a notification failure.
-        LOGGER.exception("could not publish the build failure to SNS")
+        LOGGER.exception("could not publish the build failure to SNS build_id=%s", build_id)
 
 
 def _run_build(
-    event: dict[str, Any],
+    _event: dict[str, Any],
     context: object,
     build_id: str,
     progress: dict[str, str],
@@ -187,7 +203,7 @@ def _run_build(
     LOGGER.info("silver source snapshot files=%s", len(snapshot))
 
     progress["stage"] = "build"
-    with tempfile.TemporaryDirectory(prefix="silver-lambda-") as workspace:
+    with tempfile.TemporaryDirectory(prefix="silver-lambda-", ignore_cleanup_errors=True) as workspace:
         workdir = Path(workspace)
         target = workdir / build_id
         build_started = time.perf_counter()
@@ -228,15 +244,20 @@ def _run_build(
             warnings=tuple(warnings),
         )
         publish_seconds = round(time.perf_counter() - publish_started, 3)
-        usage = shutil.disk_usage(workspace)
+        try:
+            usage = shutil.disk_usage(workspace)
+            tmp_used, tmp_free = usage.used, usage.free
+        except OSError:
+            # The pointer is already committed; do not turn cosmetic bookkeeping into a page.
+            tmp_used, tmp_free = 0, 0
 
     duration = round(time.perf_counter() - started, 3)
     LOGGER.info(
         "silver phases build_seconds=%s publish_seconds=%s tmp_used_bytes=%s tmp_free_bytes=%s",
         build_seconds,
         publish_seconds,
-        usage.used,
-        usage.free,
+        tmp_used,
+        tmp_free,
     )
     LOGGER.info(
         "silver build finished build_id=%s rows_in=%s rows_out=%s duplicates_removed=%s "
@@ -270,6 +291,7 @@ def _run_build(
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     build_id = build_id_for(utc_now())
     progress = {"stage": "settings"}
+    LOGGER.info("silver handler start build_id=%s", build_id)
     try:
         return _run_build(event, context, build_id, progress)
     except Exception as error:

@@ -29,6 +29,14 @@ def test_handler_builds_and_publishes(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     monkeypatch.setattr(handler_module, "run_build", fake_run_build)
     monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name, **kwargs: LocalObjectStore(bucket))
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(handler_module.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")
+    monkeypatch.setattr(
+        handler_module.boto3,
+        "client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("SNS must not be called on success")),
+    )
     monkeypatch.setattr(
         handler_module,
         "aws_secret",
@@ -68,6 +76,8 @@ def test_handler_ignores_the_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     bucket = tmp_path / "bucket"
     (bucket / "prices").mkdir(parents=True)
     (bucket / "prices" / "a.parquet").write_bytes(b"x")
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(handler_module.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name, **kwargs: LocalObjectStore(bucket))
     monkeypatch.setattr(
         handler_module,
@@ -119,6 +129,8 @@ def _prepare_handler(monkeypatch, tmp_path: Path, bronze_glob: str, *remaining: 
 
     monkeypatch.setattr(handler_module, "run_build", fake_run_build)
     monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name, **kwargs: LocalObjectStore(bucket))
+    (tmp_path / "tmp").mkdir(exist_ok=True)
+    monkeypatch.setattr(handler_module.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     monkeypatch.setattr(
         handler_module,
         "aws_secret",
@@ -197,6 +209,8 @@ class FakeSnsClient:
 def _empty_bucket(monkeypatch, tmp_path: Path) -> Path:
     bucket = tmp_path / "bucket"
     (bucket / "prices").mkdir(parents=True)
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(handler_module.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     monkeypatch.setattr(handler_module, "S3ObjectStore", lambda name, **kwargs: LocalObjectStore(bucket))
     monkeypatch.setenv("SILVER_BUCKET", "test-bucket")
     return bucket
@@ -254,3 +268,72 @@ def test_sns_error_does_not_mask_build_error(monkeypatch, tmp_path: Path) -> Non
         handler_module.handler({}, None)
 
     assert len(sns.calls) == 1
+
+
+def test_sns_client_error_does_not_mask_build_error(monkeypatch, tmp_path: Path) -> None:
+    _empty_bucket(monkeypatch, tmp_path)
+    monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")
+    monkeypatch.setattr(
+        handler_module.boto3,
+        "client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no region")),
+    )
+
+    with pytest.raises(EmptyCorpusError, match="no bronze objects"):
+        handler_module.handler({}, None)
+
+
+def test_failure_in_build_reports_build_stage(monkeypatch, tmp_path: Path, bronze_glob: str) -> None:
+    _calls, _bucket = _prepare_handler(monkeypatch, tmp_path, bronze_glob)
+    monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")
+    sns = FakeSnsClient()
+    monkeypatch.setattr(handler_module.boto3, "client", lambda service, **kwargs: sns)
+    monkeypatch.setattr(
+        handler_module,
+        "run_build",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("build broke")),
+    )
+
+    with pytest.raises(RuntimeError, match="build broke"):
+        handler_module.handler({}, None)
+
+    payload = json.loads(sns.calls[0]["Message"])
+    assert payload["stage"] == "build"
+
+
+def test_failure_during_publish_reports_publish_stage_and_leaves_no_pointer(
+    monkeypatch, tmp_path: Path, bronze_glob: str
+) -> None:
+    _calls, bucket = _prepare_handler(monkeypatch, tmp_path, bronze_glob)
+    monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")
+    sns = FakeSnsClient()
+    monkeypatch.setattr(handler_module.boto3, "client", lambda service, **kwargs: sns)
+
+    class FailingStore(LocalObjectStore):
+        def put_file(self, local_path: Path, key: str) -> int:
+            raise OSError("s3 is down")
+
+    monkeypatch.setattr(handler_module, "S3ObjectStore", lambda *args, **kwargs: FailingStore(bucket))
+
+    with pytest.raises(OSError, match="s3 is down"):
+        handler_module.handler({}, None)
+
+    payload = json.loads(sns.calls[0]["Message"])
+    assert payload["stage"] == "publish"
+    assert not (bucket / pointer_key("silver")).exists()
+    assert not (bucket / "silver" / "builds").exists()
+
+
+def test_redact_error_hides_secret_fragments() -> None:
+    text = "CREATE SECRET s (KEY_ID 'AKIA1234567890123456', SECRET 's3cr3t', SESSION_TOKEN 'tok')"
+    redacted = handler_module.redact_error(text)
+    assert "AKIA" not in redacted
+    assert "s3cr3t" not in redacted
+    assert "tok" not in redacted
+
+
+def test_failure_message_uses_lambda_log_group(monkeypatch) -> None:
+    monkeypatch.delenv("LOG_GROUP_NAME", raising=False)
+    monkeypatch.setenv("AWS_LAMBDA_LOG_GROUP_NAME", "/aws/lambda/analytics")
+    message = handler_module.failure_message("build-id", RuntimeError("boom"), "build")
+    assert message["log_group"] == "/aws/lambda/analytics"
