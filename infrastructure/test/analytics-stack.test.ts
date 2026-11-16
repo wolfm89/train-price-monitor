@@ -70,7 +70,6 @@ describe('AnalyticsStack', () => {
       SILVER_MAX_TEMP_SIZE: SILVER_CONFIG.lambda.duckdb_max_temp_size,
       SILVER_KEEP: String(SILVER_CONFIG.keep),
       TRANSFORM_VERSION: 'abc123def456',
-      ALERT_TOPIC_ARN: `arn:aws:sns:eu-central-1:111111111111:${ALERT_TOPIC_NAME}`,
     });
     expect(fn.Properties.Environment.Variables).toHaveProperty('LOG_GROUP_NAME');
     expect(fn.Properties.Environment.Variables).not.toHaveProperty('AWS_REGION');

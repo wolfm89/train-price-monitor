@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 
 import boto3
 import duckdb
-from botocore.config import Config
 
 from tpm_analytics.silver._duck import S3Secret
 from tpm_analytics.silver.build import EmptyCorpusError, run_build
@@ -124,10 +123,10 @@ def remaining_seconds(context: object) -> float | None:
 
 
 def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str, str]:
-    """The structured message the Pushover forwarder turns into a notification."""
+    """The structured payload the Lambda on-failure destination forwards to Pushover."""
     if stage not in STAGES:
         # A notification must never be lost because a new stage was not added to the
-        # contract first; report it as unknown instead of raising inside notify_failure.
+        # contract first; report it as unknown instead of losing the failure payload.
         LOGGER.warning("unknown failure stage %r build_id=%s", stage, build_id)
         stage = "unknown"
     return {
@@ -141,32 +140,6 @@ def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str
         # LOG_GROUP_NAME is set by CDK; AWS_LAMBDA_LOG_GROUP_NAME covers a manual run.
         "log_group": os.environ.get("LOG_GROUP_NAME") or os.environ.get("AWS_LAMBDA_LOG_GROUP_NAME", ""),
     }
-
-
-def notify_failure(build_id: str, error: BaseException, stage: str, *, client: Any | None = None) -> None:
-    """Publish a build failure without masking the original exception."""
-    topic_arn = os.environ.get("ALERT_TOPIC_ARN")
-    if not topic_arn:
-        # Local runs and tests have no topic; the build error must still surface.
-        LOGGER.warning("ALERT_TOPIC_ARN is not set; build failure was not published build_id=%s", build_id)
-        return
-    try:
-        sns = (
-            client
-            if client is not None
-            else boto3.client(
-                "sns",
-                config=Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 2}),
-            )
-        )
-        sns.publish(
-            TopicArn=topic_arn,
-            Subject="Silver build failed",
-            Message=json.dumps(failure_message(build_id, error, stage)),
-        )
-    except Exception:
-        # Never mask the build failure with a notification failure.
-        LOGGER.exception("could not publish the build failure to SNS build_id=%s", build_id)
 
 
 def _run_build(
@@ -304,5 +277,6 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     try:
         return _run_build(event, context, build_id, progress)
     except Exception as error:
-        notify_failure(build_id, error, progress["stage"])
-        raise
+        # Lambda async retries fire on this exception; the on-failure destination publishes
+        # the structured payload after the final attempt, so there is exactly one SNS message.
+        raise RuntimeError(json.dumps(failure_message(build_id, error, progress["stage"]))) from error

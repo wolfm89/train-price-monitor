@@ -98,9 +98,8 @@ function format(payload) {
     };
   }
 
-  // Lambda async invocation failure (timeout/OOM/retries exhausted). The handler cannot
-  // publish its own silver_build_failed message after a killed container, so this is the
-  // backstop. The shared topic only receives this from the analytics function today.
+  // Lambda async invocation failure (timeout/OOM/retries exhausted). Handled exceptions
+  // carry a JSON failure_message in errorMessage; timeouts fall back to the generic text.
   if (payload && payload.requestContext && payload.requestContext.functionArn) {
     const context = payload.requestContext;
     const response = payload.responseContext || {};
@@ -108,6 +107,15 @@ function format(payload) {
     const region = safeRegion(parts[3] || process.env.AWS_REGION);
     const functionName = parts[6] || 'unknown';
     const error = payload.responsePayload || {};
+    let structured;
+    if (error.errorMessage) {
+      try {
+        structured = JSON.parse(error.errorMessage);
+      } catch {
+        // Timeout/OOM records have no JSON payload; fall through to the generic message.
+      }
+    }
+    if (structured && structured.event === '${SILVER_FAILURE_EVENT}') return format(structured);
     const reason = [context.condition, response.functionError].filter(Boolean).join(' / ') || 'failed';
     return {
       title: 'Silver build invocation failed',
