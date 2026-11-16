@@ -13,7 +13,7 @@
     "ephemeral_mib": 10240,
     "threads": 2,
     "duckdb_memory_limit": "6GB",
-    "duckdb_max_temp_size": "6GB",
+    "duckdb_max_temp_size": "7GB",
     "publish_reserve_seconds": 180,
     "build_budget_seconds": 600,
     "retry_attempts": 1,

@@ -88,8 +88,8 @@ The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2
 The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s.
 The first production invocation (2026-11-16) with `memory_limit=8GB`, `threads=4` and a 5 GB temp
 limit exhausted both Lambda memory (10,231/10,240 MB) and the temp directory (4.6/4.6 GiB) after
-61 s. The deployed profile is therefore `memory_limit=6GB`, `threads=2`, `SILVER_MAX_TEMP_SIZE=6GB`,
-leaving roughly 3 GB for the output and 6 GB of spill inside the 10 GB `/tmp`. Those workstation
+61 s. The deployed profile is therefore `memory_limit=6GB`, `threads=2`, `SILVER_MAX_TEMP_SIZE=7GB`,
+leaving roughly 3 GB for the output and 7 GB of spill inside the 10 GB `/tmp`. Those workstation
 numbers are a starting point, not the Lambda profile; measure the next run. If the corpus outgrows
 it, split the build by departure month.
 
