@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pyarrow as pa
@@ -86,8 +87,8 @@ def test_departure_context(build, duck) -> None:
         "SELECT departure_weekday, departure_hour_local, is_weekend FROM {silver} "
         "WHERE journey_id IN ('journey-a', 'journey-d') ORDER BY journey_id",
     )
-    # Sunday 2026-11-15 10:00 UTC -> 11:00 CET; Monday 2026-11-16 07:30 UTC -> 08:30 CET.
-    assert result == [(0, 11, True), (1, 8, False)]
+    # ISO: 0 = Monday … 6 = Sunday. Sunday 2026-11-15 -> 6, Monday 2026-11-16 -> 0.
+    assert result == [(6, 11, True), (0, 8, False)]
 
 
 def test_dst_summer_time(tmp_path: Path, duck) -> None:
@@ -104,7 +105,7 @@ def test_dst_summer_time(tmp_path: Path, duck) -> None:
         Built(stats=built, target=tmp_path / "silver-summer"),
         "SELECT departure_hour_local, departure_date, departure_weekday FROM {silver}",
     )
-    expected_weekday = (date(2026, 7, 15).weekday() + 1) % 7  # DuckDB: 0 = Sunday
+    expected_weekday = date(2026, 7, 15).weekday()  # ISO: 0 = Monday
     assert result == [(12, date(2026, 7, 15), expected_weekday)]
 
 
@@ -130,7 +131,7 @@ def test_scrapes_per_route_day(build, duck) -> None:
     result = rows(
         duck,
         built,
-        "SELECT journey_id, scrapes_per_route_day FROM {silver} "
+        "SELECT journey_id, scrapes_per_route_day_final FROM {silver} "
         "WHERE journey_id IN ('journey-a', 'journey-b') ORDER BY journey_id",
     )
     # Route Berlin->München, local departure 2026-11-15: two August scrapes plus the November one.
@@ -368,3 +369,240 @@ def test_uri_paths_are_rejected(tmp_path: Path) -> None:
         run_build(str(tmp_path / "x" / "**" / "*.parquet"), "s3://bucket/silver")
     with pytest.raises(UnsupportedLocationError, match="source"):
         run_build("s3://bucket/prices/**/*.parquet", tmp_path / "silver-s3")
+
+
+@pytest.mark.parametrize(
+    ("load_factor", "ordinal"),
+    [("low", 1), ("low-to-medium", 1), ("high", 2), ("very-high", 3), ("exceptionally-high", 4)],
+)
+def test_load_factor_ladder_matches_the_sql(tmp_path: Path, duck, load_factor: str, ordinal: int) -> None:
+    """The gate and the transform must agree on every value the DB can emit."""
+    root = tmp_path / f"lf-{ordinal}-{load_factor}"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(load_factor=load_factor, load_factor_ordinal=None, journey_id=f"j-{load_factor}")],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / f"silver-lf-{ordinal}-{load_factor}")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / f"silver-lf-{ordinal}-{load_factor}"),
+        "SELECT load_factor_ordinal FROM {silver}",
+    )
+    assert result == [(ordinal,)]
+
+
+@pytest.mark.parametrize(
+    ("departure", "weekday", "iso_week", "iso_year"),
+    [
+        (datetime(2026, 11, 15, 10, 0), 6, 46, 2026),  # Sunday
+        (datetime(2026, 11, 16, 9, 0), 0, 47, 2026),  # Monday
+        (datetime(2027, 1, 1, 9, 0), 4, 53, 2026),  # ISO week-year differs from the calendar year
+    ],
+)
+def test_iso_calendar_columns(
+    tmp_path: Path, duck, departure: datetime, weekday: int, iso_week: int, iso_year: int
+) -> None:
+    root = tmp_path / f"iso-{weekday}"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(departure_planned=departure, arrival_planned=departure)],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / f"silver-iso-{weekday}")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / f"silver-iso-{weekday}"),
+        "SELECT departure_weekday, departure_iso_week, departure_iso_year, is_weekend FROM {silver}",
+    )
+    assert result == [(weekday, iso_week, iso_year, weekday >= 5)]
+
+
+def test_v1_rows_that_differ_only_in_train_number_are_not_duplicates(tmp_path: Path) -> None:
+    """The dedupe key is normalised; two trains on the same route/time are different rows."""
+    root = tmp_path / "v1-trains"
+    write_bronze(
+        root / "day=01",
+        [v1_row(train_number="1001"), v1_row(train_number="1003")],
+        schema_version=1,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-v1-trains")
+    assert built.rows_out == 2
+    assert built.duplicates_removed == 0
+
+
+def test_identical_v1_rows_are_deduplicated(tmp_path: Path) -> None:
+    root = tmp_path / "v1-dupes"
+    write_bronze(root / "day=01", [v1_row(), v1_row()], schema_version=1)
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-v1-dupes")
+    assert built.rows_out == 1
+    assert built.duplicates_removed == 1
+
+
+def test_compacted_v1_empty_strings_fall_back(tmp_path: Path, duck) -> None:
+    """The compactor writes v1 rows with all 22 columns and empty strings."""
+    root = tmp_path / "compacted-v1"
+    write_bronze(root / "day=01", [v1_row()], schema_version=1, compacted=True)
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-compacted-v1")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / "silver-compacted-v1"),
+        "SELECT train_numbers, source_profile, query_mode, schema_version FROM {silver}",
+    )
+    assert result == [("1001", "dbweb", "bestprice", 1)]
+
+
+def test_explicit_file_list_is_a_supported_source(bronze_root: Path, tmp_path: Path) -> None:
+    files = tuple(sorted(str(path) for path in bronze_root.glob("**/*.parquet")))
+    built = run_build(list(files), tmp_path / "silver-list")
+    assert built.rows_in == 6
+    assert built.rows_out == 6
+    assert built.source_files == files
+
+
+def test_empty_file_list_is_rejected(tmp_path: Path) -> None:
+    from tpm_analytics.silver.build import EmptyCorpusError
+
+    with pytest.raises(EmptyCorpusError):
+        run_build([], tmp_path / "silver-empty-list")
+
+
+def test_cli_success_prints_json(bronze_glob: str, tmp_path: Path, capsys) -> None:
+    import json
+
+    exit_code = main(["--source", bronze_glob, "--target", str(tmp_path / "silver-cli")])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rows_out"] == 6
+
+
+def test_cli_no_verify_warns_and_succeeds(bronze_glob: str, tmp_path: Path, capsys) -> None:
+    exit_code = main(["--source", bronze_glob, "--target", str(tmp_path / "silver-cli-nv"), "--no-verify"])
+    assert exit_code == 0
+    assert "quality gate disabled" in capsys.readouterr().err
+
+
+def test_dedupe_survivor_is_thread_independent(tmp_path: Path, duck) -> None:
+    """Two rows sharing the key but differing in transfers: the same one must survive."""
+    root = tmp_path / "ties"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(transfers=0, train_number="1001"), bronze_row(transfers=2, train_number="1001")],
+        schema_version=2,
+    )
+    source = str(root / "**" / "*.parquet")
+    one = run_build(source, tmp_path / "silver-ties-1", threads=1)
+    four = run_build(source, tmp_path / "silver-ties-4", threads=4)
+    assert one.rows_out == four.rows_out == 1
+
+    def survivor(target: Path) -> tuple[object, ...]:
+        glob = f"{target}/**/*.parquet"
+        return duck.execute(
+            f"SELECT transfers_raw FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=true)"
+        ).fetchone()
+
+    assert survivor(tmp_path / "silver-ties-1") == survivor(tmp_path / "silver-ties-4")
+    left = f"read_parquet('{tmp_path}/silver-ties-1/**/*.parquet', hive_partitioning=true)"
+    right = f"read_parquet('{tmp_path}/silver-ties-4/**/*.parquet', hive_partitioning=true)"
+    assert duck.execute(f"SELECT count(*) FROM (SELECT * FROM {left} EXCEPT ALL SELECT * FROM {right})").fetchone() == (
+        0,
+    )
+    assert duck.execute(f"SELECT count(*) FROM (SELECT * FROM {right} EXCEPT ALL SELECT * FROM {left})").fetchone() == (
+        0,
+    )
+
+
+EXPECTED_SILVER_COLUMNS = (
+    "observed_at",
+    "service_class",
+    "route_id",
+    "origin_eva",
+    "origin_name",
+    "dest_eva",
+    "dest_name",
+    "departure_planned",
+    "arrival_planned",
+    "train_type",
+    "train_number",
+    "train_numbers",
+    "transfers_raw",
+    "duration_minutes",
+    "days_to_departure",
+    "fare_lowest_eur",
+    "load_factor",
+    "load_factor_ordinal",
+    "journey_id",
+    "schema_version",
+    "source_profile",
+    "query_mode",
+    "transfers_actual",
+    "departure_date",
+    "departure_weekday",
+    "departure_hour_local",
+    "departure_iso_week",
+    "departure_iso_year",
+    "is_weekend",
+    "distance_km",
+    "origin_state",
+    "dest_state",
+    "origin_station_category",
+    "dest_station_category",
+    "timetable_period",
+    "observation_era",
+    "scrapes_per_route_day_final",
+    "departure_year",
+    "departure_month",
+)
+
+
+def test_output_columns_are_exactly_the_contract(build) -> None:
+    built = build()
+    table = pq.read_table(built.target, partitioning="hive")
+    assert tuple(table.column_names) == EXPECTED_SILVER_COLUMNS
+
+
+def test_compacted_v1_layout_keeps_the_compactor_values(tmp_path: Path, duck) -> None:
+    """The compactor backfills v2 columns on v1 rows; silver must not overwrite them."""
+    root = tmp_path / "compacted-v1-values"
+    row = v1_row(train_numbers="1001", load_factor_ordinal=1, source_profile="dbweb", query_mode="bestprice")
+    write_bronze(root / "day=01", [row], schema_version=1, compacted=True)
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-compacted-v1-values")
+    result = rows(
+        duck,
+        Built(stats=built, target=tmp_path / "silver-compacted-v1-values"),
+        "SELECT train_numbers, source_profile, query_mode, load_factor_ordinal FROM {silver}",
+    )
+    assert result == [("1001", "dbweb", "bestprice", 1)]
+
+
+def test_duplicate_count_is_exact_with_mixed_rows(tmp_path: Path) -> None:
+    """Three rows, one duplicate pair: the gate must expect one removed row, not two."""
+    root = tmp_path / "mixed-duplicates"
+    write_bronze(
+        root / "day=01",
+        [bronze_row(journey_id="a"), bronze_row(journey_id="a"), bronze_row(journey_id="b")],
+        schema_version=2,
+    )
+    built = run_build(str(root / "**" / "*.parquet"), tmp_path / "silver-mixed-duplicates")
+    assert built.rows_in == 3
+    assert built.rows_out == 2
+    assert built.duplicates_removed == 1
+
+
+def test_secret_reaches_connect(monkeypatch, bronze_glob: str, tmp_path: Path) -> None:
+    from tpm_analytics.silver import build as build_module
+    from tpm_analytics.silver._duck import S3Secret
+
+    captured: dict[str, object] = {}
+    real_connect = build_module.connect
+
+    def spy(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        kwargs.pop("secret")
+        return real_connect(**kwargs)
+
+    monkeypatch.setattr(build_module, "connect", spy)
+    secret = S3Secret(access_key="a", secret_key="b", session_token="c", region="eu-west-1")
+    run_build(bronze_glob, tmp_path / "silver-secret", s3=secret)
+
+    assert captured["secret"] is secret

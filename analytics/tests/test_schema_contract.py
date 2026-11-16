@@ -42,3 +42,17 @@ def test_fixture_schema_matches_the_writer() -> None:
     fields = writer_fields()
     assert fields, "could not parse any columns out of scraper/src/parquet.ts"
     assert fixture_fields() == fields
+
+
+ROWS_WRITER = REPO_ROOT / "scraper" / "src" / "rows.ts"
+
+
+def test_dedupe_key_matches_the_compactor() -> None:
+    """Silver must collapse exactly the rows the compactor considers duplicates."""
+    from tpm_analytics.silver.constants import DEDUPE_KEY
+
+    source = ROWS_WRITER.read_text(encoding="utf-8")
+    match = re.search(r"parquetRowKey.*?JSON\.stringify\(\[(.*?)\]\)", source, re.S)
+    assert match, "could not find parquetRowKey in scraper/src/rows.ts"
+    fields = re.findall(r"row\.([a-z_]+)", match.group(1))
+    assert tuple(fields) == DEDUPE_KEY

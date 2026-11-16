@@ -6,13 +6,13 @@ poisoning the training data. The row checks are evaluated in one scan; the dupli
 second pass with a hash aggregate.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 import duckdb
 
 from tpm_analytics.silver._duck import read_parquet, scalar
-from tpm_analytics.silver.constants import TIMETABLE_REVIEW_AFTER
+from tpm_analytics.silver.constants import DEDUPE_KEY, OBSERVATION_ERA_CUTOFF, TIMETABLE_REVIEW_AFTER
 
 REQUIRED_COLUMNS: tuple[str, ...] = (
     "observed_at",
@@ -41,6 +41,8 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "departure_date",
     "departure_weekday",
     "departure_hour_local",
+    "departure_iso_week",
+    "departure_iso_year",
     "is_weekend",
     "distance_km",
     "origin_state",
@@ -49,7 +51,7 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "dest_station_category",
     "timetable_period",
     "observation_era",
-    "scrapes_per_route_day",
+    "scrapes_per_route_day_final",
     "departure_year",
     "departure_month",
 )
@@ -88,6 +90,8 @@ REQUIRED_NON_NULL: tuple[str, ...] = (
     "departure_date",
     "departure_weekday",
     "departure_hour_local",
+    "departure_iso_week",
+    "departure_iso_year",
     "is_weekend",
     "distance_km",
     "origin_state",
@@ -96,7 +100,7 @@ REQUIRED_NON_NULL: tuple[str, ...] = (
     "dest_station_category",
     "timetable_period",
     "observation_era",
-    "scrapes_per_route_day",
+    "scrapes_per_route_day_final",
     "departure_year",
     "departure_month",
 )
@@ -127,19 +131,22 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
     # Historical rows can predate the arrival-after-departure guarantee; only new data is gated.
     (
         "non-positive duration after the fix",
-        "observed_at >= TIMESTAMP '2026-11-13 18:15:49' AND duration_minutes <= 0",
+        f"observed_at >= TIMESTAMP '{OBSERVATION_ERA_CUTOFF}' AND (duration_minutes <= 0 OR duration_minutes > 3000)",
     ),
-    ("non-positive fare", "fare_lowest_eur <= 0"),
+    ("fare outside a plausible range", "fare_lowest_eur <= 0 OR fare_lowest_eur > 1000"),
     ("negative transfers_actual", "transfers_actual < 0"),
     # Before #141 the poller wrote journeys that had already left; that is history, not a
     # regression. Only rows observed after the fix have to satisfy the invariant.
     (
         "negative days_to_departure after the fix",
-        "observed_at >= TIMESTAMP '2026-11-13 18:15:49' AND days_to_departure < 0",
+        f"observed_at >= TIMESTAMP '{OBSERVATION_ERA_CUTOFF}' AND days_to_departure < 0",
     ),
     ("station missing from the dimension", "origin_state IS NULL OR dest_state IS NULL"),
     ("distance_km missing or implausible", "distance_km IS NULL OR distance_km <= 0 OR distance_km > 1500"),
-    ("scrapes_per_route_day missing", "scrapes_per_route_day IS NULL OR scrapes_per_route_day < 1"),
+    (
+        "scrapes_per_route_day_final outside a plausible range",
+        "scrapes_per_route_day_final IS NULL OR scrapes_per_route_day_final < 1 OR scrapes_per_route_day_final > 200",
+    ),
     (
         "partition does not match departure_date",
         "EXTRACT(year FROM departure_date) <> departure_year OR EXTRACT(month FROM departure_date) <> departure_month",
@@ -156,11 +163,7 @@ ROW_CHECKS: tuple[tuple[str, str], ...] = (
 # a schema drift the explicit projection would otherwise drop silently.
 RENAMED_COLUMNS: dict[str, str] = {"transfers": "transfers_raw"}
 
-# The compactor's own de-duplication key (scraper/src/rows.ts, parquetRowKey).
-DUPLICATE_KEY = (
-    "observed_at, route_id, service_class, departure_planned, arrival_planned, "
-    "train_numbers, fare_lowest_eur, journey_id"
-)
+DUPLICATE_KEY = ", ".join(DEDUPE_KEY)
 
 
 @dataclass(frozen=True)
@@ -227,7 +230,7 @@ def _duplicate_violation(connection: duckdb.DuckDBPyConnection, silver: str) -> 
 def check(
     connection: duckdb.DuckDBPyConnection,
     *,
-    bronze_glob: str,
+    bronze_glob: str | Sequence[str],
     silver_glob: str,
     bronze_rows: int | None = None,
     expected_rows: int | None = None,

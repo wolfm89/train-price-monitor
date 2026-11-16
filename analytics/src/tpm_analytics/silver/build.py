@@ -10,40 +10,46 @@ same path is possible as long as no earlier build succeeded there.
 
 import argparse
 import json
+import logging
 import shutil
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
 import duckdb
 
-from tpm_analytics.silver import quality
+from tpm_analytics.silver import constants, quality
 from tpm_analytics.silver._duck import (
     DEFAULT_MAX_TEMP_SIZE,
     DEFAULT_MEMORY_LIMIT,
     DEFAULT_THREADS,
+    S3Secret,
     asset_dir,
     connect,
     read_parquet,
     scalar,
     sql_string,
 )
-from tpm_analytics.silver.constants import TIMETABLE_BOUNDARY
+from tpm_analytics.silver.models import BuildStats
+
+LOGGER = logging.getLogger(__name__)
 
 # Columns introduced by schema v2. A corpus that predates v2 has none of them, and union_by_name
 # cannot invent a column that exists in no file, so the source expression adds them as typed NULLs.
-V2_COLUMN_DEFAULTS: dict[str, str] = {
-    "train_numbers": "CAST(NULL AS VARCHAR)",
-    "load_factor_ordinal": "CAST(NULL AS INTEGER)",
-    "journey_id": "CAST(NULL AS VARCHAR)",
-    "schema_version": "CAST(NULL AS INTEGER)",
-    "source_profile": "CAST(NULL AS VARCHAR)",
-    "query_mode": "CAST(NULL AS VARCHAR)",
-}
+V2_COLUMN_DEFAULTS: frozendict[str, str] = frozendict(
+    {
+        "train_numbers": "CAST(NULL AS VARCHAR)",
+        "load_factor_ordinal": "CAST(NULL AS INTEGER)",
+        "journey_id": "CAST(NULL AS VARCHAR)",
+        "schema_version": "CAST(NULL AS INTEGER)",
+        "source_profile": "CAST(NULL AS VARCHAR)",
+        "query_mode": "CAST(NULL AS VARCHAR)",
+    }
+)
 
 
 class EmptyCorpusError(ValueError):
@@ -64,20 +70,7 @@ def local_path(value: str | Path, *, role: str) -> Path:
     return Path(text)
 
 
-@dataclass(frozen=True)
-class BuildStats:
-    """What one silver build produced."""
-
-    source: str
-    target: str
-    rows_in: int
-    rows_out: int
-    duplicates_removed: int
-    partitions: int
-    duration_seconds: float
-
-
-def bronze_source(connection: duckdb.DuckDBPyConnection, bronze_glob: str) -> str:
+def bronze_source(connection: duckdb.DuckDBPyConnection, bronze_glob: str | Sequence[str]) -> str:
     """Return a table expression over the bronze glob that always has the full v2 schema."""
     source = read_parquet(bronze_glob)
     columns = {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
@@ -96,13 +89,21 @@ def render_sql(
     target: Path,
 ) -> str:
     """Substitute the placeholders in ``silver.sql``."""
-    return (
-        sql_path.read_text(encoding="utf-8")
-        .replace("{{BRONZE_SOURCE}}", bronze_source_sql)
-        .replace("{{STATIONS_PATH}}", sql_string(stations_path.as_posix()))
-        .replace("{{TIMETABLE_BOUNDARY}}", TIMETABLE_BOUNDARY)
-        .replace("{{TARGET}}", sql_string(target.as_posix()))
-    )
+    replacements = {
+        "{{BRONZE_SOURCE}}": bronze_source_sql,
+        "{{STATIONS_PATH}}": sql_string(stations_path.as_posix()),
+        "{{TARGET}}": sql_string(target.as_posix()),
+        "{{TIMETABLE_BOUNDARY}}": constants.TIMETABLE_BOUNDARY,
+        "{{TIMETABLE_PREVIOUS}}": constants.TIMETABLE_PREVIOUS,
+        "{{TIMETABLE_CURRENT}}": constants.TIMETABLE_CURRENT,
+        "{{DENSE_ERA_CUTOFF}}": constants.DENSE_ERA_CUTOFF,
+        "{{OBSERVATION_ERA_CUTOFF}}": constants.OBSERVATION_ERA_CUTOFF,
+        "{{DEDUPE_KEY}}": ", ".join(constants.DEDUPE_KEY),
+    }
+    sql = sql_path.read_text(encoding="utf-8")
+    for placeholder, value in replacements.items():
+        sql = sql.replace(placeholder, value)
+    return sql
 
 
 def parse_copy_stats(
@@ -125,7 +126,7 @@ def parse_copy_stats(
 
 
 def run_build(
-    source: str,
+    source: str | Sequence[str],
     target: str | Path,
     *,
     sql_path: Path | None = None,
@@ -135,11 +136,20 @@ def run_build(
     memory_limit: str = DEFAULT_MEMORY_LIMIT,
     max_temp_size: str = DEFAULT_MAX_TEMP_SIZE,
     verify: bool = True,
+    s3: S3Secret | None = None,
 ) -> BuildStats:
     """Build silver from ``source`` into the new directory ``target``."""
     started = time.perf_counter()
-    if "://" in source:
-        raise UnsupportedLocationError(f"source {source!r} is a URI; silver builds only support local paths")
+    if isinstance(source, str) and "://" in source and not (source.startswith("s3://") and s3 is not None):
+        raise UnsupportedLocationError(
+            f"source {source!r} is a URI; pass S3 credentials to read from s3:// or use a local path"
+        )
+    if not isinstance(source, str):
+        if not source:
+            raise EmptyCorpusError("no source files given")
+        for item in source:
+            if "://" in item and not (item.startswith("s3://") and s3 is not None):
+                raise UnsupportedLocationError(f"source file {item!r} is a URI; pass S3 credentials to read from s3://")
     sql_path = Path(sql_path) if sql_path is not None else asset_dir("sql") / "silver.sql"
     stations_path = Path(stations_path) if stations_path is not None else asset_dir("data") / "stations.json"
     final_target = local_path(target, role="target")
@@ -159,9 +169,11 @@ def run_build(
             threads=threads,
             memory_limit=memory_limit,
             max_temp_size=max_temp_size,
+            secret=s3,
         )
         source_sql = bronze_source(connection, source)
         rows_in = scalar(connection, f"SELECT count(*) FROM {source_sql}")
+        LOGGER.info("build scan rows_in=%s", rows_in)
         if rows_in == 0:
             raise EmptyCorpusError(f"source {source!r} matched no rows")
         result = connection.execute(
@@ -175,7 +187,43 @@ def run_build(
         column_names = [column[0] for column in (result.description or [])]
         written = result.fetchall()
         rows_out, partitions = parse_copy_stats(column_names, written)
+        duplicates_removed = rows_in - rows_out
         silver_glob = str(partial / "**" / "*.parquet")
+        allowed = max(constants.MAX_DUPLICATE_ABSOLUTE, int(rows_in * constants.MAX_DUPLICATE_SHARE))
+        if verify and rows_in and duplicates_removed > allowed:
+            raise quality.QualityError(
+                [
+                    quality.Violation(
+                        "too many duplicates removed",
+                        f"{duplicates_removed} of {rows_in} rows; the dedupe key may be too coarse",
+                    )
+                ]
+            )
+        if verify and duplicates_removed:
+            # Removed rows must be duplicates, not silently dropped unique observations. The key
+            # has to be normalised exactly like the transform's, or a v1 corpus with a NULL
+            # train_numbers would look coarser here than in the dedupe.
+            key_sql = ", ".join(
+                "COALESCE(NULLIF(train_numbers, ''), train_number) AS train_numbers"
+                if name == "train_numbers"
+                else name
+                for name in constants.DEDUPE_KEY
+            )
+            expected_duplicates = scalar(
+                connection,
+                "SELECT coalesce(sum(n - 1), 0) FROM ("
+                f"SELECT {key_sql}, count(*) AS n FROM {source_sql} "
+                "GROUP BY ALL HAVING count(*) > 1)",
+            )
+            if expected_duplicates != duplicates_removed:
+                raise quality.QualityError(
+                    [
+                        quality.Violation(
+                            "removed rows != duplicate rows",
+                            f"{duplicates_removed} removed, {expected_duplicates} duplicates in bronze",
+                        )
+                    ]
+                )
         if verify:
             report = quality.check(
                 connection,
@@ -191,6 +239,12 @@ def run_build(
             if on_disk != partitions:
                 violations.append(quality.Violation("partition count != directories", f"{partitions} != {on_disk}"))
             quality.raise_for_violations(violations)
+            LOGGER.info(
+                "build verified rows_out=%s duplicates_removed=%s partitions=%s",
+                rows_out,
+                duplicates_removed,
+                partitions,
+            )
         # Close the engine before touching the directory tree: Windows keeps a handle on open files.
         connection.close()
         connection = None
@@ -205,13 +259,15 @@ def run_build(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     return BuildStats(
-        source=source,
+        source=source if isinstance(source, str) else f"{len(source)} files",
+        source_files=() if isinstance(source, str) else tuple(source),
         target=str(final_target),
         rows_in=rows_in,
         rows_out=rows_out,
-        duplicates_removed=rows_in - rows_out,
+        duplicates_removed=duplicates_removed,
         partitions=partitions,
         duration_seconds=round(time.perf_counter() - started, 3),
+        verified=verify,
     )
 
 

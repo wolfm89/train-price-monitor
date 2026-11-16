@@ -49,10 +49,11 @@ COPY (
         SELECT *
         FROM normalised
         QUALIFY row_number() OVER (
-            PARTITION BY
-                observed_at, route_id, service_class, departure_planned, arrival_planned,
-                train_numbers, fare_lowest_eur, journey_id
-            ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes, load_factor, fare_lowest_eur
+            PARTITION BY {{DEDUPE_KEY}}
+            ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes,
+                load_factor, fare_lowest_eur, transfers, train_type, train_number,
+                origin_name, dest_name, days_to_departure, load_factor_ordinal,
+                source_profile, query_mode, schema_version
         ) = 1
     ),
 
@@ -63,7 +64,7 @@ COPY (
         SELECT
             route_id,
             CAST(timezone('Europe/Berlin', departure_planned AT TIME ZONE 'UTC') AS DATE) AS departure_date,
-            COUNT(DISTINCT observed_at) AS scrapes_per_route_day
+            COUNT(DISTINCT observed_at) AS scrapes_per_route_day_final
         FROM bronze
         GROUP BY route_id, departure_date
     ),
@@ -93,8 +94,10 @@ COPY (
                 END
             ) AS load_factor_ordinal_filled,
             CAST(n.departure_local AS DATE) AS departure_date,
-            CAST(dayofweek(n.departure_local) AS INTEGER) AS departure_weekday,
+            CAST(EXTRACT(isodow FROM n.departure_local) AS INTEGER) - 1 AS departure_weekday,
             CAST(EXTRACT(hour FROM n.departure_local) AS INTEGER) AS departure_hour_local,
+            CAST(EXTRACT(week FROM n.departure_local) AS INTEGER) AS departure_iso_week,
+            CAST(EXTRACT(isoyear FROM n.departure_local) AS INTEGER) AS departure_iso_year,
             o.lat AS origin_lat,
             o.lon AS origin_lon,
             o.state AS origin_state,
@@ -135,7 +138,9 @@ COPY (
         enriched.departure_date,
         departure_weekday,
         departure_hour_local,
-        departure_weekday IN (0, 6) AS is_weekend,
+        departure_iso_week,
+        departure_iso_year,
+        departure_weekday >= 5 AS is_weekend,
         2 * 6371.0088 * asin(
             sqrt(
                 pow(sin(radians(dest_lat - origin_lat) / 2), 2)
@@ -149,15 +154,15 @@ COPY (
         origin_station_category,
         dest_station_category,
         CASE
-            WHEN departure_local < TIMESTAMP '{{TIMETABLE_BOUNDARY}} 00:00:00' THEN '2025-12'
-            ELSE '2026-12'
+            WHEN departure_local < TIMESTAMP '{{TIMETABLE_BOUNDARY}} 00:00:00' THEN '{{TIMETABLE_PREVIOUS}}'
+            ELSE '{{TIMETABLE_CURRENT}}'
         END AS timetable_period,
         CASE
-            WHEN observed_at < TIMESTAMP '2026-09-01 00:00:00' THEN 'dense'
-            WHEN observed_at < TIMESTAMP '2026-11-13 18:15:49' THEN 'sparse'
+            WHEN observed_at < TIMESTAMP '{{DENSE_ERA_CUTOFF}}' THEN 'dense'
+            WHEN observed_at < TIMESTAMP '{{OBSERVATION_ERA_CUTOFF}}' THEN 'sparse'
             ELSE 'post-fix'
         END AS observation_era,
-        density.scrapes_per_route_day,
+        density.scrapes_per_route_day_final,
         CAST(EXTRACT(year FROM enriched.departure_date) AS INTEGER) AS departure_year,
         CAST(EXTRACT(month FROM enriched.departure_date) AS INTEGER) AS departure_month
     FROM enriched

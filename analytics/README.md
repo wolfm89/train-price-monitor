@@ -22,9 +22,13 @@ Shipped here:
 - `src/tpm_analytics/silver/quality.py` — the gates that must pass before a build is published.
 - `tests/` — fixture-based tests over v1-only, v2-only and mixed bronze files.
 
-Not here yet: the S3 writer, the build manifest and `_latest.json` pointer, the Lambda handler, the
-`AnalyticsStack`, and the Dockerfile. Until then the module reads **local paths only** — it cannot
-open `s3://`.
+The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
+`handler.py`). Not here yet: the `AnalyticsStack`, the scheduled trigger and the deployment.
+The handler lists the bronze keys once and builds from that snapshot, so the poller's 15-minute
+appends cannot change the corpus under a nine-minute build.
+
+The CLI still writes to a local directory. Reading `s3://` requires S3 credentials passed to
+`run_build`; the Lambda handler supplies them from its execution role.
 
 The SQL and the station dimension live inside the package (`src/tpm_analytics/{sql,data}`), so a
 built wheel is self-contained and the future image only has to copy `tpm_analytics/`.
@@ -37,7 +41,7 @@ against the directory tree.
 
 ```bash
 cd analytics
-uv sync --frozen        # create .venv from the lockfile (uv also provisions Python 3.14)
+uv sync --frozen        # create .venv from the lockfile (uv also provisions Python 3.15)
 uv run pytest           # fixture tests
 uv run ruff check .     # lint
 uv run ruff format .    # format
@@ -80,8 +84,9 @@ The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2
 8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
 
 The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s,
-`memory_limit=8GB`, `threads=6`. If the corpus outgrows it, split the build by departure month
-instead of raising the limits.
+`memory_limit=8GB`, `threads=4` (the measured configuration), `SILVER_MAX_TEMP_SIZE=5GB` so spill and output share the 10 GB
+`/tmp` without colliding. Those numbers come from a workstation run; measure the first Lambda run
+before trusting the schedule. If the corpus outgrows it, split the build by departure month.
 
 ```bash
 uv run python -m tpm_analytics.silver.build \
@@ -91,27 +96,69 @@ uv run python -m tpm_analytics.silver.build \
 
 Re-run this before an engine upgrade and before the stack lands. It is not part of CI.
 
+## Publishing
+
+The Lambda handler builds into a local temp directory, verifies it, and publishes:
+
+```
+silver/builds/<build id>/departure_year=YYYY/departure_month=MM/*.parquet
+silver/builds/<build id>/_manifest.json
+silver/_latest.json
+```
+
+- The **manifest** records `build_id`, the source glob and the exact object list that was read,
+  rows in/out, duplicates removed, partitions, duration, transform version, DuckDB version,
+  SHA-256 of the SQL, station dimension and constants, the handler warnings, and every output
+  file with its size. The bucket
+  comes from the store that wrote the bytes, so it cannot disagree with them. An empty
+  `TRANSFORM_VERSION` falls back to the SQL hash, so provenance is never blank.
+- The **pointer** is written last, after the manifest is read back and every file is present with
+  the recorded size. The pointer write is the commit point: an exception before it deletes the
+  half-written build; a pointer PUT that errors is assumed to have landed and the build is kept.
+  A killed process (timeout, OOM) cannot clean up: it leaves a prefix without a manifest.
+  Retention reclaims such a prefix once it is older than an hour, which is long after any
+  in-flight upload could still be running.
+- **Retention** keeps the newest two builds (`SILVER_KEEP`, minimum 2 so one cycle of readers
+  always survives), only counts ids that match the build-id format and have a readable,
+  consistent manifest, never deletes the build the pointer names, and only deletes a complete
+  build once it is a day old. A manifest that cannot be read is never deleted.
+- **Refusals:** a corpus that shrank by more than 10 % against the pointed-at build, more than
+  0.01 % removed rows, or removed rows that are not exactly the duplicates in bronze.
+- The handler ignores the event: source, bucket, prefix and sizing come from the environment
+  (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`, `SILVER_MEMORY_LIMIT`,
+  `SILVER_MAX_TEMP_SIZE`, `TRANSFORM_VERSION`), so an invocation cannot disable the gate.
+
+For local S3 reads, install the extension once and point DuckDB at it:
+from `analytics/`, `mise run //analytics:httpfs` then
+`DUCKDB_EXTENSION_DIR=.duckdb-extensions` (the script and the variable are CWD-relative).
+The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
+
+`tests/test_publish.py` and `tests/test_handler.py` exercise the whole path against a local
+`ObjectStore`, and `tests/test_storage.py` covers the S3 implementation with botocore's
+`Stubber`. Nothing is written to AWS yet.
+
 ## Column contract
 
-Silver has the 22 bronze columns plus the columns below. Each file carries 35 columns; the
+Silver has the 22 bronze columns plus the columns below. Each file carries 37 columns; the
 partition columns `departure_year`/`departure_month` exist only in the directory path, so a hive read
-yields 37.
+yields 39.
 
-| Column                                             | Rule                                                                                                                                                          |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transfers_raw`                                    | the bronze `transfers` value, kept for provenance; **v1 counts vehicle legs (2× the changes), v2 counts changes**                                             |
-| `transfers_actual`                                 | `transfers_raw // 2` for v1, `transfers_raw` for v2                                                                                                           |
-| `load_factor_ordinal`                              | stored ordinal when present, else derived from `load_factor` (`low`/`low-to-medium`=1, `high`=2, `very-high`=3, `exceptionally-high`=4)                       |
-| `departure_date`                                   | `CAST(departure_local AS DATE)`                                                                                                                               |
-| `departure_weekday`                                | `dayofweek(departure_local)`, 0 = Sunday … 6 = Saturday                                                                                                       |
-| `departure_hour_local`                             | hour of `departure_local`                                                                                                                                     |
-| `is_weekend`                                       | weekday 0 or 6                                                                                                                                                |
-| `distance_km`                                      | haversine between the station coordinates, R = 6371.0088 km                                                                                                   |
-| `origin_state`, `dest_state`                       | federal state from the station dimension                                                                                                                      |
-| `origin_station_category`, `dest_station_category` | DB station category (1–7)                                                                                                                                     |
-| `timetable_period`                                 | `2025-12` before 2026-12-13 local, `2026-12` after                                                                                                            |
-| `observation_era`                                  | `dense` before 2026-09-01, `sparse` before 2026-11-13 18:15:49 UTC, `post-fix` after                                                                          |
-| `scrapes_per_route_day`                            | distinct `observed_at` per `(route_id, local departure date)` over the **whole corpus alive at build time** — a dataset property, not a point-in-time feature |
+| Column                                             | Rule                                                                                                                                                                                    |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transfers_raw`                                    | the bronze `transfers` value, kept for provenance; **v1 counts vehicle legs (2× the changes), v2 counts changes**                                                                       |
+| `transfers_actual`                                 | `transfers_raw // 2` for v1, `transfers_raw` for v2                                                                                                                                     |
+| `load_factor_ordinal`                              | stored ordinal when present, else derived from `load_factor` (`low`/`low-to-medium`=1, `high`=2, `very-high`=3, `exceptionally-high`=4)                                                 |
+| `departure_date`                                   | `CAST(departure_local AS DATE)`                                                                                                                                                         |
+| `departure_weekday`                                | ISO: `isodow - 1`, **0 = Monday … 6 = Sunday**                                                                                                                                          |
+| `departure_hour_local`                             | hour of `departure_local`                                                                                                                                                               |
+| `departure_iso_week`, `departure_iso_year`         | ISO-8601 week and week-year of `departure_local`; weeks start on Monday                                                                                                                 |
+| `is_weekend`                                       | `departure_weekday >= 5` (Saturday or Sunday)                                                                                                                                           |
+| `distance_km`                                      | haversine between the station coordinates, R = 6371.0088 km                                                                                                                             |
+| `origin_state`, `dest_state`                       | federal state from the station dimension                                                                                                                                                |
+| `origin_station_category`, `dest_station_category` | DB station category (1–7)                                                                                                                                                               |
+| `timetable_period`                                 | `2025-12` before 2026-12-13 local, `2026-12` after                                                                                                                                      |
+| `observation_era`                                  | `dense` before 2026-09-01, `sparse` before 2026-11-13 18:15:49 UTC, `post-fix` after                                                                                                    |
+| `scrapes_per_route_day_final`                      | distinct `observed_at` per `(route_id, local departure date)` over the **whole corpus alive at build time** — a final-corpus property: using it as a covariate leaks later observations |
 
 `departure_local` is `timezone('Europe/Berlin', departure_planned AT TIME ZONE 'UTC')`. Every
 calendar attribute and the timetable period use it, because the DB timetable runs on local time: a

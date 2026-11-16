@@ -1,0 +1,225 @@
+"""Lambda entry point: build silver from S3 bronze and publish it.
+
+The handler reads its inputs from the environment, never from the event: the event cannot choose a
+source, a bucket or whether the gate runs. A retry after a crash is safe because each run writes a
+new build id and only the pointer moves.
+"""
+
+import logging
+import os
+import shutil
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+import boto3
+import duckdb
+
+from tpm_analytics.silver._duck import S3Secret
+from tpm_analytics.silver.build import EmptyCorpusError, run_build
+from tpm_analytics.silver.manifest import build_id_for, utc_now
+from tpm_analytics.silver.publish import publish
+from tpm_analytics.silver.storage import S3ObjectStore
+
+# Lambda installs no root handler; without one, INFO would never be emitted.
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
+
+# Leave enough time to upload a 3 GB build and move the pointer.
+PUBLISH_RESERVE_SECONDS = 180
+# The measured full build is ~525 s; do not start one that cannot finish.
+BUILD_BUDGET_SECONDS = 600
+
+
+@dataclass(frozen=True)
+class Settings:
+    bucket: str
+    prefix: str
+    source: str
+    region: str
+    threads: int
+    memory_limit: str
+    max_temp_size: str
+    keep: int
+    transform_version: str
+
+
+def load_settings() -> Settings:
+    bucket = os.environ["SILVER_BUCKET"]
+    return Settings(
+        bucket=bucket,
+        prefix=os.environ.get("SILVER_PREFIX", "silver"),
+        source=os.environ.get("BRONZE_SOURCE", f"s3://{bucket}/prices/**/*.parquet"),
+        region=os.environ.get("AWS_REGION", "eu-central-1"),
+        threads=int(os.environ.get("SILVER_THREADS", "4")),
+        memory_limit=os.environ.get("SILVER_MEMORY_LIMIT", "8GB"),
+        max_temp_size=os.environ.get("SILVER_MAX_TEMP_SIZE", "5GB"),
+        keep=int(os.environ.get("SILVER_KEEP", "2")),
+        transform_version=os.environ.get("TRANSFORM_VERSION", ""),
+    )
+
+
+def parse_bronze_source(source: str) -> tuple[str, str]:
+    """Return (bucket, prefix) for the glob, so the snapshot cannot disagree with the read."""
+    parsed = urlsplit(source)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"BRONZE_SOURCE must be an s3:// glob, got {source!r}")
+    prefix = parsed.path.lstrip("/").split("**")[0].rstrip("/")
+    if not prefix:
+        raise ValueError(f"BRONZE_SOURCE {source!r} has no prefix before the wildcard")
+    return parsed.netloc, prefix + "/"
+
+
+def aws_secret(region: str) -> S3Secret:
+    """Turn the execution role's credentials into a DuckDB secret payload.
+
+    DuckDB could read the same role through `PROVIDER credential_chain`, which resolves the
+    AWS_* variables Lambda injects, but that needs the `aws` extension baked into the image and
+    would not remove boto3 (it is still the S3 client). One credential path, no second native
+    extension.
+    """
+    credentials = boto3.Session().get_credentials()
+    if credentials is None:
+        raise RuntimeError("no AWS credentials available for the DuckDB secret")
+    frozen = credentials.get_frozen_credentials()
+    return S3Secret(
+        access_key=frozen.access_key,
+        secret_key=frozen.secret_key,
+        session_token=frozen.token or "",
+        region=region,
+    )
+
+
+def sweep_workspace() -> list[str]:
+    """Remove this module's own workspaces left behind by a killed invocation."""
+    removed: list[str] = []
+    for path in Path(tempfile.gettempdir()).glob("silver-lambda-*"):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path.name)
+    return removed
+
+
+def remaining_seconds(context: object) -> float | None:
+    getter = getattr(context, "get_remaining_time_in_millis", None)
+    if not callable(getter):
+        return None
+    return float(getter()) / 1000.0
+
+
+def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
+    started = time.perf_counter()
+    settings = load_settings()
+    if not settings.source.startswith("s3://"):
+        raise ValueError("BRONZE_SOURCE must be an s3:// glob in the handler")
+    build_id = build_id_for(utc_now())
+    remaining = remaining_seconds(context)
+    if remaining is not None and remaining < BUILD_BUDGET_SECONDS + PUBLISH_RESERVE_SECONDS:
+        raise RuntimeError(f"only {remaining:.0f}s left before the deadline; not starting a build")
+    swept = sweep_workspace()
+    LOGGER.info(
+        "silver build starting build_id=%s bucket=%s prefix=%s threads=%s memory_limit=%s max_temp_size=%s",
+        build_id,
+        settings.bucket,
+        settings.prefix,
+        settings.threads,
+        settings.memory_limit,
+        settings.max_temp_size,
+    )
+
+    store = S3ObjectStore(settings.bucket, region=settings.region)
+    # One snapshot of the corpus: the build reads exactly these objects and the manifest records
+    # them. The poller appends a batch every 15 minutes, so a live glob would change mid-build.
+    source_bucket, prefix_in_source = parse_bronze_source(settings.source)
+    if source_bucket != settings.bucket:
+        raise ValueError(f"BRONZE_SOURCE names a different bucket than SILVER_BUCKET ({settings.bucket})")
+    silver_prefix = settings.prefix.strip("/") + "/"
+    if prefix_in_source.startswith(silver_prefix) or silver_prefix.startswith(prefix_in_source):
+        raise ValueError("BRONZE_SOURCE must not point at the silver prefix")
+    snapshot = tuple(
+        f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source) if key.endswith(".parquet")
+    )
+    if not snapshot:
+        raise EmptyCorpusError(f"no bronze objects under {prefix_in_source!r}")
+    LOGGER.info("silver source snapshot files=%s", len(snapshot))
+
+    with tempfile.TemporaryDirectory(prefix="silver-lambda-") as workspace:
+        workdir = Path(workspace)
+        target = workdir / build_id
+        build_started = time.perf_counter()
+        stats = run_build(
+            snapshot,
+            target,
+            s3=aws_secret(settings.region),
+            temp_directory=workdir / "duckdb",
+            threads=settings.threads,
+            memory_limit=settings.memory_limit,
+            max_temp_size=settings.max_temp_size,
+        )
+        build_seconds = round(time.perf_counter() - build_started, 3)
+        remaining = remaining_seconds(context)
+        if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
+            raise RuntimeError(f"only {remaining:.0f}s left before the build deadline; refusing to start the upload")
+        after = {
+            f"s3://{settings.bucket}/{key}" for key in store.list_keys(prefix_in_source) if key.endswith(".parquet")
+        }
+        warnings: list[str] = []
+        if after != set(snapshot):
+            warnings.append(
+                f"bronze changed during the build: {len(after)} objects now vs {len(snapshot)} in the snapshot"
+            )
+        publish_started = time.perf_counter()
+        result = publish(
+            store,
+            build_id=build_id,
+            local_dir=target,
+            stats=stats,
+            source=settings.source,
+            source_files=snapshot,
+            prefix=settings.prefix,
+            transform_version=settings.transform_version,
+            duckdb_version=duckdb.__version__,
+            keep=settings.keep,
+            warnings=tuple(warnings),
+        )
+        publish_seconds = round(time.perf_counter() - publish_started, 3)
+        usage = shutil.disk_usage(workspace)
+
+    duration = round(time.perf_counter() - started, 3)
+    LOGGER.info(
+        "silver phases build_seconds=%s publish_seconds=%s tmp_used_bytes=%s tmp_free_bytes=%s",
+        build_seconds,
+        publish_seconds,
+        usage.used,
+        usage.free,
+    )
+    LOGGER.info(
+        "silver build finished build_id=%s rows_in=%s rows_out=%s duplicates_removed=%s "
+        "partitions=%s uploaded_bytes=%s deleted_builds=%s warnings=%s duration_seconds=%s",
+        build_id,
+        stats.rows_in,
+        stats.rows_out,
+        stats.duplicates_removed,
+        stats.partitions,
+        result.uploaded_bytes,
+        list(result.deleted_builds),
+        list(result.warnings),
+        duration,
+    )
+    return {
+        "build_id": build_id,
+        "rows_in": stats.rows_in,
+        "rows_out": stats.rows_out,
+        "duplicates_removed": stats.duplicates_removed,
+        "partitions": stats.partitions,
+        "uploaded_bytes": result.uploaded_bytes,
+        "deleted_builds": list(result.deleted_builds),
+        "warnings": list(result.warnings),
+        "swept_workspaces": swept,
+        "build_seconds": build_seconds,
+        "publish_seconds": publish_seconds,
+        "duration_seconds": duration,
+    }
