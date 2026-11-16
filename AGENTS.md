@@ -181,6 +181,9 @@ flowchart LR
   round-trips (`*.test.ts`); run `npm test` in `scraper`. CI runs it alongside `typecheck` + `lint`.
 - **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
   formatting and linting on every commit.
+- **Test memory** – Jest and Vitest are capped at two workers (`infrastructure/jest.config.js`,
+  `frontend/vitest.config.ts`). On a low-memory machine use `MISE_JOBS=1 mise run //:test` so
+  modules run one at a time; concurrent default-worker Jest runs have exhausted a 17.6 GB WSL VM.
 
 ## Security & Compliance
 
