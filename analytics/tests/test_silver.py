@@ -495,13 +495,13 @@ def test_dedupe_survivor_is_thread_independent(tmp_path: Path, duck) -> None:
     four = run_build(source, tmp_path / "silver-ties-4", threads=4)
     assert one.rows_out == four.rows_out == 1
 
-    def survivor(target: Path) -> tuple[object, ...]:
+    def survivor(target: Path | str) -> tuple[object, ...]:
         glob = f"{target}/**/*.parquet"
         return duck.execute(
             f"SELECT transfers_raw FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=true)"
         ).fetchone()
 
-    assert survivor(tmp_path / "silver-ties-1") == survivor(tmp_path / "silver-ties-4")
+    assert survivor(tmp_path / "silver-ties-1") == survivor(tmp_path / "silver-ties-4") == (0,)
     left = f"read_parquet('{tmp_path}/silver-ties-1/**/*.parquet', hive_partitioning=true)"
     right = f"read_parquet('{tmp_path}/silver-ties-4/**/*.parquet', hive_partitioning=true)"
     assert duck.execute(f"SELECT count(*) FROM (SELECT * FROM {left} EXCEPT ALL SELECT * FROM {right})").fetchone() == (
@@ -510,6 +510,32 @@ def test_dedupe_survivor_is_thread_independent(tmp_path: Path, duck) -> None:
     assert duck.execute(f"SELECT count(*) FROM (SELECT * FROM {right} EXCEPT ALL SELECT * FROM {left})").fetchone() == (
         0,
     )
+
+
+def test_dedupe_survivor_is_deterministic_across_file_order(tmp_path: Path, duck) -> None:
+    """The full ORDER BY must pick the same row even when the scan order is reversed."""
+    low = write_bronze(tmp_path / "a", [bronze_row(transfers=0, train_number="1001")], schema_version=2)
+    high = write_bronze(tmp_path / "b", [bronze_row(transfers=2, train_number="1001")], schema_version=2)
+    forward = run_build([str(low), str(high)], tmp_path / "silver-forward")
+    reverse = run_build([str(high), str(low)], tmp_path / "silver-reverse")
+    assert forward.duplicates_removed == reverse.duplicates_removed == 1
+
+    def survivor(target: Path | str) -> tuple[object, ...]:
+        glob = f"{target}/**/*.parquet"
+        return duck.execute(
+            f"SELECT transfers_raw FROM read_parquet('{glob}', union_by_name=true, hive_partitioning=true)"
+        ).fetchone()
+
+    assert survivor(forward.target) == survivor(reverse.target) == (0,)
+
+
+def test_coarse_dedupe_hash_is_rejected(tmp_path: Path, bronze_glob: str) -> None:
+    """A hash collision/coarse key must fail the removed-vs-duplicate check, not drop rows."""
+    sql = Path(__file__).parents[1] / "src" / "tpm_analytics" / "sql" / "silver.sql"
+    coarse = tmp_path / "silver-coarse.sql"
+    coarse.write_text(sql.read_text().replace("hash({{DEDUPE_KEY}})", "hash({{DEDUPE_KEY}}) % 2"))
+    with pytest.raises(quality.QualityError, match="removed rows != duplicate rows"):
+        run_build(bronze_glob, tmp_path / "silver-coarse", sql_path=coarse)
 
 
 EXPECTED_SILVER_COLUMNS = (

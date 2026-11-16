@@ -31,6 +31,6 @@ DEDUPE_KEY: tuple[str, ...] = (
 )
 
 # A build may drop duplicates, but never a meaningful share of the corpus. The historical corpus
-# has 1,146 duplicates in 107M rows (0.001 %); 0.01 % is 10x that baseline.
+# has 1,164 duplicates in 107M rows (0.001 %); 0.01 % is 10x that baseline.
 MAX_DUPLICATE_SHARE = 0.0001
 MAX_DUPLICATE_ABSOLUTE = 1000

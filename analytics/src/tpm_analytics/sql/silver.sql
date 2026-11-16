@@ -15,7 +15,7 @@
 COPY (
     -- NOT MATERIALIZED on purpose: DuckDB 2.0 materialises a CTE that is referenced more than
     -- once, and materialising bronze or normalised would spill the whole corpus to disk. Inlining
-    -- trades that for a second column-pruned scan of bronze.
+    -- trades that for multiple column-pruned scans of bronze (four READ_PARQUET nodes).
     WITH bronze AS NOT MATERIALIZED (
         SELECT * FROM {{BRONZE_SOURCE}}
     ),
@@ -30,7 +30,7 @@ COPY (
         FROM (SELECT unnest(stations) AS station FROM read_json_auto('{{STATIONS_PATH}}'))
     ),
 
-    normalised AS (
+    normalised AS NOT MATERIALIZED (
         SELECT
             b.* EXCLUDE (schema_version, train_numbers, source_profile, query_mode),
             COALESCE(b.schema_version, 1) AS schema_version,
@@ -42,14 +42,32 @@ COPY (
         FROM bronze b
     ),
 
-    -- The compactor de-duplicates by this key, but a day that was compacted twice, or whose
-    -- batch files outlived the daily file, can still contain repeats. Silver is the deduplicated
-    -- layer, so the first observation of a key wins and the rest are reported by the build.
-    deduplicated AS (
-        SELECT *
+    -- Deduplicate only keys that actually repeat. A global window over all ~107M rows spills
+    -- more than 9 GB and does not fit the Lambda /tmp; the duplicate set is tiny, so the window
+    -- only sees those rows. hash() gives NULL-safe key equality: USING does not match NULL keys.
+    -- A hash collision is caught by the removed-rows-vs-duplicate-rows check, never silent loss.
+    dedupe_keys AS (
+        SELECT hash({{DEDUPE_KEY}}) AS key_hash
         FROM normalised
+        GROUP BY ALL
+        HAVING count(*) > 1
+    ),
+
+    -- The compactor de-duplicates by this key, but a day that was compacted twice, or whose
+    -- batch files outlived the daily file, can still contain repeats. Keep every row whose key
+    -- is unique, and use a small window to pick the first observation for duplicate keys.
+    normalised_unique AS (
+        SELECT n.*
+        FROM normalised n
+        ANTI JOIN dedupe_keys d ON hash({{DEDUPE_KEY}}) = d.key_hash
+    ),
+
+    normalised_duplicates AS (
+        SELECT n.*
+        FROM normalised n
+        SEMI JOIN dedupe_keys d ON hash({{DEDUPE_KEY}}) = d.key_hash
         QUALIFY row_number() OVER (
-            PARTITION BY {{DEDUPE_KEY}}
+            PARTITION BY hash({{DEDUPE_KEY}})
             ORDER BY observed_at, departure_planned, arrival_planned, duration_minutes,
                 load_factor, fare_lowest_eur, transfers, train_type, train_number,
                 origin_name, dest_name, days_to_departure, load_factor_ordinal,
@@ -57,9 +75,15 @@ COPY (
         ) = 1
     ),
 
+    deduplicated AS (
+        SELECT * FROM normalised_unique
+        UNION ALL
+        SELECT * FROM normalised_duplicates
+    ),
+
     -- Scrapes are keyed by route and the scraper's local departure day; every row of that pair
     -- shares the count. Bucketing by the UTC date would mix two target days around midnight.
-    -- Reads bronze directly so `normalised` stays single-use and is inlined, not materialised.
+    -- Reads bronze directly; `normalised` is NOT MATERIALIZED and inlined where used.
     route_day_density AS (
         SELECT
             route_id,
