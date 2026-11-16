@@ -222,6 +222,20 @@ def test_failure_raises_build_id_stage_and_error(monkeypatch, tmp_path: Path) ->
     assert "no bronze objects" in payload["error"]
     assert payload["log_group"] == "/aws/lambda/analytics"
     assert payload["region"] == "eu-central-1"
+    # Lambda's async error record must carry the whole structured payload.
+    assert len(json.dumps(payload).encode()) < 1024
+
+
+def test_failure_does_not_create_an_sns_client(monkeypatch, tmp_path: Path) -> None:
+    _empty_bucket(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        handler_module.boto3,
+        "client",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("handler must not publish SNS")),
+    )
+
+    with pytest.raises(RuntimeError):
+        handler_module.handler({}, None)
 
 
 def test_failure_in_build_reports_build_stage(monkeypatch, tmp_path: Path, bronze_glob: str) -> None:
@@ -265,6 +279,11 @@ def test_redact_error_hides_secret_fragments() -> None:
     assert "AKIA" not in redacted
     assert "s3cr3t" not in redacted
     assert "tok" not in redacted
+
+
+def test_redact_error_hides_secret_key_fragments() -> None:
+    redacted = handler_module.redact_error("credentials SECRET_KEY 'abc123' leaked")
+    assert "abc123" not in redacted
 
 
 def test_failure_message_uses_lambda_log_group(monkeypatch) -> None:

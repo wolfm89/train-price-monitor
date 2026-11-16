@@ -253,6 +253,7 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
               requestId: 'req-2',
               functionArn: 'arn:aws:lambda:eu-central-1:111111111111:function:AnalyticsStack-SilverBuildLambda',
               condition: 'RetriesExhausted',
+              approximateInvokeCount: 2,
             },
             responseContext: { statusCode: 200, functionError: 'Unhandled' },
             responsePayload: {
@@ -274,7 +275,27 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     ],
   });
 
-  expect(calls).toHaveLength(6);
+  for (const errorMessage of ['{"event":"other"}', 'null', '{"event":']) {
+    await forwarder.handler({
+      Records: [
+        {
+          Sns: {
+            Message: JSON.stringify({
+              version: '1.0',
+              requestContext: {
+                functionArn: 'arn:aws:lambda:eu-central-1:111111111111:function:AnalyticsStack-SilverBuildLambda',
+                condition: 'RetriesExhausted',
+              },
+              responseContext: { statusCode: 200, functionError: 'Unhandled' },
+              responsePayload: { errorType: 'RuntimeError', errorMessage },
+            }),
+          },
+        },
+      ],
+    });
+  }
+
+  expect(calls).toHaveLength(9);
   expect(calls[0].title).toContain('AWS Budgets:');
   expect(calls[0].priority).toBe('0');
   expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
@@ -288,6 +309,9 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
   expect(calls[4].priority).toBe('1');
   expect(calls[4].url).toContain('/functions/AnalyticsStack-SilverBuildLambda');
   expect(calls[5].title).toBe('Silver build failed');
-  expect(calls[5].message).toContain('[publish] OSError: s3 is down | build b3');
+  expect(calls[5].message).toContain('[publish] OSError: s3 is down | build b3 | attempts 2');
   expect(calls[5].url).toContain(encodeURIComponent('/aws/lambda/fn'));
+  for (const index of [6, 7, 8]) {
+    expect(calls[index].title).toBe('Silver build invocation failed');
+  }
 });

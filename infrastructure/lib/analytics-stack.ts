@@ -121,6 +121,7 @@ export class AnalyticsStack extends cdk.Stack {
       })
     );
 
+    // The async on-failure destination publishes with the function's execution role.
     props.alertTopic.grantPublish(silverFunction);
 
     const analyticsPaused = String(this.node.tryGetContext('analytics_paused') ?? '') === '1';

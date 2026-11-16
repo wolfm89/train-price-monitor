@@ -89,7 +89,8 @@ function format(payload) {
         (payload.stage ? '[' + payload.stage + '] ' : '') +
         (payload.error_type ? payload.error_type + ': ' : '') +
         (payload.error || 'no error message') +
-        (payload.build_id ? ' | build ' + payload.build_id : ''),
+        (payload.build_id ? ' | build ' + payload.build_id : '') +
+        (payload.attempts ? ' | attempts ' + payload.attempts : ''),
       priority: '1',
       sound: 'siren',
       timestamp: String(Math.floor(Date.now() / 1000)),
@@ -115,7 +116,12 @@ function format(payload) {
         // Timeout/OOM records have no JSON payload; fall through to the generic message.
       }
     }
-    if (structured && structured.event === '${SILVER_FAILURE_EVENT}') return format(structured);
+    if (structured && structured.event === '${SILVER_FAILURE_EVENT}') {
+      if (context.approximateInvokeCount && !structured.attempts) {
+        structured.attempts = context.approximateInvokeCount;
+      }
+      return format(structured);
+    }
     const reason = [context.condition, response.functionError].filter(Boolean).join(' / ') || 'failed';
     return {
       title: 'Silver build invocation failed',

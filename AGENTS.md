@@ -320,10 +320,10 @@ flowchart LR
   the alarm in the console. SNS cannot deliver to Pushover directly — it requires an HTTPS endpoint
   that answers its `SubscriptionConfirmation` handshake.
 - **Analytics and budget alerts** use the same topic. The weekly silver build raises a structured
-  `silver_build_failed` payload on any handled exception; Lambda's on-failure destination publishes
-  it after the async retry (no new alarm). The forwarder links to the analytics log group and
-  includes the build id and stage. A killed container or exhausted retry also reaches the same
-  destination. CloudWatch and Budgets
+  `silver_build_failed` payload when a run fails; Lambda retries once, and the on-failure
+  destination publishes exactly one notification only after every attempt fails (no new alarm). A
+  retry that succeeds is silent. The forwarder links to the analytics log group and includes the
+  build id and stage. A killed container also reaches the same destination. CloudWatch and Budgets
   publish through source-account/source-ARN conditions; do not add SSE with the AWS-managed
   `alias/aws/sns` key, because CloudWatch alarms cannot use it, and a customer-managed key would
   exceed the €1 budget. The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 %

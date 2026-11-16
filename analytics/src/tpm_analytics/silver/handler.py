@@ -37,7 +37,7 @@ PUBLISH_RESERVE_SECONDS = _CONFIG.lambda_.publish_reserve_seconds
 # The measured full build is ~525 s; do not start one that cannot finish.
 BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
 
-_SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
+_SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET_KEY|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
 
 
 def redact_error(message: str) -> str:
@@ -277,6 +277,13 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     try:
         return _run_build(event, context, build_id, progress)
     except Exception as error:
-        # Lambda async retries fire on this exception; the on-failure destination publishes
-        # the structured payload after the final attempt, so there is exactly one SNS message.
+        # A failed attempt is logged for transient-error diagnosis, then re-raised so Lambda
+        # retries it. The on-failure destination publishes only after every attempt fails, so
+        # a recovered retry is silent and a final failure produces exactly one SNS message.
+        LOGGER.warning(
+            "silver build attempt failed build_id=%s stage=%s error_type=%s",
+            build_id,
+            progress["stage"],
+            type(error).__name__,
+        )
         raise RuntimeError(json.dumps(failure_message(build_id, error, progress["stage"]))) from error

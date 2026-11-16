@@ -72,6 +72,7 @@ describe('AnalyticsStack', () => {
       TRANSFORM_VERSION: 'abc123def456',
     });
     expect(fn.Properties.Environment.Variables).toHaveProperty('LOG_GROUP_NAME');
+    expect(fn.Properties.Environment.Variables).not.toHaveProperty('ALERT_TOPIC_ARN');
     expect(fn.Properties.Environment.Variables).not.toHaveProperty('AWS_REGION');
     const groups = template.findResources('AWS::Logs::LogGroup');
     const logGroupId = Object.keys(groups)[0];
@@ -205,7 +206,7 @@ describe('AnalyticsStack', () => {
     expect(bronzeWrites).toHaveLength(0);
   });
 
-  test('publishes failures to the existing alert topic', () => {
+  test('grants the function destination access to the alert topic', () => {
     const template = synth();
     const publish = statements(template).find((statement) => {
       const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];

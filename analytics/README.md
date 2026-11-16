@@ -187,9 +187,10 @@ failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE`
 invoke once, confirm the Pushover alert and the unchanged pointer, then restore the previous
 `Environment.Variables` JSON; a CDK deploy also restores it.
 
-A handled failure raises a `silver_build_failed` payload with the build id and stage; Lambda's
-on-failure destination publishes it after the async retry. If the container is killed or the retry
-is exhausted, the same destination publishes the invocation failure. The pointer is
+A failed attempt raises a `silver_build_failed` payload with the build id and stage; Lambda retries
+once, and the on-failure destination publishes exactly one notification only after every attempt
+fails. A retry that succeeds is silent. If the container is killed or the retry is exhausted, the
+same destination publishes the invocation failure (a timeout pages after roughly 16 minutes). The pointer is
 only moved by a verified build; if the pointer PUT itself errors, check `silver/_latest.json` before
 rolling anything back. A bad pointer can be rolled back to the previous build (kept for at least a
 day). Config files are loaded at import, so a missing or invalid config fails Lambda INIT; the
