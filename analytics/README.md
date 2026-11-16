@@ -79,24 +79,24 @@ refused: an existing target, a failed gate, an empty corpus, a URI instead of a 
 DuckDB/OS error. argparse also exits 2 for a usage error. Linux and macOS are supported;
 Windows is untested.
 
-## Scale (measured 2026-11-14)
+## Scale (measured 2026-11-16)
 
-The full history is 107,129,248 bronze rows in 226 files (1.7 GB) and produces 2.9 GB of silver in
-8 departure-month partitions. On a workstation with 8 GB for DuckDB and 4 threads the build takes
-8m45s, peaks at 8.5 GB RSS and removes 1,146 duplicate observations.
+The full history is 107,337,180 bronze rows in 245 files (1.7 GB) and produces 1.5 GB of silver in
+8 departure-month partitions. The first production invocation with 8 GB DuckDB memory, 4 threads and
+a 5 GB temp limit exhausted both Lambda memory and the temp directory after 61 s. The working local
+profile is 6 GB DuckDB memory, 2 threads and a 7 GB temp limit: the verified build takes 8m04s,
+removes 1,162 duplicate observations and peaks at 3.5 GB of spill. The dedupe now computes a
+null-safe key hash, identifies only the repeating keys and applies the row window to that small set;
+a global window over all rows needs more than 9 GB of spill.
 
-The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s.
-The first production invocation (2026-11-16) with `memory_limit=8GB`, `threads=4` and a 5 GB temp
-limit exhausted both Lambda memory (10,231/10,240 MB) and the temp directory (4.6/4.6 GiB) after
-61 s. The deployed profile is therefore `memory_limit=6GB`, `threads=2`, `SILVER_MAX_TEMP_SIZE=7GB`,
-leaving roughly 3 GB for the output and 7 GB of spill inside the 10 GB `/tmp`. Those workstation
-numbers are a starting point, not the Lambda profile; measure the next run. If the corpus outgrows
-it, split the build by departure month.
+The Lambda is sized for that corpus: 10,240 MB memory, 10,240 MB ephemeral storage, 900 s,
+`memory_limit=6GB`, `threads=2`, `SILVER_MAX_TEMP_SIZE=7GB`. Measure the next production run before
+trusting the schedule. If the corpus outgrows it, split the build by departure month.
 
 ```bash
 uv run python -m tpm_analytics.silver.build \
   --source '/data/prices/**/*.parquet' --target /data/silver \
-  --threads 4 --memory-limit 8GB
+  --threads 2 --memory-limit 6GB --max-temp-size 7GB
 ```
 
 Re-run this before an engine upgrade and before the stack lands. It is not part of CI.
