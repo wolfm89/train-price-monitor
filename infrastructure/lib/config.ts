@@ -27,6 +27,7 @@ export interface SilverConfig {
     duckdb_max_temp_size: string;
     publish_reserve_seconds: number;
     build_budget_seconds: number;
+    retry_attempts: number;
     max_event_age_minutes: number;
   };
   local: DuckDbConfig;
@@ -84,6 +85,7 @@ const SILVER_SCHEMA: Schema = {
     duckdb_max_temp_size: 'string',
     publish_reserve_seconds: 'number',
     build_budget_seconds: 'number',
+    retry_attempts: 'number',
     max_event_age_minutes: 'number',
   },
   local: {
@@ -163,6 +165,7 @@ function validateSilverValues(config: SilverConfig): void {
   assertIntegerInRange(lambda.timeout_seconds, 1, 900, 'silver-config.json.lambda.timeout_seconds');
   assertIntegerInRange(lambda.ephemeral_mib, 512, 10_240, 'silver-config.json.lambda.ephemeral_mib');
   assertIntegerInRange(lambda.threads, 1, 10_240, 'silver-config.json.lambda.threads');
+  assertIntegerInRange(lambda.retry_attempts, 0, 2, 'silver-config.json.lambda.retry_attempts');
   // Lambda EventInvokeConfig allows at most six hours.
   assertIntegerInRange(lambda.max_event_age_minutes, 1, 360, 'silver-config.json.lambda.max_event_age_minutes');
   assertIntegerInRange(schedule.retry_attempts, 0, 185, 'silver-config.json.schedule.retry_attempts');

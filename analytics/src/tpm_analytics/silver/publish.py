@@ -108,6 +108,29 @@ def _read_pointer(store: ObjectStore, prefix: str) -> Pointer | None:
     return pointer
 
 
+def _latest_manifest(store: ObjectStore, prefix: str) -> tuple[str | None, BuildManifest | None]:
+    """Newest readable build, falling back to a scan when the pointer is missing or malformed.
+
+    The pointer is the normal source. If it is corrupt, both publish guards (no backwards
+    move and no >10% corpus shrink) must still compare against the newest complete build.
+    """
+    pointer = _read_pointer(store, prefix)
+    if pointer is not None:
+        try:
+            return pointer.build_id, BuildManifest.from_json(store.get_bytes(pointer.manifest))
+        except FileNotFoundError, ClientError, TypeError, ValueError, KeyError:
+            LOGGER.warning("pointer manifest became unreadable build_id=%s", pointer.build_id)
+
+    builds = build_ids(store, prefix)
+    if not builds:
+        return None, None
+    build_id = builds[0]
+    try:
+        return build_id, BuildManifest.from_json(store.get_bytes(manifest_key(prefix, build_id)))
+    except FileNotFoundError, ClientError, TypeError, ValueError, KeyError:
+        return build_id, None
+
+
 def verify_upload(store: ObjectStore, manifest: BuildManifest) -> None:
     """The upload is only usable if every file is there with the recorded size."""
     prefix_root = build_prefix(manifest.prefix, manifest.build_id) + "/"
@@ -165,17 +188,12 @@ def publish(
         raise ValueError(f"build prefix {prefix_root} already exists")
 
     # A slower, older run must not move the pointer backwards over a newer build.
-    current = _read_pointer(store, prefix)
-    if current is not None and timestamp_of(current.build_id) > timestamp_of(build_id):
-        raise ValueError(f"build {current.build_id} is already newer than {build_id}")
+    current_id, previous = _latest_manifest(store, prefix)
+    if current_id is not None and timestamp_of(current_id) > timestamp_of(build_id):
+        raise ValueError(f"build {current_id} is already newer than {build_id}")
 
-    if current is not None:
-        try:
-            previous = BuildManifest.from_json(store.get_bytes(current.manifest))
-        except FileNotFoundError, ClientError, TypeError, ValueError:
-            previous = None
-        if previous is not None and previous.rows_in and stats.rows_in < previous.rows_in * 0.9:
-            raise ValueError(f"corpus shrank from {previous.rows_in} to {stats.rows_in} rows; refusing to publish")
+    if previous is not None and previous.rows_in and stats.rows_in < previous.rows_in * 0.9:
+        raise ValueError(f"corpus shrank from {previous.rows_in} to {stats.rows_in} rows; refusing to publish")
 
     sql_sha, stations_sha, constants_sha = asset_hashes()
     transform_version = transform_version or f"sql-{sql_sha[:12]}"
@@ -225,9 +243,9 @@ def publish(
         verify_upload(store, manifest)
 
         pointer = Pointer(build_id=build_id, manifest=key, updated_at=utc_now().isoformat())
-        latest = _read_pointer(store, prefix)
-        if latest is not None and timestamp_of(latest.build_id) > timestamp_of(build_id):
-            raise ValueError(f"a newer build ({latest.build_id}) was published while this one was uploading")
+        latest_id, _ = _latest_manifest(store, prefix)
+        if latest_id is not None and timestamp_of(latest_id) > timestamp_of(build_id):
+            raise ValueError(f"a newer build ({latest_id}) was published while this one was uploading")
         pointer_attempted = True
         store.put_bytes(pointer.to_json(), pointer_key(prefix), content_type="application/json")
         LOGGER.info("pointer moved build_id=%s", build_id)

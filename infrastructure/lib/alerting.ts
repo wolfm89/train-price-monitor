@@ -51,9 +51,11 @@ export const PUSHOVER_FORWARDER_SOURCE = `
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const client = new SSMClient({});
 let cached;
+let cachedAt = 0;
 
 async function credentials() {
-  if (cached) return cached;
+  const ttl = Number(process.env.PUSHOVER_KEY_TTL_MS || '900000');
+  if (cached && Date.now() - cachedAt < ttl) return cached;
   const read = async (name) => {
     const res = await client.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
     if (!res.Parameter || !res.Parameter.Value) throw new Error('empty SSM parameter ' + name);
@@ -63,6 +65,7 @@ async function credentials() {
     token: await read(process.env.PUSHOVER_TOKEN_PARAM),
     user: await read(process.env.PUSHOVER_USER_PARAM),
   };
+  cachedAt = Date.now();
   return cached;
 }
 
@@ -92,6 +95,34 @@ function format(payload) {
       timestamp: String(Math.floor(Date.now() / 1000)),
       url,
       url_title: 'Open the build logs',
+    };
+  }
+
+  // Lambda async invocation failure (timeout/OOM/retries exhausted). The handler cannot
+  // publish its own silver_build_failed message after a killed container, so this is the
+  // backstop. The shared topic only receives this from the analytics function today.
+  if (payload && payload.requestContext && payload.requestContext.functionArn) {
+    const context = payload.requestContext;
+    const response = payload.responseContext || {};
+    const parts = String(context.functionArn || '').split(':');
+    const region = safeRegion(parts[3] || process.env.AWS_REGION);
+    const functionName = parts[6] || 'unknown';
+    const error = payload.responsePayload || {};
+    const reason = [context.condition, response.functionError].filter(Boolean).join(' / ') || 'failed';
+    return {
+      title: 'Silver build invocation failed',
+      message: (
+        reason +
+        (error.errorType ? ': ' + error.errorType : '') +
+        (error.errorMessage ? ' - ' + error.errorMessage : '')
+      ).slice(0, 1000),
+      priority: '1',
+      sound: 'siren',
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      url:
+        'https://' + region + '.console.aws.amazon.com/lambda/home?region=' + region +
+        '#/functions/' + encodeURIComponent(functionName) + '?tab=logs',
+      url_title: 'Open the function logs',
     };
   }
 
@@ -145,9 +176,15 @@ exports.handler = async (event) => {
     if (!notification) continue;
     const body = new URLSearchParams({ token, user, ...notification });
     const res = await fetch('https://api.pushover.net/1/messages.json', { method: 'POST', body });
-    // Throw so the SNS-to-Lambda async retry can deliver it; a logged failure
-    // would just lose the alarm.
-    if (!res.ok) throw new Error('Pushover rejected the notification: ' + res.status + ' ' + (await res.text()));
+    if (!res.ok) {
+      // A repeated 4xx never succeeds and a burst can get the caller blocked. Let the
+      // async retry handle only transient 5xx/network failures.
+      if (res.status >= 400 && res.status < 500) {
+        console.error('Pushover rejected the notification permanently: ' + res.status);
+        continue;
+      }
+      throw new Error('Pushover rejected the notification: ' + res.status + ' ' + (await res.text()));
+    }
   }
 };
 `;
@@ -174,7 +211,12 @@ export class AlertingStack extends cdk.Stack {
         actions: ['sns:Publish'],
         principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
         resources: [this.topic.topicArn],
-        conditions: { StringEquals: { 'aws:SourceOwner': this.account } },
+        conditions: {
+          StringEquals: { 'aws:SourceOwner': this.account },
+          ArnLike: {
+            'aws:SourceArn': `arn:${cdk.Stack.of(this).partition}:cloudwatch:${this.region}:${this.account}:alarm:*`,
+          },
+        },
       })
     );
 
@@ -222,7 +264,9 @@ export class AlertingStack extends cdk.Stack {
         resources: [this.topic.topicArn],
         conditions: {
           StringEquals: { 'aws:SourceAccount': this.account },
-          ArnLike: { 'aws:SourceArn': `arn:aws:budgets::${this.account}:*` },
+          ArnLike: {
+            'aws:SourceArn': `arn:${cdk.Stack.of(this).partition}:budgets::${this.account}:*`,
+          },
         },
       })
     );
@@ -238,10 +282,13 @@ export class AlertingStack extends cdk.Stack {
       code: lambda.Code.fromInline(PUSHOVER_FORWARDER_SOURCE),
       logGroup: new logs.LogGroup(this, 'PushoverForwarderLogs', {
         retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
       environment: {
         PUSHOVER_TOKEN_PARAM: token,
         PUSHOVER_USER_PARAM: user,
+        // Re-read the SSM secrets at least every 15 minutes so rotation converges.
+        PUSHOVER_KEY_TTL_MS: '900000',
       },
     });
 

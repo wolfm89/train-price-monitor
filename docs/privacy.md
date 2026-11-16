@@ -77,6 +77,13 @@ together with an update to the policy (both languages and the "Stand / Last upda
   there (or when removing the sandbox identity), the deletion stops before the user row is removed,
   so the user can retry; an absent entry or an address SES considers invalid counts as removed.
 
+## Operational alerts
+
+CloudWatch alarms, AWS Budgets notifications and silver-build failures are forwarded to the
+operator's Pushover account (a US service). They carry alarm names, metric values, budget amounts and
+redacted build errors only; no user data is sent. If a future alert includes user data, the public
+policy must be updated first.
+
 ## Scripts
 
 - `scripts/backfill-ttl.mjs` gives journeys and notifications created before the TTL existed their

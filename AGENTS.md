@@ -321,9 +321,12 @@ flowchart LR
   that answers its `SubscriptionConfirmation` handshake.
 - **Analytics and budget alerts** use the same topic. The weekly silver build publishes a
   `silver_build_failed` JSON message on any handled exception (no new alarm); the forwarder links
-  to the analytics log group and includes the build id and stage. A Lambda timeout or OOM cannot
-  run the handler and remains the known residual gap; time the first run before enabling the
-  schedule. The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 %
+  to the analytics log group and includes the build id and stage. Async invocations retry once;
+  when retries are exhausted or the container is killed, Lambda's on-failure destination publishes
+  the invocation failure to the same topic and the forwarder raises an alert. CloudWatch and Budgets
+  publish through source-account/source-ARN conditions; do not add SSE with the AWS-managed
+  `alias/aws/sns` key, because CloudWatch alarms cannot use it, and a customer-managed key would
+  exceed the €1 budget. The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD/month** with ACTUAL 50 %
   and FORECASTED 100 % notifications; AWS Budgets are USD-only, so $1.00 is the deliberately
   conservative €1 guardrail (≈ €0.86). Budget messages are plain text, so the forwarder branches on
   the `AWS Budgets:` subject before JSON parsing. The manual `Zero-Spend Budget` is an email
@@ -429,6 +432,7 @@ Environment variables (never commit values):
 | `PUSHOVER_USER_KEY`            | Infrastructure      | Pushover user key (repo secret; CI writes the SSM param)                                                    |
 | `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda     | SSM parameter name for the Pushover app token (injected by CDK)                                             |
 | `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
+| `PUSHOVER_KEY_TTL_MS`          | Alerting Lambda     | How long the resolved Pushover SSM values are cached (default 15 min)                                       |
 | `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
 | `CDK_ANALYTICS_PAUSED`         | Infrastructure      | `1` disables the weekly silver Scheduler schedule                                                           |
 | `CDK_TRANSFORM_VERSION`        | Infrastructure      | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`                          |

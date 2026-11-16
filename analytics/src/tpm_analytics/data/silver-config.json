@@ -16,7 +16,8 @@
     "duckdb_max_temp_size": "5GB",
     "publish_reserve_seconds": 180,
     "build_budget_seconds": 600,
-    "max_event_age_minutes": 15
+    "retry_attempts": 1,
+    "max_event_age_minutes": 45
   },
   "local": {
     "threads": 2,

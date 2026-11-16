@@ -47,6 +47,8 @@ describe('shared configuration', () => {
     expect(lambda.publish_reserve_seconds).toBeLessThan(lambda.build_budget_seconds);
     expect(lambda.build_budget_seconds).toBeLessThan(lambda.timeout_seconds);
     expect(lambda.build_budget_seconds + lambda.publish_reserve_seconds).toBeLessThanOrEqual(lambda.timeout_seconds);
+    expect(lambda.retry_attempts).toBe(1);
+    expect(lambda.max_event_age_minutes).toBeGreaterThan(lambda.timeout_seconds / 60);
     expect(SILVER_CONFIG.keep).toBeGreaterThanOrEqual(2);
   });
 

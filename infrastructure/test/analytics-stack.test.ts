@@ -105,11 +105,16 @@ describe('AnalyticsStack', () => {
     template.hasResourceProperties('AWS::Scheduler::Schedule', { State: 'DISABLED' });
   });
 
-  test('caps function retries and the throttle window', () => {
+  test('retries once and sends exhausted invocations to the alert topic', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
-      MaximumRetryAttempts: 0,
+      MaximumRetryAttempts: SILVER_CONFIG.lambda.retry_attempts,
       MaximumEventAgeInSeconds: SILVER_CONFIG.lambda.max_event_age_minutes * 60,
+      DestinationConfig: {
+        OnFailure: {
+          Destination: `arn:aws:sns:eu-central-1:111111111111:${ALERT_TOPIC_NAME}`,
+        },
+      },
     });
   });
 

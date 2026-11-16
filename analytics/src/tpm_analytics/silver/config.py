@@ -42,6 +42,7 @@ class LambdaConfig:
     duckdb_max_temp_size: str
     publish_reserve_seconds: int
     build_budget_seconds: int
+    retry_attempts: int
     max_event_age_minutes: int
 
 
@@ -102,6 +103,8 @@ def _validate(config: SilverConfig) -> SilverConfig:
         raise ValueError("require publish_reserve < build_budget < timeout")
     if swap.build_budget_seconds + swap.publish_reserve_seconds > swap.timeout_seconds:
         raise ValueError("build_budget + publish_reserve must fit inside the timeout")
+    if not 0 <= swap.retry_attempts <= 2:
+        raise ValueError("Lambda retry_attempts must be between 0 and 2")
     if not 0 <= config.schedule.retry_attempts <= 185:
         raise ValueError("scheduler retry_attempts must be between 0 and 185")
     if not 1 <= config.schedule.max_event_age_minutes <= 1440:
@@ -136,6 +139,7 @@ def load_config() -> SilverConfig:
                 duckdb_max_temp_size=lambda_raw["duckdb_max_temp_size"],
                 publish_reserve_seconds=int(lambda_raw["publish_reserve_seconds"]),
                 build_budget_seconds=int(lambda_raw["build_budget_seconds"]),
+                retry_attempts=int(lambda_raw["retry_attempts"]),
                 max_event_age_minutes=int(lambda_raw["max_event_age_minutes"]),
             ),
             local=DuckDbConfig(

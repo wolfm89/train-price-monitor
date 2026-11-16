@@ -145,8 +145,9 @@ The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 ## Deployment
 
-`AnalyticsStack` deploys `analytics/Dockerfile` as an x86_64 Lambda. Sizing, retention and the
-scheduler retry/max-age policy live in `analytics/src/tpm_analytics/data/silver-config.json`, which
+`AnalyticsStack` deploys `analytics/Dockerfile` as an x86_64 Lambda. Sizing, retention, the Lambda
+async retry and the scheduler retry/max-age policy live in
+`analytics/src/tpm_analytics/data/silver-config.json`, which
 `infrastructure/lib/config.ts` reads at synth time: 10,240 MB memory, 900 s, 10,240 MB `/tmp`, no
 VPC, reserved concurrency 1. The weekday, UTC timezone and 30-minute compactor offset stay in
 `infrastructure/lib/config.ts` and `analytics-stack.ts`. EventBridge Scheduler runs it every Sunday at
@@ -186,12 +187,13 @@ invoke once, confirm the Pushover alert and the unchanged pointer, then restore 
 `Environment.Variables` JSON; a CDK deploy also restores it.
 
 A handled failure publishes `silver_build_failed` with the build id and stage to `ALERT_TOPIC_ARN`.
-The pointer is only moved by a verified build; if the pointer PUT itself errors, check
-`silver/_latest.json` before rolling anything back. A bad pointer can be rolled back to the previous
-build (kept for at least a day). Config files are loaded at import, so a missing or invalid config
-fails Lambda INIT; the Docker build imports the handler and catches that before deploy. A Lambda
-timeout or OOM cannot run the handler and remains the known residual gap: time the first run and
-revisit with an on-failure destination if it happens.
+Async invocations retry once; if retries are exhausted or the container is killed, Lambda publishes
+the invocation failure to the same topic and the Pushover forwarder raises an alert. The pointer is
+only moved by a verified build; if the pointer PUT itself errors, check `silver/_latest.json` before
+rolling anything back. A bad pointer can be rolled back to the previous build (kept for at least a
+day). Config files are loaded at import, so a missing or invalid config fails Lambda INIT; the
+Docker build imports the handler and catches that before deploy. A manual compactor run that deletes
+a bronze key during the build fails the run, and the retry rebuilds from the new key set.
 `InfrastructureStack` runs `ToolkitCleaner` daily, which removes unused CDK ECR and S3 assets after
 checking deployed CloudFormation templates; unused assets younger than 10 days are retained.
 

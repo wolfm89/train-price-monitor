@@ -4,6 +4,7 @@ import {
   aws_ecr_assets as ecrAssets,
   aws_iam as iam,
   aws_lambda as lambda,
+  aws_lambda_destinations as lambdaDestinations,
   aws_logs as logs,
   aws_s3 as s3,
   aws_scheduler as scheduler,
@@ -53,10 +54,14 @@ export class AnalyticsStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(SILVER_CONFIG.lambda.timeout_seconds),
       ephemeralStorageSize: cdk.Size.mebibytes(SILVER_CONFIG.lambda.ephemeral_mib),
       reservedConcurrentExecutions: 1,
-      // One attempt. Function errors are deterministic (gate/refusal); throttle retries
-      // are capped by maxEventAge so a run queued behind a manual build is dropped.
-      retryAttempts: 0,
+      // One async retry covers transient S3/throttle errors; every run has a fresh build id
+      // and the pointer is the only commit, so a duplicate is safe. The max age is longer
+      // than the timeout so a late first attempt still leaves time for the retry.
+      retryAttempts: SILVER_CONFIG.lambda.retry_attempts,
       maxEventAge: cdk.Duration.minutes(SILVER_CONFIG.lambda.max_event_age_minutes),
+      // Retries exhausted or a killed container: Lambda publishes the failure destination;
+      // the handler's own SNS message cannot run after a timeout/OOM.
+      onFailure: new lambdaDestinations.SnsDestination(props.alertTopic),
       logGroup,
       environment: {
         SILVER_BUCKET: props.dataBucket.bucketName,

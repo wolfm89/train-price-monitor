@@ -21,7 +21,7 @@ describe('AlertingStack', () => {
     });
   });
 
-  test('lets CloudWatch publish alarm state changes', () => {
+  test('lets only this account’s CloudWatch alarms publish state changes', () => {
     const template = synth();
     template.hasResourceProperties('AWS::SNS::TopicPolicy', {
       PolicyDocument: {
@@ -29,6 +29,10 @@ describe('AlertingStack', () => {
           Match.objectLike({
             Action: 'sns:Publish',
             Principal: { Service: 'cloudwatch.amazonaws.com' },
+            Condition: {
+              StringEquals: { 'aws:SourceOwner': '111111111111' },
+              ArnLike: { 'aws:SourceArn': Match.anyValue() },
+            },
           }),
         ]),
       },
@@ -93,7 +97,7 @@ describe('AlertingStack', () => {
             Principal: { Service: 'budgets.amazonaws.com' },
             Condition: {
               StringEquals: { 'aws:SourceAccount': '111111111111' },
-              ArnLike: { 'aws:SourceArn': 'arn:aws:budgets::111111111111:*' },
+              ArnLike: { 'aws:SourceArn': Match.anyValue() },
             },
           }),
         ]),
@@ -101,10 +105,21 @@ describe('AlertingStack', () => {
     });
   });
 
-  test('forwarder carries the analytics and budget branches', () => {
+  test('forwarder carries the analytics, Lambda failure and budget branches', () => {
     expect(PUSHOVER_FORWARDER_SOURCE).toContain('silver_build_failed');
+    expect(PUSHOVER_FORWARDER_SOURCE).toContain('requestContext');
     expect(PUSHOVER_FORWARDER_SOURCE).toContain('AWS Budgets:');
     expect(PUSHOVER_FORWARDER_SOURCE).toContain('billing/home#/budgets');
+    expect(PUSHOVER_FORWARDER_SOURCE).toContain('res.status >= 400');
+  });
+
+  test('sets the Pushover key TTL', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({ PUSHOVER_KEY_TTL_MS: '900000' }),
+      },
+    });
   });
 });
 
@@ -209,7 +224,26 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     ],
   });
 
-  expect(calls).toHaveLength(4);
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            version: '1.0',
+            requestContext: {
+              requestId: 'req-1',
+              functionArn: 'arn:aws:lambda:eu-central-1:111111111111:function:AnalyticsStack-SilverBuildLambda',
+              condition: 'RetriesExhausted',
+            },
+            responseContext: { statusCode: 200, functionError: 'Unhandled' },
+            responsePayload: { errorType: 'RuntimeError', errorMessage: 'boom' },
+          }),
+        },
+      },
+    ],
+  });
+
+  expect(calls).toHaveLength(5);
   expect(calls[0].title).toContain('AWS Budgets:');
   expect(calls[0].priority).toBe('0');
   expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
@@ -218,4 +252,8 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
   expect(calls[3].url).toContain('https://us-east-1.console.aws.amazon.com/');
   expect(calls[2].title).toBe('ALARM: PollerErrors');
   expect(calls[2].priority).toBe('1');
+  expect(calls[4].title).toBe('Silver build invocation failed');
+  expect(calls[4].message).toContain('RetriesExhausted / Unhandled: RuntimeError - boom');
+  expect(calls[4].priority).toBe('1');
+  expect(calls[4].url).toContain('/functions/AnalyticsStack-SilverBuildLambda');
 });
