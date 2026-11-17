@@ -157,6 +157,36 @@ allowances are fully used, and the third dashboard slot is free. Do not add an e
 custom metric without accepting the cost. See [operations.md](operations.md) for the alarm list and
 runbooks.
 
+## DB transport
+
+DB's Akamai edge rejects every non-browser TLS/HTTP2 fingerprint with `403 OPS_BLOCKED`. This hit
+Node fetch/undici, curl-impersonate, Bun and all db-vendo-client profiles in 2026-09. A real
+Chromium worked until 2026-10-13, when DB also refused headless Linux browsers (real Chrome,
+Chromium, Firefox, patchright, Camoufox, headless and headful) even from a residential IP, while a
+Windows/macOS consumer browser on the same network was allowed. Bright Data's Browser API needed
+business KYC (`int.bahn.de/robots.txt` disallows `/web/`), fell back to datacenter egress and billed
+about 670 KB per session, so it was dropped. Kernel, Browserless (including OS emulation), ZenRows
+and ScrapingAnt were tested on 2026-10-19 and are all refused.
+
+What works is Node's own `https` client with a browser-like cipher list. DB matches the TLS
+ClientHello, so the exact list and order is what passes: Firefox, Safari, a full Chrome list,
+TLS-1.3-only and TLS-1.2-only orders all returned 201/200 on the real tagesbestpreis POST and the
+locations endpoint, from a residential IP and from Lambda in eu-central-1. Node's default order and
+the public 2026-10-20 Chrome order are refused. The transport carries six profiles (the five
+measured orders plus `legacy` as a last resort), tries `DB_TLS_PROFILE` first and rotates on a
+block.
+
+The transport sends only the minimal headers DB accepts; db-vendo-client's own User-Agent and
+correlation headers turn an accepted request into a 403. Pacing is measured too: 6 parallel calls
+were fine, 60 at concurrency 6 got an IP a `429` for minutes, and 24 calls one at a time with 2.5 s
+gaps passed. The shared module spaces request starts and caps in-flight requests; after repeated
+failures the breaker stops calling DB for a cooldown. The backend has a Decodo fallback; the poller
+deliberately has no key.
+
+Fingerprints get blocked once popular (db-vendo-client#46 reports days to weeks; the 2026-10-20
+Chrome order was blocked on 2026-10-21), so the transport rotates firefox → safari → chrome → tls13
+→ tls12 → legacy and skips a blocked profile for 15 minutes.
+
 ## Design decisions
 
 - **Serverless, no VPC.** Every workload is Lambda, API Gateway, DynamoDB, S3, SQS, SES or
@@ -172,7 +202,8 @@ runbooks.
   pointer moves. Representativeness warnings are diagnostic and never roll back a verified dataset.
 - **Browser-like TLS, no browser.** DB's edge matches the TLS ClientHello. The shared transport uses
   Node `https` with several browser-like profiles and rotates on `403 OPS_BLOCKED`; Decodo is the
-  backend-only fallback. See [AGENTS.md](../AGENTS.md) for the measured history.
+  backend-only fallback. See [DB transport](#db-transport) for the measured history and
+  `shared/db-fetch.ts` for the implementation.
 - **Alert budget.** Ten alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
   deliberate ceiling.
 

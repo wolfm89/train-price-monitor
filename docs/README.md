@@ -27,6 +27,9 @@ deeper; each fact should live in one place and the code is the final source of t
 | [Operations](operations.md)       | Alert topic, alarms, dashboards, budget, retention, runbooks and first-run checks.                                    |
 | [Privacy](privacy.md)             | Data inventory, logging, export, deletion and retention rules.                                                        |
 
+AI coding agents start at [AGENTS.md](../AGENTS.md); each module has a nested `AGENTS.md` with its
+own commands and guardrails.
+
 ## Diagrams
 
 The diagrams are single editable files with the drawio XML embedded. Open them directly in

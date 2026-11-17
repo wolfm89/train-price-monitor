@@ -146,6 +146,6 @@ Sunday 03:30 UTC, after the 03:00 compactor.
 ## Cost guardrails
 
 The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD** with notifications at 50% actual and
-100% forecasted. The CloudWatch free tier allows ten alarm metrics, ten custom metrics and three
-dashboards; the project uses ten, ten and two. Do not add an eleventh alarm or metric without
-accepting the cost. See [operations.md](operations.md).
+100% forecasted. The CloudWatch free tier allows ten alarms, ten custom metrics and three dashboards;
+the project uses ten, ten and two. Do not add an eleventh alarm or metric without accepting the cost.
+See [operations.md](operations.md).

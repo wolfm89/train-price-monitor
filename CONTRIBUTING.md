@@ -26,25 +26,13 @@ pre-commit install
 
 ## Checks
 
-Run the focused checks for your change, then the pre-commit hooks:
+Run the checks for the modules you changed. The canonical per-module command list is
+[docs/development.md#checks](docs/development.md#checks); the short version is:
 
 ```bash
-# Frontend
-cd frontend && npm run test:ci && npm run typecheck && npm run lint
-
-# Backend
-cd backend && npm test && npm run typecheck && npm run lint
-
-# Scraper
-cd scraper && npm test && npm run typecheck && npm run lint
-
-# Infrastructure
-cd infrastructure && npm test && npm run typecheck && npm run lint
-
-# Analytics
-cd analytics && uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run ty check
-
-# Repository
+mise run //...:test
+mise run //...:typecheck
+mise run //...:lint
 pre-commit run --all-files
 pre-commit run --all-files --hook-stage manual   # slower tsc/ty hooks
 ```

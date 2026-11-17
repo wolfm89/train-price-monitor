@@ -30,6 +30,10 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | `TPM-App-SearchThrottled`         | The GraphQL Lambda is being throttled (account concurrency limit reached).                  |
 | `TPM-App-RefresherDLQ`            | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
 
+`TPM-App-UsingDecodoFallback` aggregates the API's GraphQL response line and the refresher's SQS
+message line, so either path can raise it. A single fallback is not an incident; the alarm requires
+two consecutive hours.
+
 Do not add an eleventh alarm or custom metric without accepting the cost. Do not use metric math,
 Metrics Insights or anomaly-detection bands in alarms; they are billed differently from the free
 alarm metrics.
@@ -42,6 +46,11 @@ alarm metrics.
 - `TrainPriceMonitor-App`: API p50/p90/p99 and integration latency, requests, GraphQL errors, 4xx/5xx,
   refresher duration and errors, Lambda throttles, DLQ depth/age, SES sends/deliveries/bounces/
   complaints and a diagnostics table for both log groups.
+
+Both dashboards follow Google's Four Golden Signals: one row each for latency, traffic, errors and
+saturation, plus alarm state. The app dashboard uses p50 < 200 ms as the interactive SLO, p99 < 8 s
+as the search budget and 120 s as the refresher timeout; its error rate is
+`(5xx + GraphQL errors) / invocations`, and 4xx counts as expired-token noise.
 
 The SQS queue is not shown; one message per hour is consumed in under a second.
 
@@ -134,7 +143,8 @@ then.
 - DynamoDB: journey TTL after expiry + 7 days; notifications 90 days, but not before journey expiry
   - 7 days; unconfirmed sign-ups 7 days. See [privacy.md](privacy.md#retention).
 - SQS: 4 days; DLQ 14 days.
-- Logs: 14 days.
+- Logs: 14 days. Older `/aws/lambda/InfrastructureStack-Backend*` groups predate the CDK-managed
+  groups; delete them or give them a retention.
 - Silver builds: newest two; quality reports: kept indefinitely.
 - Bronze Parquet: intended as the permanent historical record.
 
