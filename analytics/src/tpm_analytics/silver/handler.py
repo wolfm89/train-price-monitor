@@ -19,12 +19,14 @@ from urllib.parse import urlsplit
 
 import boto3
 import duckdb
+from botocore.config import Config
 
-from tpm_analytics.silver._duck import S3Secret
+from tpm_analytics.silver._duck import S3Secret, connect
 from tpm_analytics.silver.build import EmptyCorpusError, run_build
-from tpm_analytics.silver.config import FAILURE_EVENT, STAGES, load_config
-from tpm_analytics.silver.manifest import build_id_for, utc_now
+from tpm_analytics.silver.config import FAILURE_EVENT, QUALITY_EVENT, STAGES, load_config
+from tpm_analytics.silver.manifest import build_id_for, manifest_key, utc_now
 from tpm_analytics.silver.publish import publish
+from tpm_analytics.silver.report import QualityReport, build_report, write_report
 from tpm_analytics.silver.storage import S3ObjectStore
 
 # Lambda installs no root handler; without one, INFO would never be emitted.
@@ -36,6 +38,14 @@ _CONFIG = load_config()
 PUBLISH_RESERVE_SECONDS = _CONFIG.lambda_.publish_reserve_seconds
 # The measured full build is ~576 s; do not start one that cannot finish.
 BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
+# Report writes and the quality SNS run after the pointer moved; bound them so a stall cannot
+# turn a published build into a timeout, a retry and a false failure page.
+POST_PUBLISH_RESERVE_SECONDS = 20
+QUALITY_SNS_RESERVE_SECONDS = 20
+# One total attempt per PUT: a retried report write is not worth the risk of a retried
+# invocation after the pointer moved. Two PUTs at 2 s connect / 5 s read stay inside the 20 s
+# reserve. `total_max_attempts` is explicit because `max_attempts` counts retries, not attempts.
+REPORT_S3_CONFIG = Config(connect_timeout=2, read_timeout=5, retries={"total_max_attempts": 1})
 
 _SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET_KEY|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
 
@@ -122,6 +132,40 @@ def remaining_seconds(context: object) -> float | None:
     return float(getter()) / 1000.0
 
 
+def notify_quality(report: QualityReport, key: str | None) -> None:
+    """Publish one quality warning without turning a verified build into a failure."""
+    if report.status != "warning":
+        return
+    topic_arn = os.environ.get("ALERT_TOPIC_ARN")
+    if not topic_arn:
+        LOGGER.warning("ALERT_TOPIC_ARN is not set; quality warning was not published build_id=%s", report.build_id)
+        return
+    # Everything after publish() must be incapable of failing the invocation: the pointer has
+    # already moved, so a raise here would page a priority-1 failure for a published build.
+    try:
+        payload = {
+            "event": QUALITY_EVENT,
+            "build_id": report.build_id,
+            "generated_at": report.generated_at,
+            "report": key,
+            "violations": [violation.to_dict() for violation in report.violations[:10]],
+            "function": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "local"),
+            "region": os.environ.get("AWS_REGION", "eu-central-1"),
+            "log_group": os.environ.get("LOG_GROUP_NAME") or os.environ.get("AWS_LAMBDA_LOG_GROUP_NAME", ""),
+        }
+        client = boto3.client(
+            "sns",
+            config=Config(connect_timeout=2, read_timeout=5, retries={"total_max_attempts": 2}),
+        )
+        client.publish(
+            TopicArn=topic_arn,
+            Subject="Silver data quality warning",
+            Message=json.dumps(payload),
+        )
+    except Exception:
+        LOGGER.exception("could not publish the silver quality warning build_id=%s", report.build_id)
+
+
 def failure_message(build_id: str, error: BaseException, stage: str) -> dict[str, str]:
     """The structured payload the Lambda on-failure destination forwards to Pushover."""
     if stage not in STAGES:
@@ -199,6 +243,30 @@ def _run_build(
             max_temp_size=settings.max_temp_size,
         )
         build_seconds = round(time.perf_counter() - build_started, 3)
+        progress["stage"] = "report"
+        report_started = time.perf_counter()
+        report_connection = connect(
+            temp_directory=workdir / "duckdb-report",
+            threads=2,
+            memory_limit="2GB",
+            max_temp_size="1GB",
+        )
+        try:
+            report = build_report(
+                report_connection,
+                str(target / "**" / "*.parquet"),
+                build_id=build_id,
+                as_of=utc_now(),
+                quality=_CONFIG.quality,
+                build={
+                    "manifest": manifest_key(settings.prefix, build_id),
+                    "rows_out": stats.rows_out,
+                    "partitions": stats.partitions,
+                },
+            )
+        finally:
+            report_connection.close()
+        report_seconds = round(time.perf_counter() - report_started, 3)
         progress["stage"] = "publish"
         remaining = remaining_seconds(context)
         if remaining is not None and remaining < PUBLISH_RESERVE_SECONDS:
@@ -226,6 +294,43 @@ def _run_build(
             warnings=tuple(warnings),
         )
         publish_seconds = round(time.perf_counter() - publish_started, 3)
+        report_key_written: str | None = None
+        remaining = remaining_seconds(context)
+        if remaining is not None and remaining < POST_PUBLISH_RESERVE_SECONDS:
+            LOGGER.warning(
+                "skipping the silver quality report; only %.0fs left after publish build_id=%s",
+                remaining,
+                build_id,
+            )
+        else:
+            try:
+                report_store = S3ObjectStore(settings.bucket, region=settings.region, config=REPORT_S3_CONFIG)
+                report_key_written = write_report(
+                    report_store,
+                    prefix=settings.prefix,
+                    quality=_CONFIG.quality,
+                    report=report,
+                )
+            except Exception:
+                LOGGER.exception("could not write the silver quality report build_id=%s", build_id)
+            if report.status == "warning":
+                remaining = remaining_seconds(context)
+                if remaining is None or remaining >= QUALITY_SNS_RESERVE_SECONDS:
+                    notify_quality(report, report_key_written)
+                else:
+                    LOGGER.warning(
+                        "skipping the silver quality warning; only %.0fs left after publish build_id=%s",
+                        remaining,
+                        build_id,
+                    )
+        LOGGER.info(
+            "silver quality report build_id=%s status=%s violations=%s report=%s report_seconds=%s",
+            build_id,
+            report.status,
+            len(report.violations),
+            report_key_written,
+            report_seconds,
+        )
         try:
             usage = shutil.disk_usage(workspace)
             tmp_used, tmp_free = usage.used, usage.free
@@ -235,8 +340,9 @@ def _run_build(
 
     duration = round(time.perf_counter() - started, 3)
     LOGGER.info(
-        "silver phases build_seconds=%s publish_seconds=%s tmp_used_bytes=%s tmp_free_bytes=%s",
+        "silver phases build_seconds=%s report_seconds=%s publish_seconds=%s tmp_used_bytes=%s tmp_free_bytes=%s",
         build_seconds,
+        report_seconds,
         publish_seconds,
         tmp_used,
         tmp_free,
@@ -267,6 +373,8 @@ def _run_build(
         "build_seconds": build_seconds,
         "publish_seconds": publish_seconds,
         "duration_seconds": duration,
+        "quality_status": report.status,
+        "quality_report": report_key_written,
     }
 
 

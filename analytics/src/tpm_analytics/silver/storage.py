@@ -80,9 +80,16 @@ class LocalObjectStore:
 class S3ObjectStore:
     """The real thing. Credentials come from the Lambda execution role."""
 
-    def __init__(self, bucket: str, client: Any | None = None, *, region: str | None = None) -> None:
+    def __init__(
+        self,
+        bucket: str,
+        client: Any | None = None,
+        *,
+        region: str | None = None,
+        config: Any | None = None,
+    ) -> None:
         self.bucket = bucket
-        self._client: Any = client if client is not None else boto3.client("s3", region_name=region)
+        self._client: Any = client if client is not None else boto3.client("s3", region_name=region, config=config)
 
     def put_file(self, local_path: Path, key: str) -> int:
         self._client.upload_file(str(local_path), self.bucket, key)

@@ -53,6 +53,24 @@ class ScheduleConfig:
 
 
 @dataclass(frozen=True)
+class QualityConfig:
+    report_version: int
+    prefix: str
+    pointer_name: str
+    event: str
+    expected_route_count: int
+    window_days: int
+    baseline_days: int
+    final_7d_coverage_min: float
+    final_24h_coverage_min: float
+    route_coverage_min: float
+    rows_drop_pct_max: float
+    freshness_hours_max: int
+    fare_null_rate_max: float
+    load_factor_null_rate_max: float
+
+
+@dataclass(frozen=True)
 class SilverConfig:
     prefix: str
     bronze_prefix: str
@@ -67,6 +85,7 @@ class SilverConfig:
     lambda_: LambdaConfig
     local: DuckDbConfig
     schedule: ScheduleConfig
+    quality: QualityConfig
 
 
 def _validate(config: SilverConfig) -> SilverConfig:
@@ -109,7 +128,57 @@ def _validate(config: SilverConfig) -> SilverConfig:
         raise ValueError("scheduler retry_attempts must be between 0 and 185")
     if not 1 <= config.schedule.max_event_age_minutes <= 1440:
         raise ValueError("scheduler max_event_age_minutes must be between 1 and 1440")
+
+    quality = config.quality
+    if not quality.prefix or quality.prefix.startswith("/") or quality.prefix.endswith("/"):
+        raise ValueError("quality.prefix must be a non-empty path without leading/trailing slashes")
+    if not quality.pointer_name or not quality.event:
+        raise ValueError("quality.pointer_name and quality.event must be non-empty")
+    if quality.event == config.failure_event:
+        raise ValueError("quality.event must differ from failure_event")
+    if not 1 <= quality.report_version <= 100:
+        raise ValueError("quality.report_version must be between 1 and 100")
+    if not 1 <= quality.expected_route_count <= 10_000:
+        raise ValueError("quality.expected_route_count must be between 1 and 10000")
+    if not 1 <= quality.window_days <= 365:
+        raise ValueError("quality.window_days must be between 1 and 365")
+    if not quality.window_days <= quality.baseline_days <= 365:
+        raise ValueError("quality.baseline_days must be between window_days and 365")
+    for name in (
+        "final_7d_coverage_min",
+        "final_24h_coverage_min",
+        "route_coverage_min",
+        "rows_drop_pct_max",
+        "fare_null_rate_max",
+        "load_factor_null_rate_max",
+    ):
+        value = getattr(quality, name)
+        if not 0 <= value <= 1:
+            raise ValueError(f"quality.{name} must be between 0 and 1")
+    if not 1 <= quality.freshness_hours_max <= 1_440:
+        raise ValueError("quality.freshness_hours_max must be between 1 and 1440")
     return config
+
+
+def _quality_int(raw: dict[str, object], key: str) -> int:
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"quality.{key} must be an integer")
+    return value
+
+
+def _quality_float(raw: dict[str, object], key: str) -> float:
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"quality.{key} must be a number")
+    return float(value)
+
+
+def _quality_str(raw: dict[str, object], key: str) -> str:
+    value = raw[key]
+    if not isinstance(value, str):
+        raise ValueError(f"quality.{key} must be a string")
+    return value
 
 
 @lru_cache(maxsize=1)
@@ -118,6 +187,7 @@ def load_config() -> SilverConfig:
     lambda_raw = raw["lambda"]
     local_raw = raw["local"]
     schedule_raw = raw["schedule"]
+    quality_raw = raw["quality"]
     return _validate(
         SilverConfig(
             prefix=raw["prefix"],
@@ -151,10 +221,27 @@ def load_config() -> SilverConfig:
                 retry_attempts=int(schedule_raw["retry_attempts"]),
                 max_event_age_minutes=int(schedule_raw["max_event_age_minutes"]),
             ),
+            quality=QualityConfig(
+                report_version=_quality_int(quality_raw, "report_version"),
+                prefix=_quality_str(quality_raw, "prefix"),
+                pointer_name=_quality_str(quality_raw, "pointer_name"),
+                event=_quality_str(quality_raw, "event"),
+                expected_route_count=_quality_int(quality_raw, "expected_route_count"),
+                window_days=_quality_int(quality_raw, "window_days"),
+                baseline_days=_quality_int(quality_raw, "baseline_days"),
+                final_7d_coverage_min=_quality_float(quality_raw, "final_7d_coverage_min"),
+                final_24h_coverage_min=_quality_float(quality_raw, "final_24h_coverage_min"),
+                route_coverage_min=_quality_float(quality_raw, "route_coverage_min"),
+                rows_drop_pct_max=_quality_float(quality_raw, "rows_drop_pct_max"),
+                freshness_hours_max=_quality_int(quality_raw, "freshness_hours_max"),
+                fare_null_rate_max=_quality_float(quality_raw, "fare_null_rate_max"),
+                load_factor_null_rate_max=_quality_float(quality_raw, "load_factor_null_rate_max"),
+            ),
         )
     )
 
 
 _CONFIG = load_config()
 FAILURE_EVENT = _CONFIG.failure_event
+QUALITY_EVENT = _CONFIG.quality.event
 STAGES = _CONFIG.stages

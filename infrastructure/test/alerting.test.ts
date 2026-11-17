@@ -295,7 +295,53 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     });
   }
 
-  expect(calls).toHaveLength(9);
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_quality_failed',
+            build_id: 'b4',
+            generated_at: '2026-11-22T03:42:00+00:00',
+            report: 'silver/quality/b4.json',
+            violations: [{ metric: 'final_7d_coverage', value: 0.74, threshold: 0.8, message: 'coverage low' }],
+            region: 'eu-central-1',
+            log_group: '/aws/lambda/analytics',
+          }),
+        },
+      },
+    ],
+  });
+
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_quality_failed',
+            build_id: 'b5',
+            violations: [{ message: 'a' }, { message: 'b' }, { message: 'c' }, { message: 'd' }],
+            region: 'evil.example/',
+          }),
+        },
+      },
+    ],
+  });
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_quality_failed',
+            build_id: 'b6',
+            violations: [{ message: 'x'.repeat(5000) }],
+          }),
+        },
+      },
+    ],
+  });
+
+  expect(calls).toHaveLength(12);
   expect(calls[0].title).toContain('AWS Budgets:');
   expect(calls[0].priority).toBe('0');
   expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
@@ -314,4 +360,12 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
   for (const index of [6, 7, 8]) {
     expect(calls[index].title).toBe('Silver build invocation failed');
   }
+  expect(calls[9].title).toBe('Silver data quality warning');
+  expect(calls[9].message).toContain('coverage low | build b4');
+  expect(calls[9].priority).toBe('0');
+  expect(calls[9].url).toContain(encodeURIComponent('/aws/lambda/analytics'));
+  expect(calls[10].message).toContain('a; b; c (+1 more) | build b5');
+  expect(calls[10].url).toContain('https://eu-central-1.console.aws.amazon.com/');
+  expect(calls[11].message).toHaveLength(1000);
+  expect(calls[11].message.startsWith('x')).toBe(true);
 });

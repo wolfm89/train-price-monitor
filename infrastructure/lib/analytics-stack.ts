@@ -55,8 +55,9 @@ export class AnalyticsStack extends cdk.Stack {
       ephemeralStorageSize: cdk.Size.mebibytes(SILVER_CONFIG.lambda.ephemeral_mib),
       reservedConcurrentExecutions: 1,
       // One async retry covers transient S3/throttle errors; every run has a fresh build id
-      // and the pointer is the only commit, so a duplicate is safe. The max age is longer
-      // than the timeout so a late first attempt still leaves time for the retry.
+      // and the pointer is the only commit, so a duplicate is safe. A retry can also emit a
+      // second quality warning, which is acceptable for an alert-only signal. The max age is
+      // longer than the timeout so a late first attempt still leaves time for the retry.
       retryAttempts: SILVER_CONFIG.lambda.retry_attempts,
       maxEventAge: cdk.Duration.minutes(SILVER_CONFIG.lambda.max_event_age_minutes),
       // The handler raises a structured payload; this destination publishes it after the
@@ -73,6 +74,8 @@ export class AnalyticsStack extends cdk.Stack {
         SILVER_KEEP: String(SILVER_CONFIG.keep),
         // Empty (manual deploy) lets the handler record sql-<hash>; CI supplies the SHA.
         TRANSFORM_VERSION: (props.transformVersion || '').slice(0, 12),
+        // Used only for the non-blocking quality warning; build failures use onFailure.
+        ALERT_TOPIC_ARN: props.alertTopic.topicArn,
         // Lambda reserves AWS_LAMBDA_LOG_GROUP_NAME; a plain name keeps the failure
         // message's log link deterministic.
         LOG_GROUP_NAME: logGroup.logGroupName,

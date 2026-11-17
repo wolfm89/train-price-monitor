@@ -132,10 +132,10 @@ silver/_latest.json
   build once it is a day old. A manifest that cannot be read is never deleted.
 - **Refusals:** a corpus that shrank by more than 10 % against the pointed-at build, more than
   0.01 % removed rows, or removed rows that are not exactly the duplicates in bronze.
-- The handler ignores the event: source, bucket, prefix, sizing and log group come from the
-  environment (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`,
+- The handler ignores the event: source, bucket, prefix, sizing, alert topic and log group come from
+  the environment (`SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`, `SILVER_THREADS`,
   `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
-  `LOG_GROUP_NAME`), so an invocation cannot disable the gate. `TRANSFORM_VERSION` is the commit SHA
+  `ALERT_TOPIC_ARN`, `LOG_GROUP_NAME`), so an invocation cannot disable the gate. `TRANSFORM_VERSION` is the commit SHA
   in CI; empty falls back to `sql-<hash>`. Any handler exception is re-raised with the structured
   `silver_build_failed` payload as its message; the Lambda on-failure destination publishes it after
   the retries. A handled failure does not move the pointer.
@@ -163,10 +163,11 @@ read/write on `silver/*`, delete/abort on `silver/builds/*`, and publish to the 
 cannot write or delete bronze.
 
 The function environment is set by CDK: `SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`,
-`SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`
-and `LOG_GROUP_NAME`. The SNS on-failure destination is configured by CDK, not an environment
-variable. `AWS_REGION` is reserved by Lambda. CI sets `TRANSFORM_VERSION` to the short commit SHA;
-an empty value records `sql-<hash>`.
+`SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
+`ALERT_TOPIC_ARN` and `LOG_GROUP_NAME`. The SNS on-failure destination is configured by CDK; the
+`ALERT_TOPIC_ARN` environment is used only for the non-blocking quality warning. `AWS_REGION` is
+reserved by Lambda. CI sets `TRANSFORM_VERSION` to the short commit SHA; an empty value records
+`sql-<hash>`.
 
 Set the repository variable `CDK_ANALYTICS_PAUSED=0` only after the manual checks; CI defaults to
 paused when the variable is unset, so the first main deploy cannot start an unverified run.
@@ -186,9 +187,9 @@ cat /tmp/silver.json
 `CDK_APP_NAME`, `CDK_DOMAIN_NAME` and `CDK_SES_FROM_EMAIL` must be set (CI supplies them from
 repository secrets).
 
-Verify `silver/_latest.json` and `silver/builds/<id>/_manifest.json`, record duration, memory, rows
-and partitions, then set the repository variable `CDK_ANALYTICS_PAUSED=0` and push to main to
-enable the schedule. For the forced
+Verify `silver/_latest.json`, `silver/builds/<id>/_manifest.json` and `silver/quality/_latest.json`,
+record duration, memory, rows and partitions, then set the repository variable
+`CDK_ANALYTICS_PAUSED=0` and push to main to enable the schedule. For the forced
 failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
 invoke once with `--invocation-type Event` (on-failure destinations apply only to asynchronous
 invocations), wait for the retry and alert, confirm the unchanged pointer, then restore the previous
@@ -206,6 +207,114 @@ Docker build imports the handler and catches that before deploy. A manual compac
 a bronze key during the build fails the run, and the retry rebuilds from the new key set.
 `InfrastructureStack` runs `ToolkitCleaner` daily, which removes unused CDK ECR and S3 assets after
 checking deployed CloudFormation templates; unused assets younger than 10 days are retained.
+
+## Quality report
+
+Every successful build writes a weekly quality profile:
+
+```
+silver/quality/<build_id>.json
+silver/quality/_latest.json
+```
+
+`_latest.json` is a small pointer to the newest report:
+
+```json
+{
+  "build_id": "20261122T033000Z-abcdef12",
+  "report": "silver/quality/20261122T033000Z-abcdef12.json",
+  "generated_at": "2026-11-22T03:42:00+00:00"
+}
+```
+
+The report is `report_version: 1` and has this shape:
+
+```json
+{
+  "report_version": 1,
+  "build_id": "...",
+  "generated_at": "...",
+  "status": "ok",
+  "window": { "days": 7, "baseline_days": 28 },
+  "metrics": {
+    "rows": { "by_observed_day": [], "last_7d": 0, "prior_7d": 0, "change_pct": null },
+    "routes": { "expected": 140, "active_last_7d": 140, "coverage": 1.0 },
+    "route_days": {
+      "expected": 980,
+      "observed": 980,
+      "final_7d_covered": 0,
+      "final_7d_coverage": 0.0,
+      "final_24h_covered": 0,
+      "final_24h_coverage": 0.0
+    },
+    "nulls": { "fare": { "rate": 0.0, "v2_rate": 0.0 }, "load_factor": { "rate": 0.0 } },
+    "freshness": { "latest_observed_at": "...", "hours": 0.0 }
+  },
+  "thresholds": {
+    "expected_route_count": 140,
+    "final_7d_coverage_min": 0.8,
+    "final_24h_coverage_min": 0.6,
+    "route_coverage_min": 0.9,
+    "rows_drop_pct_max": 0.35,
+    "freshness_hours_max": 36,
+    "fare_null_rate_max": 0.1,
+    "load_factor_null_rate_max": 0.35
+  },
+  "violations": [{ "metric": "...", "value": 0.0, "threshold": 0.0, "message": "..." }],
+  "build": { "manifest": "silver/builds/<id>/_manifest.json", "rows_out": 0, "partitions": 8 }
+}
+```
+
+Rows per observed day and `build.partitions` are report-only. The tripwire thresholds live in
+`silver-config.json` under `quality`:
+
+| Metric                  | Warning when                            |
+| ----------------------- | --------------------------------------- |
+| `final_7d_coverage`     | below 0.80                              |
+| `final_24h_coverage`    | below 0.60                              |
+| `route_coverage`        | below 0.90 of the 140-route catalogue   |
+| `rows_change`           | more than 35 % below the preceding week |
+| `freshness_hours`       | newest observation older than 36 h      |
+| `fare_null_rate`        | above 0.10                              |
+| `load_factor_null_rate` | above 0.35                              |
+
+`rows_last_7d`, `route_days_observed` and `route_count_mismatch` are also emitted as violations but
+have no configurable threshold.
+
+`final_7d_coverage` and `final_24h_coverage` count completed route-days whose newest observation
+**at or before the day's first departure** is no more than 7 days / 24 hours older than that first
+departure. They measure coverage before the route-day starts, not the scraper's final 3-hour
+window, which lands after the first departure for most route-days; `freshness_hours` and `rows`
+cover the overall scrape gap. Re-anchoring these two metrics on the day's last departure is a
+candidate for `report_version: 2`.
+
+Initial baseline (2026-11-16 production build `20261116T213950Z-513cc946`): 504,383 rows in the
+last 7 days (583,516 prior, −13.6 %), 140/140 active routes, 980 completed route-days, final-7d
+coverage 0.8847, final-24h 0.7622, fare null rate 4.01 % (v2 7.18 %), load-factor null rate
+27.96 %, freshness 4.08 h, report generation 3.5 s / 3,555 bytes, status `ok`. The 0.80/0.60
+thresholds are regression tripwires below this baseline, not a statement that current coverage is
+failing.
+
+A breach publishes one normal-priority `silver_quality_failed` event listing up to ten violations
+(the Pushover message shows the first three plus a count); it does not fail the build or move the
+pointer back. A report-query failure fails the build before publish; a report-write failure after
+publish is logged and leaves the verified build in place. A pointer-write failure after the report
+lands still returns the versioned report key and leaves `_latest.json` stale. Report writes use one
+attempt with short
+SDK timeouts. If less than 20 s remain after publish, the report write is skipped; after a
+successful write, the warning is skipped if less than 20 s remain. Reports are kept indefinitely
+for now; the two-build retention only applies to `silver/builds/`.
+
+Fetch the latest report with AWS credentials:
+
+```bash
+BUCKET=$(aws cloudformation describe-stacks --stack-name ScraperStack --region eu-central-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='ScraperBucketName'].OutputValue" --output text)
+aws s3 cp "s3://$BUCKET/silver/quality/_latest.json" - --region eu-central-1
+```
+
+The report contains counts, rates and timestamps over the scraped corpus; no route IDs, station
+IDs, prices or user data.
 
 ## Column contract
 

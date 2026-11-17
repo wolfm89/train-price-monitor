@@ -16,6 +16,7 @@ import {
   MONTHLY_BUDGET_NAME,
   MONTHLY_BUDGET_USD,
   SILVER_FAILURE_EVENT,
+  SILVER_QUALITY_EVENT,
 } from './config';
 
 /**
@@ -37,15 +38,16 @@ export function pushoverParamNames(scope: Construct): { token: string; user: str
 
 /**
  * Forwards SNS messages to Pushover: CloudWatch alarm state changes, the weekly
- * silver build failure and the account budget alerts.
+ * silver build failure, the weekly silver quality warning and the account budget
+ * alerts.
  *
  * SNS cannot deliver to Pushover directly: every HTTPS subscription has to
  * answer SNS's `SubscriptionConfirmation` handshake, which Pushover does not
  * implement. This function is that adapter.
  *
  * A state change to ALARM and a failed silver build are sent at high priority
- * (bypasses quiet hours) with the siren sound; recovery and budget alerts use
- * normal priority.
+ * (bypasses quiet hours) with the siren sound; recovery, quality warnings and
+ * budget alerts use normal priority.
  */
 export const PUSHOVER_FORWARDER_SOURCE = `
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
@@ -93,6 +95,35 @@ function format(payload) {
         (payload.attempts ? ' | attempts ' + payload.attempts : ''),
       priority: '1',
       sound: 'siren',
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      url,
+      url_title: 'Open the build logs',
+    };
+  }
+
+  if (payload && payload.event === '${SILVER_QUALITY_EVENT}') {
+    const region = safeRegion(payload.region);
+    const logGroup = payload.log_group;
+    const url = logGroup
+      ? 'https://' + region + '.console.aws.amazon.com/cloudwatch/home?region=' + region +
+        '#logsV2:log-groups/log-group/' + encodeURIComponent(logGroup)
+      : 'https://' + region + '.console.aws.amazon.com/lambda/home?region=' + region +
+        '#/functions/' + encodeURIComponent(payload.function || '') + '?tab=logs';
+    const violations = Array.isArray(payload.violations) ? payload.violations : [];
+    const details = violations
+      .slice(0, 3)
+      .map((violation) => (violation && violation.message ? violation.message : String(violation)))
+      .join('; ');
+    const more = violations.length > 3 ? ' (+' + (violations.length - 3) + ' more)' : '';
+    return {
+      title: 'Silver data quality warning',
+      message: (
+        (details || 'quality threshold breached') +
+        more +
+        (payload.build_id ? ' | build ' + payload.build_id : '')
+      ).slice(0, 1000),
+      priority: '0',
+      sound: 'pushover',
       timestamp: String(Math.floor(Date.now() / 1000)),
       url,
       url_title: 'Open the build logs',
