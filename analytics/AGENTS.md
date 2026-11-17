@@ -70,5 +70,19 @@ Use `uv` and the committed `uv.lock`; never `pip install` ad hoc and never add a
 Tests never write to AWS. When you change a query, add or update a fixture that covers v1-only,
 v2-only and mixed-schema input.
 
+## Holiday calendar
+
+- `src/tpm_analytics/data/calendar.json` is generated from OpenHolidays; do not hand-edit it. The
+  data is ODbL-1.0 while the code is GPL-3.0; preserve the `NOTICE`, `data/NOTICE` and
+  `data/README.md` files.
+- `src/tpm_analytics/calendar.py` is the runtime loader/join. It must not import networking code or
+  read the JSON at import time; keep the coverage/state validation and tests.
+- Regenerate with `mise run //analytics:calendar`, check drift with `:check`, and run the
+  `python-holidays`/KMK cross-checks before committing. Refresh after KMK publishes the next school
+  year.
+- Schema, filters (local and North Frisian/Halligen exceptions), columns and feature definitions:
+  `src/tpm_analytics/data/README.md`.
+- Adding a station state or calendar year updates the data and tests, not the poller or Lambda.
+
 Update `README.md` for schema, quality or runbook changes and
 [docs/configuration.md](../docs/configuration.md) for new environment variables.

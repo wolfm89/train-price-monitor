@@ -28,6 +28,10 @@ Shipped here:
 - `src/tpm_analytics/sql/silver.sql` — the one deterministic transform.
 - `src/tpm_analytics/silver/build.py` — DuckDB session, transform execution, local Parquet output.
 - `src/tpm_analytics/silver/quality.py` — the gates that must pass before a build is published.
+- `src/tpm_analytics/calendar.py` — loader and DuckDB join for the training-time holiday calendar.
+- `src/tpm_analytics/data/calendar.json` — generated public/school-holiday dataset (ODbL).
+- `src/tpm_analytics/data/NOTICE` — data licence and attribution.
+- `scripts/build_calendar.py` — manual generator for that dataset.
 - `tests/` — fixture-based tests over v1-only, v2-only and mixed bronze files.
 
 The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
@@ -343,6 +347,17 @@ change notice the licence requires.
 `tests/test_station_dimension.py` fails if the scraper catalogue contains a station that is missing
 here, so the two files cannot drift apart silently. Keep retired stations in the dimension: bronze
 never forgets them, and a missing row fails every future rebuild.
+
+## Holiday calendar
+
+`src/tpm_analytics/data/calendar.json` is a generated, versioned German public- and school-holiday
+dataset for the training builder (2026–2028, all 16 states). `src/tpm_analytics/calendar.py` loads
+and validates it and joins it to route-days; it makes no network calls. The data is ODbL-1.0 while
+the code is GPL-3.0.
+
+Regenerate with `mise run //analytics:calendar` and check drift with
+`mise run //analytics:calendar:check`. The schema, source filters, licence and refresh runbook are
+in [src/tpm_analytics/data/README.md](src/tpm_analytics/data/README.md).
 
 ## Semantics the transform encodes
 

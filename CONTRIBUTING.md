@@ -75,4 +75,5 @@ final source for factual claims.
 
 ## License
 
-By contributing, you agree that your contribution is licensed under GPL-3.0.
+By contributing, you agree that your contribution is licensed under GPL-3.0. The generated
+holiday calendar data is licensed under ODbL-1.0; see [NOTICE](NOTICE).

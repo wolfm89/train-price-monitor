@@ -29,6 +29,14 @@ run = "uv run ruff format ."
 description = "Install DuckDB httpfs into .duckdb-extensions for local S3 reads"
 run = "uv run python scripts/install_httpfs.py"
 
+[tasks.calendar]
+description = "Regenerate the German holiday calendar from OpenHolidays"
+run = "uv run python scripts/build_calendar.py"
+
+[tasks."calendar:check"]
+description = "Check the committed holiday calendar against OpenHolidays"
+run = "uv run python scripts/build_calendar.py --check"
+
 [tasks.image]
 description = "Build the Lambda container image"
 run = "docker build -t train-price-monitor-analytics:dev ."

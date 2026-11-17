@@ -182,6 +182,8 @@ jobs:
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/sql/silver.sql'
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/stations.json'
           python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/silver-config.json'
+          python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/calendar.json'
+          python -m zipfile -l dist/*.whl | grep -q 'tpm_analytics/data/NOTICE'
 
   artifacts:
     timeout-minutes: 45
