@@ -294,3 +294,27 @@ def test_active_routes_above_the_catalogue_are_clamped_and_flagged(tmp_path: Pat
     assert report.metrics["routes"]["active_last_7d"] == 2
     assert report.metrics["routes"]["coverage"] == 1.0
     assert "route_count_mismatch" in {violation.metric for violation in report.violations}
+
+
+def test_completed_berlin_day_at_the_utc_midnight_boundary_is_included(tmp_path: Path) -> None:
+    target = _custom_build(
+        tmp_path,
+        [
+            bronze_row(
+                observed_at=datetime(2026, 11, 19, 12, 0),
+                departure_planned=datetime(2026, 11, 20, 8, 0),
+                arrival_planned=datetime(2026, 11, 20, 12, 0),
+            )
+        ],
+    )
+    # 23:30 UTC is already 00:30 Berlin on the 21st: the completed local day 20 November
+    # must be inside the window, not replaced by the older 13 November.
+    report = _report_for(
+        target,
+        tmp_path,
+        as_of=datetime(2026, 11, 20, 23, 30, tzinfo=UTC),
+        quality=replace(load_config().quality, expected_route_count=1),
+    )
+
+    assert report.metrics["route_days"]["observed"] == 1
+    assert report.metrics["route_days"]["final_24h_covered"] == 1

@@ -38,6 +38,10 @@ _CONFIG = load_config()
 PUBLISH_RESERVE_SECONDS = _CONFIG.lambda_.publish_reserve_seconds
 # The measured full build is ~576 s; do not start one that cannot finish.
 BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
+# Report writes and the quality SNS run after the pointer moved; bound them so a stall cannot
+# turn a published build into a timeout, a retry and a false failure page.
+POST_PUBLISH_RESERVE_SECONDS = 20
+REPORT_S3_CONFIG = Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 2})
 
 _SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET_KEY|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
 
@@ -284,16 +288,33 @@ def _run_build(
         )
         publish_seconds = round(time.perf_counter() - publish_started, 3)
         report_key_written: str | None = None
-        try:
-            report_key_written = write_report(
-                store,
-                prefix=settings.prefix,
-                quality=_CONFIG.quality,
-                report=report,
+        remaining = remaining_seconds(context)
+        if remaining is not None and remaining < POST_PUBLISH_RESERVE_SECONDS:
+            LOGGER.warning(
+                "skipping the silver quality report; only %.0fs left after publish build_id=%s",
+                remaining,
+                build_id,
             )
-        except Exception:
-            LOGGER.exception("could not write the silver quality report build_id=%s", build_id)
-        notify_quality(report, report_key_written)
+        else:
+            report_store = S3ObjectStore(settings.bucket, region=settings.region, config=REPORT_S3_CONFIG)
+            try:
+                report_key_written = write_report(
+                    report_store,
+                    prefix=settings.prefix,
+                    quality=_CONFIG.quality,
+                    report=report,
+                )
+            except Exception:
+                LOGGER.exception("could not write the silver quality report build_id=%s", build_id)
+            remaining = remaining_seconds(context)
+            if remaining is None or remaining >= POST_PUBLISH_RESERVE_SECONDS:
+                notify_quality(report, report_key_written)
+            else:
+                LOGGER.warning(
+                    "skipping the silver quality warning; only %.0fs left after publish build_id=%s",
+                    remaining,
+                    build_id,
+                )
         LOGGER.info(
             "silver quality report build_id=%s status=%s violations=%s report=%s report_seconds=%s",
             build_id,

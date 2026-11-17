@@ -493,3 +493,39 @@ def test_quality_warning_without_topic_only_logs(monkeypatch, tmp_path: Path, br
     assert result["quality_status"] == "warning"
     assert (bucket / pointer_key("silver")).exists()
     assert publishes == []
+
+
+def test_quality_report_and_warning_are_skipped_when_time_is_short(
+    monkeypatch, tmp_path: Path, bronze_glob: str
+) -> None:
+    _calls, bucket = _prepare_handler(monkeypatch, tmp_path, bronze_glob)
+    monkeypatch.setenv("ALERT_TOPIC_ARN", "arn:aws:sns:eu-central-1:111111111111:TrainPriceMonitorAlerts")
+    publishes: list[dict[str, Any]] = []
+
+    class FakeSns:
+        def publish(self, **kwargs: Any) -> None:
+            publishes.append(kwargs)
+
+    monkeypatch.setattr(handler_module.boto3, "client", lambda *args, **kwargs: FakeSns())
+    report = QualityReport(
+        report_version=1,
+        build_id="20261120T000000Z-77777777",
+        generated_at="2026-11-20T00:00:00+00:00",
+        status="warning",
+        window_days=7,
+        baseline_days=28,
+        metrics={},
+        thresholds={},
+        violations=(Violation("final_7d_coverage", 0.74, 0.8, "coverage low"),),
+        build={"manifest": "silver/builds/x/_manifest.json", "rows_out": 6, "partitions": 2},
+    )
+    monkeypatch.setattr(handler_module, "build_report", lambda *args, **kwargs: report)
+    # preflight, before publish, after publish
+    context = FakeContext(900_000, 200_000, 10_000)
+
+    result = handler_module.handler({}, context)
+
+    assert result["quality_report"] is None
+    assert (bucket / pointer_key("silver")).exists()
+    assert not (bucket / quality_pointer_key("silver", handler_module._CONFIG.quality)).exists()
+    assert publishes == []

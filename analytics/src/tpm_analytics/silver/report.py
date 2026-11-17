@@ -104,7 +104,11 @@ def build_report(
     silver = read_parquet(silver_glob)
     as_of_utc = _utc(as_of)
     as_of_sql = _timestamp(as_of_utc)
-    as_of_date = as_of_utc.date()
+    # departure_date is a Berlin-local date (silver.sql), while observed_at is UTC. Derive the
+    # cutoff the same way the transform does so a late run does not shift the window by a day.
+    as_of_date = connection.execute(
+        f"SELECT CAST(timezone('Europe/Berlin', TIMESTAMP '{as_of_sql}' AT TIME ZONE 'UTC') AS DATE)"
+    ).fetchone()[0]
     window = quality.window_days
     baseline = quality.baseline_days
     window_start = f"TIMESTAMP '{as_of_sql}' - INTERVAL '{window} days'"

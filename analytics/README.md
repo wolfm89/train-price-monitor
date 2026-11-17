@@ -272,6 +272,8 @@ Rows per observed day and `build.partitions` are report-only. The tripwire thres
 A breach publishes one normal-priority `silver_quality_failed` event listing every violation; it
 does not fail the build or move the pointer back. A report-query failure fails the build before
 publish; a report-write failure after publish is logged and leaves the verified build in place.
+Report writes use short SDK timeouts, and if less than 20 s remain after publish the report and
+warning are skipped and logged rather than risking a timeout on an already-published build.
 Reports are kept indefinitely for now; the two-build retention only applies to `silver/builds/`.
 
 Fetch the latest report with AWS credentials:
