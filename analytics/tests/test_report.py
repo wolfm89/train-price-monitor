@@ -10,7 +10,7 @@ from tests.conftest import HAMBURG, MUNICH, bronze_row, write_bronze
 from tpm_analytics.silver._duck import connect
 from tpm_analytics.silver.build import run_build
 from tpm_analytics.silver.config import QualityConfig, load_config
-from tpm_analytics.silver.report import QualityReport, build_report, pointer_key, report_key, write_report
+from tpm_analytics.silver.report import QualityReport, _rate, build_report, pointer_key, report_key, write_report
 from tpm_analytics.silver.storage import LocalObjectStore
 
 
@@ -125,10 +125,19 @@ def test_report_handles_no_recent_data_without_dividing_by_zero(build, tmp_path:
         connection.close()
 
     assert report.status == "warning"
+    assert report.metrics["nulls"]["fare"]["rate"] is None
+    assert report.metrics["nulls"]["fare"]["v2_rate"] is None
+    assert report.metrics["nulls"]["load_factor"]["rate"] is None
     assert {violation.metric for violation in report.violations} >= {
         "rows_last_7d",
         "route_days_observed",
     }
+
+
+def test_rate_returns_none_for_a_zero_denominator() -> None:
+    assert _rate(0, 0) is None
+    assert _rate(1, 0) is None
+    assert _rate(1, 2) == 0.5
 
 
 def _custom_build(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
@@ -318,3 +327,66 @@ def test_completed_berlin_day_at_the_utc_midnight_boundary_is_included(tmp_path:
 
     assert report.metrics["route_days"]["observed"] == 1
     assert report.metrics["route_days"]["final_24h_covered"] == 1
+
+
+def test_fare_null_rate_reports_overall_and_v2_only(tmp_path: Path) -> None:
+    target = _custom_build(
+        tmp_path,
+        [
+            bronze_row(
+                observed_at=datetime(2026, 11, 18, 8, 0),
+                departure_planned=datetime(2026, 11, 25, 8, 0),
+                arrival_planned=datetime(2026, 11, 25, 12, 0),
+                fare_lowest_eur=None,
+                train_number="1001",
+                journey_id="journey-null-fare",
+            ),
+            bronze_row(
+                observed_at=datetime(2026, 11, 18, 9, 0),
+                departure_planned=datetime(2026, 11, 25, 9, 0),
+                arrival_planned=datetime(2026, 11, 25, 13, 0),
+                fare_lowest_eur=59.9,
+                train_number="1002",
+                journey_id="journey-priced",
+            ),
+        ],
+    )
+    report = _report_for(
+        target,
+        tmp_path,
+        as_of=datetime(2026, 11, 20, tzinfo=UTC),
+        quality=replace(load_config().quality, expected_route_count=1),
+    )
+
+    assert report.metrics["nulls"]["fare"]["rate"] == 0.5
+    assert report.metrics["nulls"]["fare"]["v2_rate"] == 0.5
+
+
+def test_all_completed_route_days_are_covered(tmp_path: Path) -> None:
+    target = _custom_build(
+        tmp_path,
+        [
+            bronze_row(
+                observed_at=datetime(2026, 11, day, 11, 0),
+                departure_planned=datetime(2026, 11, day, 12, 0),
+                arrival_planned=datetime(2026, 11, day, 16, 0),
+                train_number=f"10{day}",
+                journey_id=f"journey-{day}",
+            )
+            for day in range(14, 21)
+        ],
+    )
+    report = _report_for(
+        target,
+        tmp_path,
+        as_of=datetime(2026, 11, 21, tzinfo=UTC),
+        quality=replace(load_config().quality, expected_route_count=1),
+    )
+
+    route_days = report.metrics["route_days"]
+    assert route_days["expected"] == 7
+    assert route_days["observed"] == 7
+    assert route_days["final_7d_covered"] == 7
+    assert route_days["final_7d_coverage"] == 1.0
+    assert route_days["final_24h_covered"] == 7
+    assert route_days["final_24h_coverage"] == 1.0

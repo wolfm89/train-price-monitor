@@ -269,6 +269,13 @@ Rows per observed day and `build.partitions` are report-only. The tripwire thres
 | `fare_null_rate`        | above 0.10                              |
 | `load_factor_null_rate` | above 0.35                              |
 
+Initial baseline (2026-11-16 production build `20261116T213950Z-513cc946`): 504,383 rows in the
+last 7 days (583,516 prior, −13.6 %), 140/140 active routes, 980 completed route-days, final-7d
+coverage 0.8847, final-24h 0.7622, fare null rate 4.01 % (v2 7.18 %), load-factor null rate
+27.96 %, freshness 4.08 h, report generation 3.5 s / 3,555 bytes, status `ok`. The 0.80/0.60
+thresholds are regression tripwires below this baseline, not a statement that current coverage is
+failing.
+
 A breach publishes one normal-priority `silver_quality_failed` event listing every violation; it
 does not fail the build or move the pointer back. A report-query failure fails the build before
 publish; a report-write failure after publish is logged and leaves the verified build in place.
