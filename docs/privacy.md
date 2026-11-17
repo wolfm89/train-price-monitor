@@ -81,8 +81,8 @@ together with an update to the policy (both languages and the "Stand / Last upda
 
 CloudWatch alarms, AWS Budgets notifications, silver-build failures and silver data-quality warnings
 are forwarded to the operator's Pushover account (a US service). They carry alarm names, metric
-values, budget amounts, redacted build errors, quality metric names and counts only; no user data is
-sent. If a future alert includes user data, the public policy must be updated first.
+values, budget amounts, redacted build errors, quality metric names, rates and counts only; no user
+data is sent. If a future alert includes user data, the public policy must be updated first.
 
 ## Scripts
 

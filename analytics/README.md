@@ -295,10 +295,12 @@ coverage 0.8847, final-24h 0.7622, fare null rate 4.01 % (v2 7.18 %), load-facto
 thresholds are regression tripwires below this baseline, not a statement that current coverage is
 failing.
 
-A breach publishes one normal-priority `silver_quality_failed` event listing the violations (the
-Pushover message shows the first three plus a count); it does not fail the build or move the
+A breach publishes one normal-priority `silver_quality_failed` event listing up to ten violations
+(the Pushover message shows the first three plus a count); it does not fail the build or move the
 pointer back. A report-query failure fails the build before publish; a report-write failure after
-publish is logged and leaves the verified build in place. Report writes use one attempt with short
+publish is logged and leaves the verified build in place. A pointer-write failure after the report
+lands still returns the versioned report key and leaves `_latest.json` stale. Report writes use one
+attempt with short
 SDK timeouts. If less than 20 s remain after publish, the report write is skipped; after a
 successful write, the warning is skipped if less than 20 s remain. Reports are kept indefinitely
 for now; the two-build retention only applies to `silver/builds/`.
