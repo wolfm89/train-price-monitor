@@ -31,21 +31,24 @@ frontend `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and
 
 ## Backend runtime
 
-| Variable                    | Scope               | Default / deployed                    | Set by            | Purpose                                                              |
-| --------------------------- | ------------------- | ------------------------------------- | ----------------- | -------------------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME` | Backend             | —                                     | CDK / `env:local` | S3 bucket for profile images.                                        |
-| `TPM_SQS_QUEUE_URL`         | Backend             | —                                     | CDK / `env:local` | SQS queue for hourly refresh and daily cleanup messages.             |
-| `SES_FROM_EMAIL`            | Backend             | —                                     | CDK               | Sender address for user emails.                                      |
-| `SES_SANDBOX`               | Backend             | `true`                                | CDK               | `false` turns off the sandbox-only per-user recipient identities.    |
-| `CORS_ALLOWED_ORIGINS`      | Backend             | localhost/127.0.0.1 on port 3000      | CDK / developer   | Comma-separated browser origins; CDK sets the frontend origin.       |
-| `FRONTEND_URL`              | Backend             | `http://localhost:3000`               | CDK               | Base URL used in notification links.                                 |
-| `COGNITO_USER_POOL_ID`      | Backend (refresher) | —                                     | CDK / `env:local` | User pool for the daily unconfirmed-sign-up cleanup.                 |
-| `LOCAL_DEV`                 | Backend             | unset                                 | developer         | `1` runs an HTTP server instead of the Lambda handler.               |
-| `PORT`                      | Backend             | `4000`                                | developer         | Local HTTP port when `LOCAL_DEV=1`.                                  |
-| `DECODO_API_KEY_PARAM`      | Backend             | `/train-price-monitor/decodo-api-key` | CDK               | SSM SecureString name for the Decodo fallback key.                   |
-| `DECODO_API_KEY`            | Backend             | unset                                 | developer         | Literal key for local development; wins over `_PARAM`. Never commit. |
-| `DECODO_KEY_TTL_MS`         | Backend             | `900000`                              | developer         | How long a resolved Decodo key is cached.                            |
-| `DB_TRANSPORT`              | Backend             | unset                                 | developer         | `decodo` forces the fallback (kill switch).                          |
+| Variable                             | Scope               | Default / deployed                                                     | Set by            | Purpose                                                                      |
+| ------------------------------------ | ------------------- | ---------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------- |
+| `PROFILE_IMAGE_BUCKET_NAME`          | Backend             | —                                                                      | CDK / `env:local` | S3 bucket for profile images.                                                |
+| `TPM_SQS_QUEUE_URL`                  | Backend             | —                                                                      | CDK / `env:local` | SQS queue for hourly refresh, daily cleanup and notification-email messages. |
+| `SES_FROM_EMAIL`                     | Backend             | —                                                                      | CDK               | Sender address for user emails.                                              |
+| `SES_SANDBOX`                        | Backend             | `true`                                                                 | CDK               | `false` turns off the sandbox-only per-user recipient identities.            |
+| `CORS_ALLOWED_ORIGINS`               | Backend             | localhost/127.0.0.1 on port 3000                                       | CDK / developer   | Comma-separated browser origins; CDK sets the frontend origin.               |
+| `FRONTEND_URL`                       | Backend             | `http://localhost:3000`                                                | CDK               | Base URL used in notification links.                                         |
+| `COGNITO_USER_POOL_ID`               | Backend (refresher) | —                                                                      | CDK / `env:local` | User pool for the daily unconfirmed-sign-up cleanup.                         |
+| `LOCAL_DEV`                          | Backend             | unset                                                                  | developer         | `1` runs an HTTP server instead of the Lambda handler.                       |
+| `PORT`                               | Backend             | `4000`                                                                 | developer         | Local HTTP port when `LOCAL_DEV=1`.                                          |
+| `DECODO_API_KEY_PARAM`               | Backend             | `/train-price-monitor/decodo-api-key`                                  | CDK               | SSM SecureString name for the Decodo fallback key.                           |
+| `DECODO_API_KEY`                     | Backend             | unset                                                                  | developer         | Literal key for local development; wins over `_PARAM`. Never commit.         |
+| `DECODO_KEY_TTL_MS`                  | Backend             | `900000`                                                               | developer         | How long a resolved Decodo key is cached.                                    |
+| `DB_TRANSPORT`                       | Backend             | unset                                                                  | developer         | `decodo` forces the fallback (kill switch).                                  |
+| `POWERTOOLS_LOG_LEVEL` / `LOG_LEVEL` | Backend             | `INFO` in Lambda; `DEBUG` when `NODE_ENV=development`                  | developer         | Log level; `POWERTOOLS_LOG_LEVEL` wins over `LOG_LEVEL`.                     |
+| `NODE_ENV`                           | Backend             | unset                                                                  | developer         | `development` selects the DEBUG default; do not set it in Lambda.            |
+| `POWERTOOLS_SERVICE_NAME`            | Scraper             | set by CDK (`scraper-poller`, `scraper-hydrator`, `scraper-compactor`) | CDK               | Service name in structured logs.                                             |
 
 ## DB transport and pacing
 
@@ -95,20 +98,27 @@ values directly.
 
 ## Analytics
 
-| Variable               | Scope     | Default / deployed                  | Set by | Purpose                                                     |
-| ---------------------- | --------- | ----------------------------------- | ------ | ----------------------------------------------------------- |
-| `SILVER_BUCKET`        | Analytics | —                                   | CDK    | Shared scraper bucket.                                      |
-| `SILVER_PREFIX`        | Analytics | `silver`                            | CDK    | Prefix for builds, pointer and quality reports.             |
-| `BRONZE_SOURCE`        | Analytics | `s3://<bucket>/prices/**/*.parquet` | CDK    | Bronze glob; the handler lists the snapshot.                |
-| `SILVER_THREADS`       | Analytics | `2`                                 | CDK    | DuckDB threads for the build.                               |
-| `SILVER_MEMORY_LIMIT`  | Analytics | `6GB`                               | CDK    | DuckDB memory limit.                                        |
-| `SILVER_MAX_TEMP_SIZE` | Analytics | `7GB`                               | CDK    | DuckDB spill cap.                                           |
-| `SILVER_KEEP`          | Analytics | `2`                                 | CDK    | Number of silver builds to retain.                          |
-| `TRANSFORM_VERSION`    | Analytics | commit SHA or `sql-<hash>`          | CDK/CI | Recorded in the silver manifest.                            |
-| `ALERT_TOPIC_ARN`      | Analytics | —                                   | CDK    | SNS topic for quality warnings and the failure destination. |
-| `LOG_GROUP_NAME`       | Analytics | —                                   | CDK    | Log group used in failure links.                            |
+| Variable               | Scope     | Default / deployed                  | Set by             | Purpose                                                                  |
+| ---------------------- | --------- | ----------------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| `SILVER_BUCKET`        | Analytics | —                                   | CDK                | Shared scraper bucket.                                                   |
+| `SILVER_PREFIX`        | Analytics | `silver`                            | CDK                | Prefix for builds, pointer and quality reports.                          |
+| `BRONZE_SOURCE`        | Analytics | `s3://<bucket>/prices/**/*.parquet` | CDK                | Bronze glob; the handler lists the snapshot.                             |
+| `SILVER_THREADS`       | Analytics | `2`                                 | CDK                | DuckDB threads for the build.                                            |
+| `SILVER_MEMORY_LIMIT`  | Analytics | `6GB`                               | CDK                | DuckDB memory limit.                                                     |
+| `SILVER_MAX_TEMP_SIZE` | Analytics | `7GB`                               | CDK                | DuckDB spill cap.                                                        |
+| `SILVER_KEEP`          | Analytics | `2`                                 | CDK                | Number of silver builds to retain.                                       |
+| `TRANSFORM_VERSION`    | Analytics | commit SHA or `sql-<hash>`          | CDK/CI             | Recorded in the silver manifest.                                         |
+| `ALERT_TOPIC_ARN`      | Analytics | —                                   | CDK                | SNS topic for quality warnings and the failure destination.              |
+| `LOG_GROUP_NAME`       | Analytics | —                                   | CDK                | Log group used in failure links.                                         |
+| `AWS_LAMBDA_LOG_LEVEL` | Analytics | unset (handler defaults to `INFO`)  | Lambda / developer | Runtime log level; the handler respects it when setting the root logger. |
 
 `AWS_REGION` is reserved by Lambda; do not set it on the analytics function.
+
+## Analytics local
+
+| Variable               | Scope     | Default / deployed | Set by    | Purpose                                                                                         |
+| ---------------------- | --------- | ------------------ | --------- | ----------------------------------------------------------------------------------------------- |
+| `DUCKDB_EXTENSION_DIR` | Analytics | unset              | developer | Directory with the bundled httpfs extension for local S3 reads (`mise run //analytics:httpfs`). |
 
 ## Alerting
 

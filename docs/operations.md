@@ -17,18 +17,18 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 
 ## Alarms
 
-| Alarm                 | What it means                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------- |
-| `PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
-| `PollerErrors`        | The poller Lambda is failing.                                                               |
-| `PollerThrottledByDb` | DB throttling in two consecutive runs; a single 429 is noise.                               |
-| `PollerNoPrices`      | No direct successful scrape for 45 minutes.                                                 |
-| `PollerBatchAborted`  | A run hit the 250 s abort; the log line, not a raw duration threshold.                      |
-| `SearchErrors`        | GraphQL search errors in the API.                                                           |
-| `UsingDecodoFallback` | The direct DB transport has been degraded for two consecutive hours.                        |
-| `RefresherErrors`     | The hourly/daily SQS worker is failing.                                                     |
-| `SearchThrottled`     | DB throttling is affecting interactive search.                                              |
-| `RefresherDLQ`        | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
+| Alarm                             | What it means                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `TPM-Scraper-PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
+| `TPM-Scraper-PollerErrors`        | The poller Lambda is failing.                                                               |
+| `TPM-Scraper-PollerThrottledByDb` | DB throttling in two consecutive runs; a single 429 is noise.                               |
+| `TPM-Scraper-PollerNoPrices`      | No direct successful scrape for 45 minutes.                                                 |
+| `TPM-Scraper-PollerBatchAborted`  | A run hit the 250 s abort; the log line, not a raw duration threshold.                      |
+| `TPM-App-SearchErrors`            | GraphQL search errors in the API.                                                           |
+| `TPM-App-UsingDecodoFallback`     | The direct DB transport has been degraded for two consecutive hours.                        |
+| `TPM-App-RefresherErrors`         | The hourly/daily SQS worker is failing.                                                     |
+| `TPM-App-SearchThrottled`         | The GraphQL Lambda is being throttled (account concurrency limit reached).                  |
+| `TPM-App-RefresherDLQ`            | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
 
 Do not add an eleventh alarm or custom metric without accepting the cost. Do not use metric math,
 Metrics Insights or anomaly-detection bands in alarms; they are billed differently from the free
@@ -65,7 +65,7 @@ then.
 
 ### DB throttling or `403 OPS_BLOCKED`
 
-1. Check the `UsingDecodoFallback` and `SearchThrottled` alarms and the poller transport counters.
+1. Check the `TPM-App-UsingDecodoFallback` alarm and the poller transport counters.
 2. The backend uses the direct TLS transport first and Decodo as fallback when
    `DECODO_API_KEY_PARAM` resolves. If Decodo is unavailable, interactive search degrades.
 3. The poller has no Decodo key. On throttling it ends the batch; untouched targets are retried by
@@ -82,6 +82,13 @@ then.
    index serves NEAR first.
 4. If the backlog is deep, do not raise the batch size blindly; DB pacing is the constraint.
 
+### SearchThrottled
+
+1. Check Lambda `ConcurrentExecutions` and account concurrency limits. The API and refresher share
+   the account's concurrency pool; a traffic spike or a stuck refresher can starve the API.
+2. Reduce traffic, stop the refresher temporarily, or request a quota increase. The backend does not
+   use reserved concurrency.
+
 ### Refresher errors or DLQ
 
 1. Inspect the DLQ message and the refresher logs; the message is a GraphQL mutation.
@@ -93,7 +100,8 @@ then.
 
 1. The `onFailure` destination publishes one `silver_build_failed` event after every retry fails.
 2. Check the analytics log group for the build id, stage and error type; the pointer is unchanged.
-3. Re-run the weekly build manually through Scheduler or `aws lambda invoke --invocation-type Event`.
+3. Re-run the weekly build with `aws lambda invoke --invocation-type Event`, or temporarily edit the
+   schedule to fire once.
 4. A failed report query blocks publish by design; a failed report write after publish is logged and
    does not roll back the build.
 
@@ -123,7 +131,8 @@ then.
 
 ## Retention
 
-- DynamoDB: journey TTL after expiry + 7 days; notifications 90 days; unconfirmed sign-ups 7 days.
+- DynamoDB: journey TTL after expiry + 7 days; notifications 90 days, but not before journey expiry
+  - 7 days; unconfirmed sign-ups 7 days. See [privacy.md](privacy.md#retention).
 - SQS: 4 days; DLQ 14 days.
 - Logs: 14 days.
 - Silver builds: newest two; quality reports: kept indefinitely.

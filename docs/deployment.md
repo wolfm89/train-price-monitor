@@ -13,8 +13,9 @@ in `us-east-1`. CI deploys `main`; manual deployments use the same checks and a 
 - Repository secrets/variables for the CI deploy: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
   `AWS_ROLE_TO_ASSUME`, `AWS_ROLE_EXTERNAL_ID`, `CDK_APP_NAME`, `CDK_DOMAIN_NAME`,
   `CDK_SES_FROM_EMAIL`, `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN`,
-  `PUSHOVER_USER_KEY`; variables `AWS_REGION=eu-central-1`, `CDK_ANALYTICS_PAUSED`,
-  `CDK_SCRAPER_PAUSED`, `CDK_SES_PRODUCTION_ACCESS`, `CDK_DECODO_API_KEY_PARAM`.
+  `PUSHOVER_USER_KEY`, `DISTRIBUTION_ID`; variables `AWS_REGION=eu-central-1`,
+  `CDK_ANALYTICS_PAUSED`, `CDK_SCRAPER_PAUSED`, `CDK_SES_PRODUCTION_ACCESS`,
+  `CDK_DECODO_API_KEY_PARAM`. The deploy job invalidates the CloudFront `/*` path after deploying.
 
 Never commit credentials or generated `.env` files.
 
@@ -72,9 +73,10 @@ mise run //infrastructure:deploy
 
 The task builds the frontend, backend and scraper bundles first, then deploys all stacks with
 approval disabled. CDK builds the analytics Docker image as part of the deployment. To inspect
-changes first:
+changes first, after building the assets the synth graph consumes:
 
 ```bash
+mise run //...:build
 cd infrastructure
 npx cdk diff
 npx cdk deploy --all       # or: npm run cdk -- deploy --all
@@ -96,7 +98,8 @@ CloudFormation output keys are generated logical IDs with a hash suffix, for exa
 
 - `backend/.env`: `AWS_PROFILE`, `PROFILE_IMAGE_BUCKET_NAME`, `TPM_SQS_QUEUE_URL`,
   `COGNITO_USER_POOL_ID`.
-- `frontend/.env`: Cognito user/identity pool and client IDs.
+- `frontend/.env`: Cognito user/identity pool and client IDs plus `AWS_REGION` (the current app does
+  not read `AWS_REGION`; it is kept in the generated file for local tooling).
 - `frontend/.env.development`: `REACT_APP_GRAPHQL_ENDPOINT=http://localhost:4000/`.
 
 Set `STACK_NAME` if the stack is not named `InfrastructureStack`. The script verifies the AWS
@@ -106,8 +109,8 @@ identity with `sts:GetCallerIdentity` and needs `cloudformation:DescribeStacks` 
 ## Post-deploy verification
 
 1. Open the CloudFront URL; the frontend loads and the Cognito login screen works.
-2. Call the API health endpoint or search for a journey; the GraphQL Lambda is active and the
-   Cognito authorizer accepts the token.
+2. Sign in and run a journey search; the GraphQL Lambda is active and the Cognito authorizer accepts
+   the token. The local `/health` endpoint is only available with `LOCAL_DEV=1`, not in Lambda mode.
 3. Check the SQS queue and DLQ: the hourly rule should enqueue one `updateJourneyMonitors` message
    per hour.
 4. Inspect the silver Lambda environment for `ALERT_TOPIC_ARN` and `TRANSFORM_VERSION`.

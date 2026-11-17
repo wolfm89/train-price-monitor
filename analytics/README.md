@@ -170,14 +170,17 @@ First run:
 
 ```bash
 cd ../infrastructure
-CDK_ANALYTICS_PAUSED=1 CDK_TRANSFORM_VERSION="$(git rev-parse HEAD)" npx cdk deploy AnalyticsStack
+CDK_APP_NAME=TrainPriceMonitor CDK_DOMAIN_NAME=example.com CDK_SES_FROM_EMAIL=noreply@example.com \
+  CDK_ANALYTICS_PAUSED=1 CDK_TRANSFORM_VERSION="$(git rev-parse HEAD)" \
+  npx cdk deploy AnalyticsStack
 FN=$(aws cloudformation describe-stacks --stack-name AnalyticsStack \
   --query "Stacks[0].Outputs[?OutputKey=='SilverFunctionName'].OutputValue" --output text)
 aws lambda invoke --function-name "$FN" --invocation-type Event \
   --payload '{}' --cli-binary-format raw-in-base64-out /tmp/silver.json
 ```
 
-The invoke is asynchronous; wait about 10 minutes, then inspect `silver/_latest.json`,
+The invoke is asynchronous; `/tmp/silver.json` contains `{"StatusCode": 202}`. Wait about 12
+minutes, or watch the log group for `silver build finished`, then inspect `silver/_latest.json`,
 `silver/builds/<id>/_manifest.json` and `silver/quality/_latest.json`. A synchronous invoke can
 outlive the CLI connection and create a duplicate build.
 

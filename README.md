@@ -22,24 +22,24 @@
 </p>
 
 Train Price Monitor is a serverless web app for watching Deutsche Bahn connections. Search for a
-journey, set the highest fare you are willing to pay, and the app checks the price hourly. When a
-watched fare reaches or exceeds your limit, it creates an in-app notification and, if enabled, sends
-an email.
+journey, set a price limit, and the app checks the fare hourly. When a watched fare climbs to or past
+your limit, it creates an in-app notification and sends an email unless you turn email alerts off.
 
 The project also contains a historical data pipeline: a scraper collects fare observations as
 Parquet on S3, and a weekly analytics build turns them into a typed silver dataset with a quality
 report.
 
-![Train Price Monitor home page showing the search entry point](docs/assets/home.png)
+![Train Price Monitor landing page with the hero, feature cards and three-step how-it-works section](docs/assets/home.png)
 
 ## Features
 
 - Search Deutsche Bahn connections and page to earlier or later departures.
 - Watch a journey with an individual price limit and travel preferences.
-- Hourly fare checks with in-app notifications and optional email alerts.
+- Hourly fare checks with in-app notifications and email alerts (on by default).
 - Current price, limit and journey status on the watchlist; expired journeys are cleaned up.
 - Download your stored data or delete your account from the profile page.
 - Historical Parquet collection, silver analytics builds and a weekly quality report.
+- Automatic cleanup of expired journeys and price-alert notifications.
 
 ## Quick start
 
@@ -50,20 +50,23 @@ You need [mise](https://mise.jdx.dev/) and an AWS SSO profile with access to a d
 ```bash
 git clone https://github.com/wolfm89/train-price-monitor.git
 cd train-price-monitor
+export AWS_PROFILE=<profile>
+aws sso login --profile "$AWS_PROFILE"
 mise install
 mise run install
-mise run env:local          # reads CloudFormation outputs; requires AWS SSO
+mise run env:local          # reads CloudFormation outputs
 mise run dev:frontend       # Vite on http://localhost:3000
 ```
 
-Run the backend in a second terminal with `mise run dev:backend` (port 4000), or start the Docker
-Compose stack with `mise run dev:docker`. Without `env:local`, the frontend has no Cognito or GraphQL
+Run the backend in a second terminal with `mise run dev:backend` (port 4000). The Docker Compose
+stack is an alternative to the two local servers; see [docs/development.md](docs/development.md#local-workflows)
+for its environment requirements. Without `env:local`, the frontend has no Cognito or GraphQL
 configuration and cannot sign in.
 
 ## Architecture
 
 The web app runs on CloudFront and S3, authenticates with Cognito, and calls a GraphQL Lambda through
-API Gateway. A second Lambda consumes the hourly and daily SQS messages; DynamoDB stores users,
+API Gateway. A second Lambda consumes the hourly refresh, daily cleanup and notification-email SQS messages; DynamoDB stores users,
 journeys and notifications; S3 stores profile images. The scraper and analytics pipelines share the
 same AWS account and data bucket but run independently.
 
@@ -92,9 +95,9 @@ DuckDB.
 ## Deployment
 
 Five CDK stacks deploy to AWS: `InfrastructureStack`, `AlertingStack`, `ScraperStack` and
-`AnalyticsStack` in `eu-central-1`, plus the CloudFront certificate in `us-east-1`. The
-repository's CI deploys `main`; manual deployments use the documented mise task and a reviewed
-`cdk diff`. Start with [docs/deployment.md](docs/deployment.md).
+`AnalyticsStack` in `eu-central-1`, plus `CertificateStack` in `us-east-1`. The repository's CI
+deploys `main`; manual deployments use the documented mise task after a reviewed `cdk diff`. Start
+with [docs/deployment.md](docs/deployment.md).
 
 ## Privacy and security
 
@@ -111,3 +114,5 @@ setup, test commands and pull-request expectations.
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE).
+
+Train Price Monitor is an independent project and is not affiliated with Deutsche Bahn AG.

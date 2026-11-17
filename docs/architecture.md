@@ -60,8 +60,9 @@ application, scraper and analytics stacks. Deployment details are in [deployment
 - Expired journeys are deleted during refresh; their price-alert notifications are deleted with them.
   DynamoDB TTL is the backstop.
 
-The API and refresher run the same Docker image with different sizing, triggers and DB pacing. The
-API is sized for a waiting user; the refresher is sized for cost and can run for up to 120 s.
+The API and refresher run the same Docker image with different timeouts, triggers and DB pacing.
+Both use 512 MB; the API has a 29 s timeout for a waiting user, while the refresher has a 120 s
+timeout and is sized for cost.
 
 ## Scraper pipeline
 
@@ -78,8 +79,8 @@ the DB transport in `shared/`.
   `prices/year=/month=/day=/`, and reschedules each target. Targets whose departure day has passed
   are deleted instead of scraped.
 - **Compactor** (03:00 UTC) merges the previous day's `batch_*` files into one `daily_*` file. It
-  verifies row counts and content fingerprints before deleting the source files and preserves
-  existing daily files so retries are safe.
+  verifies row counts and content fingerprints before deleting the source files, and re-merges any
+  existing daily data. A run with no `batch_*` files is a no-op, so retries are safe.
 
 TTD intervals are capacity-derived: FAR 16 days, MID 8 days, NEAR 24 hours, with jitter. The poller
 uses a browser-like TLS profile and a paced request schedule; it has **no Decodo fallback** because
@@ -116,17 +117,30 @@ concurrency 1. It reads bronze and writes silver in the shared scraper bucket. R
 indefinitely; builds keep the newest two. The quality report and thresholds are documented in
 [analytics/README.md](../analytics/README.md) and [operations.md](operations.md).
 
+## Data model
+
+The application uses one DynamoDB table, `TrainPriceMonitor`, with `pk`/`sk` access patterns:
+
+| Access pattern                        | Item                                                                                         |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `USER#<userId>` / `METADATA#`         | User profile, notification switch, travel preferences and the Cognito `sub` binding.         |
+| `USER#<userId>` / `JOURNEY#<id>`      | Journey monitor: price limit, refresh token, expiry and the cached price/departure snapshot. |
+| `USER#<userId>` / `NOTIFICATION#<id>` | Price alert, journey expiry or stale-journey notification, with a JSON payload and TTL.      |
+
+The table is on-demand, has point-in-time recovery and uses TTL on journeys and notifications. The
+watchlist reads only the cached snapshot on the journey item; the refresher is the only writer.
+
 ## Data and retention
 
-| Store                         | What lives there                                                                              | Retention                                                                              |
-| ----------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| DynamoDB `TrainPriceMonitor`  | Users, journey monitors and notifications; single table, PITR, TTL on journeys/notifications. | Journey TTL after expiry + 7 days; notifications 90 days; unconfirmed sign-ups 7 days. |
-| S3 profile images             | Per-user profile picture, KMS-encrypted.                                                      | Deleted with the account.                                                              |
-| S3 `prices/`                  | Bronze Parquet, written by the poller and compacted daily.                                    | Intended as the permanent historical record.                                           |
-| S3 `silver/builds/`           | Published silver snapshots and manifests.                                                     | Newest two builds.                                                                     |
-| S3 `silver/quality/`          | Weekly quality reports and `_latest.json`.                                                    | Kept indefinitely for now.                                                             |
-| SQS                           | Hourly and daily internal messages.                                                           | 4 days; DLQ 14 days.                                                                   |
-| CloudWatch / API Gateway logs | Operational logs.                                                                             | 14 days (CDK-managed).                                                                 |
+| Store                         | What lives there                                                                              | Retention                                                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| DynamoDB `TrainPriceMonitor`  | Users, journey monitors and notifications; single table, PITR, TTL on journeys/notifications. | Journey TTL after expiry + 7 days; notifications 90 days, but not before journey expiry + 7 days; unconfirmed sign-ups 7 days. |
+| S3 profile images             | Per-user profile picture, KMS-encrypted.                                                      | Deleted with the account.                                                                                                      |
+| S3 `prices/`                  | Bronze Parquet, written by the poller and compacted daily.                                    | Intended as the permanent historical record.                                                                                   |
+| S3 `silver/builds/`           | Published silver snapshots and manifests.                                                     | Newest two builds.                                                                                                             |
+| S3 `silver/quality/`          | Weekly quality reports and `_latest.json`.                                                    | Kept indefinitely for now.                                                                                                     |
+| SQS                           | Hourly and daily internal messages.                                                           | 4 days; DLQ 14 days.                                                                                                           |
+| CloudWatch / API Gateway logs | Operational logs.                                                                             | 14 days (CDK-managed).                                                                                                         |
 
 The full data-protection rules are in [privacy.md](privacy.md); the public policy is linked from the
 README.
@@ -138,9 +152,10 @@ CloudWatch alarms, AWS Budgets, silver build failures and quality warnings publi
 to Pushover. Alarm state changes and build failures are high priority with the siren; recovery,
 quality warnings and budget alerts are normal priority.
 
-There are ten CloudWatch alarms and two dashboards; the free-tier allowance is fully used. Do not add
-an eleventh alarm or custom metric without accepting the cost. See [operations.md](operations.md)
-for the alarm list and runbooks.
+There are ten CloudWatch alarms, ten custom metrics and two dashboards. The alarm and custom-metric
+allowances are fully used, and the third dashboard slot is free. Do not add an eleventh alarm or
+custom metric without accepting the cost. See [operations.md](operations.md) for the alarm list and
+runbooks.
 
 ## Design decisions
 

@@ -35,12 +35,12 @@ Do not commit `.env` files. The canonical variable reference is [configuration.m
 
 ## Local workflows
 
-| Workflow           | Command                                                       | What is local                                                                                                                                         |
-| ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Frontend only      | `mise run //frontend:dev`                                     | Vite on port 3000; API calls go to the endpoint in `.env.development`.                                                                                |
-| Backend + frontend | `mise run //backend:dev` in one terminal, frontend in another | GraphQL on port 4000; S3/SQS/Cognito are the deployed resources from `env:local`.                                                                     |
-| Docker Compose     | `mise run dev:docker`                                         | Frontend, backend and a Floci container. The backend still uses `AWS_PROFILE` and the bucket/queue from `env:local`; this is not a fully offline app. |
-| Scraper on Floci   | see [scraper/README.md](../scraper/README.md)                 | Local DynamoDB/S3 and the scraper tasks.                                                                                                              |
+| Workflow           | Command                                                       | What is local                                                                                                                                                                                               |
+| ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend only      | `mise run //frontend:dev`                                     | Vite on port 3000; API calls go to the endpoint in `.env.development`.                                                                                                                                      |
+| Backend + frontend | `mise run //backend:dev` in one terminal, frontend in another | GraphQL on port 4000; S3/SQS/Cognito are the deployed resources from `env:local`.                                                                                                                           |
+| Docker Compose     | `mise run dev:docker`                                         | Frontend, backend and a Floci container. It reads `AWS_PROFILE`, `PROFILE_IMAGE_BUCKET_NAME` and `TPM_SQS_QUEUE_URL` from the shell or repo-root `.env`, not `backend/.env`, and publishes ports 3000/4000. |
+| Scraper on Floci   | see [scraper/README.md](../scraper/README.md)                 | Local DynamoDB/S3 and the scraper tasks.                                                                                                                                                                    |
 
 The frontend-only flow is not enough to sign in unless `mise run env:local` has written the Cognito
 values. There is no mock auth mode.
@@ -95,6 +95,7 @@ cd analytics && uv run pytest && uv run ruff check . && uv run ty check
 Install the pre-commit hooks once:
 
 ```bash
+pip install pre-commit
 pre-commit install
 pre-commit run --all-files
 pre-commit run --all-files --hook-stage manual   # includes tsc and ty
@@ -133,25 +134,9 @@ The generated resolver types are committed; the SDL JSON and station index are n
   `http://127.0.0.1:3000`; set it to the exact browser origin for a custom frontend.
 - **Backend image build fails on Apple Silicon:** the Lambda image is `linux/amd64`; ensure Docker
   Buildx is available. The analytics asset pins `linux/amd64` too.
-- **Docker Compose talks to real AWS:** it uses the profile and resource names from `env:local`.
-  Floci is used by the scraper's local tasks, not as a complete replacement for the app's Cognito
-  and API resources.
+- **Docker Compose environment:** it does not read `backend/.env`; export `AWS_PROFILE`,
+  `PROFILE_IMAGE_BUCKET_NAME` and `TPM_SQS_QUEUE_URL` or put them in the repo-root `.env`, and stop
+  the two dev servers first because Compose publishes 3000/4000. Floci is used by the scraper's local
+  tasks, not as a complete replacement for the app's Cognito and API resources.
 - **Missing generated files after a fresh clone:** run `mise run install` then
   `mise run //backend:codegen`; the prebuild hooks regenerate the station index and SDL.
-
-## Coder workspaces (optional)
-
-If your workspace uses the OpenCode Coder template, the template installs the tools from
-`.mise.toml` but intentionally does not install dependencies, authenticate AWS or start services.
-After the workspace is created:
-
-```bash
-export AWS_PROFILE=<profile>
-aws sso login --profile "$AWS_PROFILE"
-mise run install
-mise run //backend:codegen
-mise run env:local
-```
-
-The workspace home volume persists across restarts. This setup is environment-specific; it is not
-required for local development on a normal workstation.

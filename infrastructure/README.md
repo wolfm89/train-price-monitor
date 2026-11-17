@@ -19,9 +19,9 @@ AWS CDK v2 TypeScript stacks for Train Price Monitor.
 `InfrastructureStack` also runs `ToolkitCleaner` daily: it removes unused CDK ECR and S3 assets
 after checking deployed CloudFormation templates, keeping assets created in the last 10 days.
 
-Scraper sizing/tuning and retention values live in `../shared/runtime-config.json`; analytics sizing
-and schedule policy live in `../analytics/src/tpm_analytics/data/silver-config.json`. Both are read
-by `lib/config.ts` at synth time.
+Scraper sizing/tuning and retention values live in `../shared/runtime-config.json`; analytics sizing,
+retention, retry and report values live in `../analytics/src/tpm_analytics/data/silver-config.json`.
+The weekly cron and timezone live in `lib/config.ts` and `analytics-stack.ts`.
 
 ## Outputs
 

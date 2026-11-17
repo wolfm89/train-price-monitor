@@ -2,7 +2,7 @@
 
 GraphQL Yoga API for Train Price Monitor. One native AWS Lambda handler serves both API Gateway
 requests and SQS messages; the same Docker image is used by the API and refresher functions with
-different sizing and pacing.
+different timeouts, triggers and DB pacing.
 
 ## Commands
 

@@ -63,4 +63,5 @@ analytics/dist/
 analytics/**/*.egg-info/
 
 # draw.io editor backups
-*.bkp
+*.drawio.bkp
+*.drawio.png.bkp

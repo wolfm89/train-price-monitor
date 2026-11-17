@@ -12,3 +12,6 @@ PORT = "4000"
 [tasks.codegen]
 description = "Generate GraphQL types from schema"
 run = "npm run codegen"
+
+[tasks.test]
+run = "npm test"

@@ -104,7 +104,6 @@ uv run ruff check .    # Lint
 uv run ruff format .   # Format
 ```
 
-For a Coder workspace, run `mise run install` and `mise run //backend:codegen` after `mise install`.
 AWS SSO remains interactive: configure an AWS profile with `sts:GetCallerIdentity`,
 `cloudformation:DescribeStacks`, and `cognito-idp:ListUserPoolClients`, then run
 `aws sso login --profile "$AWS_PROFILE"` and `mise run env:local` to generate ignored local
@@ -171,13 +170,14 @@ flowchart LR
   (scrape prices), and Compactor (consolidate Parquet). See `scraper/README.md` for details.
 - **Analytics** turns bronze into silver with DuckDB: v1/v2 rows are normalised (`transfers_raw` and
   `transfers_actual`, load-factor ordinals, backfilled v1 defaults), station context is joined, and
-  all calendar fields plus `timetable_period` use Berlin local time. The timetable boundary in
-  `analytics/src/tpm_analytics/sql/silver.sql` is a hand-maintained constant; `TIMETABLE_REVIEW_AFTER`
-  in `quality.py` fails the build once departures reach the end of the reviewed period.
+  all calendar fields plus `timetable_period` use Berlin local time. The timetable boundary is a
+  hand-maintained constant in `analytics/src/tpm_analytics/silver/constants.py`
+  (`TIMETABLE_BOUNDARY`/`TIMETABLE_REVIEW_AFTER`); `silver.sql` receives it as a template value and
+  `quality.py` fails the build once departures reach the end of the reviewed period.
 
 ## Testing Strategy
 
-- **Frontend** – Vitest (`*.test.{ts,tsx}`); run `mise run //frontend:test` (or `npm test`).
+- **Frontend** – Vitest (`*.test.{ts,tsx}`); run `mise run //frontend:test` (one-shot) or `npm test` for watch mode.
 - **Infrastructure** – Jest with ts-jest (`*.test.ts`); run `mise run //infrastructure:test`.
   Use descriptive names, e.g. `test('SQS Queue Created')`.
 - **Analytics** – pytest over pyarrow fixtures that reproduce v1-only, v2-only and mixed bronze files;
@@ -187,8 +187,8 @@ flowchart LR
   redaction); run `npm test` in `backend`. CI runs it alongside `typecheck` + `lint`.
 - **Scraper** – Node's test runner via `tsx` for TTD tiering/jitter/order and Parquet serialization
   round-trips (`*.test.ts`); run `npm test` in `scraper`. CI runs it alongside `typecheck` + `lint`.
-- **CI** – `mise run //...:test` and `mise run //...:lint` run all modules; `pre-commit` enforces
-  formatting and linting on every commit.
+- **CI** – the workflow runs the per-module typecheck, lint and test commands (and `uv run pytest`
+  plus `ty check` for analytics); `pre-commit` enforces formatting and linting on every commit.
 - **Test memory** – Jest and Vitest are capped at two workers (`infrastructure/jest.config.js`,
   `frontend/vitest.config.ts`). On a low-memory machine use `MISE_JOBS=1 mise run //:test` so
   modules run one at a time; concurrent default-worker Jest runs have exhausted a 17.6 GB WSL VM.
@@ -346,7 +346,8 @@ flowchart LR
   `/train-price-monitor/pushover-user-key`) written by CI from the repo secrets `PUSHOVER_API_TOKEN`
   and `PUSHOVER_USER_KEY`; the forwarder's role can read exactly those two parameters.
 - **Ten alarms** — the CloudWatch free tier allows 10 alarm metrics, 10 custom metrics and 3
-  dashboards; we use 10, 10 and 2. The custom metrics come from log filters on the existing log
+  dashboards; we use 10, 10 and 2. Deployed alarm names are prefixed `TPM-Scraper-` or `TPM-App-`
+  (for example `TPM-Scraper-PollerErrors`); construct IDs below omit the prefix. The custom metrics come from log filters on the existing log
   lines, so no application code emits metrics.
   - Scraper: `PollerNotRunning` (0 invocations for 45 min, missing data treated as breaching),
     `PollerErrors`, `PollerThrottledByDb` (throttling in two consecutive runs — a single 429 is

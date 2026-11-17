@@ -143,7 +143,7 @@ because `db-vendo-client`'s transitive dependency tree pulls in CJS-only modules
 
 ## Local Development (Floci)
 
-The pipeline can be run locally using [Floci](https://floci.dev/), a local AWS emulator.
+The pipeline can be run locally using [Floci](https://floci.io/), a local AWS emulator.
 
 ```bash
 docker compose up -d floci                       # Start local AWS emulator

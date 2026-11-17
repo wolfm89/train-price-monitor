@@ -16,6 +16,7 @@ that cover the modules you touched.
 mise install
 mise run install
 mise run env:local          # requires AWS SSO and a deployed InfrastructureStack
+pip install pre-commit
 pre-commit install
 ```
 
@@ -48,9 +49,9 @@ pre-commit run --all-files
 pre-commit run --all-files --hook-stage manual   # slower tsc/ty hooks
 ```
 
-CI runs the per-module typecheck, lint and test commands, plus `uv run pytest`, `ruff` and `ty` for
-analytics. For a low-memory machine running the whole monorepo, use `MISE_JOBS=1 mise run //:test` so
-modules run one at a time.
+CI runs the per-module typecheck, lint and test commands, plus `uv run pytest` and `ty check` for
+analytics. `ruff`, `ruff format` and Prettier run in pre-commit.ci. For a low-memory machine running
+the whole monorepo, use `MISE_JOBS=1 mise run //:test` so modules run one at a time.
 
 ## Pull requests
 

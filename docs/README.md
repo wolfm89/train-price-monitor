@@ -22,7 +22,7 @@ deeper; each fact should live in one place and the code is the final source of t
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | [Architecture](architecture.md)   | Context, containers, request/auth path, hourly refresh, scraper and analytics diagrams, data model, design decisions. |
 | [Deployment](deployment.md)       | Stacks and regions, CDK inputs, bootstrap, deploy, outputs, verification, pause switches and rollback.                |
-| [Development](development.md)     | Toolchain, `env:local`, frontend/backend/Docker workflows, tests, troubleshooting and Coder workspaces.               |
+| [Development](development.md)     | Toolchain, `env:local`, frontend/backend/Docker workflows, tests and troubleshooting.                                 |
 | [Configuration](configuration.md) | Canonical environment-variable reference, with scope, default and injection source.                                   |
 | [Operations](operations.md)       | Alert topic, alarms, dashboards, budget, retention, runbooks and first-run checks.                                    |
 | [Privacy](privacy.md)             | Data inventory, logging, export, deletion and retention rules.                                                        |
