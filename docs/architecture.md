@@ -99,8 +99,11 @@ schedule.
 
 1. EventBridge Scheduler invokes the Docker Lambda every Sunday at 03:30 UTC, after the 03:00
    compactor.
-2. The handler lists the bronze `prices/**/*.parquet` keys once and builds from that snapshot, so a
-   poller batch landing mid-build cannot change the corpus.
+2. The handler lists the bronze `prices/**/*.parquet` keys once and builds from that list, so a
+   poller batch landing mid-build is not added to the run. The list is not immutable: a compactor
+   run that deletes a listed `batch_*` file before DuckDB reads it can still cause a missing-object
+   failure. The 03:00 compactor and 03:30 build schedule normally leave a 30-minute gap; do not run
+   them together.
 3. DuckDB applies the deterministic silver transform, normalises v1/v2 semantics, joins station
    context and writes partitioned Parquet locally.
 4. The blocking quality gate checks the invariants before anything is published. A gate failure
@@ -196,8 +199,9 @@ Chrome order was blocked on 2026-10-21), so the transport rotates firefox → sa
   simple and the table stays in the free-tier-friendly on-demand mode.
 - **SQS between the schedule and the refresher.** The hourly message is small and durable; a failed
   refresh can retry and land in the DLQ without affecting the API.
-- **Snapshot builds.** The silver build records the exact bronze key list before reading, so a
-  concurrent poller/compactor cannot change the input mid-build.
+- **Pinned key list, not an immutable snapshot.** The silver build records the bronze key list
+  before reading, so a concurrent poller append is not added to the run. A compactor delete of a
+  listed batch can still race with the read; the 03:00 → 03:30 schedule normally leaves a 30-minute gap.
 - **Blocking gate, non-blocking report.** Structural/data-contract problems fail the build before the
   pointer moves. Representativeness warnings are diagnostic and never roll back a verified dataset.
 - **Browser-like TLS, no browser.** DB's edge matches the TLS ClientHello. The shared transport uses

@@ -82,14 +82,14 @@ mise run //...:lint
 mise run //...:typecheck
 ```
 
-Or per module:
+Or per module. Each line runs in a subshell, so every check starts from the repository root:
 
 ```bash
-cd frontend && npm run test:ci && npm run typecheck && npm run lint
-cd backend && npm test && npm run typecheck && npm run lint
-cd scraper && npm test && npm run typecheck && npm run lint
-cd infrastructure && npm test && npm run typecheck && npm run lint
-cd analytics && uv run pytest && uv run ruff check . && uv run ty check
+(cd frontend && npm run test:ci && npm run typecheck && npm run lint)
+(cd backend && npm test && npm run typecheck && npm run lint)
+(cd scraper && npm test && npm run typecheck && npm run lint)
+(cd infrastructure && npm test && npm run typecheck && npm run lint)
+(cd analytics && uv run pytest && uv run ruff check . && uv run ty check)
 ```
 
 Install the pre-commit hooks once:

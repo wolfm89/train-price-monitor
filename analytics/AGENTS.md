@@ -23,8 +23,9 @@ Use `uv` and the committed `uv.lock`; never `pip install` ad hoc and never add a
 ## Silver contract
 
 - `src/tpm_analytics/sql/silver.sql` is the one deterministic transform. Every run rebuilds from
-  the listed bronze snapshot, so the same input produces the same rows; row order and file split
-  are not stable.
+  the bronze key list it captured, so the same list produces the same rows; row order and file split
+  are not stable. Later poller appends are excluded, but a concurrent compactor delete of a listed
+  batch is not; the 03:00 → 03:30 schedule normally leaves a 30-minute gap.
 - Normalise v1/v2 semantics before adding features: `transfers_raw` keeps the bronze value while
   `transfers_actual` halves v1 counts; load factors use ordinals; v1 defaults are backfilled;
   duplicates use the compactor key.

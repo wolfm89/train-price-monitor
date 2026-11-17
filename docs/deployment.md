@@ -62,25 +62,31 @@ stacks use `CDK_DEFAULT_REGION=eu-central-1`.
 
 ## Deploy
 
-For a local deploy, export the CDK inputs and use the repository task:
+For a local deploy, export the CDK inputs and build the assets the synth graph consumes:
 
 ```bash
 export CDK_APP_NAME=TrainPriceMonitor
 export CDK_DOMAIN_NAME=example.com
 export CDK_SES_FROM_EMAIL=noreply@example.com
+mise run //...:build
+```
+
+Review the diff before changing AWS:
+
+```bash
+cd infrastructure
+npx cdk diff
+```
+
+Then deploy all stacks with the repository task:
+
+```bash
 mise run //infrastructure:deploy
 ```
 
-The task builds the frontend, backend and scraper bundles first, then deploys all stacks with
-approval disabled. CDK builds the analytics Docker image as part of the deployment. To inspect
-changes first, after building the assets the synth graph consumes:
-
-```bash
-mise run //...:build
-cd infrastructure
-npx cdk diff
-npx cdk deploy --all       # or: npm run cdk -- deploy --all
-```
+The task rebuilds the frontend, backend and scraper bundles, then deploys all stacks with approval
+disabled. CDK builds the analytics Docker image as part of the deployment. `npx cdk deploy --all`
+uses the same stacks and assets once they have been built; it keeps CDK's normal approval prompt.
 
 Use `mise run //infrastructure:deploy-scraper` or the other targeted tasks from
 [infrastructure/README.md](../infrastructure/README.md) when only one stack changed.

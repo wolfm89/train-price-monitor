@@ -9,10 +9,13 @@ Silver-layer builds for the Train Price Monitor price dataset.
 
 Bronze (`s3://<scraper-bucket>/prices/`) is the scraper's Parquet output, partitioned by observation
 day. The compactor rewrites a day's `batch_*` files into one `daily_*` file, so bronze is
-append-and-rewrite, not immutable. The build lists the objects once and reads exactly that
-snapshot, so a batch the poller appends mid-build is simply not part of that build; the manifest
-records the same list. Silver is the conformed snapshot the model work reads:
-typed, with v1/v2 semantics normalised, station context joined and departure-month partitions.
+append-and-rewrite, not immutable. The build lists the objects once and reads exactly that list, so
+a batch the poller appends mid-build is simply not part of that build; the manifest records the same
+list. The list is not an immutable snapshot: a compactor run that deletes a listed `batch_*` file
+before DuckDB reads it can still cause a missing-object failure. The 03:00 compactor and 03:30 build
+schedule normally leave a 30-minute gap; do not run them together. Silver is the conformed
+snapshot the model work reads: typed, with v1/v2 semantics normalised, station context joined and
+departure-month partitions.
 Every run rebuilds it from scratch, so the same input produces the same rows; row order and file
 split are not stable, and each build needs its own target directory and room on disk for the output
 plus the spill directory (both live next to the target). Duplicate observations are removed using
@@ -31,8 +34,9 @@ The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py
 `handler.py`). The `AnalyticsStack` adds the image Lambda, the weekly EventBridge Scheduler trigger,
 the least-privilege IAM and the failure SNS path; `ScraperStack` adds the `silver/` multipart-abort
 rule. See [Deployment](#deployment).
-The handler lists the bronze keys once and builds from that snapshot, so the poller's 15-minute
-appends cannot change the corpus under a nine-minute build.
+The handler lists the bronze keys once and builds from that list, so the poller's 15-minute appends
+cannot change the corpus under a nine-minute build. The list is not immutable: a compactor delete of
+a listed batch can still race with the read, so keep manual builds clear of compaction.
 
 The CLI still writes to a local directory. Reading `s3://` requires S3 credentials passed to
 `run_build`; the Lambda handler supplies them from its execution role.

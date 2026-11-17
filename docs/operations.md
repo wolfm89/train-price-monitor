@@ -109,6 +109,8 @@ then.
 
 1. The `onFailure` destination publishes one `silver_build_failed` event after every retry fails.
 2. Check the analytics log group for the build id, stage and error type; the pointer is unchanged.
+   A missing-object error can mean a compactor run deleted a listed `batch_*` file; wait for
+   compaction to finish and rerun without overlapping it.
 3. Re-run the weekly build with `aws lambda invoke --invocation-type Event`, or temporarily edit the
    schedule to fire once.
 4. A failed report query blocks publish by design; a failed report write after publish is logged and
