@@ -35,6 +35,22 @@ export interface SilverConfig {
     retry_attempts: number;
     max_event_age_minutes: number;
   };
+  quality: {
+    report_version: number;
+    prefix: string;
+    pointer_name: string;
+    event: string;
+    expected_route_count: number;
+    window_days: number;
+    baseline_days: number;
+    final_7d_coverage_min: number;
+    final_24h_coverage_min: number;
+    route_coverage_min: number;
+    rows_drop_pct_max: number;
+    freshness_hours_max: number;
+    fare_null_rate_max: number;
+    load_factor_null_rate_max: number;
+  };
 }
 
 export interface ScraperConfig {
@@ -96,6 +112,22 @@ const SILVER_SCHEMA: Schema = {
   schedule: {
     retry_attempts: 'number',
     max_event_age_minutes: 'number',
+  },
+  quality: {
+    report_version: 'number',
+    prefix: 'string',
+    pointer_name: 'string',
+    event: 'string',
+    expected_route_count: 'number',
+    window_days: 'number',
+    baseline_days: 'number',
+    final_7d_coverage_min: 'number',
+    final_24h_coverage_min: 'number',
+    route_coverage_min: 'number',
+    rows_drop_pct_max: 'number',
+    freshness_hours_max: 'number',
+    fare_null_rate_max: 'number',
+    load_factor_null_rate_max: 'number',
   },
 };
 
@@ -170,6 +202,47 @@ function validateSilverValues(config: SilverConfig): void {
   assertIntegerInRange(lambda.max_event_age_minutes, 1, 360, 'silver-config.json.lambda.max_event_age_minutes');
   assertIntegerInRange(schedule.retry_attempts, 0, 185, 'silver-config.json.schedule.retry_attempts');
   assertIntegerInRange(schedule.max_event_age_minutes, 1, 1_440, 'silver-config.json.schedule.max_event_age_minutes');
+  const quality = config.quality;
+  for (const [name, value] of [
+    ['prefix', quality.prefix],
+    ['pointer_name', quality.pointer_name],
+    ['event', quality.event],
+  ] as const) {
+    if (!value) {
+      throw new Error(`silver-config.json.quality.${name} must be a non-empty string`);
+    }
+  }
+  if (quality.prefix.startsWith('/') || quality.prefix.endsWith('/')) {
+    throw new Error('silver-config.json.quality.prefix must not start or end with /');
+  }
+  if (quality.event === config.failure_event) {
+    throw new Error('silver-config.json.quality.event must differ from failure_event');
+  }
+  assertIntegerInRange(quality.report_version, 1, 100, 'silver-config.json.quality.report_version');
+  assertIntegerInRange(quality.expected_route_count, 1, 10_000, 'silver-config.json.quality.expected_route_count');
+  assertIntegerInRange(quality.window_days, 1, 365, 'silver-config.json.quality.window_days');
+  if (
+    !Number.isInteger(quality.baseline_days) ||
+    quality.baseline_days < quality.window_days ||
+    quality.baseline_days > 365
+  ) {
+    throw new Error(
+      `silver-config.json.quality.baseline_days must be an integer between window_days (${quality.window_days}) and 365`
+    );
+  }
+  assertIntegerInRange(quality.freshness_hours_max, 1, 1_440, 'silver-config.json.quality.freshness_hours_max');
+  for (const [name, value] of [
+    ['final_7d_coverage_min', quality.final_7d_coverage_min],
+    ['final_24h_coverage_min', quality.final_24h_coverage_min],
+    ['route_coverage_min', quality.route_coverage_min],
+    ['rows_drop_pct_max', quality.rows_drop_pct_max],
+    ['fare_null_rate_max', quality.fare_null_rate_max],
+    ['load_factor_null_rate_max', quality.load_factor_null_rate_max],
+  ] as const) {
+    if (value < 0 || value > 1) {
+      throw new Error(`silver-config.json.quality.${name} must be between 0 and 1`);
+    }
+  }
   if (!(
     lambda.publish_reserve_seconds < lambda.build_budget_seconds && lambda.build_budget_seconds < lambda.timeout_seconds
   )) {
@@ -209,6 +282,7 @@ export const MONTHLY_BUDGET_FORECAST_THRESHOLD = 100;
 export const ANALYTICS_SCHEDULE_NAME = 'tpm-silver-weekly';
 export const SILVER_FAILURE_EVENT = SILVER_CONFIG.failure_event;
 export const SILVER_FAILURE_STAGES = SILVER_CONFIG.stages;
+export const SILVER_QUALITY_EVENT = SILVER_CONFIG.quality.event;
 
 export const DASHBOARD_NAMES = {
   scraper: `${APP_NAME}-Scraper`,

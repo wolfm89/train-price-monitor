@@ -12,6 +12,7 @@ import {
   SILVER_CONFIG,
   SILVER_FAILURE_EVENT,
   SILVER_FAILURE_STAGES,
+  SILVER_QUALITY_EVENT,
 } from '../lib/config';
 
 function minutesOfDay(schedule: { hour: number; minute: number }): number {
@@ -69,7 +70,24 @@ describe('shared configuration', () => {
     expect(SILVER_CONFIG.manifest_name).toBe('_manifest.json');
     expect(SILVER_CONFIG.pointer_name).toBe('_latest.json');
     expect(SILVER_FAILURE_EVENT).toBe('silver_build_failed');
-    expect([...SILVER_FAILURE_STAGES]).toEqual(['settings', 'preflight', 'snapshot', 'build', 'publish']);
+    expect([...SILVER_FAILURE_STAGES]).toEqual(['settings', 'preflight', 'snapshot', 'build', 'report', 'publish']);
+    expect(SILVER_QUALITY_EVENT).toBe('silver_quality_failed');
+    expect(SILVER_CONFIG.quality).toMatchObject({
+      report_version: 1,
+      prefix: 'quality',
+      pointer_name: '_latest.json',
+      window_days: 7,
+      baseline_days: 28,
+      final_7d_coverage_min: 0.8,
+      final_24h_coverage_min: 0.6,
+      route_coverage_min: 0.9,
+      rows_drop_pct_max: 0.35,
+      freshness_hours_max: 36,
+      fare_null_rate_max: 0.1,
+      load_factor_null_rate_max: 0.35,
+    });
+    expect(SILVER_CONFIG.quality.event).not.toBe(SILVER_FAILURE_EVENT);
+    expect(PUSHOVER_FORWARDER_SOURCE).toContain(SILVER_QUALITY_EVENT);
     expect(PUSHOVER_FORWARDER_SOURCE).toContain(SILVER_FAILURE_EVENT);
   });
 
