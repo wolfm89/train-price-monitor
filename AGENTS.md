@@ -456,6 +456,7 @@ Environment variables (never commit values):
 
 - [scraper/README.md](scraper/README.md) – Scraper architecture, Parquet schema, local Floci dev.
 - [infrastructure/README.md](infrastructure/README.md) – CDK stacks and mise deploy tasks.
+- [docs/diagrams/](docs/diagrams/) – Web app, scraper and analytics architecture diagrams (`.drawio` + PNG overviews).
 - [docs/privacy.md](docs/privacy.md) – What the app stores, logging/export/retention rules and the
   email setup that a code change has to respect.
 - [README.md](README.md) – Product overview, getting started, usage.
