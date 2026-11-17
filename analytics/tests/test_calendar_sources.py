@@ -78,6 +78,26 @@ def test_school_christmas_and_easter_match_kmk() -> None:
             )
 
 
+def test_school_winter_and_pentecost_match_kmk() -> None:
+    """Winter and Himmelfahrt/Pfingsten ranges match the KMK table."""
+    fixture = json.loads((FIXTURES / "kmk_summer_2026_27.json").read_text(encoding="utf-8"))
+    rows = calendar.daily_rows("2027-01-01", "2027-06-30")
+    for item in fixture["winter"]:
+        state = item["state"]
+        start = date.fromisoformat(item["start"])
+        end = date.fromisoformat(item["end"])
+        assert _row(rows, state, start)["is_school_holiday"] is True, f"{state} winter start {start}"
+        assert _row(rows, state, end)["is_school_holiday"] is True, f"{state} winter end {end}"
+    for item in fixture["pentecost"]:
+        state = item["state"]
+        start = date.fromisoformat(item["start"])
+        end = date.fromisoformat(item["end"])
+        row = _row(rows, state, start)
+        assert row["is_school_holiday"] is True, f"{state} pentecost start {start}"
+        assert row["school_holiday_type"] == item["type"], f"{state} pentecost type {start}"
+        assert _row(rows, state, end)["is_school_holiday"] is True, f"{state} pentecost end {end}"
+
+
 def test_schleswig_holstein_autumn_uses_the_mainland_range() -> None:
     """The North Frisian island exception must not move the state-wide autumn start."""
     rows = calendar.daily_rows("2026-09-01", "2026-10-31")
