@@ -1,10 +1,16 @@
 # Project Overview
 
 Train Price Monitor is a serverless web app that tracks Deutsche Bahn ticket prices and notifies
-users when a monitored journey rises above a chosen threshold. It pairs a React 19 + Material-UI
-frontend with a GraphQL Yoga backend on AWS Lambda, and a standalone scraper pipeline that records
-historical fare data to Parquet on S3. Everything is defined as code with AWS CDK v2 and orchestrated
-through a `mise` monorepo.
+users when a monitored journey reaches or exceeds a chosen price limit. It pairs a React 19 +
+Material-UI frontend with a GraphQL Yoga backend on AWS Lambda, and a standalone scraper pipeline
+that records historical fare data to Parquet on S3. Everything is defined as code with AWS CDK v2
+and orchestrated through a `mise` monorepo.
+
+> **Documentation map.** User-facing documentation lives in [`docs/README.md`](docs/README.md):
+> architecture, deployment, development, configuration, operations and privacy. Architecture
+> diagrams are in [`docs/diagrams/`](docs/diagrams/). This file is the agent contract and keeps the
+> guardrails, commands and operational invariants that agents must not violate. When a fact changes,
+> update the canonical user doc first and keep this file in sync.
 
 ## Repository Structure
 
@@ -20,6 +26,8 @@ through a `mise` monorepo.
 - `infrastructure/` – AWS CDK v2 stacks (`lib/`), CDK app entry (`bin/`), CDK tests (`test/`).
 - `analytics/` – Python 3.15 silver-layer builds (DuckDB) over the scraper's bronze Parquet. The only
   non-TypeScript module; see `analytics/README.md`.
+- `docs/` – User-facing documentation: architecture, deployment, development, configuration,
+  operations, privacy and the editable architecture diagrams.
 - `.mise.toml` / `mise.tasks.toml` – Monorepo task definitions shared across modules.
 - `eslint.config.cjs` – Shared ESLint v10 flat config.
 - `docker-compose.yml` – Local dev services (Floci AWS emulator, backend, frontend).
@@ -76,8 +84,8 @@ npm run lint           # ESLint check
 
 ```bash
 # Monorepo (mise) — run from any directory
-npx pre-commit run --all-files     # Fast, file-scoped hooks (format, lint, lockfile)
-npx pre-commit run --all-files --hook-stage manual  # + tsc and ty for every module
+pre-commit run --all-files     # Fast, file-scoped hooks (format, lint, lockfile)
+pre-commit run --all-files --hook-stage manual  # + tsc and ty for every module
 mise run //...:build               # Build all modules in parallel
 mise run //...:test                # Run tests across all modules
 mise run //...:lint                # Lint all modules
@@ -397,56 +405,10 @@ flowchart LR
 
 ## Extensibility Hooks
 
-Environment variables (never commit values):
-
-| Variable                       | Module              | Description                                                                                                 |
-| ------------------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`    | Backend             | S3 bucket name for profile images                                                                           |
-| `TPM_SQS_QUEUE_URL`            | Backend             | SQS queue URL for journey monitor updates                                                                   |
-| `SES_FROM_EMAIL`               | Backend (Lambda)    | Sender address for SES emails (injected by CDK)                                                             |
-| `COGNITO_USER_POOL_ID`         | Backend (refresher) | User pool for the daily deletion of unconfirmed sign-ups (injected by CDK)                                  |
-| `SES_SANDBOX`                  | Backend (Lambda)    | `false` turns off the sandbox-only per-user recipient identities (injected by CDK)                          |
-| `CORS_ALLOWED_ORIGINS`         | Backend             | Comma-separated browser origins allowed by CORS (CDK: the frontend; default: local dev server on port 3000) |
-| `FRONTEND_URL`                 | Backend (Lambda)    | Frontend base URL for notification links                                                                    |
-| `LOCAL_DEV`                    | Backend             | `1` starts an HTTP server instead of the Lambda handler                                                     |
-| `PORT`                         | Backend             | HTTP port for local dev server (default `4000`)                                                             |
-| `DB_MIN_GAP_MS`                | Backend + Scraper   | Minimum spacing between DB request starts (default `1000`)                                                  |
-| `DB_MAX_IN_FLIGHT`             | Backend + Scraper   | Concurrent DB requests (default `2`)                                                                        |
-| `DB_MAX_ATTEMPTS`              | Backend + Scraper   | Direct attempts per request (default `2`)                                                                   |
-| `DB_RETRY_BACKOFF_MS`          | Backend + Scraper   | Pause before a retry, times the attempt number (default `3000`)                                             |
-| `DB_REQUEST_TIMEOUT_MS`        | Backend + Scraper   | Per-attempt timeout (default `20000`)                                                                       |
-| `DB_BREAKER_THRESHOLD`         | Backend + Scraper   | Consecutive failed requests that open the breaker (default `3`)                                             |
-| `DB_BREAKER_COOLDOWN_MS`       | Backend + Scraper   | How long the breaker stays open (default `180000`)                                                          |
-| `DB_TOTAL_BUDGET_MS`           | Backend + Scraper   | Wall-clock budget per request, direct + fallback                                                            |
-| `DB_TLS_PROFILE`               | Backend + Scraper   | First TLS profile: `tls13` in CDK (code default `firefox`), `safari`, `chrome`, `tls12`, `legacy`           |
-| `DB_PROFILE_BLOCK_COOLDOWN_MS` | Backend + Scraper   | How long a profile that returned `OPS_BLOCKED` is skipped (default 900000)                                  |
-| `DB_TRANSPORT`                 | Backend             | `decodo` forces the Decodo fallback (kill switch)                                                           |
-| `DECODO_API_KEY`               | Backend             | Decodo key, literal (local dev; wins over `_PARAM`)                                                         |
-| `DECODO_API_KEY_PARAM`         | Backend             | SSM SecureString name holding the Decodo key (injected by CDK)                                              |
-| `DECODO_KEY_TTL_MS`            | Backend             | How long a resolved Decodo key is cached (default 15 min)                                                   |
-| `ALERT_TOPIC_ARN`              | Analytics Lambda    | SNS topic for the non-blocking quality warning (injected by CDK)                                            |
-| `LOG_GROUP_NAME`               | Analytics Lambda    | CloudWatch log group name used in failure links (injected by CDK)                                           |
-| `REACT_APP_GRAPHQL_ENDPOINT`   | Frontend            | API Gateway base URL                                                                                        |
-| `CDK_APP_NAME`                 | Infrastructure      | Application name (overrides CDK context)                                                                    |
-| `CDK_DOMAIN_NAME`              | Infrastructure      | Custom domain name for the deployment                                                                       |
-| `CDK_SES_FROM_EMAIL`           | Infrastructure      | Sender email injected as Lambda `SES_FROM_EMAIL`                                                            |
-| `CDK_DECODO_API_KEY_PARAM`     | Infrastructure      | SSM SecureString name for the Decodo key                                                                    |
-| `PUSHOVER_API_TOKEN`           | Infrastructure      | Pushover application token (repo secret; CI writes the SSM param)                                           |
-| `PUSHOVER_USER_KEY`            | Infrastructure      | Pushover user key (repo secret; CI writes the SSM param)                                                    |
-| `PUSHOVER_TOKEN_PARAM`         | Alerting Lambda     | SSM parameter name for the Pushover app token (injected by CDK)                                             |
-| `PUSHOVER_USER_PARAM`          | Alerting Lambda     | SSM parameter name for the Pushover user key (injected by CDK)                                              |
-| `PUSHOVER_KEY_TTL_MS`          | Alerting Lambda     | How long the resolved Pushover SSM values are cached (default 15 min)                                       |
-| `CDK_SCRAPER_PAUSED`           | Infrastructure      | `1` disables the poller and hydrator schedules                                                              |
-| `CDK_ANALYTICS_PAUSED`         | Infrastructure      | `1` disables the weekly silver Scheduler schedule                                                           |
-| `CDK_TRANSFORM_VERSION`        | Infrastructure      | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`                          |
-| `CDK_SES_PRODUCTION_ACCESS`    | Infrastructure      | `1` once SES production access is granted (repo variable); see `docs/privacy.md`                            |
-| `SCRAPER_TABLE_NAME`           | Scraper             | DynamoDB schedule table (injected by CDK)                                                                   |
-| `SCRAPER_BUCKET_NAME`          | Scraper             | S3 bucket for Parquet data (injected by CDK)                                                                |
-| `SCRAPER_BATCH_SIZE`           | Scraper             | Targets per poller run (shared default `25`; 1 = 2 calls)                                                   |
-| `HYDRATOR_LOOKAHEAD_DAYS`      | Scraper             | Days ahead to seed (shared default `60`)                                                                    |
-| `HYDRATOR_SEED_WINDOW_DAYS`    | Scraper             | Newest days re-seeded per nightly run (default `3`)                                                         |
-| `HYDRATOR_FULL_SEED`           | Scraper             | `1` seeds the whole window and prunes beyond it (manual)                                                    |
-| `AWS_ENDPOINT_URL`             | Scraper             | Local Floci endpoint (set by mise tasks)                                                                    |
+The canonical environment-variable reference is [docs/configuration.md](docs/configuration.md). It
+covers the CDK inputs, backend/frontend/scraper/analytics runtime values, defaults and secret
+handling. Keep it in sync with the code and CDK when adding or renaming a variable; do not duplicate
+the full table here.
 
 - Add CDK stacks under `infrastructure/lib/` and wire them in `infrastructure/bin/`.
 - Extend scrape coverage by editing `scraper/stations.json` (route catalog is auto-generated).
@@ -454,9 +416,16 @@ Environment variables (never commit values):
 
 ## Further Reading
 
+- [docs/README.md](docs/README.md) – Documentation index and reading paths.
+- [docs/architecture.md](docs/architecture.md) – System context, flows, diagrams and design decisions.
+- [docs/deployment.md](docs/deployment.md) – Stacks, regions, inputs, outputs, verification and rollback.
+- [docs/development.md](docs/development.md) – Toolchain, local modes, tests and troubleshooting.
+- [docs/configuration.md](docs/configuration.md) – Canonical environment-variable reference.
+- [docs/operations.md](docs/operations.md) – Alarms, dashboards, budget and runbooks.
 - [scraper/README.md](scraper/README.md) – Scraper architecture, Parquet schema, local Floci dev.
+- [analytics/README.md](analytics/README.md) – Silver transform, quality report and column contract.
 - [infrastructure/README.md](infrastructure/README.md) – CDK stacks and mise deploy tasks.
-- [docs/diagrams/](docs/diagrams/) – Web app, scraper and analytics architecture diagrams (`.drawio` + PNG overviews).
+- [docs/diagrams/](docs/diagrams/) – Web app, scraper and analytics architecture diagrams (`.drawio.png`, editable in draw.io).
 - [docs/privacy.md](docs/privacy.md) – What the app stores, logging/export/retention rules and the
   email setup that a code change has to respect.
 - [README.md](README.md) – Product overview, getting started, usage.

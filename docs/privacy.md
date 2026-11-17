@@ -1,9 +1,10 @@
 # Data protection notes for this codebase
 
-The public statements are the [privacy policy](https://wolfgangmoser.eu/privacy-policy/) and the
-[legal notice](https://wolfgangmoser.eu/legal-notice/) (source: `wolfm89/landing-page`,
-`privacy-policy/index.html`; German and English, the German version prevails). This page lists only
-what a change in this repository has to respect, so that the policy stays true.
+> Part of the [documentation index](README.md). The public statements are the
+> [privacy policy](https://wolfgangmoser.eu/privacy-policy/) and the
+> [legal notice](https://wolfgangmoser.eu/legal-notice/) (source: `wolfm89/landing-page`,
+> `privacy-policy/index.html`; German and English, the German version prevails). This page lists only
+> what a change in this repository has to respect, so that the policy stays true.
 
 ## What the app stores
 

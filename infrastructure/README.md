@@ -1,16 +1,20 @@
 # Infrastructure (CDK)
 
-AWS CDK v2 TypeScript stacks for the Train Price Monitor.
+AWS CDK v2 TypeScript stacks for Train Price Monitor.
+
+> Part of [Train Price Monitor](../README.md). See [Deployment](../docs/deployment.md) for the
+> bootstrap, inputs, outputs, verification and rollback flow, and [Architecture](../docs/architecture.md)
+> for the runtime diagrams.
 
 ## Stacks
 
-| Stack                 | Description                                                                     |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `InfrastructureStack` | Main application stack: API Gateway, backend Lambda, Cognito, S3, SQS           |
-| `CertificateStack`    | ACM certificate in us-east-1 for the custom domain                              |
-| `AlertingStack`       | Alert topic, Pushover forwarder and the $1 monthly account budget               |
-| `ScraperStack`        | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions        |
-| `AnalyticsStack`      | Weekly silver build: image Lambda, EventBridge Scheduler, IAM, SNS failure path |
+| Stack                 | Region         | Description                                                                                                              |
+| --------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `CertificateStack`    | `us-east-1`    | ACM certificate for the CloudFront custom domain.                                                                        |
+| `AlertingStack`       | `eu-central-1` | SNS alert topic, Pushover forwarder and the $1 monthly account budget.                                                   |
+| `InfrastructureStack` | `eu-central-1` | CloudFront/S3 frontend, Cognito, API Gateway/GraphQL Lambda, DynamoDB, profile S3, SQS/refresher, SES, `ToolkitCleaner`. |
+| `ScraperStack`        | `eu-central-1` | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions.                                                |
+| `AnalyticsStack`      | `eu-central-1` | Weekly silver build: image Lambda, EventBridge Scheduler, IAM, SNS failure path.                                         |
 
 `InfrastructureStack` also runs `ToolkitCleaner` daily: it removes unused CDK ECR and S3 assets
 after checking deployed CloudFormation templates, keeping assets created in the last 10 days.
@@ -19,23 +23,38 @@ Scraper sizing/tuning and retention values live in `../shared/runtime-config.jso
 and schedule policy live in `../analytics/src/tpm_analytics/data/silver-config.json`. Both are read
 by `lib/config.ts` at synth time.
 
+## Outputs
+
+CloudFormation output keys carry a hash suffix. `mise run env:local` resolves the prefixes with
+`starts_with`; do not copy the suffix. Important prefixes: `FrontendCloudFrontUrl`,
+`BackendApiEndpoint`, `BackendQueueUrl`, `BackendProfileImageBucketName`, `CognitoAuthUserPoolId`,
+`CognitoAuthIdentityPoolId`, `ScraperBucketName`, `SilverFunctionName`, `SilverScheduleName`.
+
 ## Commands
 
-Run these mise tasks from anywhere in the repo (they map to tasks in `mise.toml`):
+Run these mise tasks from anywhere in the repo (they map to tasks in `.mise.toml`):
 
-| Command                                          | Description                                       |
-| ------------------------------------------------ | ------------------------------------------------- |
-| `mise run //infrastructure:install`              | Install dependencies                              |
-| `mise run //infrastructure:build`                | Compile TypeScript                                |
-| `mise run //infrastructure:typecheck`            | TypeScript type check                             |
-| `mise run //infrastructure:lint`                 | ESLint check                                      |
-| `mise run //infrastructure:test`                 | Run Jest tests                                    |
-| `mise run //infrastructure:deploy`               | Deploy all stacks (builds frontend first)         |
-| `mise run //infrastructure:deploy-scraper`       | Deploy only `ScraperStack` (builds scraper first) |
-| `mise run //infrastructure:deploy-local-scraper` | Deploy `ScraperStack` to local Floci              |
-| `mise run //infrastructure:clean`                | Remove CDK synthesis output (`cdk.out`)           |
+| Command                                          | Description                                        |
+| ------------------------------------------------ | -------------------------------------------------- |
+| `mise run //infrastructure:install`              | Install dependencies.                              |
+| `mise run //infrastructure:build`                | Compile TypeScript.                                |
+| `mise run //infrastructure:typecheck`            | TypeScript type check.                             |
+| `mise run //infrastructure:lint`                 | ESLint check.                                      |
+| `mise run //infrastructure:test`                 | Run Jest tests.                                    |
+| `mise run //infrastructure:deploy`               | Deploy all stacks (builds frontend first).         |
+| `mise run //infrastructure:deploy-scraper`       | Deploy only `ScraperStack` (builds scraper first). |
+| `mise run //infrastructure:deploy-local-scraper` | Deploy `ScraperStack` to local Floci.              |
+| `mise run //infrastructure:clean`                | Remove CDK synthesis output (`cdk.out`).           |
 
 The deploy tasks wrap `cdk` with the correct dependencies and approval flags. For raw CDK access
-(e.g. `cdk diff`, `cdk synth`, `cdk bootstrap`), run `npx cdk <command>` from this directory.
+(e.g. `cdk diff`, `cdk synth`, `cdk bootstrap`), run `npx cdk <command>` from this directory after
+`npm run build`.
 
-For scraper architecture and local development, see [../scraper/README.md](../scraper/README.md).
+## Environment
+
+The required CDK inputs and optional pause/SES/Decodo settings are in
+[Configuration](../docs/configuration.md#cdk-deployment-inputs). Never commit credentials or
+generated `.env` files.
+
+For scraper architecture and local development, see [../scraper/README.md](../scraper/README.md);
+for the analytics build, see [../analytics/README.md](../analytics/README.md).

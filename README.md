@@ -1,174 +1,113 @@
-# Train Price Monitor
-
 <p align="center">
-  <img src="frontend/public/logo512.png" width="20%"/></br>
-  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>
-  <a href="https://github.com/wolfm89/train-price-monitor/tags"><img src="https://img.shields.io/github/v/tag/wolfm89/train-price-monitor?label=version&color=darkgreen"></a>
+  <img src="frontend/public/logo512.png" width="128" alt="Train Price Monitor logo">
 </p>
 
-Train price monitoring WebApp that sends notifications to users when prices increase above a certain threshold, built on a serverless and low-cost tech stack using React, TypeScript, GraphQL, Docker and AWS services such as API Gateway, Lambda, DynamoDB, S3, SQS, and SNS.
+<h1 align="center">Train Price Monitor</h1>
 
-## Table of Contents
+<p align="center"><em>Deutsche Bahn fare alerts when a monitored journey reaches your price limit.</em></p>
 
-- [Features](#features)
-- [Getting Started](#getting-started)
-- [Environment Variables](#environment-variables)
-- [Usage](#usage)
-- [Technologies](#technologies)
-- [Privacy](#privacy)
-- [Contributing](#contributing)
+<p align="center">
+  <a href="https://github.com/wolfm89/train-price-monitor/actions/workflows/ci.yaml"><img src="https://github.com/wolfm89/train-price-monitor/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
+  <a href="https://github.com/wolfm89/train-price-monitor/tags"><img src="https://img.shields.io/github/v/tag/wolfm89/train-price-monitor?label=release" alt="Latest release"></a>
+  <a href="https://tpm.wolfgangmoser.eu"><img src="https://img.shields.io/badge/live-demo-brightgreen" alt="Live demo"></a>
+  <a href=".nvmrc"><img src="https://img.shields.io/badge/node-24-339933?logo=node.js" alt="Node.js 24"></a>
+</p>
+
+<p align="center">
+  <a href="https://tpm.wolfgangmoser.eu">Live demo</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/privacy.md">Privacy</a>
+</p>
+
+Train Price Monitor is a serverless web app for watching Deutsche Bahn connections. Search for a
+journey, set the highest fare you are willing to pay, and the app checks the price hourly. When a
+watched fare reaches or exceeds your limit, it creates an in-app notification and, if enabled, sends
+an email.
+
+The project also contains a historical data pipeline: a scraper collects fare observations as
+Parquet on S3, and a weekly analytics build turns them into a typed silver dataset with a quality
+report.
+
+![Train Price Monitor home page showing the search entry point](docs/assets/home.png)
 
 ## Features
 
-- Find train journeys between two locations (currently only for Deutsche Bahn in Germany)
-- Browse earlier and later departures with pagination controls in search results
-- Monitor train ticket prices of selected journeys
-- Get notified when the ticket price of a journey exceeds a certain threshold
-- Automatic cleanup of price-alert notifications when a monitored journey expires
-- Background price scraper that collects historical fare data into Parquet on S3
-- Sign up and log in securely
-- Download a copy of your data or delete your account from the profile page
-- Responsive design for mobile and desktop
+- Search Deutsche Bahn connections and page to earlier or later departures.
+- Watch a journey with an individual price limit and travel preferences.
+- Hourly fare checks with in-app notifications and optional email alerts.
+- Current price, limit and journey status on the watchlist; expired journeys are cleaned up.
+- Download your stored data or delete your account from the profile page.
+- Historical Parquet collection, silver analytics builds and a weekly quality report.
 
-> The `scraper/` module is an independent serverless pipeline (Hydrator → Poller → Compactor) that
-> collects Deutsche Bahn price data. See [scraper/README.md](scraper/README.md) for architecture,
-> the Parquet schema, and local development with Floci.
+## Quick start
 
-## Getting Started
-
-This project uses [mise](https://mise.jdx.dev/) for Node.js version management. Run `mise install` at the repository root before anything else.
-
-To get a local copy of the project up and running, follow these steps:
-
-1. Clone the repository: `git clone https://github.com/wolfm89/train-price-monitor.git`
-2. Install mise and run `mise install` at the root
-3. `cd frontend && npm install`
-4. Start the frontend dev server: `npm run dev`
-
-In order to deploy the infrastructure to your AWS account, run the following:
-
-1. Set the required CDK environment variables (see [Environment Variables](#environment-variables))
-2. `cd infrastructure`
-3. Install CDK with `npm install -g aws-cdk`
-4. Bootstrap your AWS account: `cdk bootstrap aws://ACCOUNT-NUMBER/us-east-1 aws://ACCOUNT-NUMBER/REGION`
-5. Deploy the infrastructure: `npm run cdk deploy -- --all`
-6. In the CDK output you should note down the values for `FrontendCloudFrontUrl`, `BackendQueueUrl` and `BackendProfileImageBucketName`
-
-The backend can be started locally with the following steps:
-
-1. `cd backend`
-2. Install dependencies: `npm install`
-3. `npm run dev` (needs `PROFILE_IMAGE_BUCKET_NAME`, `TPM_SQS_QUEUE_URL` and AWS credentials; `mise run env:local` writes them)
-
-Alternatively, use `mise run dev:backend` from the repository root. Either way the dev server runs the
-esbuild bundle with the same `cross-fetch` alias as the Lambda, so journey searches work locally
-instead of being blocked by DB's bot protection. `npm run dev:types` checks types in a second
-terminal; the bundle itself does not typecheck.
-
-For running the price scraper pipeline locally, see [scraper/README.md](scraper/README.md).
-
-### Coder Workspace Setup
-
-The OpenCode Coder template installs tools declared in `.mise.toml`, including Node.js and the AWS CLI.
-It does not install dependencies, authenticate with AWS, generate local environment files, or start services.
-Those actions are intentionally user-driven and persist in the workspace home volume across restarts.
-
-After creating a workspace, configure an SSO profile in `~/.aws/config` with permission to call
-`sts:GetCallerIdentity`, `cloudformation:DescribeStacks`, and `cognito-idp:ListUserPoolClients`, then run:
+You need [mise](https://mise.jdx.dev/) and an AWS SSO profile with access to a deployed
+`InfrastructureStack` for the generated frontend/backend environment. The full local setup is in
+[docs/development.md](docs/development.md).
 
 ```bash
-export AWS_PROFILE=<aws-profile>
-aws sso login --profile "$AWS_PROFILE"
+git clone https://github.com/wolfm89/train-price-monitor.git
+cd train-price-monitor
+mise install
 mise run install
-mise run //backend:codegen
-mise run env:local
+mise run env:local          # reads CloudFormation outputs; requires AWS SSO
+mise run dev:frontend       # Vite on http://localhost:3000
 ```
 
-`mise run env:local` verifies the selected AWS identity and reads `InfrastructureStack` CloudFormation
-outputs to generate the ignored `backend/.env`, `frontend/.env`, and `frontend/.env.development` files.
-Set `STACK_NAME` to use a different stack name. When the SSO session expires, repeat `aws sso login`.
-The output-to-environment mappings are maintained in [`scripts/generate-local-env.sh`](scripts/generate-local-env.sh).
+Run the backend in a second terminal with `mise run dev:backend` (port 4000), or start the Docker
+Compose stack with `mise run dev:docker`. Without `env:local`, the frontend has no Cognito or GraphQL
+configuration and cannot sign in.
 
-## Environment Variables
+## Architecture
 
-| Variable                     | Module            | Description                                                                      |
-| ---------------------------- | ----------------- | -------------------------------------------------------------------------------- |
-| `PROFILE_IMAGE_BUCKET_NAME`  | Backend           | S3 bucket name for profile images                                                |
-| `TPM_SQS_QUEUE_URL`          | Backend           | SQS queue URL for journey monitor updates                                        |
-| `SES_FROM_EMAIL`             | Backend (Lambda)  | Sender address for SES notification emails                                       |
-| `SES_SANDBOX`                | Backend (Lambda)  | `false` turns off the sandbox-only per-user SES recipient identities             |
-| `CORS_ALLOWED_ORIGINS`       | Backend           | Comma-separated origins allowed by CORS (default: local dev server on port 3000) |
-| `FRONTEND_URL`               | Backend (Lambda)  | Frontend base URL injected into notification links                               |
-| `DECODO_API_KEY_PARAM`       | Backend           | SSM SecureString name holding the Decodo fallback key (injected by CDK)          |
-| `DB_MIN_GAP_MS`              | Backend + Scraper | Minimum spacing between DB request starts (default `1000`)                       |
-| `LOCAL_DEV`                  | Backend           | Set to `1` to start an HTTP server instead of exporting a Lambda handler         |
-| `REACT_APP_GRAPHQL_ENDPOINT` | Frontend          | API Gateway endpoint URL                                                         |
-| `CDK_APP_NAME`               | Infrastructure    | Application name (overrides CDK context)                                         |
-| `CDK_DOMAIN_NAME`            | Infrastructure    | Custom domain name for the deployment                                            |
-| `CDK_SES_FROM_EMAIL`         | Infrastructure    | Sender email injected as Lambda env var                                          |
-| `CDK_DECODO_API_KEY_PARAM`   | Infrastructure    | SSM SecureString name for the Decodo fallback key                                |
-| `CDK_SCRAPER_PAUSED`         | Infrastructure    | `1` disables the scraper's poller and hydrator schedules                         |
-| `CDK_SES_PRODUCTION_ACCESS`  | Infrastructure    | `1` once SES production access is granted (see `docs/privacy.md`)                |
-| `SCRAPER_TABLE_NAME`         | Scraper           | DynamoDB table for scrape schedule (injected by CDK)                             |
-| `SCRAPER_BUCKET_NAME`        | Scraper           | S3 bucket for Parquet price data (injected by CDK)                               |
-| `HYDRATOR_LOOKAHEAD_DAYS`    | Scraper           | How many days ahead to seed (default: 60)                                        |
+The web app runs on CloudFront and S3, authenticates with Cognito, and calls a GraphQL Lambda through
+API Gateway. A second Lambda consumes the hourly and daily SQS messages; DynamoDB stores users,
+journeys and notifications; S3 stores profile images. The scraper and analytics pipelines share the
+same AWS account and data bucket but run independently.
 
-## Usage
+![Web app architecture: CloudFront, Cognito, API Gateway, GraphQL Lambda, DynamoDB, SQS, refresher and SES](docs/diagrams/web-app-aws.drawio.png)
 
-To use the application, simply sign up and log in. Then, on the search page enter the departure and arrival locations, the desired date and time of travel, and search for journeys. Select the preferred journey by pressing "Watch" and enter the threshold price. On the journeys page you can always find all your monitored journeys along with the current price. Train Price Monitor will periodically (hourly) check the ticket prices and notify you when the price exceeds your threshold. The notifications are shown in the header bar and can be accessed by clicking on the bell icon. For convenience, they are also sent to your email address.
+See [docs/architecture.md](docs/architecture.md) for the request path, hourly refresh, scraper and
+analytics diagrams, data model and design decisions.
 
-## Technologies
+**Built with** React 19 · TypeScript · GraphQL Yoga · AWS CDK · Lambda · DynamoDB · S3 · Parquet and
+DuckDB.
 
-Frontend:
+## Documentation
 
-- React 19
-- TypeScript
-- Material-UI v7
-- Vite
-- AWS SDK
-- AWS Cognito
-- urql
+| Document                                   | What it covers                                                                                    |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| [Architecture](docs/architecture.md)       | System context, request and refresh flows, scraper and analytics pipelines, diagrams, data model. |
+| [Deployment](docs/deployment.md)           | Stacks and regions, CDK inputs, bootstrap, outputs, verification, pause and rollback.             |
+| [Development](docs/development.md)         | Toolchain, local environment, frontend/backend/Docker workflows, tests and troubleshooting.       |
+| [Configuration](docs/configuration.md)     | Canonical environment-variable reference and secret handling.                                     |
+| [Operations](docs/operations.md)           | Alarms, dashboards, budget, alert routing and runbooks.                                           |
+| [Privacy](docs/privacy.md)                 | What the app stores, logging/export/retention rules and the public policy.                        |
+| [Scraper](scraper/README.md)               | Bronze Parquet pipeline, TTD tiers, schema and Floci development.                                 |
+| [Analytics](analytics/README.md)           | Silver transform, quality gate/report, column contract and local DuckDB runs.                     |
+| [Infrastructure](infrastructure/README.md) | CDK stacks and mise commands.                                                                     |
 
-Backend:
+## Deployment
 
-- GraphQL Yoga
-- Native AWS Lambda handler (API Gateway v1/v2 + SQS)
-- db-vendo-client (Deutsche Bahn journey data)
-- DynamoDB (via dynamodb-toolbox v2)
-- AWS S3
-- AWS SQS
-- AWS SES
-- AWS Lambda with Docker
-- AWS API Gateway
+Five CDK stacks deploy to AWS: `InfrastructureStack`, `AlertingStack`, `ScraperStack` and
+`AnalyticsStack` in `eu-central-1`, plus the CloudFront certificate in `us-east-1`. The
+repository's CI deploys `main`; manual deployments use the documented mise task and a reviewed
+`cdk diff`. Start with [docs/deployment.md](docs/deployment.md).
 
-Scraper:
+## Privacy and security
 
-- db-vendo-client (Deutsche Bahn internal timetable API)
-- hyparquet / hyparquet-writer (Parquet read/write)
-- @aws-lambda-powertools/logger (structured logging)
-- esbuild (ESM bundling)
-- Docker Lambda (Poller only — to avoid Akamai IP blocking)
-- Floci (local AWS emulation)
-
-Infrastructure:
-
-- AWS CDK v2
-- AWS Cognito
-- Node.js 24
-
-## Privacy
-
-The hosted instance at [tpm.wolfgangmoser.eu](https://tpm.wolfgangmoser.eu) is covered by the
-[privacy policy](https://wolfgangmoser.eu/privacy-policy/) and the
-[legal notice](https://wolfgangmoser.eu/legal-notice/). [docs/privacy.md](docs/privacy.md)
-summarises what the code stores, the retention rules and what a change has to respect.
+The hosted instance is covered by the [privacy policy](https://wolfgangmoser.eu/privacy-policy/) and
+the [legal notice](https://wolfgangmoser.eu/legal-notice/). [docs/privacy.md](docs/privacy.md)
+summarises the implementation rules. Report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-Contributions are welcome! To contribute to this project, please follow these steps:
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the local checks, pre-commit
+setup, test commands and pull-request expectations.
 
-1. Fork the repository
-2. Create a new branch for your feature: `git checkout -b feature/feature-name`
-3. Make your changes and commit them: `git commit -m 'Add some feature'`
-4. Push your changes to your fork: `git push origin feature/feature-name`
-5. Submit a pull request
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).

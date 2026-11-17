@@ -61,3 +61,6 @@ analytics/.ruff_cache/
 analytics/.ty_cache/
 analytics/dist/
 analytics/**/*.egg-info/
+
+# draw.io editor backups
+*.bkp

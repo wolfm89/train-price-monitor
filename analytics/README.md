@@ -2,6 +2,11 @@
 
 Silver-layer builds for the Train Price Monitor price dataset.
 
+> Part of [Train Price Monitor](../README.md). See [Architecture](../docs/architecture.md#analytics-pipeline),
+> [Deployment](../docs/deployment.md) and [Operations](../docs/operations.md) for the wider system.
+
+![Analytics pipeline: weekly scheduler, silver build, bronze/silver S3, quality report and SNS](../docs/diagrams/analytics-pipeline.drawio.png)
+
 Bronze (`s3://<scraper-bucket>/prices/`) is the scraper's Parquet output, partitioned by observation
 day. The compactor rewrites a day's `batch_*` files into one `daily_*` file, so bronze is
 append-and-rewrite, not immutable. The build lists the objects once and reads exactly that
@@ -151,28 +156,17 @@ The Lambda image bakes the same extension into `/opt/duckdb/extensions`.
 
 ## Deployment
 
-`AnalyticsStack` deploys `analytics/Dockerfile` as an x86_64 Lambda. Sizing, retention, the Lambda
-async retry and the scheduler retry/max-age policy live in
-`analytics/src/tpm_analytics/data/silver-config.json`, which
-`infrastructure/lib/config.ts` reads at synth time: 10,240 MB memory, 900 s, 10,240 MB `/tmp`, no
-VPC, reserved concurrency 1. The weekday, UTC timezone and 30-minute compactor offset stay in
-`infrastructure/lib/config.ts` and `analytics-stack.ts`. EventBridge Scheduler runs it every Sunday at
-03:30 UTC, after the 03:00 compactor. It reads bronze from `prices/`, writes `silver/` and keeps the
-newest two builds. IAM is prefix-scoped: list `prices/*` and `silver/*`, read `prices/*`,
-read/write on `silver/*`, delete/abort on `silver/builds/*`, and publish to the alert topic; it
-cannot write or delete bronze.
+`AnalyticsStack` deploys the Docker image as an x86_64 Lambda with 10,240 MB memory, 900 s timeout,
+10,240 MB ephemeral storage, no VPC and reserved concurrency 1. EventBridge Scheduler runs it every
+Sunday at 03:30 UTC, after the 03:00 compactor. It reads `prices/`, writes `silver/` and keeps the
+newest two builds; quality reports are kept indefinitely. IAM is prefix-scoped: read bronze,
+read/write silver and delete/abort only under `silver/builds/`.
 
-The function environment is set by CDK: `SILVER_BUCKET`, `SILVER_PREFIX`, `BRONZE_SOURCE`,
-`SILVER_THREADS`, `SILVER_MEMORY_LIMIT`, `SILVER_MAX_TEMP_SIZE`, `SILVER_KEEP`, `TRANSFORM_VERSION`,
-`ALERT_TOPIC_ARN` and `LOG_GROUP_NAME`. The SNS on-failure destination is configured by CDK; the
-`ALERT_TOPIC_ARN` environment is used only for the non-blocking quality warning. `AWS_REGION` is
-reserved by Lambda. CI sets `TRANSFORM_VERSION` to the short commit SHA; an empty value records
-`sql-<hash>`.
+Full stack, bootstrap, inputs and outputs are in [Deployment](../docs/deployment.md). Set
+`CDK_ANALYTICS_PAUSED=1` for a paused deploy; CI defaults to paused when the repository variable is
+unset. Enable it with `0` after the first-run checks.
 
-Set the repository variable `CDK_ANALYTICS_PAUSED=0` only after the manual checks; CI defaults to
-paused when the variable is unset, so the first main deploy cannot start an unverified run.
-
-Deploy paused first, so the first run cannot race verification:
+First run:
 
 ```bash
 cd ../infrastructure
@@ -183,33 +177,14 @@ aws lambda invoke --function-name "$FN" --invocation-type Event \
   --payload '{}' --cli-binary-format raw-in-base64-out /tmp/silver.json
 ```
 
-The invoke is asynchronous: the CLI returns before the build starts, so wait for the run (about
-10 minutes) and inspect the pointers below. A synchronous invoke can outlive the CLI connection and
-be retried, which creates a second build; use the async form for manual checks.
+The invoke is asynchronous; wait about 10 minutes, then inspect `silver/_latest.json`,
+`silver/builds/<id>/_manifest.json` and `silver/quality/_latest.json`. A synchronous invoke can
+outlive the CLI connection and create a duplicate build.
 
-`CDK_APP_NAME`, `CDK_DOMAIN_NAME` and `CDK_SES_FROM_EMAIL` must be set (CI supplies them from
-repository secrets).
-
-Verify `silver/_latest.json`, `silver/builds/<id>/_manifest.json` and `silver/quality/_latest.json`,
-record duration, memory, rows and partitions, then set the repository variable
-`CDK_ANALYTICS_PAUSED=0` and push to main to enable the schedule. For the forced
-failure, use `aws lambda update-function-configuration` to point `BRONZE_SOURCE` at an empty prefix,
-invoke once with `--invocation-type Event` (on-failure destinations apply only to asynchronous
-invocations), wait for the retry and alert, confirm the unchanged pointer, then restore the previous
-`Environment.Variables` JSON; a CDK deploy also restores it.
-
-A failed attempt raises a `silver_build_failed` payload with the build id and stage; Lambda retries
-once, and the on-failure destination publishes exactly one notification only after every attempt
-fails. A retry that succeeds is silent. If the container is killed or the retry is exhausted, the
-same destination publishes the invocation failure (if both attempts time out, expect the page after
-roughly 31 minutes). The pointer is only moved by a verified build; if the pointer PUT itself errors,
-check `silver/_latest.json` before
-rolling anything back. A bad pointer can be rolled back to the previous build (kept for at least a
-day). Config files are loaded at import, so a missing or invalid config fails Lambda INIT; the
-Docker build imports the handler and catches that before deploy. A manual compactor run that deletes
-a bronze key during the build fails the run, and the retry rebuilds from the new key set.
-`InfrastructureStack` runs `ToolkitCleaner` daily, which removes unused CDK ECR and S3 assets after
-checking deployed CloudFormation templates; unused assets younger than 10 days are retained.
+A failed attempt raises a `silver_build_failed` payload and the on-failure destination publishes one
+notification after every retry fails. A report-query failure fails the build before the pointer
+moves; a report-write failure after publish is logged and does not roll back. See
+[Operations](../docs/operations.md) for runbooks.
 
 ## Quality report
 
