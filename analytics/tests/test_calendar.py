@@ -2,7 +2,7 @@
 
 import copy
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from importlib.resources import files
 from pathlib import Path
 
@@ -200,6 +200,13 @@ def test_register_calendar_and_route_join() -> None:
     assert rows["same"]["origin_state_missing"] is False
 
 
+def test_aware_datetime_uses_the_berlin_date() -> None:
+    """A UTC datetime just before midnight maps to the next Berlin calendar date."""
+    moment = datetime(2026, 1, 5, 23, 30, tzinfo=UTC)
+    rows = calendar.daily_rows(moment, moment)
+    assert _row(rows, "BY", "2026-01-06")["is_public_holiday"] is True
+
+
 def test_route_join_reports_missing_dates() -> None:
     """A route outside the registered calendar range is flagged, not silently false."""
     connection = duckdb.connect()
@@ -215,6 +222,23 @@ def test_route_join_reports_missing_dates() -> None:
     result = dict(zip(columns, row, strict=True))
     assert result["calendar_missing"] is True
     assert result["date_missing"] is True
+
+
+def test_missing_next_holidays_stay_null() -> None:
+    """Two missing next-holiday distances must not produce a valid 14-day value."""
+    connection = duckdb.connect()
+    calendar.register_calendar(connection, "2028-01-01", "2028-12-31")
+    connection.execute(
+        "CREATE TABLE routes (route_id VARCHAR, origin_state VARCHAR, dest_state VARCHAR, departure_date DATE)"
+    )
+    connection.execute("INSERT INTO routes VALUES ('after-last', 'Bayern', 'Berlin', DATE '2028-12-27')")
+    calendar.register_route_states(connection, "routes")
+    row = connection.execute(calendar.route_calendar_sql("routes")).fetchone()
+    assert row is not None
+    columns = [description[0] for description in connection.description]
+    result = dict(zip(columns, row, strict=True))
+    assert result["min_days_to_public_holiday"] is None
+    assert result["calendar_missing"] is False
 
 
 def test_route_state_validation_rejects_unknown_names() -> None:

@@ -17,11 +17,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     import duckdb
 
 SCHEMA_VERSION = 1
+BERLIN = ZoneInfo("Europe/Berlin")
 SCHOOL_TYPES = frozenset({"summer", "christmas", "easter", "autumn", "winter", "whitsun", "other"})
 PUBLIC_HOLIDAY_SCOPES = frozenset({"National", "Regional"})
 STATE_CODES_BY_NAME = {
@@ -125,8 +127,10 @@ def _calendar_path() -> Path:
 
 
 def _as_date(value: date | datetime | str) -> date:
-    """Coerce a date, datetime or ISO date string to a date."""
+    """Coerce a date or datetime to the Europe/Berlin calendar date."""
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(BERLIN).date()
         return value.date()
     return value if isinstance(value, date) else date.fromisoformat(value)
 
@@ -448,14 +452,14 @@ def route_calendar_sql(
                 WHEN d.days_to_next_public_holiday IS NULL THEN NULL
                 ELSE LEAST(d.days_to_next_public_holiday, 14)
             END AS dest_days_to_next_public_holiday,
-            NULLIF(
-                LEAST(
-                    COALESCE(o.days_to_next_public_holiday, 9999),
-                    COALESCE(d.days_to_next_public_holiday, 9999),
+            CASE
+                WHEN o.days_to_next_public_holiday IS NULL AND d.days_to_next_public_holiday IS NULL THEN NULL
+                ELSE LEAST(
+                    COALESCE(o.days_to_next_public_holiday, 14),
+                    COALESCE(d.days_to_next_public_holiday, 14),
                     14
-                ),
-                9999
-            ) AS min_days_to_public_holiday,
+                )
+            END AS min_days_to_public_holiday,
             COALESCE(o.is_public_holiday_window, FALSE) AS origin_public_holiday_window,
             COALESCE(d.is_public_holiday_window, FALSE) AS dest_public_holiday_window,
             (COALESCE(o.is_public_holiday_window, FALSE) OR COALESCE(d.is_public_holiday_window, FALSE))
