@@ -28,6 +28,10 @@ Shipped here:
 - `src/tpm_analytics/sql/silver.sql` — the one deterministic transform.
 - `src/tpm_analytics/silver/build.py` — DuckDB session, transform execution, local Parquet output.
 - `src/tpm_analytics/silver/quality.py` — the gates that must pass before a build is published.
+- `src/tpm_analytics/calendar.py` — loader and DuckDB join for the training-time holiday calendar.
+- `src/tpm_analytics/data/calendar.json` — generated public/school-holiday dataset (ODbL).
+- `src/tpm_analytics/data/NOTICE` — data licence and attribution.
+- `scripts/build_calendar.py` — manual generator for that dataset.
 - `tests/` — fixture-based tests over v1-only, v2-only and mixed bronze files.
 
 The S3 writer, manifest, pointer and Lambda handler are implemented (`publish.py`, `manifest.py`,
@@ -343,6 +347,30 @@ change notice the licence requires.
 `tests/test_station_dimension.py` fails if the scraper catalogue contains a station that is missing
 here, so the two files cannot drift apart silently. Keep retired stations in the dimension: bronze
 never forgets them, and a missing row fails every future rebuild.
+
+## Holiday calendar
+
+`src/tpm_analytics/data/calendar.json` is the committed public-holiday and school-holiday calendar
+for the training builder. It covers 2026-01-01 through 2028-12-31 for all 16 states, including
+school breaks that cross the window boundary.
+
+- Source: [OpenHolidays API](https://www.openholidaysapi.org/en/); data under ODbL-1.0.
+- The data is a separate ODbL database; the code remains GPL-3.0. See the repository `NOTICE` and
+  `src/tpm_analytics/data/README.md`.
+- Local holidays (for example Augsburg's Friedensfest) are excluded from state-level flags;
+  Bavaria's `Mariä Himmelfahrt` is included as a documented municipality-dependent approximation,
+  and Saarland's is a full statutory holiday.
+- School holidays use general-school ranges where OpenHolidays exposes school-type groups.
+  North Frisian island/Halligen exception ranges are excluded and recorded under
+  `excluded.school_holiday_exceptions`, so the state-wide SH ranges win.
+- `src/tpm_analytics/calendar.py` validates coverage, expands the ranges to a daily table and joins
+  it to route-days by `(origin_state | dest_state, departure_date)`. It never calls the network.
+- Daily columns are listed in `DAILY_COLUMNS`; route features include origin/destination/either
+  public-holiday and school-holiday flags, school-break type and day, start/end windows, bounded
+  distances (0–14), `either_bridge_day`, `calendar_missing` and `is_state_match`.
+- Regenerate with `mise run //analytics:calendar`; check drift with
+  `mise run //analytics:calendar:check`. Refresh after KMK publishes the next school year (usually
+  in autumn), verify the diff, run the source cross-checks, and commit the data with the code.
 
 ## Semantics the transform encodes
 

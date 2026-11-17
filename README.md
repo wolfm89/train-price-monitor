@@ -113,6 +113,7 @@ setup, test commands and pull-request expectations.
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE). The generated holiday calendar data is licensed under ODbL-1.0;
+see [NOTICE](NOTICE).
 
 Train Price Monitor is an independent project and is not affiliated with Deutsche Bahn AG.

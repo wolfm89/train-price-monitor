@@ -3,7 +3,7 @@ name = "tpm-analytics"
 version = "0.1.0"
 description = "Silver-layer builds for the Train Price Monitor price dataset"
 readme = "README.md"
-license = "GPL-3.0-only"
+license = "GPL-3.0-only AND ODbL-1.0"
 requires-python = ">=3.15"
 dependencies = [
     "boto3==1.44.3",
@@ -12,6 +12,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "holidays==0.108",
   "pyarrow==26.0.1",
   "pytest==9.2.0",
   "ruff==0.17.5",
@@ -35,7 +36,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "PT", "RUF"]
 python-version = "3.15"
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

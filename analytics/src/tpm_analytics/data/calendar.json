@@ -1,0 +1,5497 @@
+{
+  "calendar_version": "2026-11-17",
+  "coverage": {
+    "from": "2026-01-01",
+    "to": "2028-12-31"
+  },
+  "excluded": {
+    "local_holidays": [
+      {
+        "end": "2026-08-08",
+        "name": "Friedensfest",
+        "place": "Augsburg",
+        "start": "2026-08-08",
+        "state": "BY-AU"
+      },
+      {
+        "end": "2027-08-08",
+        "name": "Friedensfest",
+        "place": "Augsburg",
+        "start": "2027-08-08",
+        "state": "BY-AU"
+      },
+      {
+        "end": "2028-08-08",
+        "name": "Friedensfest",
+        "place": "Augsburg",
+        "start": "2028-08-08",
+        "state": "BY-AU"
+      }
+    ],
+    "school_holiday_exceptions": [
+      {
+        "comment": "Inseln Sylt, Föhr, Amrum, Helgoland und die Halligen",
+        "end": "2026-08-08",
+        "name": "Sommerferien",
+        "start": "2026-07-04",
+        "state": "SH"
+      },
+      {
+        "comment": "Inseln Sylt, Föhr, Amrum, Helgoland und die Halligen",
+        "end": "2026-10-24",
+        "name": "Herbstferien",
+        "start": "2026-10-05",
+        "state": "SH"
+      },
+      {
+        "comment": "Inseln Sylt, Föhr, Amrum, Helgoland und die Halligen",
+        "end": "2027-08-07",
+        "name": "Sommerferien",
+        "start": "2027-07-03",
+        "state": "SH"
+      },
+      {
+        "comment": "Inseln Sylt, Föhr, Amrum, Helgoland und die Halligen",
+        "end": "2027-10-23",
+        "name": "Herbstferien",
+        "start": "2027-10-04",
+        "state": "SH"
+      },
+      {
+        "comment": "Inseln Sylt, Föhr, Amrum, Helgoland und die Halligen",
+        "end": "2028-07-28",
+        "name": "Sommerferien",
+        "start": "2028-06-24",
+        "state": "SH"
+      },
+      {
+        "comment": "Inseln Sylt, Föhr, Amrum, Helgoland und die Halligen",
+        "end": "2028-10-30",
+        "name": "Herbstferien",
+        "start": "2028-10-09",
+        "state": "SH"
+      }
+    ]
+  },
+  "public_holidays": [
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-04-05",
+      "name": "Ostersonntag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-05-24",
+      "name": "Pfingstsonntag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-03-28",
+      "name": "Ostersonntag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-05-16",
+      "name": "Pfingstsonntag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-04-16",
+      "name": "Ostersonntag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-06-04",
+      "name": "Pfingstsonntag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "BB"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BB"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-03-08",
+      "name": "Internationaler Frauentag",
+      "scope": "Regional",
+      "state": "BE"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-03-08",
+      "name": "Internationaler Frauentag",
+      "scope": "Regional",
+      "state": "BE"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-03-08",
+      "name": "Internationaler Frauentag",
+      "scope": "Regional",
+      "state": "BE"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-06-17",
+      "name": "75-jährige Jubiläum des Volksaufstands in der DDR",
+      "scope": "Regional",
+      "state": "BE"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BE"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-06-04",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-05-27",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-06-15",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "BW"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BW"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-06-04",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2026-08-15",
+      "name": "Mariä Himmelfahrt",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-05-27",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2027-08-15",
+      "name": "Mariä Himmelfahrt",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-06-15",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2028-08-15",
+      "name": "Mariä Himmelfahrt",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "BY"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "BY"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "HB"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "HB"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "HB"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HB"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-06-04",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "HE"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-05-27",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "HE"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-06-15",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "HE"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HE"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "HH"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "HH"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "HH"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "HH"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-03-08",
+      "name": "Internationaler Frauentag",
+      "scope": "Regional",
+      "state": "MV"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "MV"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-03-08",
+      "name": "Internationaler Frauentag",
+      "scope": "Regional",
+      "state": "MV"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "MV"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-03-08",
+      "name": "Internationaler Frauentag",
+      "scope": "Regional",
+      "state": "MV"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "MV"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "MV"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "NI"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "NI"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "NI"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NI"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-06-04",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "NW"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "NW"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-05-27",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "NW"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "NW"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-06-15",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "NW"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "NW"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "NW"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-06-04",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "RP"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "RP"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-05-27",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "RP"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "RP"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-06-15",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "RP"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "RP"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "RP"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "SH"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "SH"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "SH"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SH"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-06-04",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2026-08-15",
+      "name": "Mariä Himmelfahrt",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-05-27",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2027-08-15",
+      "name": "Mariä Himmelfahrt",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-06-15",
+      "name": "Fronleichnam",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2028-08-15",
+      "name": "Mariä Himmelfahrt",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-11-01",
+      "name": "Allerheiligen",
+      "scope": "Regional",
+      "state": "SL"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SL"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "SN"
+    },
+    {
+      "date": "2026-11-18",
+      "name": "Buß- und Bettag",
+      "scope": "Regional",
+      "state": "SN"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "SN"
+    },
+    {
+      "date": "2027-11-17",
+      "name": "Buß- und Bettag",
+      "scope": "Regional",
+      "state": "SN"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "SN"
+    },
+    {
+      "date": "2028-11-22",
+      "name": "Buß- und Bettag",
+      "scope": "Regional",
+      "state": "SN"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "SN"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "ST"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "ST"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "ST"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "ST"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-01-06",
+      "name": "Heilige Drei Könige",
+      "scope": "Regional",
+      "state": "ST"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "ST"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "ST"
+    },
+    {
+      "date": "2026-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-04-03",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-04-06",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-05-14",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-05-25",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-09-20",
+      "name": "Weltkindertag",
+      "scope": "Regional",
+      "state": "TH"
+    },
+    {
+      "date": "2026-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "TH"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2026-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-03-29",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-05-06",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-05-17",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-09-20",
+      "name": "Weltkindertag",
+      "scope": "Regional",
+      "state": "TH"
+    },
+    {
+      "date": "2027-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "TH"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2027-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-01-01",
+      "name": "Neujahr",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-04-14",
+      "name": "Karfreitag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-04-17",
+      "name": "Ostermontag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-05-01",
+      "name": "Tag der Arbeit",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-05-25",
+      "name": "Christi Himmelfahrt",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-06-05",
+      "name": "Pfingstmontag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-09-20",
+      "name": "Weltkindertag",
+      "scope": "Regional",
+      "state": "TH"
+    },
+    {
+      "date": "2028-10-03",
+      "name": "Tag der Deutschen Einheit",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-10-31",
+      "name": "Reformationstag",
+      "scope": "Regional",
+      "state": "TH"
+    },
+    {
+      "date": "2028-12-25",
+      "name": "1. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "TH"
+    },
+    {
+      "date": "2028-12-26",
+      "name": "2. Weihnachtsfeiertag",
+      "scope": "National",
+      "state": "TH"
+    }
+  ],
+  "schema_version": 1,
+  "school_holidays": [
+    {
+      "end": "2026-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "BB",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-07",
+      "name": "Winterferien",
+      "start": "2026-02-02",
+      "state": "BB",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "BB",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Variabler Ferientag",
+      "start": "2026-05-15",
+      "state": "BB",
+      "type": "other"
+    },
+    {
+      "end": "2026-05-26",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "BB",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-22",
+      "name": "Sommerferien",
+      "start": "2026-07-09",
+      "state": "BB",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-30",
+      "name": "Herbstferien",
+      "start": "2026-10-19",
+      "state": "BB",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "BB",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-06",
+      "name": "Winterferien",
+      "start": "2027-02-01",
+      "state": "BB",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-03",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "BB",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Variabler Ferientag",
+      "start": "2027-05-07",
+      "state": "BB",
+      "type": "other"
+    },
+    {
+      "end": "2027-05-18",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "BB",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-14",
+      "name": "Sommerferien",
+      "start": "2027-07-01",
+      "state": "BB",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-11",
+      "state": "BB",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "BB",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-05",
+      "name": "Winterferien",
+      "start": "2028-01-31",
+      "state": "BB",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "BB",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Variabler Ferientag",
+      "start": "2028-05-26",
+      "state": "BB",
+      "type": "other"
+    },
+    {
+      "end": "2028-08-12",
+      "name": "Sommerferien",
+      "start": "2028-06-29",
+      "state": "BB",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-14",
+      "name": "Herbstferien",
+      "start": "2028-10-02",
+      "state": "BB",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-10-30",
+      "name": "Variabler Ferientag",
+      "start": "2028-10-30",
+      "state": "BB",
+      "type": "other"
+    },
+    {
+      "end": "2029-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-22",
+      "state": "BB",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "BE",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-07",
+      "name": "Winterferien",
+      "start": "2026-02-02",
+      "state": "BE",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "BE",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Unterrichtsfreier Tag",
+      "start": "2026-05-15",
+      "state": "BE",
+      "type": "other"
+    },
+    {
+      "end": "2026-05-26",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "BE",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-22",
+      "name": "Sommerferien",
+      "start": "2026-07-09",
+      "state": "BE",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-31",
+      "name": "Herbstferien",
+      "start": "2026-10-19",
+      "state": "BE",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "BE",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-06",
+      "name": "Winterferien",
+      "start": "2027-02-01",
+      "state": "BE",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-02",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "BE",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Unterrichtsfreier Tag",
+      "start": "2027-05-07",
+      "state": "BE",
+      "type": "other"
+    },
+    {
+      "end": "2027-05-19",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "BE",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-14",
+      "name": "Sommerferien",
+      "start": "2027-07-01",
+      "state": "BE",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-11",
+      "state": "BE",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-22",
+      "state": "BE",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-05",
+      "name": "Winterferien",
+      "start": "2028-01-31",
+      "state": "BE",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "BE",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Unterrichtsfreier Tag",
+      "start": "2028-05-26",
+      "state": "BE",
+      "type": "other"
+    },
+    {
+      "end": "2028-06-02",
+      "name": "Pfingstferien",
+      "start": "2028-06-01",
+      "state": "BE",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-08-12",
+      "name": "Sommerferien",
+      "start": "2028-07-01",
+      "state": "BE",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-14",
+      "name": "Herbstferien",
+      "start": "2028-10-02",
+      "state": "BE",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-22",
+      "state": "BE",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "BW",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-04-11",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "BW",
+      "type": "easter"
+    },
+    {
+      "end": "2026-06-05",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "BW",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-09-12",
+      "name": "Sommerferien",
+      "start": "2026-07-30",
+      "state": "BW",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-30",
+      "name": "Herbstferien",
+      "start": "2026-10-26",
+      "state": "BW",
+      "type": "autumn"
+    },
+    {
+      "end": "2026-10-31",
+      "name": "Reformationsfest",
+      "start": "2026-10-31",
+      "state": "BW",
+      "type": "other"
+    },
+    {
+      "end": "2027-01-09",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "BW",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-03-25",
+      "name": "Gründonnerstag",
+      "start": "2027-03-25",
+      "state": "BW",
+      "type": "other"
+    },
+    {
+      "end": "2027-04-03",
+      "name": "Osterferien",
+      "start": "2027-03-30",
+      "state": "BW",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-29",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "BW",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-09-11",
+      "name": "Sommerferien",
+      "start": "2027-07-29",
+      "state": "BW",
+      "type": "summer"
+    },
+    {
+      "end": "2027-11-06",
+      "name": "Herbstferien",
+      "start": "2027-11-02",
+      "state": "BW",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "BW",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-04-13",
+      "name": "Gründonnerstag",
+      "start": "2028-04-13",
+      "state": "BW",
+      "type": "other"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-18",
+      "state": "BW",
+      "type": "easter"
+    },
+    {
+      "end": "2028-06-17",
+      "name": "Pfingstferien",
+      "start": "2028-06-06",
+      "state": "BW",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-09-09",
+      "name": "Sommerferien",
+      "start": "2028-07-27",
+      "state": "BW",
+      "type": "summer"
+    },
+    {
+      "end": "2028-11-03",
+      "name": "Herbstferien",
+      "start": "2028-10-30",
+      "state": "BW",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-23",
+      "state": "BW",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "BY",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-20",
+      "name": "Frühjahrsferien",
+      "start": "2026-02-16",
+      "state": "BY",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "BY",
+      "type": "easter"
+    },
+    {
+      "end": "2026-06-05",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "BY",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-09-14",
+      "name": "Sommerferien",
+      "start": "2026-08-03",
+      "state": "BY",
+      "type": "summer"
+    },
+    {
+      "end": "2026-11-06",
+      "name": "Herbstferien",
+      "start": "2026-11-02",
+      "state": "BY",
+      "type": "autumn"
+    },
+    {
+      "end": "2026-11-18",
+      "name": "Buß- und Bettag",
+      "start": "2026-11-18",
+      "state": "BY",
+      "type": "other"
+    },
+    {
+      "end": "2027-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-24",
+      "state": "BY",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-12",
+      "name": "Frühjahrsferien",
+      "start": "2027-02-08",
+      "state": "BY",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-02",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "BY",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-28",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "BY",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-09-13",
+      "name": "Sommerferien",
+      "start": "2027-08-02",
+      "state": "BY",
+      "type": "summer"
+    },
+    {
+      "end": "2027-11-05",
+      "name": "Herbstferien",
+      "start": "2027-11-02",
+      "state": "BY",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-11-17",
+      "name": "Buß- und Bettag",
+      "start": "2027-11-17",
+      "state": "BY",
+      "type": "other"
+    },
+    {
+      "end": "2028-01-07",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-24",
+      "state": "BY",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-03-03",
+      "name": "Frühjahrsferien",
+      "start": "2028-02-28",
+      "state": "BY",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-21",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "BY",
+      "type": "easter"
+    },
+    {
+      "end": "2028-06-16",
+      "name": "Pfingstferien",
+      "start": "2028-06-06",
+      "state": "BY",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-09-11",
+      "name": "Sommerferien",
+      "start": "2028-07-31",
+      "state": "BY",
+      "type": "summer"
+    },
+    {
+      "end": "2028-11-03",
+      "name": "Herbstferien",
+      "start": "2028-10-30",
+      "state": "BY",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-11-22",
+      "name": "Buß- und Bettag",
+      "start": "2028-11-22",
+      "state": "BY",
+      "type": "other"
+    },
+    {
+      "end": "2029-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-23",
+      "state": "BY",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "HB",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-03",
+      "name": "Halbjahresferien",
+      "start": "2026-02-02",
+      "state": "HB",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-07",
+      "name": "Osterferien",
+      "start": "2026-03-23",
+      "state": "HB",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Tag nach Himmelfahrt",
+      "start": "2026-05-15",
+      "state": "HB",
+      "type": "other"
+    },
+    {
+      "end": "2026-05-26",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "HB",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-12",
+      "name": "Sommerferien",
+      "start": "2026-07-02",
+      "state": "HB",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-24",
+      "name": "Herbstferien",
+      "start": "2026-10-12",
+      "state": "HB",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-09",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "HB",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-02",
+      "name": "Halbjahresferien",
+      "start": "2027-02-01",
+      "state": "HB",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-03",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "HB",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Tag nach Himmelfahrt",
+      "start": "2027-05-07",
+      "state": "HB",
+      "type": "other"
+    },
+    {
+      "end": "2027-05-18",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "HB",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-18",
+      "name": "Sommerferien",
+      "start": "2027-07-08",
+      "state": "HB",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-30",
+      "name": "Herbstferien",
+      "start": "2027-10-18",
+      "state": "HB",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "HB",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-01",
+      "name": "Halbjahresferien",
+      "start": "2028-01-31",
+      "state": "HB",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "HB",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Tag nach Himmelfahrt",
+      "start": "2028-05-26",
+      "state": "HB",
+      "type": "other"
+    },
+    {
+      "end": "2028-06-06",
+      "name": "Pfingstferien",
+      "start": "2028-06-06",
+      "state": "HB",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-08-30",
+      "name": "Sommerferien",
+      "start": "2028-07-20",
+      "state": "HB",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-02",
+      "name": "Tag vor dem 3. Oktober",
+      "start": "2028-10-02",
+      "state": "HB",
+      "type": "other"
+    },
+    {
+      "end": "2028-11-04",
+      "name": "Herbstferien",
+      "start": "2028-10-23",
+      "state": "HB",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-06",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-27",
+      "state": "HB",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-10",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "HE",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "HE",
+      "type": "easter"
+    },
+    {
+      "end": "2026-08-07",
+      "name": "Sommerferien",
+      "start": "2026-06-29",
+      "state": "HE",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-17",
+      "name": "Herbstferien",
+      "start": "2026-10-05",
+      "state": "HE",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-12",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "HE",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-04-02",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "HE",
+      "type": "easter"
+    },
+    {
+      "end": "2027-08-06",
+      "name": "Sommerferien",
+      "start": "2027-06-28",
+      "state": "HE",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-16",
+      "name": "Herbstferien",
+      "start": "2027-10-04",
+      "state": "HE",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-11",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "HE",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-04-14",
+      "name": "Osterferien",
+      "start": "2028-04-03",
+      "state": "HE",
+      "type": "easter"
+    },
+    {
+      "end": "2028-08-11",
+      "name": "Sommerferien",
+      "start": "2028-07-03",
+      "state": "HE",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-20",
+      "name": "Herbstferien",
+      "start": "2028-10-09",
+      "state": "HE",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-12",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-27",
+      "state": "HE",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-17",
+      "state": "HH",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-30",
+      "name": "Halbjahrespause",
+      "start": "2026-01-30",
+      "state": "HH",
+      "type": "winter"
+    },
+    {
+      "end": "2026-03-13",
+      "name": "Frühjahrsferien",
+      "start": "2026-03-02",
+      "state": "HH",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Pfingstferien",
+      "start": "2026-05-11",
+      "state": "HH",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-19",
+      "name": "Sommerferien",
+      "start": "2026-07-09",
+      "state": "HH",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-30",
+      "name": "Herbstferien",
+      "start": "2026-10-19",
+      "state": "HH",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-01",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-21",
+      "state": "HH",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-01-29",
+      "name": "Halbjahrespause",
+      "start": "2027-01-29",
+      "state": "HH",
+      "type": "winter"
+    },
+    {
+      "end": "2027-03-12",
+      "name": "Frühjahrsferien",
+      "start": "2027-03-01",
+      "state": "HH",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-14",
+      "name": "Pfingstferien",
+      "start": "2027-05-07",
+      "state": "HH",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-11",
+      "name": "Sommerferien",
+      "start": "2027-07-01",
+      "state": "HH",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-22",
+      "name": "Herbstferien",
+      "start": "2027-10-11",
+      "state": "HH",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-20",
+      "state": "HH",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-01-28",
+      "name": "Halbjahrespause",
+      "start": "2028-01-28",
+      "state": "HH",
+      "type": "winter"
+    },
+    {
+      "end": "2028-03-17",
+      "name": "Frühjahrsferien",
+      "start": "2028-03-06",
+      "state": "HH",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Pfingstferien",
+      "start": "2028-05-22",
+      "state": "HH",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-08-11",
+      "name": "Sommerferien",
+      "start": "2028-07-03",
+      "state": "HH",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-13",
+      "name": "Herbstferien",
+      "start": "2028-10-02",
+      "state": "HH",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-10-30",
+      "name": "Brückentag",
+      "start": "2028-10-30",
+      "state": "HH",
+      "type": "other"
+    },
+    {
+      "end": "2028-12-29",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-18",
+      "state": "HH",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-03",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-20",
+      "state": "MV",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-20",
+      "name": "Winterferien",
+      "start": "2026-02-09",
+      "state": "MV",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-08",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "MV",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2026-05-15",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2026-05-26",
+      "name": "Pfingstferien",
+      "start": "2026-05-22",
+      "state": "MV",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-22",
+      "name": "Sommerferien",
+      "start": "2026-07-13",
+      "state": "MV",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-24",
+      "name": "Herbstferien",
+      "start": "2026-10-15",
+      "state": "MV",
+      "type": "autumn"
+    },
+    {
+      "end": "2026-11-26",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2026-11-26",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2026-11-27",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2026-11-27",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2027-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-21",
+      "state": "MV",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-19",
+      "name": "Winterferien",
+      "start": "2027-02-08",
+      "state": "MV",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-02",
+      "name": "Osterferien",
+      "start": "2027-03-24",
+      "state": "MV",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2027-05-07",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2027-05-18",
+      "name": "Pfingstferien",
+      "start": "2027-05-14",
+      "state": "MV",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-14",
+      "name": "Sommerferien",
+      "start": "2027-07-05",
+      "state": "MV",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-14",
+      "state": "MV",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-11-25",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2027-11-25",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2027-11-26",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2027-11-26",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2028-01-04",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-22",
+      "state": "MV",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-17",
+      "name": "Winterferien",
+      "start": "2028-02-05",
+      "state": "MV",
+      "type": "winter"
+    },
+    {
+      "end": "2028-02-18",
+      "name": "Schulfrei",
+      "start": "2028-02-18",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2028-04-21",
+      "name": "Osterferien",
+      "start": "2028-04-12",
+      "state": "MV",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2028-05-26",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2028-06-06",
+      "name": "Pfingstferien",
+      "start": "2028-06-02",
+      "state": "MV",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-08-05",
+      "name": "Sommerferien",
+      "start": "2028-06-26",
+      "state": "MV",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-02",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2028-10-02",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2028-10-28",
+      "name": "Herbstferien",
+      "start": "2028-10-23",
+      "state": "MV",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-10-30",
+      "name": "Zusätzlicher Ferientag",
+      "start": "2028-10-30",
+      "state": "MV",
+      "type": "other"
+    },
+    {
+      "end": "2029-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-22",
+      "state": "MV",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "NI",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-03",
+      "name": "Halbjahresferien",
+      "start": "2026-02-02",
+      "state": "NI",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-07",
+      "name": "Osterferien",
+      "start": "2026-03-23",
+      "state": "NI",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Tag nach Himmelfahrt",
+      "start": "2026-05-15",
+      "state": "NI",
+      "type": "other"
+    },
+    {
+      "end": "2026-05-26",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "NI",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-12",
+      "name": "Sommerferien",
+      "start": "2026-07-02",
+      "state": "NI",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-24",
+      "name": "Herbstferien",
+      "start": "2026-10-12",
+      "state": "NI",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-09",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "NI",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-02",
+      "name": "Halbjahresferien",
+      "start": "2027-02-01",
+      "state": "NI",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-03",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "NI",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Tag nach Himmelfahrt",
+      "start": "2027-05-07",
+      "state": "NI",
+      "type": "other"
+    },
+    {
+      "end": "2027-05-18",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "NI",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-18",
+      "name": "Sommerferien",
+      "start": "2027-07-08",
+      "state": "NI",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-30",
+      "name": "Herbstferien",
+      "start": "2027-10-16",
+      "state": "NI",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "NI",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-01",
+      "name": "Halbjahresferien",
+      "start": "2028-01-31",
+      "state": "NI",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "NI",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Tag nach Himmelfahrt",
+      "start": "2028-05-26",
+      "state": "NI",
+      "type": "other"
+    },
+    {
+      "end": "2028-06-06",
+      "name": "Pfingstferien",
+      "start": "2028-06-06",
+      "state": "NI",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-08-30",
+      "name": "Sommerferien",
+      "start": "2028-07-20",
+      "state": "NI",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-02",
+      "name": "Tag vor dem 3. Oktober",
+      "start": "2028-10-02",
+      "state": "NI",
+      "type": "other"
+    },
+    {
+      "end": "2028-11-04",
+      "name": "Herbstferien",
+      "start": "2028-10-23",
+      "state": "NI",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-06",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-27",
+      "state": "NI",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-06",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "NW",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-04-11",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "NW",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-26",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "NW",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-09-01",
+      "name": "Sommerferien",
+      "start": "2026-07-20",
+      "state": "NW",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-31",
+      "name": "Herbstferien",
+      "start": "2026-10-17",
+      "state": "NW",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-06",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "NW",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-04-03",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "NW",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-18",
+      "name": "Pfingstferien",
+      "start": "2027-05-18",
+      "state": "NW",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-31",
+      "name": "Sommerferien",
+      "start": "2027-07-19",
+      "state": "NW",
+      "type": "summer"
+    },
+    {
+      "end": "2027-11-06",
+      "name": "Herbstferien",
+      "start": "2027-10-23",
+      "state": "NW",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-24",
+      "state": "NW",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "NW",
+      "type": "easter"
+    },
+    {
+      "end": "2028-08-22",
+      "name": "Sommerferien",
+      "start": "2028-07-10",
+      "state": "NW",
+      "type": "summer"
+    },
+    {
+      "end": "2028-11-04",
+      "name": "Herbstferien",
+      "start": "2028-10-23",
+      "state": "NW",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-21",
+      "state": "NW",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-07",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "RP",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "RP",
+      "type": "easter"
+    },
+    {
+      "end": "2026-08-07",
+      "name": "Sommerferien",
+      "start": "2026-06-29",
+      "state": "RP",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-16",
+      "name": "Herbstferien",
+      "start": "2026-10-05",
+      "state": "RP",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "RP",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-04-02",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "RP",
+      "type": "easter"
+    },
+    {
+      "end": "2027-08-06",
+      "name": "Sommerferien",
+      "start": "2027-06-28",
+      "state": "RP",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-15",
+      "name": "Herbstferien",
+      "start": "2027-10-04",
+      "state": "RP",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-07",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "RP",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-04-21",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "RP",
+      "type": "easter"
+    },
+    {
+      "end": "2028-08-11",
+      "name": "Sommerferien",
+      "start": "2028-07-03",
+      "state": "RP",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-20",
+      "name": "Herbstferien",
+      "start": "2028-10-09",
+      "state": "RP",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-21",
+      "state": "RP",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-06",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-19",
+      "state": "SH",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-03-26",
+      "state": "SH",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Himmelfahrt",
+      "start": "2026-05-15",
+      "state": "SH",
+      "type": "other"
+    },
+    {
+      "end": "2026-08-15",
+      "name": "Sommerferien",
+      "start": "2026-07-04",
+      "state": "SH",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-24",
+      "name": "Herbstferien",
+      "start": "2026-10-12",
+      "state": "SH",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-06",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-21",
+      "state": "SH",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-04-10",
+      "name": "Osterferien",
+      "start": "2027-03-30",
+      "state": "SH",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Himmelfahrt",
+      "start": "2027-05-07",
+      "state": "SH",
+      "type": "other"
+    },
+    {
+      "end": "2027-08-14",
+      "name": "Sommerferien",
+      "start": "2027-07-03",
+      "state": "SH",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-11",
+      "state": "SH",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-08",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "SH",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-04-15",
+      "name": "Osterferien",
+      "start": "2028-04-03",
+      "state": "SH",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Himmelfahrt",
+      "start": "2028-05-26",
+      "state": "SH",
+      "type": "other"
+    },
+    {
+      "end": "2028-08-04",
+      "name": "Sommerferien",
+      "start": "2028-06-24",
+      "state": "SH",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-30",
+      "name": "Herbstferien",
+      "start": "2028-10-16",
+      "state": "SH",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-21",
+      "state": "SH",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "SL",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-20",
+      "name": "Fastnachtsferien",
+      "start": "2026-02-16",
+      "state": "SL",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-17",
+      "name": "Osterferien",
+      "start": "2026-04-07",
+      "state": "SL",
+      "type": "easter"
+    },
+    {
+      "end": "2026-08-07",
+      "name": "Sommerferien",
+      "start": "2026-06-29",
+      "state": "SL",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-16",
+      "name": "Herbstferien",
+      "start": "2026-10-05",
+      "state": "SL",
+      "type": "autumn"
+    },
+    {
+      "end": "2026-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-21",
+      "state": "SL",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-12",
+      "name": "Fastnachtsferien",
+      "start": "2027-02-08",
+      "state": "SL",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-09",
+      "name": "Osterferien",
+      "start": "2027-03-30",
+      "state": "SL",
+      "type": "easter"
+    },
+    {
+      "end": "2027-08-06",
+      "name": "Sommerferien",
+      "start": "2027-06-28",
+      "state": "SL",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-15",
+      "name": "Herbstferien",
+      "start": "2027-10-04",
+      "state": "SL",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-20",
+      "state": "SL",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-29",
+      "name": "Fastnachtsferien",
+      "start": "2028-02-21",
+      "state": "SL",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-21",
+      "name": "Osterferien",
+      "start": "2028-04-12",
+      "state": "SL",
+      "type": "easter"
+    },
+    {
+      "end": "2028-08-11",
+      "name": "Sommerferien",
+      "start": "2028-07-03",
+      "state": "SL",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-20",
+      "name": "Herbstferien",
+      "start": "2028-10-09",
+      "state": "SL",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-20",
+      "state": "SL",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "SN",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-21",
+      "name": "Winterferien",
+      "start": "2026-02-09",
+      "state": "SN",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-10",
+      "name": "Osterferien",
+      "start": "2026-04-03",
+      "state": "SN",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Unterrichtsfreier Tag",
+      "start": "2026-05-15",
+      "state": "SN",
+      "type": "other"
+    },
+    {
+      "end": "2026-08-14",
+      "name": "Sommerferien",
+      "start": "2026-07-04",
+      "state": "SN",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-24",
+      "name": "Herbstferien",
+      "start": "2026-10-12",
+      "state": "SN",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "SN",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-19",
+      "name": "Winterferien",
+      "start": "2027-02-08",
+      "state": "SN",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-02",
+      "name": "Osterferien",
+      "start": "2027-03-26",
+      "state": "SN",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Unterrichtsfreier Tag",
+      "start": "2027-05-07",
+      "state": "SN",
+      "type": "other"
+    },
+    {
+      "end": "2027-05-18",
+      "name": "Pfingstferien",
+      "start": "2027-05-15",
+      "state": "SN",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-20",
+      "name": "Sommerferien",
+      "start": "2027-07-10",
+      "state": "SN",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-11",
+      "state": "SN",
+      "type": "autumn"
+    },
+    {
+      "end": "2028-01-01",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "SN",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-26",
+      "name": "Winterferien",
+      "start": "2028-02-14",
+      "state": "SN",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-14",
+      "state": "SN",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Unterrichtsfreier Tag",
+      "start": "2028-05-26",
+      "state": "SN",
+      "type": "other"
+    },
+    {
+      "end": "2028-09-01",
+      "name": "Sommerferien",
+      "start": "2028-07-22",
+      "state": "SN",
+      "type": "summer"
+    },
+    {
+      "end": "2028-11-03",
+      "name": "Herbstferien",
+      "start": "2028-10-23",
+      "state": "SN",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-03",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-23",
+      "state": "SN",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "ST",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-06",
+      "name": "Winterferien",
+      "start": "2026-01-31",
+      "state": "ST",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-04",
+      "name": "Osterferien",
+      "start": "2026-03-30",
+      "state": "ST",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-29",
+      "name": "Pfingstferien",
+      "start": "2026-05-26",
+      "state": "ST",
+      "type": "whitsun"
+    },
+    {
+      "end": "2026-08-14",
+      "name": "Sommerferien",
+      "start": "2026-07-04",
+      "state": "ST",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-30",
+      "name": "Herbstferien",
+      "start": "2026-10-19",
+      "state": "ST",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-21",
+      "state": "ST",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-06",
+      "name": "Winterferien",
+      "start": "2027-02-01",
+      "state": "ST",
+      "type": "winter"
+    },
+    {
+      "end": "2027-03-27",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "ST",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-22",
+      "name": "Pfingstferien",
+      "start": "2027-05-15",
+      "state": "ST",
+      "type": "whitsun"
+    },
+    {
+      "end": "2027-08-20",
+      "name": "Sommerferien",
+      "start": "2027-07-10",
+      "state": "ST",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-18",
+      "state": "ST",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-20",
+      "state": "ST",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-12",
+      "name": "Winterferien",
+      "start": "2028-02-07",
+      "state": "ST",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-22",
+      "name": "Osterferien",
+      "start": "2028-04-10",
+      "state": "ST",
+      "type": "easter"
+    },
+    {
+      "end": "2028-06-10",
+      "name": "Pfingstferien",
+      "start": "2028-06-03",
+      "state": "ST",
+      "type": "whitsun"
+    },
+    {
+      "end": "2028-09-01",
+      "name": "Sommerferien",
+      "start": "2028-07-22",
+      "state": "ST",
+      "type": "summer"
+    },
+    {
+      "end": "2028-10-02",
+      "name": "Ferientag",
+      "start": "2028-10-02",
+      "state": "ST",
+      "type": "other"
+    },
+    {
+      "end": "2028-11-03",
+      "name": "Herbstferien",
+      "start": "2028-10-30",
+      "state": "ST",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-21",
+      "state": "ST",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-01-03",
+      "name": "Weihnachtsferien",
+      "start": "2025-12-22",
+      "state": "TH",
+      "type": "christmas"
+    },
+    {
+      "end": "2026-02-21",
+      "name": "Winterferien",
+      "start": "2026-02-16",
+      "state": "TH",
+      "type": "winter"
+    },
+    {
+      "end": "2026-04-17",
+      "name": "Osterferien",
+      "start": "2026-04-07",
+      "state": "TH",
+      "type": "easter"
+    },
+    {
+      "end": "2026-05-15",
+      "name": "Schulfreier Tag",
+      "start": "2026-05-15",
+      "state": "TH",
+      "type": "other"
+    },
+    {
+      "end": "2026-08-14",
+      "name": "Sommerferien",
+      "start": "2026-07-04",
+      "state": "TH",
+      "type": "summer"
+    },
+    {
+      "end": "2026-10-24",
+      "name": "Herbstferien",
+      "start": "2026-10-12",
+      "state": "TH",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-01-02",
+      "name": "Weihnachtsferien",
+      "start": "2026-12-23",
+      "state": "TH",
+      "type": "christmas"
+    },
+    {
+      "end": "2027-02-06",
+      "name": "Winterferien",
+      "start": "2027-02-01",
+      "state": "TH",
+      "type": "winter"
+    },
+    {
+      "end": "2027-04-03",
+      "name": "Osterferien",
+      "start": "2027-03-22",
+      "state": "TH",
+      "type": "easter"
+    },
+    {
+      "end": "2027-05-07",
+      "name": "Schulfreier Tag",
+      "start": "2027-05-07",
+      "state": "TH",
+      "type": "other"
+    },
+    {
+      "end": "2027-08-20",
+      "name": "Sommerferien",
+      "start": "2027-07-10",
+      "state": "TH",
+      "type": "summer"
+    },
+    {
+      "end": "2027-10-23",
+      "name": "Herbstferien",
+      "start": "2027-10-09",
+      "state": "TH",
+      "type": "autumn"
+    },
+    {
+      "end": "2027-12-31",
+      "name": "Weihnachtsferien",
+      "start": "2027-12-23",
+      "state": "TH",
+      "type": "christmas"
+    },
+    {
+      "end": "2028-02-12",
+      "name": "Winterferien",
+      "start": "2028-02-07",
+      "state": "TH",
+      "type": "winter"
+    },
+    {
+      "end": "2028-04-15",
+      "name": "Osterferien",
+      "start": "2028-04-03",
+      "state": "TH",
+      "type": "easter"
+    },
+    {
+      "end": "2028-05-26",
+      "name": "Schulfreier Tag",
+      "start": "2028-05-26",
+      "state": "TH",
+      "type": "other"
+    },
+    {
+      "end": "2028-09-01",
+      "name": "Sommerferien",
+      "start": "2028-07-22",
+      "state": "TH",
+      "type": "summer"
+    },
+    {
+      "end": "2028-11-03",
+      "name": "Herbstferien",
+      "start": "2028-10-23",
+      "state": "TH",
+      "type": "autumn"
+    },
+    {
+      "end": "2029-01-05",
+      "name": "Weihnachtsferien",
+      "start": "2028-12-23",
+      "state": "TH",
+      "type": "christmas"
+    }
+  ],
+  "source": {
+    "attribution": "Contains information from OpenHolidays API, made available under the Open Database License (ODbL).",
+    "data_url": "https://github.com/openpotato/openholidaysapi.data",
+    "license": "ODbL-1.0",
+    "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "name": "OpenHolidays API",
+    "retrieved_at": "2026-11-17",
+    "school_holiday_filter": "general schools where groups are present; state-wide ranges; island/Halligen exceptions excluded",
+    "url": "https://www.openholidaysapi.org/en/"
+  },
+  "states": [
+    {
+      "code": "BW",
+      "name": "Baden-Württemberg"
+    },
+    {
+      "code": "BY",
+      "name": "Bayern"
+    },
+    {
+      "code": "BE",
+      "name": "Berlin"
+    },
+    {
+      "code": "BB",
+      "name": "Brandenburg"
+    },
+    {
+      "code": "HB",
+      "name": "Bremen"
+    },
+    {
+      "code": "HH",
+      "name": "Hamburg"
+    },
+    {
+      "code": "HE",
+      "name": "Hessen"
+    },
+    {
+      "code": "MV",
+      "name": "Mecklenburg-Vorpommern"
+    },
+    {
+      "code": "NI",
+      "name": "Niedersachsen"
+    },
+    {
+      "code": "NW",
+      "name": "Nordrhein-Westfalen"
+    },
+    {
+      "code": "RP",
+      "name": "Rheinland-Pfalz"
+    },
+    {
+      "code": "SL",
+      "name": "Saarland"
+    },
+    {
+      "code": "SN",
+      "name": "Sachsen"
+    },
+    {
+      "code": "ST",
+      "name": "Sachsen-Anhalt"
+    },
+    {
+      "code": "SH",
+      "name": "Schleswig-Holstein"
+    },
+    {
+      "code": "TH",
+      "name": "Thüringen"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+Train Price Monitor
+===================
+
+The source code in this repository is licensed under GPL-3.0; see LICENSE.
+
+The generated holiday and school-holiday calendar at
+`analytics/src/tpm_analytics/data/calendar.json` is a derivative database of the OpenHolidays API
+data and is licensed under the Open Database License (ODbL) 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+
+Contains information from OpenHolidays API, which is made available under the Open Database
+License (ODbL): https://www.openholidaysapi.org/en/
+
+The calendar data is kept as a separate data file. It is not relicensed under GPL-3.0.
