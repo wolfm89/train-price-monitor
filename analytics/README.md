@@ -350,27 +350,14 @@ never forgets them, and a missing row fails every future rebuild.
 
 ## Holiday calendar
 
-`src/tpm_analytics/data/calendar.json` is the committed public-holiday and school-holiday calendar
-for the training builder. It covers 2026-01-01 through 2028-12-31 for all 16 states, including
-school breaks that cross the window boundary.
+`src/tpm_analytics/data/calendar.json` is a generated, versioned German public- and school-holiday
+dataset for the training builder (2026–2028, all 16 states). `src/tpm_analytics/calendar.py` loads
+and validates it and joins it to route-days; it makes no network calls. The data is ODbL-1.0 while
+the code is GPL-3.0.
 
-- Source: [OpenHolidays API](https://www.openholidaysapi.org/en/); data under ODbL-1.0.
-- The data is a separate ODbL database; the code remains GPL-3.0. See the repository `NOTICE` and
-  `src/tpm_analytics/data/README.md`.
-- Local holidays (for example Augsburg's Friedensfest) are excluded from state-level flags;
-  Bavaria's `Mariä Himmelfahrt` is included as a documented municipality-dependent approximation,
-  and Saarland's is a full statutory holiday.
-- School holidays use general-school ranges where OpenHolidays exposes school-type groups.
-  North Frisian island/Halligen exception ranges are excluded and recorded under
-  `excluded.school_holiday_exceptions`, so the state-wide SH ranges win.
-- `src/tpm_analytics/calendar.py` validates coverage, expands the ranges to a daily table and joins
-  it to route-days by `(origin_state | dest_state, departure_date)`. It never calls the network.
-- Daily columns are listed in `DAILY_COLUMNS`; route features include origin/destination/either
-  public-holiday and school-holiday flags, school-break type and day, start/end windows, bounded
-  distances (0–14), `either_bridge_day`, `calendar_missing` and `is_state_match`.
-- Regenerate with `mise run //analytics:calendar`; check drift with
-  `mise run //analytics:calendar:check`. Refresh after KMK publishes the next school year (usually
-  in autumn), verify the diff, run the source cross-checks, and commit the data with the code.
+Regenerate with `mise run //analytics:calendar` and check drift with
+`mise run //analytics:calendar:check`. The schema, source filters, licence and refresh runbook are
+in [src/tpm_analytics/data/README.md](src/tpm_analytics/data/README.md).
 
 ## Semantics the transform encodes
 

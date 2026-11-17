@@ -72,20 +72,17 @@ v2-only and mixed-schema input.
 
 ## Holiday calendar
 
-- `src/tpm_analytics/data/calendar.json` is generated from OpenHolidays; do not hand-edit it.
-- The dataset is ODbL-1.0 while the code is GPL-3.0. Keep the data separate, preserve the `NOTICE`,
-  `src/tpm_analytics/data/NOTICE` and `src/tpm_analytics/data/README.md`, and do not describe the
-  data as GPL.
+- `src/tpm_analytics/data/calendar.json` is generated from OpenHolidays; do not hand-edit it. The
+  data is ODbL-1.0 while the code is GPL-3.0; preserve the `NOTICE`, `data/NOTICE` and
+  `data/README.md` files.
 - `src/tpm_analytics/calendar.py` is the runtime loader/join. It must not import networking code or
-  read the JSON at import time; keep the coverage guard and the state map tested.
-- Regenerate with `mise run //analytics:calendar` and check drift with
-  `mise run //analytics:calendar:check`. Run the `holidays` cross-check before committing.
-- Refresh after KMK publishes the next school year (usually in autumn), verify the diff against the
-  official table, and extend the coverage before scoring reaches the end date.
-- North Frisian island/Halligen exception ranges are excluded from state-wide features and kept in
-  `excluded.school_holiday_exceptions`; do not feed them into `is_school_holiday`.
-- Adding a station state or a new calendar year requires updating the data and the tests, not the
-  poller or the Lambda.
+  read the JSON at import time; keep the coverage/state validation and tests.
+- Regenerate with `mise run //analytics:calendar`, check drift with `:check`, and run the
+  `python-holidays`/KMK cross-checks before committing. Refresh after KMK publishes the next school
+  year.
+- Schema, filters (local and North Frisian/Halligen exceptions), columns and feature definitions:
+  `src/tpm_analytics/data/README.md`.
+- Adding a station state or calendar year updates the data and tests, not the poller or Lambda.
 
 Update `README.md` for schema, quality or runbook changes and
 [docs/configuration.md](../docs/configuration.md) for new environment variables.

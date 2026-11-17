@@ -1,4 +1,4 @@
-"""The holiday calendar contract used by the P2.1 training builder."""
+"""The holiday calendar contract used by the training builder."""
 
 import copy
 import json
