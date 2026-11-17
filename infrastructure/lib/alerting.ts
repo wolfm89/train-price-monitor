@@ -114,10 +114,14 @@ function format(payload) {
       .slice(0, 3)
       .map((violation) => (violation && violation.message ? violation.message : String(violation)))
       .join('; ');
+    const more = violations.length > 3 ? ' (+' + (violations.length - 3) + ' more)' : '';
     return {
       title: 'Silver data quality warning',
-      message: ((details || 'quality threshold breached') + (payload.build_id ? ' | build ' + payload.build_id : ''))
-        .slice(0, 1000),
+      message: (
+        (details || 'quality threshold breached') +
+        more +
+        (payload.build_id ? ' | build ' + payload.build_id : '')
+      ).slice(0, 1000),
       priority: '0',
       sound: 'pushover',
       timestamp: String(Math.floor(Date.now() / 1000)),

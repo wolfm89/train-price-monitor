@@ -313,7 +313,35 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
     ],
   });
 
-  expect(calls).toHaveLength(10);
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_quality_failed',
+            build_id: 'b5',
+            violations: [{ message: 'a' }, { message: 'b' }, { message: 'c' }, { message: 'd' }],
+            region: 'evil.example/',
+          }),
+        },
+      },
+    ],
+  });
+  await forwarder.handler({
+    Records: [
+      {
+        Sns: {
+          Message: JSON.stringify({
+            event: 'silver_quality_failed',
+            build_id: 'b6',
+            violations: [{ message: 'x'.repeat(5000) }],
+          }),
+        },
+      },
+    ],
+  });
+
+  expect(calls).toHaveLength(12);
   expect(calls[0].title).toContain('AWS Budgets:');
   expect(calls[0].priority).toBe('0');
   expect(calls[1].message).toContain('[snapshot] EmptyCorpusError: no bronze');
@@ -336,4 +364,8 @@ test('forwarder handles budget, silver failure and alarm records', async () => {
   expect(calls[9].message).toContain('coverage low | build b4');
   expect(calls[9].priority).toBe('0');
   expect(calls[9].url).toContain(encodeURIComponent('/aws/lambda/analytics'));
+  expect(calls[10].message).toContain('a; b; c (+1 more) | build b5');
+  expect(calls[10].url).toContain('https://eu-central-1.console.aws.amazon.com/');
+  expect(calls[11].message).toHaveLength(1000);
+  expect(calls[11].message.startsWith('x')).toBe(true);
 });

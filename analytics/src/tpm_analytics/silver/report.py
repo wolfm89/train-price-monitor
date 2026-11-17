@@ -365,10 +365,20 @@ def write_report(
         "report": key,
         "generated_at": report.generated_at,
     }
-    store.put_bytes(
-        (json.dumps(pointer, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-        pointer_key(prefix, quality),
-        content_type=REPORT_CONTENT_TYPE,
-    )
+    try:
+        store.put_bytes(
+            (json.dumps(pointer, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+            pointer_key(prefix, quality),
+            content_type=REPORT_CONTENT_TYPE,
+        )
+    except Exception:
+        # The versioned report is the artifact; the pointer is convenience. Return its key so
+        # the warning and invocation result still name the object that exists.
+        LOGGER.exception(
+            "could not update the silver quality report pointer build_id=%s report=%s",
+            report.build_id,
+            key,
+        )
+        return key
     LOGGER.info("silver quality report written build_id=%s report=%s", report.build_id, key)
     return key

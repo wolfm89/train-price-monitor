@@ -7,16 +7,16 @@ what a change in this repository has to respect, so that the policy stays true.
 
 ## What the app stores
 
-| Where                                     | What                                                                                                                                                                                                                                                           |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cognito (eu-central-1)                    | email, first and last name, random user id, `sub`, password verifier, status, timestamps                                                                                                                                                                       |
-| DynamoDB `TrainPriceMonitor`, `USER#<id>` | `METADATA#`: email, names, `cognitoSub`, notification switch, travel preferences, picture key; `JOURNEY#<id>`: search details, limit price, expiry, DB refresh token, last price; `NOTIFICATION#<id>`: type, time, read/sent flags, journey data               |
-| S3                                        | profile picture `<user id>.<ext>`, KMS-encrypted, not versioned                                                                                                                                                                                                |
-| S3 `scraper` bucket                       | scraped fare observations (`prices/`, the bronze record) and the derived silver dataset (`silver/`, newest two builds); station names, prices, timestamps, no user data; SSE-S3, not versioned; incomplete multipart uploads under `silver/` abort after 1 day |
-| SES (sandbox only)                        | the user's address as a recipient identity; the account-level suppression list holds addresses that bounced or complained                                                                                                                                      |
-| SQS                                       | user id and notification id in the email job                                                                                                                                                                                                                   |
-| CloudWatch, CloudTrail                    | pseudonymous ids, counts and redacted error messages; CloudTrail's event history records sign-up/sign-in calls, including the caller's IP address                                                                                                              |
-| Browser                                   | landing page `theme`, blog `pref-theme`, app `CognitoIdentityServiceProvider.*` (60 min tokens, 30-day refresh token). No cookies anywhere                                                                                                                     |
+| Where                                     | What                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cognito (eu-central-1)                    | email, first and last name, random user id, `sub`, password verifier, status, timestamps                                                                                                                                                                                                                                                                 |
+| DynamoDB `TrainPriceMonitor`, `USER#<id>` | `METADATA#`: email, names, `cognitoSub`, notification switch, travel preferences, picture key; `JOURNEY#<id>`: search details, limit price, expiry, DB refresh token, last price; `NOTIFICATION#<id>`: type, time, read/sent flags, journey data                                                                                                         |
+| S3                                        | profile picture `<user id>.<ext>`, KMS-encrypted, not versioned                                                                                                                                                                                                                                                                                          |
+| S3 `scraper` bucket                       | scraped fare observations (`prices/`, the bronze record), the derived silver dataset (`silver/`, newest two builds) and one small weekly quality report per build (`silver/quality/`, kept indefinitely); station names, prices, counts, timestamps, no user data; SSE-S3, not versioned; incomplete multipart uploads under `silver/` abort after 1 day |
+| SES (sandbox only)                        | the user's address as a recipient identity; the account-level suppression list holds addresses that bounced or complained                                                                                                                                                                                                                                |
+| SQS                                       | user id and notification id in the email job                                                                                                                                                                                                                                                                                                             |
+| CloudWatch, CloudTrail                    | pseudonymous ids, counts and redacted error messages; CloudTrail's event history records sign-up/sign-in calls, including the caller's IP address                                                                                                                                                                                                        |
+| Browser                                   | landing page `theme`, blog `pref-theme`, app `CognitoIdentityServiceProvider.*` (60 min tokens, 30-day refresh token). No cookies anywhere                                                                                                                                                                                                               |
 
 ## Rules for changes
 
@@ -79,10 +79,10 @@ together with an update to the policy (both languages and the "Stand / Last upda
 
 ## Operational alerts
 
-CloudWatch alarms, AWS Budgets notifications and silver-build failures are forwarded to the
-operator's Pushover account (a US service). They carry alarm names, metric values, budget amounts and
-redacted build errors only; no user data is sent. If a future alert includes user data, the public
-policy must be updated first.
+CloudWatch alarms, AWS Budgets notifications, silver-build failures and silver data-quality warnings
+are forwarded to the operator's Pushover account (a US service). They carry alarm names, metric
+values, budget amounts, redacted build errors, quality metric names and counts only; no user data is
+sent. If a future alert includes user data, the public policy must be updated first.
 
 ## Scripts
 

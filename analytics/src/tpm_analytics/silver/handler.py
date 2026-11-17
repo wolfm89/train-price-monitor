@@ -41,10 +41,11 @@ BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
 # Report writes and the quality SNS run after the pointer moved; bound them so a stall cannot
 # turn a published build into a timeout, a retry and a false failure page.
 POST_PUBLISH_RESERVE_SECONDS = 20
-QUALITY_SNS_RESERVE_SECONDS = 15
-# One attempt per PUT: a retried report write is not worth the risk of a retried invocation
-# after the pointer moved. Two PUTs at 2 s connect / 5 s read stay inside the 20 s reserve.
-REPORT_S3_CONFIG = Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 1})
+QUALITY_SNS_RESERVE_SECONDS = 20
+# One total attempt per PUT: a retried report write is not worth the risk of a retried
+# invocation after the pointer moved. Two PUTs at 2 s connect / 5 s read stay inside the 20 s
+# reserve. `total_max_attempts` is explicit because `max_attempts` counts retries, not attempts.
+REPORT_S3_CONFIG = Config(connect_timeout=2, read_timeout=5, retries={"total_max_attempts": 1})
 
 _SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET_KEY|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
 
@@ -152,7 +153,10 @@ def notify_quality(report: QualityReport, key: str | None) -> None:
             "region": os.environ.get("AWS_REGION", "eu-central-1"),
             "log_group": os.environ.get("LOG_GROUP_NAME") or os.environ.get("AWS_LAMBDA_LOG_GROUP_NAME", ""),
         }
-        client = boto3.client("sns", config=Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 2}))
+        client = boto3.client(
+            "sns",
+            config=Config(connect_timeout=2, read_timeout=5, retries={"total_max_attempts": 2}),
+        )
         client.publish(
             TopicArn=topic_arn,
             Subject="Silver data quality warning",
@@ -299,8 +303,8 @@ def _run_build(
                 build_id,
             )
         else:
-            report_store = S3ObjectStore(settings.bucket, region=settings.region, config=REPORT_S3_CONFIG)
             try:
+                report_store = S3ObjectStore(settings.bucket, region=settings.region, config=REPORT_S3_CONFIG)
                 report_key_written = write_report(
                     report_store,
                     prefix=settings.prefix,
@@ -309,15 +313,16 @@ def _run_build(
                 )
             except Exception:
                 LOGGER.exception("could not write the silver quality report build_id=%s", build_id)
-            remaining = remaining_seconds(context)
-            if remaining is None or remaining >= QUALITY_SNS_RESERVE_SECONDS:
-                notify_quality(report, report_key_written)
-            else:
-                LOGGER.warning(
-                    "skipping the silver quality warning; only %.0fs left after publish build_id=%s",
-                    remaining,
-                    build_id,
-                )
+            if report.status == "warning":
+                remaining = remaining_seconds(context)
+                if remaining is None or remaining >= QUALITY_SNS_RESERVE_SECONDS:
+                    notify_quality(report, report_key_written)
+                else:
+                    LOGGER.warning(
+                        "skipping the silver quality warning; only %.0fs left after publish build_id=%s",
+                        remaining,
+                        build_id,
+                    )
         LOGGER.info(
             "silver quality report build_id=%s status=%s violations=%s report=%s report_seconds=%s",
             build_id,

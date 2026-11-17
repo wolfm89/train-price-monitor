@@ -237,7 +237,7 @@ The report is `report_version: 1` and has this shape:
   "status": "ok",
   "window": { "days": 7, "baseline_days": 28 },
   "metrics": {
-    "rows": { "by_observed_day": [], "last_7d": 0, "prior_7d": 0, "change_pct": 0.0 },
+    "rows": { "by_observed_day": [], "last_7d": 0, "prior_7d": 0, "change_pct": null },
     "routes": { "expected": 140, "active_last_7d": 140, "coverage": 1.0 },
     "route_days": {
       "expected": 980,
@@ -250,7 +250,16 @@ The report is `report_version: 1` and has this shape:
     "nulls": { "fare": { "rate": 0.0, "v2_rate": 0.0 }, "load_factor": { "rate": 0.0 } },
     "freshness": { "latest_observed_at": "...", "hours": 0.0 }
   },
-  "thresholds": {},
+  "thresholds": {
+    "expected_route_count": 140,
+    "final_7d_coverage_min": 0.8,
+    "final_24h_coverage_min": 0.6,
+    "route_coverage_min": 0.9,
+    "rows_drop_pct_max": 0.35,
+    "freshness_hours_max": 36,
+    "fare_null_rate_max": 0.1,
+    "load_factor_null_rate_max": 0.35
+  },
   "violations": [{ "metric": "...", "value": 0.0, "threshold": 0.0, "message": "..." }],
   "build": { "manifest": "silver/builds/<id>/_manifest.json", "rows_out": 0, "partitions": 8 }
 }
@@ -269,6 +278,16 @@ Rows per observed day and `build.partitions` are report-only. The tripwire thres
 | `fare_null_rate`        | above 0.10                              |
 | `load_factor_null_rate` | above 0.35                              |
 
+`rows_last_7d`, `route_days_observed` and `route_count_mismatch` are also emitted as violations but
+have no configurable threshold.
+
+`final_7d_coverage` and `final_24h_coverage` count completed route-days whose newest observation
+**at or before the day's first departure** is no more than 7 days / 24 hours older than that first
+departure. They measure coverage before the route-day starts, not the scraper's final 3-hour
+window, which lands after the first departure for most route-days; `freshness_hours` and `rows`
+cover the overall scrape gap. Re-anchoring these two metrics on the day's last departure is a
+candidate for `report_version: 2`.
+
 Initial baseline (2026-11-16 production build `20261116T213950Z-513cc946`): 504,383 rows in the
 last 7 days (583,516 prior, −13.6 %), 140/140 active routes, 980 completed route-days, final-7d
 coverage 0.8847, final-24h 0.7622, fare null rate 4.01 % (v2 7.18 %), load-factor null rate
@@ -276,12 +295,13 @@ coverage 0.8847, final-24h 0.7622, fare null rate 4.01 % (v2 7.18 %), load-facto
 thresholds are regression tripwires below this baseline, not a statement that current coverage is
 failing.
 
-A breach publishes one normal-priority `silver_quality_failed` event listing every violation; it
-does not fail the build or move the pointer back. A report-query failure fails the build before
-publish; a report-write failure after publish is logged and leaves the verified build in place.
-Report writes use short SDK timeouts, and if less than 20 s remain after publish the report and
-warning are skipped and logged rather than risking a timeout on an already-published build.
-Reports are kept indefinitely for now; the two-build retention only applies to `silver/builds/`.
+A breach publishes one normal-priority `silver_quality_failed` event listing the violations (the
+Pushover message shows the first three plus a count); it does not fail the build or move the
+pointer back. A report-query failure fails the build before publish; a report-write failure after
+publish is logged and leaves the verified build in place. Report writes use one attempt with short
+SDK timeouts. If less than 20 s remain after publish, the report write is skipped; after a
+successful write, the warning is skipped if less than 20 s remain. Reports are kept indefinitely
+for now; the two-build retention only applies to `silver/builds/`.
 
 Fetch the latest report with AWS credentials:
 

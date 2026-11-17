@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from tests.conftest import HAMBURG, MUNICH, bronze_row, write_bronze
+from tests.conftest import HAMBURG, MUNICH, bronze_row, v1_row, write_bronze
 from tpm_analytics.silver._duck import connect
 from tpm_analytics.silver.build import run_build
 from tpm_analytics.silver.config import QualityConfig, load_config
@@ -141,8 +141,13 @@ def test_rate_returns_none_for_a_zero_denominator() -> None:
 
 
 def _custom_build(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
+    return _custom_build_files(tmp_path, [(rows, 2)])
+
+
+def _custom_build_files(tmp_path: Path, files: list[tuple[list[dict[str, object]], int]]) -> Path:
     root = tmp_path / f"prices-{uuid4().hex[:8]}"
-    write_bronze(root / "year=2026" / "month=11" / "day=01", rows, schema_version=2)
+    for index, (rows, schema_version) in enumerate(files):
+        write_bronze(root / f"batch-{index}", rows, schema_version=schema_version)
     target = tmp_path / f"silver-{uuid4().hex[:8]}"
     run_build(str(root / "**" / "*.parquet"), target)
     return target
@@ -390,3 +395,108 @@ def test_all_completed_route_days_are_covered(tmp_path: Path) -> None:
     assert route_days["final_7d_coverage"] == 1.0
     assert route_days["final_24h_covered"] == 7
     assert route_days["final_24h_coverage"] == 1.0
+
+
+def test_fare_null_rate_separates_v1_and_v2_denominators(tmp_path: Path) -> None:
+    target = _custom_build_files(
+        tmp_path,
+        [
+            (
+                [
+                    v1_row(
+                        observed_at=datetime(2026, 11, 18, 10, 0),
+                        departure_planned=datetime(2026, 11, 25, 8, 0),
+                        arrival_planned=datetime(2026, 11, 25, 12, 0),
+                        fare_lowest_eur=59.9,
+                    )
+                ],
+                1,
+            ),
+            (
+                [
+                    bronze_row(
+                        observed_at=datetime(2026, 11, 18, 11, 0),
+                        departure_planned=datetime(2026, 11, 25, 9, 0),
+                        arrival_planned=datetime(2026, 11, 25, 13, 0),
+                        fare_lowest_eur=None,
+                        train_number="2002",
+                        journey_id="journey-v2-null",
+                    )
+                ],
+                2,
+            ),
+        ],
+    )
+    report = _report_for(
+        target,
+        tmp_path,
+        as_of=datetime(2026, 11, 20, tzinfo=UTC),
+        quality=replace(load_config().quality, expected_route_count=1),
+    )
+
+    # One null fare out of two recent rows overall, but one out of one v2 row.
+    assert report.metrics["nulls"]["fare"]["rate"] == 0.5
+    assert report.metrics["nulls"]["fare"]["v2_rate"] == 1.0
+
+
+def test_final_coverage_includes_exact_seven_day_and_24_hour_boundaries(tmp_path: Path) -> None:
+    target = _custom_build(
+        tmp_path,
+        [
+            bronze_row(
+                observed_at=datetime(2026, 11, 11, 12, 0),
+                departure_planned=datetime(2026, 11, 18, 12, 0),
+                arrival_planned=datetime(2026, 11, 18, 16, 0),
+                train_number="1001",
+                journey_id="journey-7d",
+            ),
+            bronze_row(
+                observed_at=datetime(2026, 11, 18, 12, 0),
+                departure_planned=datetime(2026, 11, 19, 12, 0),
+                arrival_planned=datetime(2026, 11, 19, 16, 0),
+                train_number="1002",
+                journey_id="journey-24h",
+            ),
+        ],
+    )
+    report = _report_for(
+        target,
+        tmp_path,
+        as_of=datetime(2026, 11, 21, tzinfo=UTC),
+        quality=replace(load_config().quality, expected_route_count=1),
+    )
+
+    route_days = report.metrics["route_days"]
+    assert route_days["observed"] == 2
+    assert route_days["final_7d_covered"] == 2
+    assert route_days["final_24h_covered"] == 1
+
+
+class _FailingPointerStore(LocalObjectStore):
+    def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None:
+        if key.endswith("/_latest.json"):
+            raise OSError("pointer unavailable")
+        super().put_bytes(data, key, content_type=content_type)
+
+
+def test_pointer_failure_still_returns_the_written_report_key(tmp_path: Path) -> None:
+    quality = load_config().quality
+    report = QualityReport(
+        report_version=1,
+        build_id="20261120T000000Z-aaaaaaaa",
+        generated_at="2026-11-20T00:00:00+00:00",
+        status="ok",
+        window_days=7,
+        baseline_days=28,
+        metrics={},
+        thresholds={},
+        violations=(),
+        build={"manifest": "silver/builds/x/_manifest.json", "rows_out": 1, "partitions": 1},
+    )
+    store = _FailingPointerStore(tmp_path / "bucket")
+
+    key = write_report(store, prefix="silver", quality=quality, report=report)
+
+    assert key == report_key("silver", quality, report.build_id)
+    assert store.size(key) > 0
+    assert not (tmp_path / "bucket" / pointer_key("silver", quality)).exists()
