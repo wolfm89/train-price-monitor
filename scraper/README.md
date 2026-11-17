@@ -3,23 +3,17 @@
 An independent serverless pipeline that collects, stores, and compacts Deutsche Bahn price data.
 It runs alongside the main application and is deployed as a separate CDK stack (`ScraperStack`).
 
+> Part of [Train Price Monitor](../README.md). See [Architecture](../docs/architecture.md#scraper-pipeline),
+> [Configuration](../docs/configuration.md#scraper) and [Deployment](../docs/deployment.md).
+
 ## Architecture
 
-```mermaid
-flowchart LR
-    HydratorRule[EventBridge<br/>nightly 02:00 UTC] --> Hydrator
-    PollerRule[EventBridge<br/>every 15 min] --> Poller
-    CompactorRule[EventBridge<br/>nightly 03:00 UTC] --> Compactor
-
-    Hydrator -->|seed PENDING targets| DDB[(DynamoDB<br/>ScraperSchedule)]
-    Poller -->|query due targets| DDB
-    Poller -->|bestprice 1st & 2nd class| Vendo[DB Vendo API]
-    Poller -->|write batch_*.parquet| S3[(S3<br/>Parquet price data)]
-    Compactor -->|merge batch_ → daily_| S3
-```
+![Scraper pipeline: EventBridge schedules, Hydrator, Poller, Compactor, DynamoDB schedule table, DB Vendo and bronze S3](../docs/diagrams/scraper-pipeline.drawio.png)
 
 The pipeline has three Lambda functions driven by EventBridge schedules, a DynamoDB table that
 tracks what to scrape and when, and an S3 bucket that stores price observations as Parquet files.
+The same bucket also holds the silver builds and quality reports written by the analytics stack; the
+scraper only writes `prices/`.
 
 ## Components
 
@@ -149,7 +143,7 @@ because `db-vendo-client`'s transitive dependency tree pulls in CJS-only modules
 
 ## Local Development (Floci)
 
-The pipeline can be run locally using [Floci](https://floci.dev/), a local AWS emulator.
+The pipeline can be run locally using [Floci](https://floci.io/), a local AWS emulator.
 
 ```bash
 docker compose up -d floci                       # Start local AWS emulator
@@ -169,6 +163,9 @@ Deploy the scraper stack to AWS (depends on `//scraper:build`):
 mise run //infrastructure:deploy-scraper
 ```
 
+The full deployment flow, pause switch and outputs are in [docs/deployment.md](../docs/deployment.md).
+The schedule can be paused with `CDK_SCRAPER_PAUSED=1`; the compactor stays enabled.
+
 ## Infrastructure (`ScraperStack`)
 
 | Resource          | Details                                                      |
@@ -182,9 +179,6 @@ mise run //infrastructure:deploy-scraper
 
 ## Environment Variables
 
-| Variable                  | Description                                                  |
-| ------------------------- | ------------------------------------------------------------ |
-| `SCRAPER_TABLE_NAME`      | DynamoDB table for scrape schedule (injected by CDK)         |
-| `SCRAPER_BUCKET_NAME`     | S3 bucket for Parquet price data (injected by CDK)           |
-| `HYDRATOR_LOOKAHEAD_DAYS` | How many days ahead to seed (default: 60)                    |
-| `AWS_ENDPOINT_URL`        | Local endpoint URL for Floci development (set by mise tasks) |
+The canonical list, including the shared DB pacing settings, is in
+[Configuration](../docs/configuration.md#scraper). Most values are injected by CDK; only
+`AWS_ENDPOINT_URL` and the manual `HYDRATOR_FULL_SEED` switch are normally set for local work.

@@ -29,8 +29,28 @@ from tpm_analytics.silver.publish import publish
 from tpm_analytics.silver.report import QualityReport, build_report, write_report
 from tpm_analytics.silver.storage import S3ObjectStore
 
-# Lambda installs no root handler; without one, INFO would never be emitted.
+_LAMBDA_LOG_LEVELS = {
+    "TRACE": logging.DEBUG,
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "FATAL": logging.CRITICAL,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def _lambda_log_level() -> int:
+    """Return the configured root level, mapping Lambda's TRACE to Python's DEBUG."""
+    name = os.environ.get("AWS_LAMBDA_LOG_LEVEL", "INFO").upper()
+    return _LAMBDA_LOG_LEVELS.get(name, logging.INFO)
+
+
+# The Lambda runtime configures the root logger before this module is imported, so basicConfig
+# does not lower the level and INFO lines (build phases, report_seconds) would be dropped.
 logging.basicConfig(level=logging.INFO)
+logging.getLogger().setLevel(_lambda_log_level())
 LOGGER = logging.getLogger(__name__)
 
 # Leave enough time to upload a 1.5 GB build and move the pointer.

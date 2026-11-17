@@ -1,6 +1,8 @@
 """The Lambda handler: env-driven inputs, real build, local fake store."""
 
+import importlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -564,3 +566,29 @@ def test_quality_warning_is_skipped_but_report_is_written_when_time_is_short(
     assert result["quality_report"] is not None
     assert (bucket / quality_pointer_key("silver", handler_module._CONFIG.quality)).exists()
     assert publishes == []
+
+
+def _reload_handler_with_root_level(monkeypatch: pytest.MonkeyPatch, level: str | None) -> int:
+    root = logging.getLogger()
+    previous_level = root.level
+    previous_handlers = root.handlers[:]
+    root.handlers = [logging.NullHandler()]
+    root.setLevel(logging.WARNING)
+    if level is None:
+        monkeypatch.delenv("AWS_LAMBDA_LOG_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("AWS_LAMBDA_LOG_LEVEL", level)
+    try:
+        importlib.reload(handler_module)
+        return root.level
+    finally:
+        root.handlers = previous_handlers
+        root.setLevel(previous_level)
+
+
+def test_handler_lowers_root_logger_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _reload_handler_with_root_level(monkeypatch, None) == logging.INFO
+
+
+def test_handler_normalizes_lambda_trace_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _reload_handler_with_root_level(monkeypatch, "TRACE") == logging.DEBUG
