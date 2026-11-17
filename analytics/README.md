@@ -177,12 +177,15 @@ Deploy paused first, so the first run cannot race verification:
 ```bash
 cd ../infrastructure
 CDK_ANALYTICS_PAUSED=1 CDK_TRANSFORM_VERSION="$(git rev-parse HEAD)" npx cdk deploy AnalyticsStack
-aws lambda invoke --function-name "$(aws cloudformation describe-stacks --stack-name AnalyticsStack \
-  --query "Stacks[0].Outputs[?OutputKey=='SilverFunctionName'].OutputValue" --output text)" \
-  --cli-read-timeout 900 --cli-connect-timeout 10 \
+FN=$(aws cloudformation describe-stacks --stack-name AnalyticsStack \
+  --query "Stacks[0].Outputs[?OutputKey=='SilverFunctionName'].OutputValue" --output text)
+aws lambda invoke --function-name "$FN" --invocation-type Event \
   --payload '{}' --cli-binary-format raw-in-base64-out /tmp/silver.json
-cat /tmp/silver.json
 ```
+
+The invoke is asynchronous: the CLI returns before the build starts, so wait for the run (about
+10 minutes) and inspect the pointers below. A synchronous invoke can outlive the CLI connection and
+be retried, which creates a second build; use the async form for manual checks.
 
 `CDK_APP_NAME`, `CDK_DOMAIN_NAME` and `CDK_SES_FROM_EMAIL` must be set (CI supplies them from
 repository secrets).

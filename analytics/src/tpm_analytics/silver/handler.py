@@ -29,8 +29,10 @@ from tpm_analytics.silver.publish import publish
 from tpm_analytics.silver.report import QualityReport, build_report, write_report
 from tpm_analytics.silver.storage import S3ObjectStore
 
-# Lambda installs no root handler; without one, INFO would never be emitted.
+# The Lambda runtime configures the root logger before this module is imported, so basicConfig
+# does not lower the level and INFO lines (build phases, report_seconds) would be dropped.
 logging.basicConfig(level=logging.INFO)
+logging.getLogger().setLevel(logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 # Leave enough time to upload a 1.5 GB build and move the pointer.
