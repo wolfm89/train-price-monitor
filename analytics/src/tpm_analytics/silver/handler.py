@@ -41,7 +41,10 @@ BUILD_BUDGET_SECONDS = _CONFIG.lambda_.build_budget_seconds
 # Report writes and the quality SNS run after the pointer moved; bound them so a stall cannot
 # turn a published build into a timeout, a retry and a false failure page.
 POST_PUBLISH_RESERVE_SECONDS = 20
-REPORT_S3_CONFIG = Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 2})
+QUALITY_SNS_RESERVE_SECONDS = 15
+# One attempt per PUT: a retried report write is not worth the risk of a retried invocation
+# after the pointer moved. Two PUTs at 2 s connect / 5 s read stay inside the 20 s reserve.
+REPORT_S3_CONFIG = Config(connect_timeout=2, read_timeout=5, retries={"max_attempts": 1})
 
 _SECRET_FRAGMENT = re.compile(r"(?:KEY_ID|SECRET_KEY|SECRET|SESSION_TOKEN)\s+'[^']*'|AKIA[0-9A-Z]{16}")
 
@@ -307,7 +310,7 @@ def _run_build(
             except Exception:
                 LOGGER.exception("could not write the silver quality report build_id=%s", build_id)
             remaining = remaining_seconds(context)
-            if remaining is None or remaining >= POST_PUBLISH_RESERVE_SECONDS:
+            if remaining is None or remaining >= QUALITY_SNS_RESERVE_SECONDS:
                 notify_quality(report, report_key_written)
             else:
                 LOGGER.warning(
