@@ -440,6 +440,7 @@ class Evaluation:
     evaluation_split: str
     test_evaluated: bool
     calibration_prevalence: float
+    train_prevalence: float
     dropped_features: tuple[str, ...]
     calibration: tuple[Array, Array, Array]
     headroom: tuple[dict[str, Any], ...]
@@ -461,6 +462,7 @@ class Evaluation:
             "evaluation_split": self.evaluation_split,
             "test_evaluated": self.test_evaluated,
             "calibration_prevalence": self.calibration_prevalence,
+            "train_prevalence": self.train_prevalence,
             "dropped_features": list(self.dropped_features),
             "calibration": {
                 "prob_pred": [float(value) for value in self.calibration[0]],
@@ -689,12 +691,20 @@ def train_and_evaluate(
         requested_method,
         min_positives=config.calibration.min_positives,
     )
+    calibration_method = calibrator.method
+    if calibration_method not in oof_predictions:
+        oof_predictions[calibration_method] = _cross_fitted(
+            raw_cal,
+            cal_data.y,
+            cal_data.route_day,
+            calibration_method,
+            config,
+        )
     threshold, threshold_met = _threshold(
         cal_data.y,
-        oof_predictions[requested_method],
+        oof_predictions[calibration_method],
         config.report.threshold_precision_floor,
     )
-    calibration_method = calibrator.method
 
     eval_data = test if evaluate_test else cal_data
     evaluation_split = "test" if evaluate_test else "validation_calibrate"
@@ -718,17 +728,18 @@ def train_and_evaluate(
         eval_rows = eval_data
         test_tier = "all_labelled_rows"
     test_tier_rows = len(eval_rows)
+    train_eval = train.subset(train.future_observations >= 2) if test_tier == "two_plus_observations" else train
     calibrated_eval = (
         calibrator.predict(model.predict(eval_rows))
         if evaluate_test
         else (
-            oof_predictions[requested_method][evidence]
+            oof_predictions[calibration_method][evidence]
             if len(eval_rows) != len(cal_data)
-            else oof_predictions[requested_method]
+            else oof_predictions[calibration_method]
         )
     )
     test_metrics = _metrics(eval_rows.y, calibrated_eval)
-    train_rate = float(np.mean(train.y))
+    train_rate = float(np.mean(train_eval.y))
     reference = float(np.mean((eval_rows.y - train_rate) ** 2))
     test_metrics["bss_train"] = 1.0 - _metric_value(test_metrics["brier"]) / reference if reference > 0 else None
     test_metrics["threshold"] = threshold
@@ -760,7 +771,7 @@ def train_and_evaluate(
         decisions = _decision_metrics(y_headroom, probabilities, threshold)
         item["precision_at_threshold"] = decisions["precision_at_threshold"]
         item["recall_at_threshold"] = decisions["recall_at_threshold"]
-        train_headroom = train.y[train.headroom == value]
+        train_headroom = train_eval.y[train_eval.headroom == value]
         train_rate_h = float(np.mean(train_headroom)) if len(train_headroom) else train_rate
         reference_h = float(np.mean((y_headroom - train_rate_h) ** 2))
         item["bss_train"] = 1.0 - item["brier"] / reference_h if reference_h > 0 and item["brier"] is not None else None
@@ -793,6 +804,7 @@ def train_and_evaluate(
         evaluation_split=evaluation_split,
         test_evaluated=evaluate_test,
         calibration_prevalence=float(np.mean(cal_data.y)),
+        train_prevalence=train_rate,
         dropped_features=tuple(sorted({name for fitted in candidates.values() for name in fitted.dropped})),
         calibration=(prob_pred, prob_true, counts),
         headroom=tuple(headroom),

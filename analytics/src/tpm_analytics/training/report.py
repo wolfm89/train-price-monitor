@@ -83,6 +83,13 @@ def _report(
             "prevalence shift between calibration and evaluation: "
             f"{evaluation.calibration_prevalence:.3f} vs {evaluation.test.get('positive_rate')}"
         )
+    if abs(float(evaluation.test.get("positive_rate") or 0.0) - evaluation.train_prevalence) > 0.02:
+        warning_items.append(
+            "prevalence shift between train and evaluation: "
+            f"{evaluation.train_prevalence:.3f} vs {evaluation.test.get('positive_rate')}"
+        )
+    if not evaluation.test.get("headroom_monotonic"):
+        warning_items.append("calibrated breach probability is not monotone across headroom")
     for split in stats.splits:
         share = split.labelled / split.rows if split.rows else 0.0
         if share < 0.9:
@@ -133,7 +140,8 @@ def _report(
     )
     bss_line = (
         f"- Brier skill score vs the slice base rate: {_fmt(evaluation.test.get('bss'))}\n"
-        f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.test.get('bss_train'))}"
+        f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.test.get('bss_train'))}\n"
+        f"- Train prevalence of the evaluated subset: {_fmt(evaluation.train_prevalence)}"
     )
     test_all_line = (
         (
@@ -173,6 +181,10 @@ def _report(
         "- These are development figures, not a production estimate. The product's hourly refresher "
         "and 7-30 d booking window are not fully represented.\n"
         "- Pooled metrics include headroom identification; per-headroom rows are the primary view.\n"
+        "- Validation precision and recall use the same validation-calibrate rows that selected the "
+        "threshold; they are optimistic.\n"
+        "- The validation headline uses the two-or-more-scrape tier while the model comparison table "
+        "uses all validation-select rows.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
