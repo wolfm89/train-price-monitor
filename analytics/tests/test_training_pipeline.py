@@ -236,6 +236,104 @@ def test_v2_row_in_a_split_fails(tmp_path: Path) -> None:
         connection.close()
 
 
+def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
+    source = tmp_path / "silver.parquet"
+    _write_silver(source, _rows())
+    config = load_config(_config(tmp_path))
+    digests = []
+    for name in ("a", "b"):
+        connection = duckdb.connect()
+        try:
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(source), label="test", build_id=None, manifest_sha256=None),
+                config,
+                tmp_path / name,
+                run_id=name,
+            )
+        finally:
+            connection.close()
+        manifest = json.loads((tmp_path / name / "dataset_manifest.json").read_text())
+        digests.append(next(item for item in manifest["dataset_files"] if item["split"] == "train"))
+    assert digests[0]["sum64"] == digests[1]["sum64"]
+    assert digests[0]["xor64"] == digests[1]["xor64"]
+    assert digests[0]["rows"] == digests[1]["rows"]
+
+
+def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 10, 10, 0)
+
+    def window_row(observed_at: datetime, fare: float) -> dict[str, object]:
+        return _row(
+            observed_at=observed_at,
+            departure=departure,
+            route="future",
+            train="ICE4",
+            fare=fare,
+        )
+
+    extra = [
+        _row(
+            observed_at=datetime(2026, 7, 2, 10, 0),
+            departure=datetime(2026, 7, 12, 10, 0),
+            route="v",
+            train="ICE2",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 12, 10, 0),
+            departure=datetime(2026, 7, 22, 10, 0),
+            route="c",
+            train="ICE3",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 22, 10, 0),
+            departure=datetime(2026, 8, 1, 10, 0),
+            route="t",
+            train="ICE5",
+            fare=80.0,
+        ),
+    ]
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["splits"] = SPLITS
+    raw["calendar"]["feature_set"] = "none"
+    raw["sample"]["sample_rate"] = 1.0
+    raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_label_coverage"] = 0.0
+    config_path = tmp_path / "future.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(config_path)
+    outputs = []
+    for name, future_fare in (("low", 100.0), ("high", 120.0)):
+        source = tmp_path / f"{name}.parquet"
+        rows = [
+            window_row(departure - timedelta(hours=54), 90.0),
+            window_row(departure - timedelta(hours=30), 100.0),
+            window_row(departure - timedelta(hours=10), future_fare),
+            *extra,
+        ]
+        _write_silver(source, rows)
+        connection = duckdb.connect()
+        try:
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(source), label=name, build_id=None, manifest_sha256=None),
+                config,
+                tmp_path / name,
+                run_id=name,
+            )
+        finally:
+            connection.close()
+        outputs.append(load_split(tmp_path / name / "dataset" / "train.parquet", feature_spec("none")))
+    low, high = outputs
+    low_index = int(np.flatnonzero(low.price == 100.0)[0])
+    high_index = int(np.flatnonzero(high.price == 100.0)[0])
+    for name in low.features:
+        np.testing.assert_equal(low.features[name][low_index], high.features[name][high_index])
+    assert float(low.future_max[low_index]) != float(high.future_max[high_index])
+
+
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
     raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     raw["splits"]["validation_select_start"] = raw["splits"]["train_end"]
@@ -304,6 +402,13 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     _write_silver(
         source,
         [
+            _row(
+                observed_at=departure - timedelta(hours=800),
+                departure=departure,
+                route="lag",
+                train="ICE9",
+                fare=50.0,
+            ),
             _row(
                 observed_at=departure - timedelta(hours=54),
                 departure=departure,
@@ -379,6 +484,7 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     index = int(np.flatnonzero(data.price == 100.0)[0])
     assert float(data.features["price_change_24h"][index]) == pytest.approx(10.0)
     assert float(data.features["price_velocity_24h"][index]) == pytest.approx(10.0 / 24.0)
+    assert float(data.features["price_vs_series_min"][index]) == pytest.approx(50.0)
     connection = duckdb.connect()
     try:
         regimes = connection.execute(
@@ -440,6 +546,53 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert (run_out / "metrics.json").is_file()
     assert (run_out / "calibration.csv").is_file()
     assert (run_out / "manifest.json").is_file()
+    report_text = (run_out / "report.md").read_text()
+    assert "Known limitations" in report_text
+    assert "Prevalence:" in report_text
+    assert "average precision" in report_text
+    manifest_json = json.loads((run_out / "manifest.json").read_text())
+    assert manifest_json["test_evaluated"] is False
     metrics = json.loads((run_out / "metrics.json").read_text())
     assert metrics["evaluation"]["chosen_model"] in {"base_rate", "logistic", "hist_gradient_boosting"}
     assert len(metrics["evaluation"]["headroom"]) == 5
+    assert metrics["evaluation"]["test_evaluated"] is False
+    assert metrics["evaluation"]["evaluation_split"] == "validation_calibrate"
+
+    test_out = tmp_path / "tested"
+    assert (
+        main(
+            [
+                "--config",
+                str(config),
+                "--source",
+                str(source),
+                "--out",
+                str(test_out),
+                "--evaluate-test",
+            ]
+        )
+        == 0
+    )
+    tested = json.loads((test_out / "metrics.json").read_text())
+    assert tested["evaluation"]["test_evaluated"] is True
+    assert tested["evaluation"]["evaluation_split"] == "test"
+    assert tested["test_evaluated"] is True
+
+    ablation_out = tmp_path / "ablation"
+    assert (
+        main(
+            [
+                "--config",
+                str(config),
+                "--source",
+                str(source),
+                "--out",
+                str(ablation_out),
+                "--ablation",
+            ]
+        )
+        == 0
+    )
+    ablated = json.loads((ablation_out / "metrics.json").read_text())
+    assert ablated["test_evaluated"] is False
+    assert all("test_brier" not in item for item in ablated["ablation"].values())

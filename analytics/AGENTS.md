@@ -117,7 +117,10 @@ v2-only and mixed-schema input.
 - Training artifacts are local and ignored. Downloaded silver goes under `analytics/.data/`; never
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
-  claim post-fix generalization.
+  claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
+  and `--ablation` report validation only.
+- A clean rerun must match the per-split content digests in `dataset_manifest.json`. Do not remove
+  the total `ORDER BY` in the Parquet writer.
 
 Update `README.md` for schema, quality or runbook changes and
 [docs/configuration.md](../docs/configuration.md) for new environment variables.

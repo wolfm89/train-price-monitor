@@ -116,12 +116,17 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             "future_observations",
             "headroom_pct",
             "departure_date",
+            "snapshot_at",
+            "bin_regime",
+            "bin_index",
         )
     )
     connection = duckdb.connect()
     try:
         rows = connection.execute(
-            f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') WHERE label_observed"
+            f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') "
+            "WHERE label_observed "
+            "ORDER BY series_key, snapshot_at, bin_regime, bin_index"
         ).fetchnumpy()
     finally:
         connection.close()
@@ -146,7 +151,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         route_day=np.asarray(rows["route_day"], dtype=str),
         price=_filled(rows["price_eur"], np.nan),
         future_max=future_max,
-        future_observations=np.asarray(rows["future_observations"], dtype=np.int8),
+        future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=np.asarray(rows["headroom_pct"], dtype=np.int16),
         departure_date=np.asarray(rows["departure_date"], dtype=str),
     )
@@ -193,16 +198,23 @@ def _indices(spec: FeatureSpec, kinds: tuple[str, ...]) -> list[int]:
     return [index for index, feature in enumerate(spec.features) if feature.kind in kinds]
 
 
-def _usable_columns(matrix: Array, categorical: list[int]) -> tuple[int, ...]:
+def _usable_columns(
+    matrix: Array,
+    categorical: list[int],
+    names: tuple[str, ...],
+) -> tuple[tuple[int, ...], tuple[str, ...]]:
     """Drop columns with no usable split; HistGB cannot bin a constant/all-null feature."""
     usable: list[int] = []
+    dropped: list[str] = []
     categorical_set = set(categorical)
     for index in range(matrix.shape[1]):
         column = matrix[:, index]
         values = column if index in categorical_set else column[~np.isnan(column)]
         if np.unique(values).size >= 2:
             usable.append(index)
-    return tuple(usable)
+        else:
+            dropped.append(names[index])
+    return tuple(usable), tuple(dropped)
 
 
 @dataclass
@@ -212,6 +224,7 @@ class FittedModel:
     encoder: OrdinalEncoder
     spec: FeatureSpec
     selected: tuple[int, ...] | None = None
+    dropped: tuple[str, ...] = ()
 
     def predict(self, data: TabularData, headroom: int | None = None) -> Array:
         matrix = _matrix(data, self.spec, self.encoder, headroom)
@@ -271,7 +284,7 @@ def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: Train
         estimator.fit(matrix, data.y)
     elif name == "hist_gradient_boosting":
         categorical = _indices(spec, (CATEGORICAL,))
-        selected = _usable_columns(matrix, categorical)
+        selected, dropped = _usable_columns(matrix, categorical, spec.names)
         if not selected:
             raise ModelError("no feature has two distinct values")
         remapped = [position for position, index in enumerate(selected) if index in set(categorical)]
@@ -289,7 +302,14 @@ def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: Train
             random_state=config.model.random_state,
         )
         estimator.fit(matrix[:, list(selected)], data.y)
-        return FittedModel(name=name, estimator=estimator, encoder=encoder, spec=spec, selected=selected)
+        return FittedModel(
+            name=name,
+            estimator=estimator,
+            encoder=encoder,
+            spec=spec,
+            selected=selected,
+            dropped=dropped,
+        )
     elif name == "lightgbm":
         try:
             lightgbm = importlib.import_module("lightgbm")
@@ -303,6 +323,7 @@ def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: Train
             learning_rate=config.model.learning_rate,
             num_leaves=config.model.max_leaf_nodes,
             random_state=config.model.random_state,
+            monotone_constraints=[-1 if feature.name == "headroom_pct" else 0 for feature in spec.features],
             verbosity=-1,
         )
         estimator.fit(matrix, data.y)
@@ -325,10 +346,12 @@ class ScoreCalibrator:
             if self.temperature is None:
                 raise ModelError("temperature calibrator has no fitted temperature")
             logits = np.log(clipped / (1.0 - clipped))
-            return np.asarray(expit(logits / float(self.temperature)), dtype=np.float64)
-        if self.method == "isotonic":
-            return np.asarray(self.model.predict(clipped), dtype=np.float64)
-        return np.asarray(self.model.predict_proba(clipped.reshape(-1, 1))[:, 1], dtype=np.float64)
+            values = expit(logits / float(self.temperature))
+        elif self.method == "isotonic":
+            values = self.model.predict(clipped)
+        else:
+            values = self.model.predict_proba(clipped.reshape(-1, 1))[:, 1]
+        return np.asarray(np.clip(values, 1e-3, 1.0 - 1e-3), dtype=np.float64)
 
 
 def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
@@ -371,7 +394,7 @@ def _metrics(y: Array, probabilities: Array) -> dict[str, float | None]:
         "log_loss": float(log_loss(y, clipped, labels=[0, 1])),
         "bss": 1.0 - brier / reference if reference > 0 else None,
         "roc_auc": float(roc_auc_score(y, clipped)) if both else None,
-        "pr_auc": float(average_precision_score(y, clipped)) if both else None,
+        "average_precision": float(average_precision_score(y, clipped)) if both else None,
         "positive_rate": base_rate,
     }
 
@@ -404,9 +427,13 @@ class Evaluation:
     threshold_precision_floor_met: bool
     candidates: dict[str, dict[str, float | None]]
     test: dict[str, Any]
-    test_all: dict[str, Any]
+    test_all: dict[str, Any] | None
     test_tier: str
     test_tier_rows: int
+    evaluation_split: str
+    test_evaluated: bool
+    calibration_prevalence: float
+    dropped_features: tuple[str, ...]
     calibration: tuple[Array, Array, Array]
     headroom: tuple[dict[str, Any], ...]
     importance: tuple[dict[str, Any], ...]
@@ -424,6 +451,10 @@ class Evaluation:
             "test_all": self.test_all,
             "test_tier": self.test_tier,
             "test_tier_rows": self.test_tier_rows,
+            "evaluation_split": self.evaluation_split,
+            "test_evaluated": self.test_evaluated,
+            "calibration_prevalence": self.calibration_prevalence,
+            "dropped_features": list(self.dropped_features),
             "calibration": {
                 "prob_pred": [float(value) for value in self.calibration[0]],
                 "prob_true": [float(value) for value in self.calibration[1]],
@@ -519,10 +550,10 @@ def _permutation_importance(
 
 
 def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, seed: int) -> dict[str, list[float]]:
-    """Grouped bootstrap over series, using per-series sufficient statistics.
+    """Grouped bootstrap over the configured cluster, using per-cluster sufficient statistics.
 
     Concatenating row indices for every replicate is O(rows x replicates); this version is
-    O(series x replicates) and gives the same weighted Brier/log-loss.
+    O(clusters x replicates) and gives the same weighted Brier/log-loss.
     """
     unique, inverse = np.unique(groups, return_inverse=True)
     clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
@@ -551,6 +582,8 @@ def train_and_evaluate(
     splits: dict[str, TabularData],
     spec: FeatureSpec,
     config: TrainingConfig,
+    *,
+    evaluate_test: bool = False,
 ) -> tuple[Evaluation, dict[str, FittedModel], ScoreCalibrator]:
     train = splits["train"]
     validation_select = splits["validation_select"]
@@ -587,7 +620,7 @@ def train_and_evaluate(
     if best != "logistic" and logistic is not None:
         margin = max(0.002, 0.02 * _metric_value(logistic["brier"], 0.0))
         tree = candidate_metrics[best]
-        pr_gain = _metric_value(tree["pr_auc"], 0.0) - _metric_value(logistic["pr_auc"], 0.0)
+        pr_gain = _metric_value(tree["average_precision"], 0.0) - _metric_value(logistic["average_precision"], 0.0)
         if _metric_value(tree["brier"]) > _metric_value(logistic["brier"]) - margin and pr_gain < 0.01:
             chosen = "logistic"
     if (
@@ -628,39 +661,57 @@ def train_and_evaluate(
     )
     calibration_method = calibrator.method
 
-    raw_test = model.predict(test)
-    test_all = _metrics(test.y, calibrator.predict(raw_test))
-    evidence = test.future_observations >= 2
+    eval_data = test if evaluate_test else cal_data
+    evaluation_split = "test" if evaluate_test else "validation_calibrate"
+    test_all = None
+    if evaluate_test:
+        raw_cal_all = model.predict(validation_calibrate)
+        all_calibrator = fit_calibrator(
+            raw_cal_all,
+            validation_calibrate.y,
+            calibration_method,
+            min_positives=config.calibration.min_positives,
+        )
+        test_all = _metrics(test.y, all_calibrator.predict(model.predict(test)))
+
+    evidence = eval_data.future_observations >= 2
     evidence_rows = int(evidence.sum())
     if evidence_rows >= 100:
-        test_eval = test.subset(evidence)
+        eval_rows = eval_data.subset(evidence)
         test_tier = "two_plus_observations"
     else:
-        test_eval = test
+        eval_rows = eval_data
         test_tier = "all_labelled_rows"
-    test_tier_rows = len(test_eval)
-    raw_test_eval = model.predict(test_eval)
-    calibrated_test = calibrator.predict(raw_test_eval)
-    test_metrics = _metrics(test_eval.y, calibrated_test)
+    test_tier_rows = len(eval_rows)
+    calibrated_eval = (
+        calibrator.predict(model.predict(eval_rows))
+        if evaluate_test
+        else (
+            oof_predictions[requested_method][evidence]
+            if len(eval_rows) != len(cal_data)
+            else oof_predictions[requested_method]
+        )
+    )
+    test_metrics = _metrics(eval_rows.y, calibrated_eval)
     train_rate = float(np.mean(train.y))
-    reference = float(np.mean((test_eval.y - train_rate) ** 2))
+    reference = float(np.mean((eval_rows.y - train_rate) ** 2))
     test_metrics["bss_train"] = 1.0 - _metric_value(test_metrics["brier"]) / reference if reference > 0 else None
     test_metrics["threshold"] = threshold
-    test_metrics.update(_decision_metrics(test_eval.y, calibrated_test, threshold))
-    test_metrics["precision_floor_met_on_test"] = bool(
+    test_metrics.update(_decision_metrics(eval_rows.y, calibrated_eval, threshold))
+    test_metrics["precision_floor_met_on_evaluation"] = bool(
         _metric_value(test_metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
     )
     test_metrics["headroom_monotonic"] = bool(
-        np.all(
-            model.predict(test_eval, headroom=config.label.headroom_pct[0])
-            >= model.predict(test_eval, headroom=config.label.headroom_pct[-1])
+        all(
+            np.all(model.predict(eval_rows, headroom=left) >= model.predict(eval_rows, headroom=right))
+            for left, right in zip(config.label.headroom_pct, config.label.headroom_pct[1:], strict=False)
         )
     )
 
     headroom = []
     for value in config.label.headroom_pct:
-        y_headroom = (test_eval.future_max >= test_eval.price * (1.0 + value / 100.0)).astype(np.int8)
-        probabilities = calibrator.predict(model.predict(test_eval, headroom=value))
+        y_headroom = (eval_rows.future_max >= eval_rows.price * (1.0 + value / 100.0)).astype(np.int8)
+        probabilities = calibrator.predict(model.predict(eval_rows, headroom=value))
         item = _metrics(y_headroom, probabilities)
         item["headroom_pct"] = value
         item["mean_probability"] = float(np.mean(probabilities))
@@ -674,9 +725,14 @@ def train_and_evaluate(
         item["bss_train"] = 1.0 - item["brier"] / reference_h if reference_h > 0 and item["brier"] is not None else None
         headroom.append(item)
 
-    prob_pred, prob_true, counts = _calibration_curve(test_eval.y, calibrated_test, config.report.calibration_bins)
+    prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
+    groups = eval_rows.departure_date if config.report.bootstrap_cluster == "departure_date" else eval_rows.route_day
     bootstrap = _bootstrap(
-        test_eval.y, calibrated_test, test_eval.route_day, config.report.bootstrap_replicates, config.seed
+        eval_rows.y,
+        calibrated_eval,
+        groups,
+        config.report.bootstrap_replicates,
+        config.seed,
     )
     importance = _permutation_importance(model, calibrator, validation_select, spec, seed=config.seed)
     evaluation = Evaluation(
@@ -689,6 +745,10 @@ def train_and_evaluate(
         test_all=test_all,
         test_tier=test_tier,
         test_tier_rows=test_tier_rows,
+        evaluation_split=evaluation_split,
+        test_evaluated=evaluate_test,
+        calibration_prevalence=float(np.mean(cal_data.y)),
+        dropped_features=tuple(sorted({name for fitted in candidates.values() for name in fitted.dropped})),
         calibration=(prob_pred, prob_true, counts),
         headroom=tuple(headroom),
         importance=importance,

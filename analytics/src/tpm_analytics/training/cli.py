@@ -36,6 +36,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--calendar-features", choices=CALENDAR_SETS, default=None)
     parser.add_argument("--profile", action="store_true", help="build and profile without training")
     parser.add_argument("--ablation", action="store_true", help="compare the four calendar feature sets")
+    parser.add_argument(
+        "--evaluate-test",
+        action="store_true",
+        help="score the untouched test split once; default reports validation only",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -56,19 +61,30 @@ def _load_splits(out_dir: Path, spec: FeatureSpec) -> dict[str, training_model.T
 def _ablation(
     full: dict[str, training_model.TabularData],
     config: TrainingConfig,
+    primary_set: str,
+    primary: training_model.Evaluation,
 ) -> dict[str, Any]:
-    results: dict[str, Any] = {}
+    results: dict[str, Any] = {
+        primary_set: {
+            "chosen_model": primary.chosen_model,
+            "calibration": primary.calibration_method,
+            "validation_brier": primary.candidates[primary.chosen_model]["brier"],
+            "validation_log_loss": primary.test.get("log_loss"),
+            "validation_roc_auc": primary.test.get("roc_auc"),
+        }
+    }
     for calendar_set in CALENDAR_SETS:
+        if calendar_set == primary_set:
+            continue
         spec = feature_spec(calendar_set)
         splits = {name: data.select(spec.names) for name, data in full.items()}
-        evaluation, _, _ = training_model.train_and_evaluate(splits, spec, config)
+        evaluation, _, _ = training_model.train_and_evaluate(splits, spec, config, evaluate_test=False)
         results[calendar_set] = {
             "chosen_model": evaluation.chosen_model,
             "calibration": evaluation.calibration_method,
             "validation_brier": evaluation.candidates[evaluation.chosen_model]["brier"],
-            "test_brier": evaluation.test["brier"],
-            "test_log_loss": evaluation.test["log_loss"],
-            "test_roc_auc": evaluation.test["roc_auc"],
+            "validation_log_loss": evaluation.test.get("log_loss"),
+            "validation_roc_auc": evaluation.test.get("roc_auc"),
         }
     return results
 
@@ -85,8 +101,11 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("no source: pass --source or set source in the config")
         if args.calendar_features is not None:
             config = replace(config, calendar=replace(config.calendar, feature_set=args.calendar_features))
-        if args.ablation:
-            config = replace(config, calendar=replace(config.calendar, feature_set="full"))
+        if args.ablation and args.evaluate_test:
+            raise ValueError("--ablation is validation-only; do not combine it with --evaluate-test")
+        primary_set = config.calendar.feature_set
+        build_set = "full" if args.ablation else primary_set
+        build_config = replace(config, calendar=replace(config.calendar, feature_set=build_set))
         source = resolve_source(source_uri)
         run_id = _run_id(config, args.run_id)
         if args.out is not None:
@@ -103,26 +122,42 @@ def main(argv: list[str] | None = None) -> int:
         if configured_extensions is None and Path(".duckdb-extensions").is_dir():
             configured_extensions = str(Path(".duckdb-extensions").resolve())
         extensions = Path(configured_extensions) if configured_extensions else None
+        threads = min(8, os.cpu_count() or 4)
         connection = connect(
             temp_directory=temp_dir,
-            threads=min(8, os.cpu_count() or 4),
+            threads=threads,
             memory_limit=os.environ.get("TRAIN_DUCKDB_MEMORY_LIMIT", "6GB"),
             max_temp_size=os.environ.get("TRAIN_DUCKDB_MAX_TEMP_SIZE", "8GB"),
             extensions=extensions,
             secret=source.s3_secret,
         )
         try:
-            stats = build_dataset(connection, source, config, out_dir, run_id=run_id, write_splits=not args.profile)
+            stats = build_dataset(
+                connection,
+                source,
+                build_config,
+                out_dir,
+                run_id=run_id,
+                write_splits=not args.profile,
+                cli_argv=tuple(sys.argv),
+                threads=threads,
+            )
         finally:
             connection.close()
             shutil.rmtree(temp_dir, ignore_errors=True)
         if args.profile:
             print(json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str))
             return 0
-        spec = feature_spec(config.calendar.feature_set)
-        splits = _load_splits(out_dir, spec)
-        evaluation, _, _ = training_model.train_and_evaluate(splits, spec, config)
-        ablation = _ablation(splits, config) if args.ablation else None
+        spec = feature_spec(primary_set)
+        full_splits = _load_splits(out_dir, feature_spec(build_set))
+        splits = {name: data.select(spec.names) for name, data in full_splits.items()}
+        evaluation, _, _ = training_model.train_and_evaluate(
+            splits,
+            spec,
+            config,
+            evaluate_test=args.evaluate_test and not args.ablation,
+        )
+        ablation = _ablation(full_splits, config, primary_set, evaluation) if args.ablation else None
         write_report(
             out_dir,
             stats,
@@ -139,8 +174,10 @@ def main(argv: list[str] | None = None) -> int:
             "labelled_rows": stats.labelled_rows,
             "chosen_model": evaluation.chosen_model,
             "calibration": evaluation.calibration_method,
-            "test_brier": evaluation.test["brier"],
-            "test_log_loss": evaluation.test["log_loss"],
+            "evaluation_split": evaluation.evaluation_split,
+            "test_evaluated": evaluation.test_evaluated,
+            "brier": evaluation.test["brier"],
+            "log_loss": evaluation.test["log_loss"],
             "ablation": ablation,
         }
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))

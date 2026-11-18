@@ -44,7 +44,8 @@
     "folds": 5
   },
   "report": {
-    "bootstrap_replicates": 200,
+    "bootstrap_replicates": 2000,
+    "bootstrap_cluster": "departure_date",
     "threshold_precision_floor": 0.7,
     "calibration_bins": 10,
     "min_label_coverage": 0.8,

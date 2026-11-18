@@ -375,7 +375,16 @@ mise run //analytics:train:ablation -- --source .data/silver/<build>
 
 `--source` accepts an S3 pointer, a Parquet glob or a local directory. S3 reads need
 `DUCKDB_EXTENSION_DIR` and the httpfs extension (`mise run //analytics:httpfs`); local runs do not.
-The default config is `config/training.json`; use `--config` for a local split window. Artifacts go to the ignored
+The default config is `config/training.json`; use `--config` for a local split window.
+
+Runs are validation-only by default. Add `--evaluate-test` to score the untouched test split once;
+`--ablation` is always validation-only. Two clean builds use a total row order and write
+order-independent content digests in `dataset_manifest.json`; a rerun must match those digests.
+The report header records the git SHA, silver build, config hash and digests.
+
+The current label is the maximum over scraped observations in the next 24 hours; for many rows it is
+one scrape about 13 hours ahead. The report shows label coverage and the two-or-more-observation
+tier as the headline, plus a known-limitations section. Artifacts go to the ignored
 `analytics/artifacts/<run_id>/` directory:
 
 - `dataset/{train,validation_select,validation_calibrate,test}.parquet`

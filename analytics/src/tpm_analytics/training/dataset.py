@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import subprocess
 import time
 from dataclasses import asdict, dataclass, field, replace
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +79,43 @@ def _source_count(connection: duckdb.DuckDBPyConnection, source_sql: str) -> int
     return _scalar(connection, f"SELECT count(*) FROM {source_sql}")
 
 
+def _git_state() -> tuple[str | None, bool]:
+    root = Path(__file__).resolve().parents[3]
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
+        return sha or None, dirty
+    except OSError, subprocess.CalledProcessError:
+        return None, False
+
+
+def _lock_sha256() -> str | None:
+    path = Path(__file__).resolve().parents[3] / "uv.lock"
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def _package_versions() -> dict[str, str | None]:
+    names = ("numpy", "scikit-learn", "scipy", "pyarrow")
+    result: dict[str, str | None] = {"python": platform.python_version(), "duckdb": duckdb.__version__}
+    for name in names:
+        try:
+            result[name.replace("-", "_")] = version(name)
+        except PackageNotFoundError:
+            result[name.replace("-", "_")] = None
+    return result
+
+
+def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: tuple[str, ...]) -> dict[str, Any]:
+    payload = ", ".join(f"coalesce(CAST({column} AS VARCHAR), '<null>')" for column in columns)
+    hash_expression = f"CAST(('0x' || substr(sha256(concat_ws('|', {payload})), 1, 16)) AS UBIGINT)"
+    row = connection.execute(
+        f"SELECT count(*), sum({hash_expression}), bit_xor({hash_expression}) FROM sampled WHERE split = '{split}'"
+    ).fetchone()
+    if row is None:
+        raise DatasetError(f"no content digest for split {split}")
+    return {"rows": int(row[0]), "sum64": int(row[1]), "xor64": int(row[2])}
+
+
 def _final_columns(calendar_set: str) -> tuple[str, ...]:
     spec = feature_spec(calendar_set)
     return tuple(dict.fromkeys((*AUDIT_COLUMNS, *spec.names)))
@@ -140,8 +179,6 @@ def _create_views(
         WHERE fare_lowest_eur IS NOT NULL
           AND departure_date <= DATE '{splits.test_end.isoformat()}'
           AND observed_at < departure_planned
-          AND date_diff('second', observed_at, departure_planned) / 3600.0
-              <= {label.max_hours_to_departure + 36}
         """
     )
     v2_rows = _scalar(
@@ -194,14 +231,23 @@ def _create_views(
     )
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW dedup AS
+        CREATE OR REPLACE TEMP VIEW dedup_candidates AS
         SELECT
-            series_key,
-            observed_at,
-            max(price_eur) AS price_eur,
-            max(load_factor_ordinal) AS load_factor_ordinal
+            *,
+            row_number() OVER (
+                PARTITION BY series_key, observed_at
+                ORDER BY price_eur DESC, load_factor_ordinal DESC NULLS LAST,
+                         train_number, departure_planned, arrival_planned, transfers_actual
+            ) AS dedup_rank
         FROM base_sampled
-        GROUP BY series_key, observed_at
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW dedup AS
+        SELECT series_key, observed_at, price_eur, load_factor_ordinal
+        FROM dedup_candidates
+        WHERE dedup_rank = 1
         """
     )
     connection.execute(
@@ -258,13 +304,15 @@ def _create_views(
                             THEN floor(hours_to_departure / {resample.outer_bin_hours})
                         ELSE floor(hours_to_departure / {resample.inner_bin_hours})
                     END
-                ORDER BY observed_at DESC, price_eur DESC, load_factor_ordinal DESC NULLS LAST
+                ORDER BY observed_at DESC, price_eur DESC, load_factor_ordinal DESC NULLS LAST,
+                         train_number DESC, departure_planned DESC, arrival_planned DESC,
+                         transfers_actual DESC NULLS LAST
             ) AS rn
         FROM cross_section
         """
     )
     connection.execute(
-        f"""
+        """
         CREATE OR REPLACE TEMP VIEW snapshot AS
         SELECT
             r.* EXCLUDE (rn),
@@ -275,7 +323,6 @@ def _create_views(
         FROM resampled r
         LEFT JOIN future f USING (series_key, observed_at)
         WHERE r.rn = 1
-          AND r.hours_to_departure BETWEEN {label.min_hours_to_departure} AND {label.max_hours_to_departure}
         """
     )
     connection.execute(
@@ -435,7 +482,10 @@ def _create_views(
         if missing:
             raise DatasetError(f"{missing} panel rows have no calendar coverage")
 
-    connection.execute("CREATE OR REPLACE TEMP TABLE sampled AS SELECT * FROM panel_calendar")
+    connection.execute(
+        f"CREATE OR REPLACE TEMP TABLE sampled AS SELECT * FROM panel_calendar "
+        f"WHERE hours_to_departure BETWEEN {label.min_hours_to_departure} AND {label.max_hours_to_departure}"
+    )
     null_splits = _scalar(connection, "SELECT count(*) FROM sampled WHERE split IS NULL")
     if null_splits:
         raise DatasetError(f"{null_splits} rows fall between configured splits; make the split dates contiguous")
@@ -568,6 +618,8 @@ def build_dataset(
     *,
     run_id: str,
     write_splits: bool = True,
+    cli_argv: tuple[str, ...] | None = None,
+    threads: int | None = None,
 ) -> DatasetStats:
     """Build the panel, profile it and write the Parquet splits."""
     started = time.perf_counter()
@@ -583,21 +635,6 @@ def build_dataset(
 
     _create_views(connection, source_sql, config, calendar_set)
 
-    v2 = _scalar(
-        connection,
-        "SELECT count(*) FROM base_all WHERE ("
-        f"departure_date <= DATE '{config.splits.train_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{config.splits.validation_select_start.isoformat()}' "
-        f"AND DATE '{config.splits.validation_select_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{config.splits.validation_calibrate_start.isoformat()}' "
-        f"AND DATE '{config.splits.validation_calibrate_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{config.splits.test_start.isoformat()}' "
-        f"AND DATE '{config.splits.test_end.isoformat()}') "
-        "AND (schema_version != 1 OR journey_id IS NOT NULL)",
-    )
-    if v2:
-        raise DatasetError(f"{v2} v2 rows fall inside the baseline splits; this baseline is v1-only")
-
     columns = _final_columns(calendar_set)
     missing = set(columns) - {row[0] for row in connection.execute("DESCRIBE SELECT * FROM sampled").fetchall()}
     if missing:
@@ -608,7 +645,8 @@ def build_dataset(
         for split in ("train", "validation_select", "validation_calibrate", "test"):
             target = dataset_dir / f"{split}.parquet"
             connection.execute(
-                f"COPY (SELECT {selected} FROM sampled WHERE split = '{split}') "
+                f"COPY (SELECT {selected} FROM sampled WHERE split = '{split}' "
+                f"ORDER BY series_key, snapshot_at, bin_regime, bin_index) "
                 f"TO '{sql_string(target.as_posix())}' (FORMAT parquet, COMPRESSION zstd)"
             )
             dataset_files.append(
@@ -617,6 +655,7 @@ def build_dataset(
                     "path": f"dataset/{target.name}",
                     "bytes": target.stat().st_size,
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                    **_content_digest(connection, split, columns),
                 }
             )
     splits = _split_stats(connection)
@@ -656,6 +695,7 @@ def build_dataset(
     if total_rows < 2_000_000:
         warnings.append(f"panel has {total_rows} rows; below the 2M target, raise sample_rate")
     stats = replace(stats, warnings=tuple(warnings))
+    git_sha, git_dirty = _git_state()
 
     manifest = {
         "manifest_version": 2,
@@ -663,6 +703,12 @@ def build_dataset(
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source": source.label,
         "source_rows": source_rows,
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
+        "uv_lock_sha256": _lock_sha256(),
+        "cli_argv": list(cli_argv or ()),
+        "threads": threads,
+        "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
         "silver_build_id": source.build_id,
         "silver_manifest_sha256": source.manifest_sha256,
         "config_sha256": config.hash(),
@@ -705,10 +751,7 @@ def build_dataset(
             "max_hours_to_departure": config.label.max_hours_to_departure,
         },
         "stats": stats.to_dict(),
-        "package_versions": {
-            "python": platform.python_version(),
-            "duckdb": duckdb.__version__,
-        },
+        "package_versions": _package_versions(),
         "warnings": list(warnings),
     }
     (out_dir / "dataset_manifest.json").write_text(

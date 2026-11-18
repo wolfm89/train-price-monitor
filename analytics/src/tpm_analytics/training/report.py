@@ -37,13 +37,14 @@ def _report(
     config: dict[str, Any],
     runner: str,
     ablation: dict[str, Any] | None = None,
+    provenance_lines: str = "",
 ) -> str:
     split_rows = [
         [item.split, item.rows, item.series, item.route_days, item.labelled, item.positives, item.positive_rate]
         for item in stats.splits
     ]
     candidate_rows = [
-        [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "pr_auc", "positive_rate")]]
+        [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
         for name, metrics in evaluation.candidates.items()
     ]
     headroom_rows = [
@@ -52,10 +53,11 @@ def _report(
             item["brier"],
             item["log_loss"],
             item["roc_auc"],
-            item["pr_auc"],
+            item["average_precision"],
             item["positive_rate"],
             item["mean_probability"],
             item["calibration_gap"],
+            item["bss_train"],
             item["precision_at_threshold"],
             item["recall_at_threshold"],
         ]
@@ -72,15 +74,34 @@ def _report(
         for item in stats.profile.get("coverage", [])
     ]
     era_rows = [[item["split"], item["observation_era"], item["rows"]] for item in stats.profile.get("era", [])]
-    warnings = "\n".join(f"- {warning}" for warning in stats.warnings) or "- none"
+    warning_items = list(stats.warnings)
+    if not evaluation.test.get("precision_floor_met_on_evaluation"):
+        warning_items.append("precision floor missed on the evaluated split")
+    if abs(float(evaluation.test.get("positive_rate") or 0.0) - evaluation.calibration_prevalence) > 0.02:
+        warning_items.append(
+            "prevalence shift between calibration and evaluation: "
+            f"{evaluation.calibration_prevalence:.3f} vs {evaluation.test.get('positive_rate')}"
+        )
+    for split in stats.splits:
+        share = split.labelled / split.rows if split.rows else 0.0
+        if share < 0.9:
+            warning_items.append(f"{split.split} has only {share:.1%} labelled rows")
+    if evaluation.dropped_features:
+        warning_items.append(f"constant/all-null features dropped: {', '.join(evaluation.dropped_features)}")
+    warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
     if ablation:
         rows = [
-            [name, item["validation_brier"], item["test_brier"], item["test_log_loss"], item["test_roc_auc"]]
+            [
+                name,
+                item["validation_brier"],
+                item["validation_log_loss"],
+                item["validation_roc_auc"],
+            ]
             for name, item in ablation.items()
         ]
         ablation_section = "\n## Calendar ablation\n\n" + _table(
-            ["feature set", "validation Brier", "test Brier", "test log loss", "test ROC-AUC"], rows
+            ["feature set", "validation Brier", "validation log loss", "validation ROC-AUC"], rows
         )
     split_caveat = (
         "The test split is a future-departure cohort, not a future-era holdout. "
@@ -114,26 +135,44 @@ def _report(
         f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.test.get('bss_train'))}"
     )
     test_all_line = (
-        f"- All labelled rows (including one-observation windows): "
-        f"Brier {_fmt(evaluation.test_all.get('brier'))}, "
-        f"ROC-AUC {_fmt(evaluation.test_all.get('roc_auc'))}. "
-        f"The headline uses two or more future observations."
+        (
+            f"- All labelled rows (including one-observation windows): "
+            f"Brier {_fmt(evaluation.test_all.get('brier'))}, "
+            f"ROC-AUC {_fmt(evaluation.test_all.get('roc_auc'))}. "
+            f"The headline uses two or more future observations."
+        )
+        if evaluation.test_all is not None
+        else "- Test was not evaluated; this report shows validation-calibrate only."
     )
     headroom_headers = [
         "headroom %",
         "Brier",
         "log loss",
         "ROC-AUC",
-        "PR-AUC",
+        "average precision",
         "positive rate",
         "mean prob",
         "gap",
+        "BSS train",
         "precision",
         "recall",
     ]
     risk_bands = (
         "Risk bands: `< 0.15` low, `0.15-0.35` watch, `>= 0.35` high. "
         "The threshold is a reporting choice, not a product decision."
+    )
+    eval_label = "Test" if evaluation.test_evaluated else "Validation-calibrate"
+    known_limitations = (
+        "## Known limitations\n\n"
+        "- The label is the maximum over scraped observations in the next 24 h; for most rows it is "
+        "one scrape about 13 h ahead. The >=2-scrape tier is selected on future information and its "
+        "mix follows scraper operations.\n"
+        "- Test snapshots overlap validation-calibrate weeks unless the run used a later forward "
+        "set; the September departure cohort has been evaluated before this run.\n"
+        "- These are development figures, not a production estimate. The product's hourly refresher "
+        "and 7-30 d booking window are not fully represented.\n"
+        "- Pooled metrics include headroom identification; per-headroom rows are the primary view.\n"
+        "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
 
@@ -148,6 +187,7 @@ def _report(
 {model_line}
 {split_line}
 {ttd_line}
+{provenance_lines}
 - {split_caveat}
 
 ## Dataset
@@ -164,25 +204,26 @@ def _report(
 
 ## Model comparison (cross-fitted validation-select)
 
-{_table(["model", "Brier", "log loss", "ROC-AUC", "PR-AUC", "positive rate"], candidate_rows)}
+{_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_rows)}
 {ablation_section}
 
-## Test metrics
+## {eval_label} metrics
 
 {brier_line}
 {logloss_line}
 {bss_line}
-- ROC-AUC: {_fmt(evaluation.test.get("roc_auc"))}; PR-AUC: {_fmt(evaluation.test.get("pr_auc"))}
+- ROC-AUC: {_fmt(evaluation.test.get("roc_auc"))}; average precision: {_fmt(evaluation.test.get("average_precision"))}
+- Prevalence: {_fmt(evaluation.test.get("positive_rate"))}
 - Precision at threshold: {_fmt(evaluation.test.get("precision_at_threshold"))}
 - Recall at threshold: {_fmt(evaluation.test.get("recall_at_threshold"))}
 - Headroom monotonic: {evaluation.test.get("headroom_monotonic")}
 - Evaluation tier: `{evaluation.test_tier}` ({evaluation.test_tier_rows} rows)
+- Precision floor met on evaluation: {evaluation.test.get("precision_floor_met_on_evaluation")}
 {test_all_line}
-- Precision floor met on test: {evaluation.test.get("precision_floor_met_on_test")}
 
 {risk_bands}
 
-## Per-headroom test metrics
+## Per-headroom evaluation metrics
 
 {_table(headroom_headers, headroom_rows)}
 
@@ -193,6 +234,8 @@ def _report(
 ## Permutation importance (validation-select sample)
 
 {_table(["feature", "Brier increase"], [[item["feature"], item["importance"]] for item in evaluation.importance[:15]])}
+
+{known_limitations}
 
 ## Warnings
 
@@ -211,7 +254,20 @@ def write_report(
     ablation: dict[str, Any] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.md").write_text(_report(stats, evaluation, spec, config, runner, ablation), encoding="utf-8")
+    dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
+    digests = ", ".join(
+        f"{item['split']}:{item.get('sum64')}:{item.get('xor64')}" for item in dataset_manifest.get("dataset_files", [])
+    )
+    provenance_lines = (
+        f"- Git: `{dataset_manifest.get('git_sha')}` (dirty: {dataset_manifest.get('git_dirty')})\n"
+        f"- Silver build: `{dataset_manifest.get('silver_build_id')}`\n"
+        f"- Config hash: `{dataset_manifest.get('config_sha256')}`\n"
+        f"- Dataset digests: `{digests}`"
+    )
+    (out_dir / "report.md").write_text(
+        _report(stats, evaluation, spec, config, runner, ablation, provenance_lines),
+        encoding="utf-8",
+    )
     payload = {
         "run_id": stats.run_id,
         "runner": runner,
@@ -219,6 +275,8 @@ def write_report(
         "dataset": stats.to_dict(),
         "feature_spec": {"calendar_set": spec.calendar_set, "features": list(spec.names)},
         "evaluation": evaluation.to_dict(),
+        "test_evaluated": evaluation.test_evaluated,
+        "evaluation_split": evaluation.evaluation_split,
     }
     if ablation is not None:
         payload["ablation"] = ablation
@@ -232,9 +290,10 @@ def write_report(
             evaluation.calibration[0], evaluation.calibration[1], evaluation.calibration[2], strict=True
         ):
             writer.writerow([float(prob), float(true), int(count)])
-    dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
     manifest = dict(dataset_manifest)
     manifest["config"] = config
+    manifest["test_evaluated"] = evaluation.test_evaluated
+    manifest["evaluation_split"] = evaluation.evaluation_split
     manifest["model"] = {
         "chosen": evaluation.chosen_model,
         "calibration": evaluation.calibration_method,
@@ -244,6 +303,7 @@ def write_report(
         "bootstrap": evaluation.bootstrap,
         "ablation": ablation,
         "runner": runner,
+        "dropped_features": list(evaluation.dropped_features),
         "package_versions": {
             "python": platform.python_version(),
             "numpy": numpy.__version__,
@@ -255,6 +315,8 @@ def write_report(
         "dataset/validation_select.parquet",
         "dataset/validation_calibrate.parquet",
         "dataset/test.parquet",
+        "dataset_manifest.json",
+        "profile.json",
         "report.md",
         "metrics.json",
         "calibration.csv",
