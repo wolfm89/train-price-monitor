@@ -17,7 +17,7 @@ from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
 from tpm_analytics.training.dataset import DatasetError, DatasetStats, build_dataset
 from tpm_analytics.training.features import feature_spec
-from tpm_analytics.training.model import _calibration_curve, load_split
+from tpm_analytics.training.model import _calibration_curve, fit_calibrator, load_split, train_and_evaluate
 from tpm_analytics.training.sources import SourceSpec
 
 SPLITS = {
@@ -332,6 +332,32 @@ def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
     for name in low.features:
         np.testing.assert_equal(low.features[name][low_index], high.features[name][high_index])
     assert float(low.future_max[low_index]) != float(high.future_max[high_index])
+
+
+def test_train_evaluate_is_permutation_invariant(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    splits = {
+        name: load_split(out / "dataset" / f"{name}.parquet", spec)
+        for name in ("train", "validation_select", "validation_calibrate", "test")
+    }
+    config = load_config(_config(tmp_path))
+    first, _, _ = train_and_evaluate(splits, spec, config)
+    rng = np.random.default_rng(11)
+    shuffled = {name: data.subset(rng.permutation(len(data))) for name, data in splits.items()}
+    second, _, _ = train_and_evaluate(shuffled, spec, config)
+    assert first.test["brier"] == pytest.approx(second.test["brier"], rel=1e-6)
+    assert first.test["log_loss"] == pytest.approx(second.test["log_loss"], rel=1e-6)
+
+
+def test_calibrator_outputs_are_bounded() -> None:
+    rng = np.random.default_rng(5)
+    raw = rng.random(1000)
+    y = rng.integers(0, 2, size=1000)
+    calibrator = fit_calibrator(raw, y, "isotonic", min_positives=1)
+    probabilities = calibrator.predict(raw)
+    assert probabilities.min() >= 1e-3
+    assert probabilities.max() <= 1.0 - 1e-3
 
 
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
