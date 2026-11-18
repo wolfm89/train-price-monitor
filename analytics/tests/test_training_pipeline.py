@@ -16,9 +16,19 @@ import pytest
 
 from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
-from tpm_analytics.training.dataset import DatasetError, DatasetStats, build_dataset
+from tpm_analytics.training.dataset import DatasetError, DatasetStats, SplitStats, build_dataset
 from tpm_analytics.training.features import feature_spec
-from tpm_analytics.training.model import _calibration_curve, fit_calibrator, load_split, train_and_evaluate
+from tpm_analytics.training.model import (
+    Evaluation,
+    TabularData,
+    _bss_train,
+    _calibration_curve,
+    _train_prevalence,
+    fit_calibrator,
+    load_split,
+    train_and_evaluate,
+)
+from tpm_analytics.training.report import _warnings
 from tpm_analytics.training.sources import SourceSpec
 
 SPLITS = {
@@ -585,6 +595,112 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
         connection.close()
     assert (54.0, "12h") in regimes
     assert (30.0, "1h") in regimes
+
+
+def _tabular(y: np.ndarray, future_observations: np.ndarray, headroom: np.ndarray) -> TabularData:
+    size = len(y)
+    return TabularData(
+        features={},
+        y=y,
+        series=np.array([f"s{index}" for index in range(size)], dtype=object),
+        route_day=np.arange(size, dtype=np.int64),
+        price=np.full(size, 80.0, dtype=np.float64),
+        future_max=np.full(size, 90.0, dtype=np.float64),
+        future_observations=future_observations,
+        headroom=headroom,
+        departure_date=np.full(size, "2026-07-01", dtype=object),
+    )
+
+
+def _evaluation(
+    *, test_evaluated: bool, calibration_prevalence: float, train_prevalence: float, positive_rate: float
+) -> Evaluation:
+    return Evaluation(
+        chosen_model="logistic",
+        calibration_method="isotonic",
+        threshold=0.5,
+        threshold_precision_floor_met=True,
+        candidates={},
+        test={
+            "brier": 0.2,
+            "log_loss": 0.5,
+            "roc_auc": 0.7,
+            "average_precision": 0.5,
+            "positive_rate": positive_rate,
+            "precision_floor_met_on_evaluation": True,
+            "headroom_monotonic": True,
+        },
+        test_all=None,
+        test_tier="two_plus_observations",
+        test_tier_rows=1_000,
+        evaluation_split="test" if test_evaluated else "validation_calibrate",
+        test_evaluated=test_evaluated,
+        calibration_prevalence=calibration_prevalence,
+        train_prevalence=train_prevalence,
+        dropped_features=(),
+        calibration=(np.array([0.2]), np.array([0.2]), np.array([10])),
+        headroom=(),
+        importance=(),
+        bootstrap={"brier": [0.1, 0.3], "log_loss": [0.4, 0.6]},
+        split_sizes={"train": 1_000},
+    )
+
+
+def _stats() -> DatasetStats:
+    return DatasetStats(
+        run_id="warnings",
+        rows=1_000,
+        labelled_rows=1_000,
+        series=100,
+        route_days=10,
+        splits=(
+            SplitStats(
+                "train", rows=1_000, series=100, route_days=10, labelled=1_000, positives=240, positive_rate=0.24
+            ),
+        ),
+        duration_seconds=1.0,
+    )
+
+
+def test_train_prevalence_matches_evaluated_tier() -> None:
+    train = _tabular(
+        y=np.array([1, 0, 1, 0], dtype=np.int8),
+        future_observations=np.array([1, 3, 3, 5], dtype=np.int16),
+        headroom=np.array([1, 5, 10, 5], dtype=np.int32),
+    )
+    assert _train_prevalence(train, "all_labelled_rows") == pytest.approx(0.5)
+    assert _train_prevalence(train, "two_plus_observations") == pytest.approx(1 / 3)
+
+
+def test_bss_train_uses_matching_train_prevalence() -> None:
+    labels = np.array(([1] * 239) + ([0] * 761), dtype=np.int8)
+    matching = _bss_train(0.11115, labels, 0.2704)
+    inflated = _bss_train(0.11115, labels, 0.134)
+    assert matching == pytest.approx(0.392, abs=0.002)
+    assert inflated == pytest.approx(0.424, abs=0.002)
+    assert matching is not None
+    assert inflated is not None
+    assert inflated > matching  # all-labelled train prevalence inflates the score
+
+
+def test_prevalence_warnings_are_formatted_and_gated() -> None:
+    evaluated = _evaluation(
+        test_evaluated=True,
+        calibration_prevalence=0.27037560714730513,
+        train_prevalence=0.27037560714730513,
+        positive_rate=0.2392969572255863,
+    )
+    warnings = _warnings(_stats(), evaluated)
+    assert "prevalence shift between calibration and evaluation: 0.270 vs 0.239" in warnings
+    assert "prevalence shift between train and evaluation: 0.270 vs 0.239" in warnings
+    assert all("0.27037560714730513" not in warning for warning in warnings)
+    validation_only = _evaluation(
+        test_evaluated=False,
+        calibration_prevalence=0.27037560714730513,
+        train_prevalence=0.2392969572255863,
+        positive_rate=0.2392969572255863,
+    )
+    assert not any("calibration and evaluation" in warning for warning in _warnings(_stats(), validation_only))
 
 
 def test_calibration_counts_match_quantile_bins() -> None:

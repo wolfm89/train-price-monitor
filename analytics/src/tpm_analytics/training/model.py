@@ -87,6 +87,20 @@ class TabularData:
         )
 
 
+def _train_prevalence(train: TabularData, tier: str) -> float:
+    """Event rate on the same population as the evaluated tier."""
+    rows = train.subset(train.future_observations >= 2) if tier == "two_plus_observations" else train
+    return float(np.mean(rows.y)) if len(rows) else float("nan")
+
+
+def _bss_train(brier: float | None, labels: Array, train_rate: float) -> float | None:
+    """Brier skill against a constant predictor at the matching train prevalence."""
+    if brier is None:
+        return None
+    reference = float(np.mean((labels - train_rate) ** 2))
+    return 1.0 - float(brier) / reference if reference > 0 else None
+
+
 def _filled(values: Any, fill: float) -> Array:
     if isinstance(values, np.ma.MaskedArray):
         return np.asarray(values.astype(np.float32).filled(fill), dtype=np.float32)
@@ -740,8 +754,7 @@ def train_and_evaluate(
     )
     test_metrics = _metrics(eval_rows.y, calibrated_eval)
     train_rate = float(np.mean(train_eval.y))
-    reference = float(np.mean((eval_rows.y - train_rate) ** 2))
-    test_metrics["bss_train"] = 1.0 - _metric_value(test_metrics["brier"]) / reference if reference > 0 else None
+    test_metrics["bss_train"] = _bss_train(test_metrics["brier"], eval_rows.y, train_rate)
     test_metrics["threshold"] = threshold
     test_metrics.update(_decision_metrics(eval_rows.y, calibrated_eval, threshold))
     test_metrics["precision_floor_met_on_evaluation"] = bool(
@@ -773,8 +786,7 @@ def train_and_evaluate(
         item["recall_at_threshold"] = decisions["recall_at_threshold"]
         train_headroom = train_eval.y[train_eval.headroom == value]
         train_rate_h = float(np.mean(train_headroom)) if len(train_headroom) else train_rate
-        reference_h = float(np.mean((y_headroom - train_rate_h) ** 2))
-        item["bss_train"] = 1.0 - item["brier"] / reference_h if reference_h > 0 and item["brier"] is not None else None
+        item["bss_train"] = _bss_train(item["brier"], y_headroom, train_rate_h)
         headroom_probabilities.append(probabilities)
         headroom.append(item)
 

@@ -31,6 +31,33 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
+def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
+    warning_items = list(stats.warnings)
+    positives = float(evaluation.test.get("positive_rate") or 0.0)
+    if not evaluation.test.get("precision_floor_met_on_evaluation"):
+        warning_items.append("precision floor missed on the evaluated split")
+    if evaluation.test_evaluated and abs(positives - evaluation.calibration_prevalence) > 0.02:
+        warning_items.append(
+            "prevalence shift between calibration and evaluation: "
+            f"{evaluation.calibration_prevalence:.3f} vs {positives:.3f}"
+        )
+    if not numpy.isfinite(evaluation.train_prevalence):
+        warning_items.append("no training rows match the evaluated tier; BSS vs train is unavailable")
+    elif abs(positives - evaluation.train_prevalence) > 0.02:
+        warning_items.append(
+            f"prevalence shift between train and evaluation: {evaluation.train_prevalence:.3f} vs {positives:.3f}"
+        )
+    if not evaluation.test.get("headroom_monotonic"):
+        warning_items.append("calibrated breach probability is not monotone across headroom")
+    for split in stats.splits:
+        share = split.labelled / split.rows if split.rows else 0.0
+        if share < 0.9:
+            warning_items.append(f"{split.split} has only {share:.1%} labelled rows")
+    if evaluation.dropped_features:
+        warning_items.append(f"constant/all-null features dropped: {', '.join(evaluation.dropped_features)}")
+    return warning_items
+
+
 def _report(
     stats: DatasetStats,
     evaluation: Evaluation,
@@ -75,27 +102,7 @@ def _report(
         for item in stats.profile.get("coverage", [])
     ]
     era_rows = [[item["split"], item["observation_era"], item["rows"]] for item in stats.profile.get("era", [])]
-    warning_items = list(stats.warnings)
-    if not evaluation.test.get("precision_floor_met_on_evaluation"):
-        warning_items.append("precision floor missed on the evaluated split")
-    if abs(float(evaluation.test.get("positive_rate") or 0.0) - evaluation.calibration_prevalence) > 0.02:
-        warning_items.append(
-            "prevalence shift between calibration and evaluation: "
-            f"{evaluation.calibration_prevalence:.3f} vs {evaluation.test.get('positive_rate')}"
-        )
-    if abs(float(evaluation.test.get("positive_rate") or 0.0) - evaluation.train_prevalence) > 0.02:
-        warning_items.append(
-            "prevalence shift between train and evaluation: "
-            f"{evaluation.train_prevalence:.3f} vs {evaluation.test.get('positive_rate')}"
-        )
-    if not evaluation.test.get("headroom_monotonic"):
-        warning_items.append("calibrated breach probability is not monotone across headroom")
-    for split in stats.splits:
-        share = split.labelled / split.rows if split.rows else 0.0
-        if share < 0.9:
-            warning_items.append(f"{split.split} has only {share:.1%} labelled rows")
-    if evaluation.dropped_features:
-        warning_items.append(f"constant/all-null features dropped: {', '.join(evaluation.dropped_features)}")
+    warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
     if ablation:
@@ -171,6 +178,12 @@ def _report(
         "The threshold is a reporting choice, not a product decision."
     )
     eval_label = "Test" if evaluation.test_evaluated else "Validation-calibrate"
+    threshold_caveat = (
+        "- Validation precision and recall use the same validation-calibrate rows that selected the "
+        "threshold; they are optimistic.\n"
+        if not evaluation.test_evaluated
+        else ""
+    )
     known_limitations = (
         "## Known limitations\n\n"
         "- The label is the maximum over scraped observations in the next 24 h; for most rows it is "
@@ -181,10 +194,9 @@ def _report(
         "- These are development figures, not a production estimate. The product's hourly refresher "
         "and 7-30 d booking window are not fully represented.\n"
         "- Pooled metrics include headroom identification; per-headroom rows are the primary view.\n"
-        "- Validation precision and recall use the same validation-calibrate rows that selected the "
-        "threshold; they are optimistic.\n"
-        "- The validation headline uses the two-or-more-scrape tier while the model comparison table "
-        "uses all validation-select rows.\n"
+        f"{threshold_caveat}"
+        "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
+        "validation-select rows.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
