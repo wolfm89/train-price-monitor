@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -234,6 +235,25 @@ def test_v2_row_in_a_split_fails(tmp_path: Path) -> None:
             )
     finally:
         connection.close()
+
+
+def test_headroom_bucket_assignment_is_golden(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(
+            "SELECT series_key, snapshot_at, headroom_pct "
+            "FROM read_parquet(?) ORDER BY series_key, snapshot_at, bin_regime, bin_index LIMIT 20",
+            [str(out / "dataset" / "train.parquet")],
+        ).fetchall()
+    finally:
+        connection.close()
+    grid = (1, 5, 10, 20, 30)
+    assert rows
+    for series_key, snapshot_at, actual in rows:
+        payload = f"{series_key}|{snapshot_at.strftime('%Y-%m-%d %H:%M:%S')}".encode()
+        bucket = int(hashlib.sha256(payload).hexdigest()[:8], 16) % len(grid)
+        assert actual == grid[bucket]
 
 
 def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
