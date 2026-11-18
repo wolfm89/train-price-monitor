@@ -405,6 +405,8 @@ class Evaluation:
     candidates: dict[str, dict[str, float | None]]
     test: dict[str, Any]
     test_all: dict[str, Any]
+    test_tier: str
+    test_tier_rows: int
     calibration: tuple[Array, Array, Array]
     headroom: tuple[dict[str, Any], ...]
     importance: tuple[dict[str, Any], ...]
@@ -420,6 +422,8 @@ class Evaluation:
             "candidates": self.candidates,
             "test": self.test,
             "test_all": self.test_all,
+            "test_tier": self.test_tier,
+            "test_tier_rows": self.test_tier_rows,
             "calibration": {
                 "prob_pred": [float(value) for value in self.calibration[0]],
                 "prob_true": [float(value) for value in self.calibration[1]],
@@ -610,29 +614,36 @@ def train_and_evaluate(
         )
         oof_predictions[method] = oof
         method_scores[method] = _metrics(cal_data.y, oof)
-    calibration_method = min(method_scores, key=lambda name: float(method_scores[name]["brier"] or 1.0))
+    requested_method = min(method_scores, key=lambda name: float(method_scores[name]["brier"] or 1.0))
     calibrator = fit_calibrator(
         raw_cal,
         cal_data.y,
-        calibration_method,
+        requested_method,
         min_positives=config.calibration.min_positives,
     )
-    calibration_method = calibrator.method
     threshold, threshold_met = _threshold(
         cal_data.y,
-        oof_predictions[calibration_method],
+        oof_predictions[requested_method],
         config.report.threshold_precision_floor,
     )
+    calibration_method = calibrator.method
 
     raw_test = model.predict(test)
     test_all = _metrics(test.y, calibrator.predict(raw_test))
     evidence = test.future_observations >= 2
-    test_eval = test.subset(evidence) if int(evidence.sum()) >= 100 else test
+    evidence_rows = int(evidence.sum())
+    if evidence_rows >= 100:
+        test_eval = test.subset(evidence)
+        test_tier = "two_plus_observations"
+    else:
+        test_eval = test
+        test_tier = "all_labelled_rows"
+    test_tier_rows = len(test_eval)
     raw_test_eval = model.predict(test_eval)
     calibrated_test = calibrator.predict(raw_test_eval)
     test_metrics = _metrics(test_eval.y, calibrated_test)
     train_rate = float(np.mean(train.y))
-    reference = train_rate * (1.0 - train_rate)
+    reference = float(np.mean((test_eval.y - train_rate) ** 2))
     test_metrics["bss_train"] = 1.0 - _metric_value(test_metrics["brier"]) / reference if reference > 0 else None
     test_metrics["threshold"] = threshold
     test_metrics.update(_decision_metrics(test_eval.y, calibrated_test, threshold))
@@ -659,7 +670,7 @@ def train_and_evaluate(
         item["recall_at_threshold"] = decisions["recall_at_threshold"]
         train_headroom = train.y[train.headroom == value]
         train_rate_h = float(np.mean(train_headroom)) if len(train_headroom) else train_rate
-        reference_h = train_rate_h * (1.0 - train_rate_h)
+        reference_h = float(np.mean((y_headroom - train_rate_h) ** 2))
         item["bss_train"] = 1.0 - item["brier"] / reference_h if reference_h > 0 and item["brier"] is not None else None
         headroom.append(item)
 
@@ -676,6 +687,8 @@ def train_and_evaluate(
         candidates=candidate_metrics,
         test=test_metrics,
         test_all=test_all,
+        test_tier=test_tier,
+        test_tier_rows=test_tier_rows,
         calibration=(prob_pred, prob_true, counts),
         headroom=tuple(headroom),
         importance=importance,

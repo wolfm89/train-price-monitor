@@ -379,6 +379,16 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     index = int(np.flatnonzero(data.price == 100.0)[0])
     assert float(data.features["price_change_24h"][index]) == pytest.approx(10.0)
     assert float(data.features["price_velocity_24h"][index]) == pytest.approx(10.0 / 24.0)
+    connection = duckdb.connect()
+    try:
+        regimes = connection.execute(
+            "SELECT hours_to_departure, bin_regime FROM read_parquet(?) ORDER BY hours_to_departure",
+            [str(tmp_path / "lag-run" / "dataset" / "train.parquet")],
+        ).fetchall()
+    finally:
+        connection.close()
+    assert (54.0, "12h") in regimes
+    assert (30.0, "1h") in regimes
 
 
 def test_calibration_counts_match_quantile_bins() -> None:

@@ -176,6 +176,7 @@ def _report(
 - Precision at threshold: {_fmt(evaluation.test.get("precision_at_threshold"))}
 - Recall at threshold: {_fmt(evaluation.test.get("recall_at_threshold"))}
 - Headroom monotonic: {evaluation.test.get("headroom_monotonic")}
+- Evaluation tier: `{evaluation.test_tier}` ({evaluation.test_tier_rows} rows)
 {test_all_line}
 - Precision floor met on test: {evaluation.test.get("precision_floor_met_on_test")}
 
