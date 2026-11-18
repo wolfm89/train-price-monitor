@@ -166,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
             config.to_dict(),
             runner="local",
             ablation=ablation,
+            build_config=build_config.to_dict(),
         )
         summary = {
             "run_id": run_id,

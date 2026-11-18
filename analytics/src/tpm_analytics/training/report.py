@@ -253,6 +253,7 @@ def write_report(
     *,
     runner: str,
     ablation: dict[str, Any] | None = None,
+    build_config: dict[str, Any] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
@@ -263,7 +264,7 @@ def write_report(
     provenance_lines = (
         f"- Git: `{dataset_manifest.get('git_sha')}` (dirty: {dataset_manifest.get('git_dirty')})\n"
         f"- Silver build: `{dataset_manifest.get('silver_build_id')}`\n"
-        f"- Config hash: `{dataset_manifest.get('config_sha256')}`\n"
+        f"- Build config hash: `{dataset_manifest.get('config_sha256')}`\n"
         f"- Evaluation config hash: `{evaluation_hash}`\n"
         f"- Dataset digests: `{digests}`"
     )
@@ -294,6 +295,8 @@ def write_report(
         ):
             writer.writerow([float(prob), float(true), int(count)])
     manifest = dict(dataset_manifest)
+    manifest["build_config"] = build_config or config
+    manifest["build_config_sha256"] = dataset_manifest.get("config_sha256")
     manifest["config"] = config
     manifest["evaluation_config_sha256"] = hashlib.sha256(
         json.dumps(config, sort_keys=True, default=str).encode()
