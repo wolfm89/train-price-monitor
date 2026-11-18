@@ -380,6 +380,50 @@ def test_calibrator_outputs_are_bounded() -> None:
     assert probabilities.max() <= 1.0 - 1e-3
 
 
+def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
+    source = tmp_path / "empty-split.parquet"
+    _write_silver(
+        source,
+        [
+            _row(
+                observed_at=datetime(2026, 7, 1, 10, 0),
+                departure=datetime(2026, 7, 5, 10, 0),
+                route="train",
+                train="ICE1",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 26, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE2",
+                fare=80.0,
+            ),
+        ],
+    )
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["splits"] = SPLITS
+    raw["calendar"]["feature_set"] = "none"
+    raw["sample"]["sample_rate"] = 1.0
+    raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_label_coverage"] = 0.0
+    config_path = tmp_path / "empty-split.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        with pytest.raises(DatasetError, match="missing split"):
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(source), label="empty", build_id=None, manifest_sha256=None),
+                config,
+                tmp_path / "empty-run",
+                run_id="empty",
+            )
+    finally:
+        connection.close()
+
+
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
     raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     raw["splits"]["validation_select_start"] = raw["splits"]["train_end"]

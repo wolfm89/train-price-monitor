@@ -113,7 +113,11 @@ def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: 
     ).fetchone()
     if row is None:
         raise DatasetError(f"no content digest for split {split}")
-    return {"rows": int(row[0]), "sum64": int(row[1]), "xor64": int(row[2])}
+    return {
+        "rows": int(row[0]),
+        "sum64": int(row[1] or 0),
+        "xor64": int(row[2] or 0),
+    }
 
 
 def _final_columns(calendar_set: str) -> tuple[str, ...]:
