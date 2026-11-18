@@ -376,18 +376,15 @@ def _create_views(
         SELECT
             * EXCLUDE (ref_at, ref_gap_h, ref_price, ref_load_factor),
             CASE
-                WHEN (bin_regime = '1h' AND ref_gap_h BETWEEN 23 AND 26)
-                  OR (bin_regime = '12h' AND ref_gap_h BETWEEN 24 AND 36)
+                WHEN ref_gap_h BETWEEN 23 AND 36
                 THEN price_eur - ref_price
             END AS price_change_24h,
             CASE
-                WHEN (bin_regime = '1h' AND ref_gap_h BETWEEN 23 AND 26)
-                  OR (bin_regime = '12h' AND ref_gap_h BETWEEN 24 AND 36)
+                WHEN ref_gap_h BETWEEN 23 AND 36
                 THEN (price_eur - ref_price) / nullif(ref_gap_h, 0)
             END AS price_velocity_24h,
             CASE
-                WHEN (bin_regime = '1h' AND ref_gap_h BETWEEN 23 AND 26)
-                  OR (bin_regime = '12h' AND ref_gap_h BETWEEN 24 AND 36)
+                WHEN ref_gap_h BETWEEN 23 AND 36
                 THEN load_factor_ordinal - ref_load_factor
             END AS load_factor_change_24h
         FROM (
