@@ -48,3 +48,22 @@ run = "rm -rf dist .pytest_cache .ruff_cache"
 [tasks."silver:local"]
 description = "Build silver from a local bronze glob; pass --source <glob> --target <dir> after --"
 run = "uv run python -m tpm_analytics.silver.build"
+
+[tasks.train]
+description = "Build the baseline training set and report; pass --source <pointer|glob> after --"
+run = "uv run --group train python -m tpm_analytics.training.cli"
+env = { DUCKDB_EXTENSION_DIR = "{{config_root}}/.duckdb-extensions" }
+
+[tasks."train:profile"]
+description = "Profile the training source without training"
+run = "uv run --group train python -m tpm_analytics.training.cli --profile"
+env = { DUCKDB_EXTENSION_DIR = "{{config_root}}/.duckdb-extensions" }
+
+[tasks."train:ablation"]
+description = "Run the four calendar feature sets on one full dataset"
+run = "uv run --group train python -m tpm_analytics.training.cli --ablation"
+env = { DUCKDB_EXTENSION_DIR = "{{config_root}}/.duckdb-extensions" }
+
+[tasks."train:clean"]
+description = "Remove local training artifacts"
+run = "rm -rf artifacts"

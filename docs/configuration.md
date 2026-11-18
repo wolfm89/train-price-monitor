@@ -116,9 +116,11 @@ values directly.
 
 ## Analytics local
 
-| Variable               | Scope     | Default / deployed | Set by    | Purpose                                                                                         |
-| ---------------------- | --------- | ------------------ | --------- | ----------------------------------------------------------------------------------------------- |
-| `DUCKDB_EXTENSION_DIR` | Analytics | unset              | developer | Directory with the bundled httpfs extension for local S3 reads (`mise run //analytics:httpfs`). |
+| Variable                     | Scope     | Default / deployed | Set by    | Purpose                                                                                                                         |
+| ---------------------------- | --------- | ------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `DUCKDB_EXTENSION_DIR`       | Analytics | unset              | developer | Directory with the bundled httpfs extension for local S3 reads (`mise run //analytics:httpfs`); required for `--source s3://…`. |
+| `TRAIN_DUCKDB_MEMORY_LIMIT`  | Analytics | `6GB`              | developer | DuckDB memory limit for the local training builder.                                                                             |
+| `TRAIN_DUCKDB_MAX_TEMP_SIZE` | Analytics | `8GB`              | developer | DuckDB spill cap for the local training builder.                                                                                |
 
 ## Alerting
 

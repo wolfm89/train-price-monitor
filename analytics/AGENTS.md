@@ -15,6 +15,23 @@ uv run ruff format . # format
 uv build             # wheel + sdist with assets
 ```
 
+Training uses an optional group; the Lambda image must not install it:
+
+```bash
+uv sync --group train
+uv run --group train pytest
+uv run --group train ty check
+mise run //analytics:train -- --source .data/silver/<build>
+mise run //analytics:train:ablation -- --source .data/silver/<build>
+```
+
+The `train` group adds numpy, scikit-learn and scipy only. CI installs it for the analytics job and the
+manual pre-commit `ty` hook; `uv export --no-dev` must keep it out of the Lambda image.
+
+S3 credentials are frozen into a temporary DuckDB secret for the run. IAM Identity Center role
+sessions default to one hour; for a long scan, download the silver build to `analytics/.data/` and
+run locally instead of holding an S3 scan open.
+
 From the repository root: `mise run //analytics:test`, `mise run //analytics:lint`,
 `mise run //analytics:typecheck`, `mise run //analytics:build` and `mise run //analytics:format`.
 Use `uv` and the committed `uv.lock`; never `pip install` ad hoc and never add a
@@ -83,6 +100,24 @@ v2-only and mixed-schema input.
 - Schema, filters (local and North Frisian/Halligen exceptions), columns and feature definitions:
   `src/tpm_analytics/data/README.md`.
 - Adding a station state or calendar year updates the data and tests, not the poller or Lambda.
+
+## Baseline training
+
+- The baseline is **v1-only**. `journey_id` starts with schema v2 on 2026-11-13; a v2 row inside a
+  baseline split fails the build. Do not mix v1 and v2 series keys in one split.
+- The label domain is `24 h <= hours_to_departure <= 30 d`. The dataset stores
+  `future_max_fare_24h`, `future_observations` and `label_window_end`; every headroom label is
+  derived from that evidence. Never train on `future_*`, `label_*` or `limit_eur`.
+- The model matrix is an allowlist from `features.py`, not "all columns minus exclusions". Null
+  numerics must arrive as `NaN` plus indicators, never as zero; a test covers the DuckDB→numpy
+  handoff.
+- Sample whole **route-days**, not rows or individual series, so the route-day cross-section stays
+  intact. Compute cross-sectional features before the sample.
+- Calibrate on `validation_calibrate`, never on `validation_select` or test. Test is reported once.
+- Training artifacts are local and ignored. Downloaded silver goes under `analytics/.data/`; never
+  commit it or upload the dataset to S3 from this module.
+- The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
+  claim post-fix generalization.
 
 Update `README.md` for schema, quality or runbook changes and
 [docs/configuration.md](../docs/configuration.md) for new environment variables.

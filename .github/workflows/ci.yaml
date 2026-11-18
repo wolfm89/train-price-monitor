@@ -171,10 +171,10 @@ jobs:
         with:
           version: '0.13.8'
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --group train
       # ruff and ruff-format run in pre-commit.ci; only project-scoped checks stay here.
-      - run: uv run ty check --output-format github
-      - run: uv run pytest
+      - run: uv run --group train ty check --output-format github
+      - run: uv run --group train pytest
       # The package ships sql/ and data/ inside the module; this fails if they stop being packaged.
       - run: uv build
       - name: Verify the wheel ships the SQL, station dimension and config
