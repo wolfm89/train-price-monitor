@@ -214,6 +214,7 @@ def write_report(
     payload = {
         "run_id": stats.run_id,
         "runner": runner,
+        "config": config,
         "dataset": stats.to_dict(),
         "feature_spec": {"calendar_set": spec.calendar_set, "features": list(spec.names)},
         "evaluation": evaluation.to_dict(),
@@ -232,6 +233,7 @@ def write_report(
             writer.writerow([float(prob), float(true), int(count)])
     dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
     manifest = dict(dataset_manifest)
+    manifest["config"] = config
     manifest["model"] = {
         "chosen": evaluation.chosen_model,
         "calibration": evaluation.calibration_method,

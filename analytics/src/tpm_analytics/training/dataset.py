@@ -653,7 +653,7 @@ def build_dataset(
     stats = replace(stats, warnings=tuple(warnings))
 
     manifest = {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "run_id": run_id,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source": source.label,
