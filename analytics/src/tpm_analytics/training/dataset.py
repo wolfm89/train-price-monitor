@@ -204,7 +204,8 @@ def _create_views(
         connection.execute(
             f"CREATE OR REPLACE TEMP VIEW selected_route_days AS "
             f"SELECT route_id, departure_date, route_day_hash FROM ("
-            f"SELECT DISTINCT route_id, departure_date, route_day_hash FROM base_all"
+            f"SELECT DISTINCT route_id, departure_date, route_day_hash FROM base_all "
+            f"WHERE route_day_hash < {threshold}"
             f") ORDER BY route_day_hash, route_id, departure_date LIMIT {config.sample.max_route_days}"
         )
         connection.execute(
