@@ -68,7 +68,7 @@ def _ablation(
         primary_set: {
             "chosen_model": primary.chosen_model,
             "calibration": primary.calibration_method,
-            "validation_brier": primary.candidates[primary.chosen_model]["brier"],
+            "validation_brier": primary.test.get("brier"),
             "validation_log_loss": primary.test.get("log_loss"),
             "validation_roc_auc": primary.test.get("roc_auc"),
         }
@@ -82,7 +82,7 @@ def _ablation(
         results[calendar_set] = {
             "chosen_model": evaluation.chosen_model,
             "calibration": evaluation.calibration_method,
-            "validation_brier": evaluation.candidates[evaluation.chosen_model]["brier"],
+            "validation_brier": evaluation.test.get("brier"),
             "validation_log_loss": evaluation.test.get("log_loss"),
             "validation_roc_auc": evaluation.test.get("roc_auc"),
         }

@@ -258,6 +258,32 @@ def _create_views(
         """
     )
     connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW raw_features AS
+        SELECT
+            *,
+            price_eur - min(price_eur) OVER (
+                PARTITION BY series_key ORDER BY observed_at
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS price_vs_series_min,
+            price_eur / median(price_eur) OVER (
+                PARTITION BY series_key ORDER BY observed_at
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS price_vs_series_median,
+            min(price_eur) OVER (
+                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
+                RANGE BETWEEN 168 PRECEDING AND CURRENT ROW
+            ) AS price_min_7d,
+            max(price_eur) OVER (
+                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
+                RANGE BETWEEN 168 PRECEDING AND CURRENT ROW
+            ) AS price_max_7d,
+            date_diff('second', min(observed_at) OVER (PARTITION BY series_key), observed_at) / 3600.0
+                AS history_depth_h
+        FROM dedup
+        """
+    )
+    connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW future AS
         SELECT
@@ -367,8 +393,7 @@ def _create_views(
         CREATE OR REPLACE TEMP VIEW features_base AS
         SELECT
             *,
-            lag(price_eur) OVER (PARTITION BY series_key ORDER BY observed_at) AS prev_price,
-            min(observed_at) OVER (PARTITION BY series_key) AS first_observed_at
+            lag(price_eur) OVER (PARTITION BY series_key ORDER BY observed_at) AS prev_price
         FROM split_rows
         """
     )
@@ -376,35 +401,24 @@ def _create_views(
         """
         CREATE OR REPLACE TEMP VIEW features_window AS
         SELECT
-            * EXCLUDE (prev_price, first_observed_at),
-            price_eur - min(price_eur) OVER (
-                PARTITION BY series_key ORDER BY observed_at
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS price_vs_series_min,
-            price_eur / median(price_eur) OVER (
-                PARTITION BY series_key ORDER BY observed_at
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS price_vs_series_median,
-            min(price_eur) OVER (
-                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
-                RANGE BETWEEN 168 PRECEDING AND CURRENT ROW
-            ) AS price_min_7d,
-            max(price_eur) OVER (
-                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
-                RANGE BETWEEN 168 PRECEDING AND CURRENT ROW
-            ) AS price_max_7d,
+            p.* EXCLUDE (prev_price),
+            r.price_vs_series_min,
+            r.price_vs_series_median,
+            r.price_min_7d,
+            r.price_max_7d,
+            r.history_depth_h,
             sum(
                 CASE
-                    WHEN prev_price IS NOT NULL
-                     AND abs(price_eur - prev_price) / nullif(prev_price, 0) > 0.05
+                    WHEN p.prev_price IS NOT NULL
+                     AND abs(p.price_eur - p.prev_price) / nullif(p.prev_price, 0) > 0.05
                     THEN 1 ELSE 0
                 END
             ) OVER (
-                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
+                PARTITION BY p.series_key ORDER BY epoch(p.observed_at) / 3600.0
                 RANGE BETWEEN 24 PRECEDING AND CURRENT ROW
-            ) AS price_jumps_24h,
-            date_diff('second', first_observed_at, observed_at) / 3600.0 AS history_depth_h
-        FROM features_base
+            ) AS price_jumps_24h
+        FROM features_base p
+        JOIN raw_features r USING (series_key, observed_at)
         """
     )
     connection.execute(

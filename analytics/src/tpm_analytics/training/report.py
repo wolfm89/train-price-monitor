@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import platform
 from pathlib import Path
@@ -258,10 +259,12 @@ def write_report(
     digests = ", ".join(
         f"{item['split']}:{item.get('sum64')}:{item.get('xor64')}" for item in dataset_manifest.get("dataset_files", [])
     )
+    evaluation_hash = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
     provenance_lines = (
         f"- Git: `{dataset_manifest.get('git_sha')}` (dirty: {dataset_manifest.get('git_dirty')})\n"
         f"- Silver build: `{dataset_manifest.get('silver_build_id')}`\n"
         f"- Config hash: `{dataset_manifest.get('config_sha256')}`\n"
+        f"- Evaluation config hash: `{evaluation_hash}`\n"
         f"- Dataset digests: `{digests}`"
     )
     (out_dir / "report.md").write_text(
@@ -292,6 +295,9 @@ def write_report(
             writer.writerow([float(prob), float(true), int(count)])
     manifest = dict(dataset_manifest)
     manifest["config"] = config
+    manifest["evaluation_config_sha256"] = hashlib.sha256(
+        json.dumps(config, sort_keys=True, default=str).encode()
+    ).hexdigest()
     manifest["test_evaluated"] = evaluation.test_evaluated
     manifest["evaluation_split"] = evaluation.evaluation_split
     manifest["model"] = {

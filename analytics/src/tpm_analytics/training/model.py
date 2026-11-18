@@ -410,7 +410,7 @@ def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: Trai
     unique = np.unique(groups)
     folds = min(config.calibration.folds, len(unique))
     if folds < 2:
-        return fit_calibrator(raw, y, method, min_positives=config.calibration.min_positives).predict(raw)
+        raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
     splitter = GroupKFold(n_splits=folds)
     predicted = np.full(len(raw), np.nan, dtype=np.float64)
     for fit_idx, predict_idx in splitter.split(raw, y, groups):
@@ -708,17 +708,27 @@ def train_and_evaluate(
     test_metrics["precision_floor_met_on_evaluation"] = bool(
         _metric_value(test_metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
     )
-    calibrated_by_headroom = [
-        calibrator.predict(model.predict(eval_rows, headroom=value)) for value in config.label.headroom_pct
-    ]
-    test_metrics["headroom_monotonic"] = bool(
-        all(np.all(left >= right) for left, right in itertools.pairwise(calibrated_by_headroom))
-    )
 
     headroom = []
+    headroom_probabilities: list[Array] = []
     for value in config.label.headroom_pct:
         y_headroom = (eval_rows.future_max >= eval_rows.price * (1.0 + value / 100.0)).astype(np.int8)
-        probabilities = calibrator.predict(model.predict(eval_rows, headroom=value))
+        if evaluate_test:
+            probabilities = calibrator.predict(model.predict(eval_rows, headroom=value))
+        else:
+            y_cal = (cal_data.future_max >= cal_data.price * (1.0 + value / 100.0)).astype(np.int8)
+            if np.unique(y_cal).size < 2:
+                # A one-class headroom cannot be calibrated; report raw scores for this diagnostic.
+                oof_headroom = model.predict(cal_data, headroom=value)
+            else:
+                oof_headroom = _cross_fitted(
+                    model.predict(cal_data, headroom=value),
+                    y_cal,
+                    cal_data.route_day,
+                    calibration_method,
+                    config,
+                )
+            probabilities = oof_headroom[evidence] if len(eval_rows) != len(cal_data) else oof_headroom
         item = _metrics(y_headroom, probabilities)
         item["headroom_pct"] = value
         item["mean_probability"] = float(np.mean(probabilities))
@@ -730,8 +740,12 @@ def train_and_evaluate(
         train_rate_h = float(np.mean(train_headroom)) if len(train_headroom) else train_rate
         reference_h = float(np.mean((y_headroom - train_rate_h) ** 2))
         item["bss_train"] = 1.0 - item["brier"] / reference_h if reference_h > 0 and item["brier"] is not None else None
+        headroom_probabilities.append(probabilities)
         headroom.append(item)
 
+    test_metrics["headroom_monotonic"] = bool(
+        all(np.all(left >= right) for left, right in itertools.pairwise(headroom_probabilities))
+    )
     prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
     groups = eval_rows.departure_date if config.report.bootstrap_cluster == "departure_date" else eval_rows.route_day
     bootstrap = _bootstrap(
