@@ -517,6 +517,34 @@ def _calibration_curve(y: Array, probabilities: Array, bins: int) -> tuple[Array
     )
 
 
+def _cross_fitted_apply(
+    raw_fit: Array,
+    y_fit: Array,
+    groups: Array,
+    raw_apply: Array,
+    method: str,
+    config: TrainingConfig,
+) -> Array:
+    """Fit the pooled calibrator out-of-fold, then apply it to a different raw score array."""
+    unique = np.unique(groups)
+    folds = min(config.calibration.folds, len(unique))
+    if folds < 2:
+        raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
+    splitter = GroupKFold(n_splits=folds)
+    predicted = np.full(len(raw_apply), np.nan, dtype=np.float64)
+    for fit_idx, predict_idx in splitter.split(raw_fit, y_fit, groups):
+        calibrator = fit_calibrator(
+            raw_fit[fit_idx],
+            y_fit[fit_idx],
+            method,
+            min_positives=config.calibration.min_positives,
+        )
+        predicted[predict_idx] = calibrator.predict(raw_apply[predict_idx])
+    if np.isnan(predicted).any():
+        raise ModelError("cross-fitted calibration left rows without a prediction")
+    return predicted
+
+
 def _permutation_importance(
     model: FittedModel,
     calibrator: ScoreCalibrator,
@@ -716,18 +744,14 @@ def train_and_evaluate(
         if evaluate_test:
             probabilities = calibrator.predict(model.predict(eval_rows, headroom=value))
         else:
-            y_cal = (cal_data.future_max >= cal_data.price * (1.0 + value / 100.0)).astype(np.int8)
-            if np.unique(y_cal).size < 2:
-                # A one-class headroom cannot be calibrated; report raw scores for this diagnostic.
-                oof_headroom = model.predict(cal_data, headroom=value)
-            else:
-                oof_headroom = _cross_fitted(
-                    model.predict(cal_data, headroom=value),
-                    y_cal,
-                    cal_data.route_day,
-                    calibration_method,
-                    config,
-                )
+            oof_headroom = _cross_fitted_apply(
+                model.predict(cal_data),
+                cal_data.y,
+                cal_data.route_day,
+                model.predict(cal_data, headroom=value),
+                calibration_method,
+                config,
+            )
             probabilities = oof_headroom[evidence] if len(eval_rows) != len(cal_data) else oof_headroom
         item = _metrics(y_headroom, probabilities)
         item["headroom_pct"] = value
