@@ -36,6 +36,7 @@ request.json
 # plans
 .github/plans/
 .opencode/plans/
+.opencode/reviews/
 
 # stats
 stats/
