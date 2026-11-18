@@ -8,6 +8,7 @@ selection slice or the test set.
 from __future__ import annotations
 
 import importlib
+import itertools
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,12 @@ def _filled(values: Any, fill: float) -> Array:
     return np.asarray(values, dtype=np.float32)
 
 
+def _filled64(values: Any, fill: float) -> Array:
+    if isinstance(values, np.ma.MaskedArray):
+        return np.asarray(values.astype(np.float64).filled(fill), dtype=np.float64)
+    return np.asarray(values, dtype=np.float64)
+
+
 def _categorical(values: Any) -> Array:
     if isinstance(values, np.ma.MaskedArray):
         values = values.astype(object).filled("__missing__")
@@ -141,7 +148,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             features[feature.name] = _filled(values, 0.0)
         else:
             features[feature.name] = _filled(values, np.nan)
-    future_max = _filled(rows["future_max_fare_24h"], np.nan)
+    future_max = _filled64(rows["future_max_fare_24h"], np.nan)
     if np.isnan(future_max).any():
         raise ModelError(f"{path} has labelled rows with no future maximum")
     return TabularData(
@@ -149,7 +156,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         y=np.asarray(rows["breached_in_24h"], dtype=np.int8),
         series=np.asarray(rows["series_key"], dtype=str),
         route_day=np.asarray(rows["route_day"], dtype=str),
-        price=_filled(rows["price_eur"], np.nan),
+        price=_filled64(rows["price_eur"], np.nan),
         future_max=future_max,
         future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=np.asarray(rows["headroom_pct"], dtype=np.int16),
@@ -701,11 +708,11 @@ def train_and_evaluate(
     test_metrics["precision_floor_met_on_evaluation"] = bool(
         _metric_value(test_metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
     )
+    calibrated_by_headroom = [
+        calibrator.predict(model.predict(eval_rows, headroom=value)) for value in config.label.headroom_pct
+    ]
     test_metrics["headroom_monotonic"] = bool(
-        all(
-            np.all(model.predict(eval_rows, headroom=left) >= model.predict(eval_rows, headroom=right))
-            for left, right in zip(config.label.headroom_pct, config.label.headroom_pct[1:], strict=False)
-        )
+        all(np.all(left >= right) for left, right in itertools.pairwise(calibrated_by_headroom))
     )
 
     headroom = []

@@ -139,7 +139,7 @@ def _report(
             f"- All labelled rows (including one-observation windows): "
             f"Brier {_fmt(evaluation.test_all.get('brier'))}, "
             f"ROC-AUC {_fmt(evaluation.test_all.get('roc_auc'))}. "
-            f"The headline uses two or more future observations."
+            f"The headline uses {evaluation.test_tier.replace('_', ' ')}."
         )
         if evaluation.test_all is not None
         else "- Test was not evaluated; this report shows validation-calibrate only."

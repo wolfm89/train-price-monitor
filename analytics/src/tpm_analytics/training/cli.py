@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.out is not None:
             out_dir = args.out
         else:
-            config_root = Path(args.config).resolve().parent.parent
+            config_root = DEFAULT_CONFIG_PATH.parent.parent
             out_dir = config_root / config.output_root / run_id
         out_dir = out_dir.resolve()
         if out_dir.exists() and any(out_dir.iterdir()):

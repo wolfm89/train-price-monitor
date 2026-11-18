@@ -419,7 +419,7 @@ def _create_views(
         FROM features_window p
         ASOF LEFT JOIN history h
             ON p.series_key = h.series_key
-            AND (p.observed_at - INTERVAL 24 HOUR) >= h.observed_at
+            AND (p.observed_at - INTERVAL 23 HOUR) >= h.observed_at
         """
     )
     connection.execute(
