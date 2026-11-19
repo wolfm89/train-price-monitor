@@ -30,6 +30,14 @@ def test_directory_source_reads_manifest_provenance(tmp_path: Path) -> None:
     assert source.glob.endswith("**/*.parquet")
 
 
+def test_directory_without_manifest_has_no_build_id(tmp_path: Path) -> None:
+    build = tmp_path / "some_stale_download"
+    _parquet(build / "data.parquet")
+    source = resolve_source(str(build))
+    assert source.build_id is None
+    assert source.manifest_sha256 is None
+
+
 def test_local_pointer_source(tmp_path: Path) -> None:
     root = tmp_path / "silver"
     build = root / "builds" / "20261117T000000Z-abcdef12"

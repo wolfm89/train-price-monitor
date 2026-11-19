@@ -60,6 +60,7 @@ class DatasetStats:
 
 
 def _hash_bucket(expression: str, buckets: int) -> str:
+    """Return a stable bucket for ``expression``: the first 8 SHA-256 hex digits modulo ``buckets``."""
     return f"CAST((('0x' || substr(sha256({expression}), 1, 8))::UBIGINT % {buckets}) AS INTEGER)"
 
 
@@ -80,6 +81,13 @@ def _source_count(connection: duckdb.DuckDBPyConnection, source_sql: str) -> int
 
 
 def _git_state() -> tuple[str | None, bool]:
+    """Return the checkout's HEAD and dirty flag.
+
+    ``git status`` runs at the repository root, so a change in any module marks the run dirty.
+    The flag is conservative: a clean flag means the whole checkout matches HEAD, and a
+    false-positive dirty flag is preferred over claiming provenance the run cannot prove.
+    Unknown git state (a wheel outside a checkout) is returned as ``(None, False)``.
+    """
     root = Path(__file__).resolve().parents[3]
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
@@ -90,6 +98,7 @@ def _git_state() -> tuple[str | None, bool]:
 
 
 def _lock_sha256() -> str | None:
+    """Hash the repository lockfile; ``None`` when the package runs outside a source checkout."""
     path = Path(__file__).resolve().parents[3] / "uv.lock"
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
@@ -106,6 +115,12 @@ def _package_versions() -> dict[str, str | None]:
 
 
 def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: tuple[str, ...]) -> dict[str, Any]:
+    """Return an order-independent digest for one split.
+
+    Each row is hashed over all output columns and reduced to its first 64 bits. The row count,
+    the sum and the XOR of those values identify the split's content regardless of file order,
+    while the Parquet byte hash in ``dataset_files`` still pins the physical layout.
+    """
     payload = ", ".join(f"coalesce(CAST({column} AS VARCHAR), '<null>')" for column in columns)
     hash_expression = f"CAST(('0x' || substr(sha256(concat_ws('|', {payload})), 1, 16)) AS UBIGINT)"
     row = connection.execute(
@@ -288,6 +303,8 @@ def _create_views(
         FROM dedup
         """
     )
+    # Start the label window an epsilon after the snapshot so a row never contributes to its own
+    # label; duplicate timestamps are already collapsed by dedup, so any positive offset works.
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW future AS
@@ -659,32 +676,10 @@ def build_dataset(
     if missing:
         raise DatasetError(f"sampled panel is missing columns: {sorted(missing)}")
     selected = ", ".join(columns)
-    dataset_files: list[dict[str, Any]] = []
-    if write_splits:
-        for split in ("train", "validation_select", "validation_calibrate", "test"):
-            target = dataset_dir / f"{split}.parquet"
-            connection.execute(
-                f"COPY (SELECT {selected} FROM sampled WHERE split = '{split}' "
-                f"ORDER BY series_key, snapshot_at, bin_regime, bin_index) "
-                f"TO '{sql_string(target.as_posix())}' (FORMAT parquet, COMPRESSION zstd)"
-            )
-            dataset_files.append(
-                {
-                    "split": split,
-                    "path": f"dataset/{target.name}",
-                    "bytes": target.stat().st_size,
-                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                    **_content_digest(connection, split, columns),
-                }
-            )
+    split_names = ("train", "validation_select", "validation_calibrate", "test")
     splits = _split_stats(connection)
     profile = _profile(connection)
-    if {item.split for item in splits} != {
-        "train",
-        "validation_select",
-        "validation_calibrate",
-        "test",
-    }:
+    if {item.split for item in splits} != set(split_names):
         raise DatasetError(f"missing split(s): {sorted({item.split for item in splits})}")
 
     total_rows = sum(item.rows for item in splits)
@@ -715,6 +710,27 @@ def build_dataset(
         warnings.append(f"panel has {total_rows} rows; below the 2M target, raise sample_rate")
     stats = replace(stats, warnings=tuple(warnings))
     git_sha, git_dirty = _git_state()
+
+    # Digest before writing: a failed gate or digest query must not leave plausible Parquet files.
+    digests = {split: _content_digest(connection, split, columns) for split in split_names} if write_splits else {}
+    dataset_files: list[dict[str, Any]] = []
+    if write_splits:
+        for split in split_names:
+            target = dataset_dir / f"{split}.parquet"
+            connection.execute(
+                f"COPY (SELECT {selected} FROM sampled WHERE split = '{split}' "
+                f"ORDER BY series_key, snapshot_at, bin_regime, bin_index) "
+                f"TO '{sql_string(target.as_posix())}' (FORMAT parquet, COMPRESSION zstd)"
+            )
+            dataset_files.append(
+                {
+                    "split": split,
+                    "path": f"dataset/{target.name}",
+                    "bytes": target.stat().st_size,
+                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                    **digests[split],
+                }
+            )
 
     manifest = {
         "manifest_version": 2,

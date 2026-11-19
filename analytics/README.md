@@ -373,7 +373,8 @@ mise run //analytics:train -- --source .data/silver/<build>
 mise run //analytics:train:ablation -- --source .data/silver/<build>
 ```
 
-`--source` accepts an S3 pointer, a Parquet glob or a local directory. S3 reads need
+`--source` accepts an S3 pointer, a Parquet glob, a single Parquet file, a local directory or a local
+`_latest.json` pointer. S3 reads need
 `DUCKDB_EXTENSION_DIR` and the httpfs extension (`mise run //analytics:httpfs`); local runs do not.
 The default config is `config/training.json`; use `--config` for a local split window.
 

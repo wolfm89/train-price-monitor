@@ -332,7 +332,7 @@ def write_report(
         "calibration": evaluation.calibration_method,
         "threshold": evaluation.threshold,
         "candidates": evaluation.candidates,
-        "test": evaluation.test,
+        "metrics": evaluation.test,
         "bootstrap": evaluation.bootstrap,
         "ablation": ablation,
         "runner": runner,

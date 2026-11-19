@@ -112,7 +112,8 @@ v2-only and mixed-schema input.
   numerics must arrive as `NaN` plus indicators, never as zero; a test covers the DuckDB→numpy
   handoff.
 - Sample whole **route-days**, not rows or individual series, so the route-day cross-section stays
-  intact. Compute cross-sectional features before the sample.
+  intact. Cross-sectional features are computed from the sampled route-days; never sample individual
+  series or rows.
 - Calibrate on `validation_calibrate`, never on `validation_select` or test. Test is reported once.
 - Training artifacts are local and ignored. Downloaded silver goes under `analytics/.data/`; never
   commit it or upload the dataset to S3 from this module.

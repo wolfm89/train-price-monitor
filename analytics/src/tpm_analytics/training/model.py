@@ -469,11 +469,10 @@ class Evaluation:
             "threshold": self.threshold,
             "threshold_precision_floor_met": self.threshold_precision_floor_met,
             "candidates": self.candidates,
-            "test": self.test,
+            "metrics": {"split": self.evaluation_split, "values": self.test},
             "test_all": self.test_all,
             "test_tier": self.test_tier,
             "test_tier_rows": self.test_tier_rows,
-            "evaluation_split": self.evaluation_split,
             "test_evaluated": self.test_evaluated,
             "calibration_prevalence": self.calibration_prevalence,
             "train_prevalence": self.train_prevalence,
@@ -636,6 +635,14 @@ def train_and_evaluate(
     *,
     evaluate_test: bool = False,
 ) -> tuple[Evaluation, dict[str, FittedModel], ScoreCalibrator]:
+    """Fit the candidate models and evaluate the configured cohort.
+
+    ``train`` fits the candidates; ``validation_select`` compares and selects them;
+    ``validation_calibrate`` fits the final calibrator and supplies the default evaluation rows.
+    ``test`` is read only when ``evaluate_test`` is true, and is then the reported split. The
+    returned tuple holds the evaluation payload, all fitted candidates and the calibrator that
+    belongs to the selected model.
+    """
     train = splits["train"]
     validation_select = splits["validation_select"]
     validation_calibrate = splits["validation_calibrate"]
@@ -753,7 +760,7 @@ def train_and_evaluate(
         )
     )
     test_metrics = _metrics(eval_rows.y, calibrated_eval)
-    train_rate = float(np.mean(train_eval.y))
+    train_rate = _train_prevalence(train, test_tier)
     test_metrics["bss_train"] = _bss_train(test_metrics["brier"], eval_rows.y, train_rate)
     test_metrics["threshold"] = threshold
     test_metrics.update(_decision_metrics(eval_rows.y, calibrated_eval, threshold))

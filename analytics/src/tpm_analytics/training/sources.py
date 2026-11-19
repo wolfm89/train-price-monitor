@@ -107,18 +107,22 @@ def resolve_source(value: str) -> SourceSpec:
         if not files:
             raise SourceError(f"directory {path} contains no Parquet files")
         manifest_path = path / "_manifest.json"
-        build_id = path.name or None
+        build_id: str | None = None
+        manifest_sha: str | None = None
         if manifest_path.is_file():
+            manifest_bytes = manifest_path.read_bytes()
             try:
-                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                payload = json.loads(manifest_bytes)
             except json.JSONDecodeError as error:
                 raise SourceError(f"manifest {manifest_path} is not valid JSON") from error
-            build_id = str(payload.get("build_id") or build_id)
+            value = payload.get("build_id")
+            build_id = str(value) if value else None
+            manifest_sha = _sha256(manifest_bytes)
         return SourceSpec(
             glob=str(path / "**" / "*.parquet"),
             label=str(path),
             build_id=build_id,
-            manifest_sha256=_sha256(manifest_path.read_bytes()) if manifest_path.is_file() else None,
+            manifest_sha256=manifest_sha,
         )
     if path.is_file() and path.suffix == ".json":
         return _local_pointer(path)

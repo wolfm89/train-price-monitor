@@ -288,6 +288,8 @@ def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
     assert digests[0]["sum64"] == digests[1]["sum64"]
     assert digests[0]["xor64"] == digests[1]["xor64"]
     assert digests[0]["rows"] == digests[1]["rows"]
+    # The byte hash is the guard for the total ORDER BY: the content digest is order-independent.
+    assert digests[0]["sha256"] == digests[1]["sha256"]
 
 
 def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
@@ -430,6 +432,7 @@ def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
                 tmp_path / "empty-run",
                 run_id="empty",
             )
+        assert not list((tmp_path / "empty-run" / "dataset").glob("*.parquet"))
     finally:
         connection.close()
 
@@ -758,11 +761,13 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert "average precision" in report_text
     manifest_json = json.loads((run_out / "manifest.json").read_text())
     assert manifest_json["test_evaluated"] is False
+    assert "test" not in manifest_json["model"]
     metrics = json.loads((run_out / "metrics.json").read_text())
     assert metrics["evaluation"]["chosen_model"] in {"base_rate", "logistic", "hist_gradient_boosting"}
     assert len(metrics["evaluation"]["headroom"]) == 5
     assert metrics["evaluation"]["test_evaluated"] is False
-    assert metrics["evaluation"]["evaluation_split"] == "validation_calibrate"
+    assert metrics["evaluation"]["metrics"]["split"] == "validation_calibrate"
+    assert "test" not in metrics["evaluation"]
 
     test_out = tmp_path / "tested"
     assert (
@@ -781,7 +786,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     )
     tested = json.loads((test_out / "metrics.json").read_text())
     assert tested["evaluation"]["test_evaluated"] is True
-    assert tested["evaluation"]["evaluation_split"] == "test"
+    assert tested["evaluation"]["metrics"]["split"] == "test"
     assert tested["test_evaluated"] is True
 
     ablation_out = tmp_path / "ablation"
