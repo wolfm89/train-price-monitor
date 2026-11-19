@@ -661,7 +661,6 @@ def build_dataset(
     started = time.perf_counter()
     out_dir = out_dir.resolve()
     dataset_dir = out_dir / "dataset"
-    dataset_dir.mkdir(parents=True, exist_ok=True)
     calendar_set = config.calendar.feature_set
     spec = feature_spec(calendar_set)
     source_sql = read_parquet(source.glob, union_by_name=False)
@@ -715,6 +714,7 @@ def build_dataset(
     digests = {split: _content_digest(connection, split, columns) for split in split_names} if write_splits else {}
     dataset_files: list[dict[str, Any]] = []
     if write_splits:
+        dataset_dir.mkdir(parents=True, exist_ok=True)
         for split in split_names:
             target = dataset_dir / f"{split}.parquet"
             connection.execute(

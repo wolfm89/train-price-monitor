@@ -437,6 +437,54 @@ def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
         connection.close()
 
 
+def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
+    source = tmp_path / "reusable.parquet"
+    departures = {
+        "train": datetime(2026, 7, 5, 10, 0),
+        "validation_select": datetime(2026, 7, 16, 10, 0),
+        "validation_calibrate": datetime(2026, 7, 23, 10, 0),
+        "test": datetime(2026, 7, 30, 10, 0),
+    }
+    _write_silver(
+        source,
+        [
+            _row(
+                observed_at=departure - timedelta(days=4),
+                departure=departure,
+                route=split,
+                train=f"ICE-{split}",
+                fare=80.0,
+            )
+            for split, departure in departures.items()
+        ],
+    )
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["splits"] = SPLITS
+    raw["calendar"]["feature_set"] = "none"
+    raw["sample"]["sample_rate"] = 1.0
+    raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_label_coverage"] = 1.0
+    config_path = tmp_path / "coverage-gate.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(config_path)
+    spec = SourceSpec(glob=str(source), label="reusable", build_id=None, manifest_sha256=None)
+    out = tmp_path / "reusable-run"
+    connection = duckdb.connect()
+    try:
+        with pytest.raises(DatasetError, match="labelled rows"):
+            build_dataset(connection, spec, config, out, run_id="reusable")
+    finally:
+        connection.close()
+    assert not out.exists()
+    permissive = replace(config, report=replace(config.report, min_label_coverage=0.0))
+    connection = duckdb.connect()
+    try:
+        build_dataset(connection, spec, permissive, out, run_id="reusable")
+    finally:
+        connection.close()
+    assert (out / "dataset" / "train.parquet").is_file()
+
+
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
     raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     raw["splits"]["validation_select_start"] = raw["splits"]["train_end"]
