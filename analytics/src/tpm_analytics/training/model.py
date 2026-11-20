@@ -457,6 +457,8 @@ class ScoreCalibrator:
 
     def predict(self, raw: Array) -> Array:
         clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+        if self.method == "constant":
+            return np.full(len(clipped), float(self.model), dtype=np.float64)
         if self.method == "temperature":
             if self.temperature is None:
                 raise ModelError("temperature calibrator has no fitted temperature")
@@ -471,6 +473,8 @@ class ScoreCalibrator:
 
 def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
     clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+    if len(np.unique(y)) < 2:
+        return ScoreCalibrator("constant", float(np.mean(y)))
     positives = int(np.sum(y))
     if method == "isotonic" and positives < min_positives:
         method = "sigmoid"
@@ -1135,18 +1139,19 @@ def train_and_evaluate(
     y_headroom_arrays: list[Array] = []
     for value in config.label.headroom_pct:
         y_headroom = (eval_rows.future_max >= eval_rows.price * (1.0 + value / 100.0)).astype(np.int8)
+        y_cal_headroom = (cal_data.future_max >= cal_data.price * (1.0 + value / 100.0)).astype(np.int8)
         if evaluate_test:
             raw_headroom = model.predict(eval_rows, headroom=value)
             headroom_calibrator = fit_calibrator(
                 model.predict(cal_data, headroom=value),
-                cal_data.y,
+                y_cal_headroom,
                 calibration_method,
                 min_positives=config.calibration.min_positives,
             )
             probabilities = headroom_calibrator.predict(raw_headroom)
             clim_calibrator_headroom = fit_calibrator(
                 climatology.predict(cal_data, headroom=value),
-                cal_data.y,
+                y_cal_headroom,
                 calibration_method,
                 min_positives=config.calibration.min_positives,
             )
@@ -1157,7 +1162,7 @@ def train_and_evaluate(
             raw_headroom = select_eval(raw_cal_headroom)
             oof_headroom, fold_ids = _cross_fitted_with_folds(
                 raw_cal_headroom,
-                cal_data.y,
+                y_cal_headroom,
                 cal_data.route_day,
                 calibration_method,
                 config,
@@ -1168,7 +1173,7 @@ def train_and_evaluate(
             clim_headroom = select_eval(
                 _cross_fitted(
                     clim_raw_headroom,
-                    cal_data.y,
+                    y_cal_headroom,
                     cal_data.route_day,
                     calibration_method,
                     config,

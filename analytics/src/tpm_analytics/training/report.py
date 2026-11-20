@@ -473,6 +473,7 @@ def _report(
     journey_disappeared = int(journey.get("disappeared", 0))
     journey_share = _p(journey.get("share"))
     journey_share_at_risk = _p(journey.get("share_at_risk"))
+    journey_none = sum(item["journeys"] for item in journey.get("groups", []) if item["successor"] == "none")
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -625,9 +626,10 @@ Single future scrape lag:
 ### Journey disappearance
 
 - Journeys with at least 3 observations: **{journey_total:,}**
-- At risk (a later route-day scrape exists): **{journey_at_risk:,}**
-- Disappeared more than 24 h before departure while the route-day was still scraped:
-  **{journey_disappeared:,}** of all journeys ({journey_share}); {journey_share_at_risk} of at-risk
+- At risk (last observation more than 24 h before departure): **{journey_at_risk:,}**
+- Disappeared while the route-day was still scraped: **{journey_disappeared:,}** of all journeys
+  ({journey_share}); {journey_share_at_risk} of at-risk
+- Successor `none`: **{journey_none:,}** (a later scrape existed but contained no priced journey)
 
 {journey_table}
 
