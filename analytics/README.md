@@ -387,6 +387,13 @@ The label is the maximum over scraped observations in the next 24 hours (often o
 13 hours ahead). The domain is `24 h <= hours_to_departure <= 30 d`; the test split is a
 future-**departure** cohort, not a future-era holdout.
 
+The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
+(`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
+diagnostics, the climatology baseline, per-headroom x TTD metrics, strata, clustered intervals,
+calibration slope/intercept/ECE and a decision-value diagnostic. Each run also writes
+`predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
+produce.
+
 ## Semantics the transform encodes
 
 - `schema_version` is `1` when the column is absent or null (files written before schema v2).
