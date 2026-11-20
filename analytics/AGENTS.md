@@ -120,7 +120,7 @@ v2-only and mixed-schema input.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
   and `--ablation` report validation only.
-- `check_at` (20-28 h), `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the
+- `check_at` (20-24 h for the PR 2 diagnostics, so the point stays inside the 24 h maximum), `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the
   label diagnostics are audit columns, not model features. They may use future scrapes only for
   evaluation, never inside the feature matrix.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
