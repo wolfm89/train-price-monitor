@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -118,9 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         out_dir = out_dir.resolve()
         if out_dir.exists() and any(out_dir.iterdir()):
             raise FileExistsError(f"{out_dir} is not empty; use a new --run-id or --out")
-        work_dir = out_dir.parent / f".{out_dir.name}.tmp"
-        shutil.rmtree(work_dir, ignore_errors=True)
-        work_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.", suffix=".tmp", dir=out_dir.parent))
         temp_dir = work_dir / ".duckdb-tmp"
         configured_extensions = os.environ.get("DUCKDB_EXTENSION_DIR")
         if configured_extensions is None and Path(".duckdb-extensions").is_dir():
@@ -131,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             temp_directory=temp_dir,
             threads=threads,
             memory_limit=os.environ.get("TRAIN_DUCKDB_MEMORY_LIMIT", "6GB"),
-            max_temp_size=os.environ.get("TRAIN_DUCKDB_MAX_TEMP_SIZE", "8GB"),
+            max_temp_size=os.environ.get("TRAIN_DUCKDB_MAX_TEMP_SIZE", "20GB"),
             extensions=extensions,
             secret=source.s3_secret,
         )

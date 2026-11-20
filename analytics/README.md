@@ -377,6 +377,9 @@ mise run //analytics:train:ablation -- --source .data/silver/<build>
 `_latest.json` pointer; S3 needs `DUCKDB_EXTENSION_DIR` and the httpfs extension
 (`mise run //analytics:httpfs`). The default config is `config/training.json`.
 
+The training CLI defaults to a 6 GB DuckDB memory limit and 20 GB of temp spill space; both are
+recorded in `dataset_manifest.json`.
+
 Runs are validation-only by default; `--evaluate-test` scores the test split once, and `--ablation`
 stays validation-only while comparing the four calendar sets. Two clean builds write
 order-independent digests to `dataset_manifest.json` and must match. The report shows label
@@ -390,7 +393,9 @@ future-**departure** cohort, not a future-era holdout.
 The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
 (`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
 diagnostics, the climatology baseline, per-headroom x TTD metrics, strata, clustered intervals,
-calibration slope/intercept/ECE and a decision-value diagnostic. Each run also writes
+calibration slope/intercept/ECE and a decision-value diagnostic. The next-day diagnostic is
+reported for both the 20-28 h and 22-26 h windows; the 20-24 h check is kept only for the
+"crossed and came back" comparison. Each run also writes
 `predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
 produce.
 

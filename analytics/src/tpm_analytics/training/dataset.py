@@ -121,6 +121,19 @@ def _package_versions() -> dict[str, str | None]:
     return result
 
 
+def _duckdb_settings(connection: duckdb.DuckDBPyConnection) -> dict[str, str | None]:
+    """Record the effective DuckDB limits so an out-of-memory build is diagnosable."""
+    settings: dict[str, str | None] = {}
+    for name in ("memory_limit", "max_temp_directory_size", "threads"):
+        try:
+            row = connection.execute(f"SELECT current_setting('{name}')").fetchone()
+        except duckdb.Error:
+            settings[name] = None
+        else:
+            settings[name] = None if row is None else str(row[0])
+    return settings
+
+
 def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: tuple[str, ...]) -> dict[str, Any]:
     """Return an order-independent digest for one split.
 
@@ -403,9 +416,11 @@ def _create_views(
         WHERE r.rn = 1
         """
     )
+    # One superset join against the route-day scrape grid; every check window is a filtered pick
+    # from these candidates, so the grid is joined once instead of four times (R2-1).
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW check_candidates AS
+        CREATE OR REPLACE TEMP TABLE check_candidates AS
         SELECT
             n.series_key,
             n.snapshot_at,
@@ -416,13 +431,51 @@ def _create_views(
           ON g.route_id = n.route_id
          AND g.departure_date = n.departure_date
         WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
-                                AND n.snapshot_at + INTERVAL 24 HOUR
+                                AND n.snapshot_at + INTERVAL 28 HOUR
           AND g.observed_at < n.departure_planned
+        """
+    )
+    # The 20-24 h point stays the crossed-back diagnostic. The lower bound is already 20 h.
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_points AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+            ) AS rn
+            FROM check_candidates
+            WHERE check_at <= snapshot_at + INTERVAL 24 HOUR
+        )
+        WHERE rn = 1
         """
     )
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW check_points AS
+        CREATE OR REPLACE TEMP TABLE check_points_narrow AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+            ) AS rn
+            FROM check_candidates
+            WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
+                               AND snapshot_at + INTERVAL 24 HOUR
+        )
+        WHERE rn = 1
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_points_2028 AS
         SELECT
             series_key,
             snapshot_at,
@@ -439,24 +492,7 @@ def _create_views(
     )
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW check_candidates_narrow AS
-        SELECT
-            n.series_key,
-            n.snapshot_at,
-            g.observed_at AS check_at,
-            abs(date_diff('second', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_s
-        FROM snapshot n
-        JOIN scrape_grid g
-          ON g.route_id = n.route_id
-         AND g.departure_date = n.departure_date
-        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 22 HOUR
-                                AND n.snapshot_at + INTERVAL 24 HOUR
-          AND g.observed_at < n.departure_planned
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP VIEW check_points_narrow AS
+        CREATE OR REPLACE TEMP TABLE check_points_2226 AS
         SELECT
             series_key,
             snapshot_at,
@@ -466,77 +502,30 @@ def _create_views(
             SELECT *, row_number() OVER (
                 PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
             ) AS rn
-            FROM check_candidates_narrow
+            FROM check_candidates
+            WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
+                               AND snapshot_at + INTERVAL 26 HOUR
         )
         WHERE rn = 1
         """
     )
+    # Price each distinct (series, check) once; the four windows share most check points.
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW check_candidates_2028 AS
-        SELECT
-            n.series_key,
-            n.snapshot_at,
-            g.observed_at AS check_at,
-            abs(date_diff('second', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_s
-        FROM snapshot n
-        JOIN scrape_grid g
-          ON g.route_id = n.route_id
-         AND g.departure_date = n.departure_date
-        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
-                                AND n.snapshot_at + INTERVAL 28 HOUR
-          AND g.observed_at < n.departure_planned
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP VIEW check_points_2028 AS
-        SELECT
-            series_key,
-            snapshot_at,
-            check_at,
-            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
-        FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
-            ) AS rn
-            FROM check_candidates_2028
-        )
-        WHERE rn = 1
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP VIEW check_candidates_2226 AS
-        SELECT
-            n.series_key,
-            n.snapshot_at,
-            g.observed_at AS check_at,
-            abs(date_diff('second', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_s
-        FROM snapshot n
-        JOIN scrape_grid g
-          ON g.route_id = n.route_id
-         AND g.departure_date = n.departure_date
-        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 22 HOUR
-                                AND n.snapshot_at + INTERVAL 26 HOUR
-          AND g.observed_at < n.departure_planned
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP VIEW check_points_2226 AS
-        SELECT
-            series_key,
-            snapshot_at,
-            check_at,
-            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
-        FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
-            ) AS rn
-            FROM check_candidates_2226
-        )
-        WHERE rn = 1
+        CREATE OR REPLACE TEMP TABLE check_prices AS
+        SELECT d.series_key, d.observed_at AS check_at, d.price_eur
+        FROM dedup d
+        JOIN (
+            SELECT series_key, check_at FROM check_points
+            UNION
+            SELECT series_key, check_at FROM check_points_narrow
+            UNION
+            SELECT series_key, check_at FROM check_points_2028
+            UNION
+            SELECT series_key, check_at FROM check_points_2226
+        ) p
+          ON p.series_key = d.series_key
+         AND p.check_at = d.observed_at
         """
     )
     connection.execute(
@@ -605,10 +594,10 @@ def _create_views(
         LEFT JOIN check_points_narrow cn USING (series_key, snapshot_at)
         LEFT JOIN check_points_2028 c28 USING (series_key, snapshot_at)
         LEFT JOIN check_points_2226 c26 USING (series_key, snapshot_at)
-        LEFT JOIN dedup d ON d.series_key = n.series_key AND d.observed_at = c.check_at
-        LEFT JOIN dedup dn ON dn.series_key = n.series_key AND dn.observed_at = cn.check_at
-        LEFT JOIN dedup d28 ON d28.series_key = n.series_key AND d28.observed_at = c28.check_at
-        LEFT JOIN dedup d26 ON d26.series_key = n.series_key AND d26.observed_at = c26.check_at
+        LEFT JOIN check_prices d ON d.series_key = n.series_key AND d.check_at = c.check_at
+        LEFT JOIN check_prices dn ON dn.series_key = n.series_key AND dn.check_at = cn.check_at
+        LEFT JOIN check_prices d28 ON d28.series_key = n.series_key AND d28.check_at = c28.check_at
+        LEFT JOIN check_prices d26 ON d26.series_key = n.series_key AND d26.check_at = c26.check_at
         LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
         """
     )
@@ -902,6 +891,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         SELECT
             split,
             ttd_band AS band,
+            count(*) AS rows,
             count(*) FILTER (WHERE label_observed) AS labelled,
             count(*) FILTER (WHERE check_at IS NOT NULL) AS check_eligible,
             count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NOT NULL) AS check_priced,
@@ -941,6 +931,46 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         WHERE split IS NOT NULL
         GROUP BY split, ttd_band
         ORDER BY split, ttd_band
+        """,
+    )
+    label_era = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            observation_era AS era,
+            ttd_band AS band,
+            count(*) AS rows,
+            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
+            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
+            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
+            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
+            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
+            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, observation_era, ttd_band
+        ORDER BY split, observation_era, ttd_band
+        """,
+    )
+    label_week = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            observation_week AS week,
+            ttd_band AS band,
+            count(*) AS rows,
+            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
+            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
+            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
+            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
+            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
+            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, observation_week, ttd_band
+        ORDER BY split, observation_week, ttd_band
         """,
     )
     a29 = _dict_rows(
@@ -1092,6 +1122,27 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                     ) THEN 'other_train'
                     ELSE 'none'
                 END AS successor,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM series_obs o JOIN series_info oi USING (series_key)
+                        WHERE o.route_id = n.route_id
+                          AND o.departure_date = n.departure_date
+                          AND o.observed_at = n.next_s
+                          AND oi.first_obs = n.next_s
+                          AND o.train_number IS NOT DISTINCT FROM n.train_number
+                          AND o.service_class = n.service_class
+                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 3600
+                    ) THEN 'same_train'
+                    WHEN EXISTS (
+                        SELECT 1 FROM series_obs o JOIN series_info oi USING (series_key)
+                        WHERE o.route_id = n.route_id
+                          AND o.departure_date = n.departure_date
+                          AND o.observed_at = n.next_s
+                          AND oi.first_obs = n.next_s
+                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 3600
+                    ) THEN 'other_train'
+                    ELSE 'none'
+                END AS successor_60,
                 {ttd_band_case("date_diff('second', last_obs, departure_planned) / 3600.0", JOURNEY_BANDS)} AS ttd_band,
                 strftime(last_obs, '%G-W%V') AS observation_week
             FROM next_scrape n
@@ -1106,10 +1157,11 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             ttd_band,
             observation_week,
             successor,
+            successor_60,
             count(*) AS journeys
         FROM classified
-        GROUP BY ttd_band, observation_week, successor
-        ORDER BY ttd_band, observation_week, successor
+        GROUP BY ttd_band, observation_week, successor, successor_60
+        ORDER BY ttd_band, observation_week, successor, successor_60
         """
     ).fetchall()
     total_journeys = int(journey_row[0][0]) if journey_row else 0
@@ -1150,6 +1202,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             for row in ttd
         ],
         "label": label,
+        "label_era": label_era,
+        "label_week": label_week,
         "a29": a29,
         "unlabelled": [
             {
@@ -1196,7 +1250,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                     "band": str(row[3]),
                     "week": str(row[4]),
                     "successor": str(row[5]),
-                    "journeys": int(row[6]),
+                    "successor_60": str(row[6]),
+                    "journeys": int(row[7]),
                 }
                 for row in journey_row
             ],
@@ -1326,6 +1381,7 @@ def build_dataset(
         "uv_lock_sha256": _lock_sha256(),
         "cli_argv": list(cli_argv or ()),
         "threads": threads,
+        "duckdb_settings": _duckdb_settings(connection),
         "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
         "silver_build_id": source.build_id,
         "silver_manifest_sha256": source.manifest_sha256,
