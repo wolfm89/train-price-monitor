@@ -50,6 +50,9 @@
     "threshold_precision_floor": 0.7,
     "calibration_bins": 10,
     "min_label_coverage": 0.8,
-    "min_headroom_positives": 500
+    "min_headroom_positives": 500,
+    "min_tier_rows": 100,
+    "r24_max_tail_hours": 4,
+    "r24_max_gap_hours": 6
   }
 }
