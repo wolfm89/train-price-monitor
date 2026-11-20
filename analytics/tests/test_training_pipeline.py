@@ -25,6 +25,7 @@ from tpm_analytics.training.model import (
     _bss_train,
     _calibration_curve,
     _calibration_stats,
+    _decision_value_rows,
     _strata_rows,
     _train_prevalence,
     fit_calibrator,
@@ -271,6 +272,85 @@ def test_headroom_bucket_assignment_is_golden(tmp_path: Path) -> None:
         assert actual == grid[bucket]
 
 
+def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    source = tmp_path / "successor.parquet"
+    _write_silver(
+        source,
+        [
+            _row(
+                observed_at=datetime(2026, 7, 3, 8, 0),
+                departure=departure,
+                route="successor",
+                train="ICE-OLD",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 9, 0),
+                departure=departure,
+                route="successor",
+                train="ICE-OLD",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure,
+                route="successor",
+                train="ICE-OLD",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 4, 10, 0),
+                departure=departure + timedelta(minutes=10),
+                route="successor",
+                train="ICE-OLD",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 15, 10, 0),
+                departure=datetime(2026, 7, 16, 10, 0),
+                route="select",
+                train="ICE-SELECT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 22, 10, 0),
+                departure=datetime(2026, 7, 23, 10, 0),
+                route="calibrate",
+                train="ICE-CAL",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 29, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE-TEST",
+                fare=80.0,
+            ),
+        ],
+    )
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="successor", build_id=None, manifest_sha256=None),
+            config,
+            tmp_path / "successor-run",
+            run_id="successor",
+        )
+    finally:
+        connection.close()
+    profile = json.loads((tmp_path / "successor-run" / "profile.json").read_text())["profile"]
+    successors = {group["successor"]: group["journeys"] for group in profile["journey"]["groups"]}
+    assert successors.get("same_train", 0) >= 1
+
+
 def test_check_grid_and_coverage(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 5, 10, 0)
     source = tmp_path / "check-grid.parquet"
@@ -329,7 +409,8 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
             run_id="check",
         )
         row = connection.execute(
-            "SELECT check_at, check_lag_h, check_price_eur, cov_tail_h, cov_max_gap_h, r24_covered "
+            "SELECT check_at, check_lag_h, check_price_eur, cov_tail_h, cov_max_gap_h, r24_covered, "
+            "check_at_2028, check_at_2226, check_price_2028_eur, check_price_2226_eur "
             "FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00'",
             [str(tmp_path / "check-run" / "dataset" / "train.parquet")],
         ).fetchone()
@@ -342,6 +423,10 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     assert row[3] == pytest.approx(1.0)
     assert row[4] == pytest.approx(23.0)
     assert row[5] is False
+    assert str(row[6]) == "2026-07-04 10:00:00"
+    assert str(row[7]) == "2026-07-04 10:00:00"
+    assert row[8] == pytest.approx(90.0)
+    assert row[9] == pytest.approx(90.0)
 
 
 def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
@@ -496,6 +581,13 @@ def test_calibrator_outputs_are_bounded() -> None:
     probabilities = calibrator.predict(raw)
     assert probabilities.min() >= 1e-3
     assert probabilities.max() <= 1.0 - 1e-3
+
+
+def test_load_model_rejects_wrong_hash(tmp_path: Path) -> None:
+    path = tmp_path / "model.joblib"
+    path.write_bytes(b"not a model")
+    with pytest.raises(Exception, match="hash mismatch"):
+        load_model(path, "0" * 64)
 
 
 def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
@@ -898,6 +990,45 @@ def test_climatology_smoothing_is_bounded() -> None:
     assert np.mean(at_30) <= np.mean(at_1)
 
 
+def test_decision_value_sign_convention() -> None:
+    size = 20
+    data = _tabular(
+        y=np.zeros(size, dtype=np.int8),
+        future_observations=np.full(size, 2, dtype=np.int16),
+        headroom=np.full(size, 1, dtype=np.int16),
+    )
+    half = size // 2
+    data = TabularData(
+        features=data.features,
+        y=data.y,
+        series=data.series,
+        route_day=data.route_day,
+        price=np.full(size, 100.0),
+        future_max=data.future_max,
+        future_observations=data.future_observations,
+        headroom=data.headroom,
+        departure_date=np.array([f"2026-07-{index % 10 + 1:02d}" for index in range(size)], dtype=object),
+        snapshot_at=data.snapshot_at,
+        observation_era=data.observation_era,
+        observation_week=data.observation_week,
+        check_price=np.array([110.0] * half + [90.0] * half),
+    )
+    rows = _decision_value_rows(
+        data,
+        (1,),
+        [np.array([0.9] * half + [0.1] * half)],
+        np.array(["1-3d"] * size),
+        0.5,
+        50,
+        7,
+    )
+    row = rows[0]
+    assert row["saving_vs_always_wait_eur"] == pytest.approx(5.0)
+    assert row["saving_vs_always_book_eur"] == pytest.approx(5.0)
+    assert row["conditional_saving_when_alert_eur"] == pytest.approx(10.0)
+    assert row["cost_of_waiting_eur"] == pytest.approx(0.0)
+
+
 def test_strata_do_not_fall_back_to_pooled_prevalence() -> None:
     size = 20
     data = _tabular(
@@ -1028,7 +1159,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert len(predictions["label"]) == 5 * metrics["evaluation"]["test_tier_rows"]
     assert set(predictions["calibration_mode"]) == {"oof"}
     assert min(predictions["calibration_fold"]) >= 0
-    assert "raw_score_pooled" in predictions
+    assert {"raw_score_pooled", "assigned_headroom", "calibrated_score_pooled", "ttd_band"} <= set(predictions)
     connection = duckdb.connect()
     try:
         mismatch_row = connection.execute(

@@ -584,6 +584,7 @@ class Evaluation:
     decision_value: tuple[dict[str, Any], ...] = ()
     intervals: dict[str, list[float]] = field(default_factory=dict)
     paired: dict[str, Any] = field(default_factory=dict)
+    bootstrap_clusters: int = 0
     prediction_series: Array | None = field(default=None, repr=False, compare=False)
     prediction_snapshot_at: Array | None = field(default=None, repr=False, compare=False)
     prediction_route_day: Array | None = field(default=None, repr=False, compare=False)
@@ -594,6 +595,10 @@ class Evaluation:
     prediction_calibration_mode: str = field(default="", repr=False, compare=False)
     prediction_calibrated: Array | None = field(default=None, repr=False, compare=False)
     prediction_y: Array | None = field(default=None, repr=False, compare=False)
+    prediction_assigned_headroom: Array | None = field(default=None, repr=False, compare=False)
+    prediction_calibrated_pooled: Array | None = field(default=None, repr=False, compare=False)
+    prediction_departure_date: Array | None = field(default=None, repr=False, compare=False)
+    prediction_ttd_band: Array | None = field(default=None, repr=False, compare=False)
     prediction_split: str = field(default="", repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -631,6 +636,7 @@ class Evaluation:
             "decision_value": list(self.decision_value),
             "intervals": self.intervals,
             "paired": self.paired,
+            "bootstrap_clusters": self.bootstrap_clusters,
         }
 
 
@@ -807,6 +813,8 @@ def _bootstrap_metrics(
         collected["recall"].append(decisions["recall_at_threshold"])
     result: dict[str, list[float]] = {}
     for key, values in collected.items():
+        if key in {"brier", "log_loss"}:
+            continue
         array = np.asarray(values, dtype=np.float64)
         array = array[np.isfinite(array)]
         result[key] = [float(np.percentile(array, 2.5)), float(np.percentile(array, 97.5))] if len(array) else []
@@ -931,9 +939,8 @@ def _decision_value_rows(
             saving = check - price
             if int(alert.sum()) == 0:
                 continue
-            policy = np.where(alert, saving, 0.0)
-            policy_ci = _cluster_mean_ci(policy, data.departure_date[mask], replicates, seed)
-            difference_ci = _cluster_mean_ci(policy - saving, data.departure_date[mask], replicates, seed + 1)
+            saving_vs_wait = np.where(alert, saving, 0.0)
+            saving_vs_book = -np.where(alert, 0.0, saving)
             rows.append(
                 {
                     "headroom_pct": int(headroom),
@@ -941,17 +948,19 @@ def _decision_value_rows(
                     "rows": int(mask.sum()),
                     "alert_rows": int(alert.sum()),
                     "alert_share": float(alert.mean()),
-                    "policy_saving_eur": float(np.mean(policy)),
-                    "policy_saving_pct": float(np.sum(policy) / np.sum(price)),
-                    "conditional_saving_eur": float(np.mean(saving[alert])),
-                    "conditional_saving_pct": float(np.mean(saving[alert] / price[alert])),
-                    "policy_vs_wait_eur": float(np.mean(policy - saving)),
-                    "policy_vs_wait_pct": float(np.sum(policy - saving) / np.sum(price)),
-                    "ci_eur": policy_ci,
-                    "difference_ci_eur": difference_ci,
-                    "always_wait_eur": float(np.mean(saving)),
-                    "always_wait_pct": float(np.sum(saving) / np.sum(price)),
-                    "always_book_eur": 0.0,
+                    "saving_vs_always_wait_eur": float(np.mean(saving_vs_wait)),
+                    "saving_vs_always_wait_pct": float(np.sum(saving_vs_wait) / np.sum(price)),
+                    "saving_vs_always_book_eur": float(np.mean(saving_vs_book)),
+                    "saving_vs_always_book_pct": float(np.sum(saving_vs_book) / np.sum(price)),
+                    "conditional_saving_when_alert_eur": float(np.mean(saving[alert])),
+                    "cost_of_waiting_eur": float(np.mean(saving)),
+                    "cost_of_waiting_pct": float(np.sum(saving) / np.sum(price)),
+                    "ci_saving_vs_wait_eur": _cluster_mean_ci(
+                        saving_vs_wait, data.departure_date[mask], replicates, seed
+                    ),
+                    "ci_saving_vs_book_eur": _cluster_mean_ci(
+                        saving_vs_book, data.departure_date[mask], replicates, seed + 1
+                    ),
                 }
             )
     return rows
@@ -1180,6 +1189,14 @@ def _headroom_diagnostics(
                 if len(np.unique(y_headroom[mask])) == 2
                 else None
             )
+            band_bootstrap = _bootstrap(
+                y_headroom[mask],
+                probabilities[mask],
+                eval_rows.departure_date[mask],
+                config.report.metric_bootstrap_replicates,
+                config.seed + value,
+            )
+            band_metrics["brier_ci"] = band_bootstrap.get("brier", [])
             band_metrics["headroom_pct"] = value
             band_metrics["ttd_band"] = band
             headroom_ttd.append(band_metrics)
@@ -1369,8 +1386,14 @@ def train_and_evaluate(
             evaluate_test,
         )
     )
+    shipped_headroom = [
+        calibrator.predict(model.predict(eval_rows, headroom=value)) for value in config.label.headroom_pct
+    ]
     test_metrics["headroom_monotonic"] = bool(
-        all(np.all(left >= right) for left, right in itertools.pairwise(headroom_probabilities))
+        all(np.all(left >= right) for left, right in itertools.pairwise(shipped_headroom))
+    )
+    test_metrics["headroom_monotonic_raw"] = bool(
+        all(np.all(left >= right) for left, right in itertools.pairwise(raw_headroom_probabilities))
     )
     prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
     calibration_stats = _calibration_stats(eval_rows.y, calibrated_eval, config.report.calibration_bins)
@@ -1398,15 +1421,6 @@ def train_and_evaluate(
         config.seed + 1,
         threshold,
     )
-    positive_rate = float(np.mean(eval_rows.y))
-    if bootstrap.get("brier"):
-        reference = positive_rate * (1.0 - positive_rate)
-        if reference > 0:
-            intervals["bss"] = [
-                1.0 - bootstrap["brier"][1] / reference,
-                1.0 - bootstrap["brier"][0] / reference,
-            ]
-
     paired: dict[str, Any] = {
         "vs_climatology_brier_point": float(
             np.mean((np.clip(calibrated_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
@@ -1503,6 +1517,7 @@ def train_and_evaluate(
         decision_value=tuple(decision_value),
         intervals=intervals,
         paired=paired,
+        bootstrap_clusters=len(np.unique(groups)),
         prediction_series=np.tile(eval_rows.series, len(config.label.headroom_pct)),
         prediction_snapshot_at=np.tile(eval_rows.snapshot_at, len(config.label.headroom_pct)),
         prediction_route_day=np.tile(eval_rows.route_day, len(config.label.headroom_pct)),
@@ -1512,6 +1527,10 @@ def train_and_evaluate(
         prediction_calibration_fold=np.concatenate(fold_assignments),
         prediction_calibration_mode="full" if evaluate_test else "oof",
         prediction_calibrated=np.concatenate(headroom_probabilities),
+        prediction_assigned_headroom=np.tile(eval_rows.headroom, len(config.label.headroom_pct)),
+        prediction_calibrated_pooled=np.tile(calibrated_eval, len(config.label.headroom_pct)),
+        prediction_departure_date=np.tile(eval_rows.departure_date, len(config.label.headroom_pct)),
+        prediction_ttd_band=np.tile(bands_eval, len(config.label.headroom_pct)),
         prediction_y=np.concatenate(y_headroom_arrays),
         prediction_split=evaluation_split,
     )
@@ -1546,6 +1565,10 @@ def write_evaluation_artifacts(
     raw_pooled = evaluation.prediction_raw_pooled
     calibration_folds = evaluation.prediction_calibration_fold
     calibrated_scores = evaluation.prediction_calibrated
+    assigned_headroom = evaluation.prediction_assigned_headroom
+    calibrated_pooled = evaluation.prediction_calibrated_pooled
+    departure_date = evaluation.prediction_departure_date
+    ttd_band = evaluation.prediction_ttd_band
     labels = evaluation.prediction_y
     if (
         series is None
@@ -1556,6 +1579,10 @@ def write_evaluation_artifacts(
         or raw_pooled is None
         or calibration_folds is None
         or calibrated_scores is None
+        or assigned_headroom is None
+        or calibrated_pooled is None
+        or departure_date is None
+        or ttd_band is None
         or labels is None
     ):
         raise ModelError("evaluation has no prediction arrays to persist")
@@ -1572,6 +1599,10 @@ def write_evaluation_artifacts(
             "calibration_fold": calibration_folds,
             "calibration_mode": [evaluation.prediction_calibration_mode] * len(labels),
             "calibrated_score": calibrated_scores,
+            "assigned_headroom": assigned_headroom,
+            "calibrated_score_pooled": calibrated_pooled,
+            "departure_date": departure_date,
+            "ttd_band": ttd_band,
             "label": labels,
             "split": [evaluation.prediction_split] * len(labels),
         }
@@ -1596,6 +1627,7 @@ def write_evaluation_artifacts(
             "threshold_precision_floor_met": evaluation.threshold_precision_floor_met,
             "dropped_features": list(evaluation.dropped_features),
             "config": {key: value for key, value in config.to_dict().items() if key != "source"},
+            "joblib_version": joblib.__version__,
         },
         out_dir / "model.joblib",
     )

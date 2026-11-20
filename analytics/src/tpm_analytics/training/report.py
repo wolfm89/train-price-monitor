@@ -110,6 +110,11 @@ def _report(
     def _p(value: Any) -> str:
         return "—" if value is None else f"{float(value):.1%}"
 
+    def _ci(values: Any) -> str:
+        if not isinstance(values, list) or len(values) != 2:
+            return "—"
+        return f"{_fmt(values[0])}..{_fmt(values[1])}"
+
     cohort_rows = [
         [
             item["split"],
@@ -147,6 +152,12 @@ def _report(
             item["check_eligible"],
             item.get("check_priced", "—"),
             item.get("check_censored", "—"),
+            item.get("check_eligible_2028", "—"),
+            item.get("check_priced_2028", "—"),
+            _p(item.get("next_day_2028_rate")),
+            item.get("check_eligible_2226", "—"),
+            item.get("check_priced_2226", "—"),
+            _p(item.get("next_day_2226_rate")),
             _p(item["within_day_rate"]),
             _p(item.get("priced_within_day_rate")),
             _p(item["next_day_rate"]),
@@ -158,6 +169,27 @@ def _report(
             item["unchanged"],
         ]
         for item in stats.profile.get("label", [])
+    ]
+    forward_rows = [
+        [
+            item["split"],
+            item["band"],
+            item.get("forward_dearer", 0),
+            item.get("forward_cheaper", 0),
+            max(0, item.get("check_priced_2028", 0) - item.get("forward_dearer", 0) - item.get("forward_cheaper", 0)),
+        ]
+        for item in stats.profile.get("label", [])
+    ]
+    a29_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["rows"],
+            _p(item["within_day_rate"]),
+            _p(item["next_day_rate"]),
+            _p(item["crossed_back_rate"]),
+        ]
+        for item in stats.profile.get("a29", [])
     ]
     tier_rows = [
         [
@@ -222,6 +254,7 @@ def _report(
             item.get("train_rows"),
             item.get("positive_rate"),
             _fmt(item.get("brier")),
+            _ci(item.get("brier_ci")),
             _fmt(item.get("log_loss")),
             _fmt(item.get("bss")),
             _fmt(item.get("bss_train")),
@@ -293,12 +326,16 @@ def _report(
             item["headroom_pct"],
             item["alert_rows"],
             _p(item["alert_share"]),
-            _fmt(item["policy_saving_eur"], 2),
-            _p(item["policy_saving_pct"]),
-            _fmt(item["conditional_saving_eur"], 2),
-            _fmt(item["ci_eur"][0], 2) + ".." + _fmt(item["ci_eur"][1], 2) if item["ci_eur"] else "—",
-            _fmt(item["always_wait_eur"], 2),
-            _p(item["always_wait_pct"]),
+            _fmt(item["saving_vs_always_wait_eur"], 2),
+            _fmt(item["saving_vs_always_book_eur"], 2),
+            _fmt(item["conditional_saving_when_alert_eur"], 2),
+            _fmt(item["cost_of_waiting_eur"], 2),
+            _fmt(item["ci_saving_vs_wait_eur"][0], 2) + ".." + _fmt(item["ci_saving_vs_wait_eur"][1], 2)
+            if item["ci_saving_vs_wait_eur"]
+            else "—",
+            _fmt(item["ci_saving_vs_book_eur"][0], 2) + ".." + _fmt(item["ci_saving_vs_book_eur"][1], 2)
+            if item["ci_saving_vs_book_eur"]
+            else "—",
         ]
         for item in evaluation.decision_value
     ]
@@ -366,8 +403,14 @@ def _report(
             "TTD band",
             "labelled",
             "check eligible",
-            "check priced",
-            "check censored",
+            "check priced 20-24",
+            "check censored 20-24",
+            "check eligible 20-28",
+            "check priced 20-28",
+            "next-day 20-28",
+            "check eligible 22-26",
+            "check priced 22-26",
+            "next-day 22-26",
             "within-day all",
             "within-day priced",
             "next-day point",
@@ -380,6 +423,8 @@ def _report(
         ],
         label_rows,
     )
+    a29_table = _table(["split", "TTD band", "rows", "within-day 5%", "next-day 5%", "crossed back 5%"], a29_rows)
+    forward_table = _table(["split", "TTD band", "forward dearer", "forward cheaper", "unchanged"], forward_rows)
     tier_table = _table(
         ["split", "TTD band", "one future scrape", "one prevalence", "two or more", "two-plus prevalence"], tier_rows
     )
@@ -411,6 +456,7 @@ def _report(
             "train rows",
             "positive rate",
             "Brier",
+            "Brier 95% CI",
             "log loss",
             "BSS slice",
             "BSS train",
@@ -465,12 +511,12 @@ def _report(
             "headroom %",
             "alerts",
             "alert share",
-            "policy € / snapshot",
-            "policy % / snapshot",
+            "saving vs wait €",
+            "saving vs book €",
             "conditional € / alert",
-            "policy 95% CI €",
-            "always wait €",
-            "always wait %",
+            "cost of waiting €",
+            "95% CI vs wait",
+            "95% CI vs book",
         ],
         decision_rows,
     )
@@ -578,6 +624,8 @@ def _report(
         "validation-select rows.\n"
         "- Dataset diagnostics for the test cohort are descriptive; test model metrics are written "
         "only with `--evaluate-test`.\n"
+        "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
+        "uses the pooled calibrator, so PR 1 and PR 2 per-headroom numbers are not like-for-like.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
@@ -619,6 +667,14 @@ def _report(
 `crossed back` is the share whose within-day maximum breached but the next-day point did not.
 `dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover only rows with
 a 23-36 h reference; `check priced` is the denominator for the next-day rate.
+
+A29-like fixed 5 % comparison:
+
+{a29_table}
+
+Forward day-over-day direction (20-28 h check, +/-0.5 %):
+
+{forward_table}
 
 Prevalence by evidence tier:
 
@@ -682,7 +738,8 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 - Prevalence: {_fmt(evaluation.test.get("positive_rate"))}
 - Precision at threshold: {_fmt(evaluation.test.get("precision_at_threshold"))}
 - Recall at threshold: {_fmt(evaluation.test.get("recall_at_threshold"))}
-- Headroom monotonic: {evaluation.test.get("headroom_monotonic")}
+- Headroom monotonic (shipped pooled calibrator): {evaluation.test.get("headroom_monotonic")}
+- Headroom monotonic (raw scores): {evaluation.test.get("headroom_monotonic_raw")}
 - Evaluation tier: `{evaluation.test_tier}` ({evaluation.test_tier_rows} rows)
 - Precision floor met on evaluation: {evaluation.test.get("precision_floor_met_on_evaluation")}
 {test_all_line}
@@ -691,6 +748,8 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 
 ### Bootstrap intervals and paired Brier differences
 
+{_table(["cluster count"], [[evaluation.bootstrap_clusters]])}
+
 {interval_table}
 
 {paired_table}
@@ -698,6 +757,10 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 Negative Brier differences mean the model is better than the baseline.
 
 ## Per-headroom evaluation metrics
+
+Per-headroom rows use a separate out-of-fold calibration fitted on that headroom's labels; the
+shipped model uses the pooled calibrator. These are diagnostic and are not directly comparable with
+the PR 1 pooled-calibrator table.
 
 {_table(headroom_headers, headroom_rows)}
 
@@ -728,6 +791,9 @@ Reliability by headroom, TTD band and era:
 ### Decision value (diagnostic on the current label)
 
 {decision_table}
+
+Positive saving means the alert policy costs less than the baseline; negative means it costs
+more. `cost of waiting` is the unconditional cost of always waiting one day.
 
 ## Calibration
 
