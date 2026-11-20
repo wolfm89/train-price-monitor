@@ -972,6 +972,17 @@ def train_and_evaluate(
     returned tuple holds the evaluation payload, all fitted candidates and the calibrator that
     belongs to the selected model.
     """
+
+    def canonical(data: TabularData) -> TabularData:
+        order = np.lexsort(
+            (
+                np.asarray(data.snapshot_at, dtype=str),
+                np.asarray(data.series, dtype=str),
+            )
+        )
+        return data.subset(order)
+
+    splits = {name: canonical(data) for name, data in splits.items()}
     train = splits["train"]
     validation_select = splits["validation_select"]
     validation_calibrate = splits["validation_calibrate"]
@@ -1130,6 +1141,10 @@ def train_and_evaluate(
     climatology_metrics: dict[str, Any] = dict(_metrics(eval_rows.y, clim_eval))
     climatology_metrics["bss_train"] = _bss_train(climatology_metrics["brier"], eval_rows.y, train_rate)
     climatology_metrics["method"] = calibration_method
+    clim_reference = float(np.mean((eval_rows.y - clim_eval) ** 2))
+    test_metrics["bss_climatology"] = (
+        1.0 - _metric_value(test_metrics["brier"]) / clim_reference if clim_reference > 0 else None
+    )
 
     headroom = []
     headroom_ttd = []

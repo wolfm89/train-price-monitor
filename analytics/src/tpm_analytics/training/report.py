@@ -520,6 +520,7 @@ def _report(
     bss_line = (
         f"- Brier skill score vs the slice base rate: {_fmt(evaluation.test.get('bss'))}\n"
         f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.test.get('bss_train'))}\n"
+        f"- Brier skill score vs climatology: {_fmt(evaluation.test.get('bss_climatology'))}\n"
         f"- Train prevalence of the evaluated subset: {_fmt(evaluation.train_prevalence)}"
     )
     test_all_line = (
@@ -610,6 +611,8 @@ def _report(
 {label_table}
 
 `crossed back` is the share whose within-day maximum breached but the next-day point did not.
+`dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover only rows with
+a 23-36 h reference; `check priced` is the denominator for the next-day rate.
 
 Prevalence by evidence tier:
 

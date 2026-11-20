@@ -472,6 +472,21 @@ def test_train_evaluate_is_permutation_invariant(tmp_path: Path) -> None:
     assert first.test["brier"] == pytest.approx(second.test["brier"], rel=1e-6)
     assert first.test["log_loss"] == pytest.approx(second.test["log_loss"], rel=1e-6)
 
+    def stable(value: object) -> object:
+        if isinstance(value, float):
+            return round(value, 6)
+        if isinstance(value, dict):
+            return {key: stable(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    first_digest = hashlib.sha256(json.dumps(stable(first.to_dict()), sort_keys=True, default=str).encode()).hexdigest()
+    second_digest = hashlib.sha256(
+        json.dumps(stable(second.to_dict()), sort_keys=True, default=str).encode()
+    ).hexdigest()
+    assert first_digest == second_digest
+
 
 def test_calibrator_outputs_are_bounded() -> None:
     rng = np.random.default_rng(5)
