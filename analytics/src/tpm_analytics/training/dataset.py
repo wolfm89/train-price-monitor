@@ -913,11 +913,11 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         series_info AS (
             SELECT
                 series_key,
-                any_value(route_id) AS route_id,
-                any_value(departure_date) AS departure_date,
-                any_value(train_number) AS train_number,
-                any_value(departure_planned) AS departure_planned,
-                any_value(service_class) AS service_class,
+                min(route_id) AS route_id,
+                min(departure_date) AS departure_date,
+                min(train_number) AS train_number,
+                min(departure_planned) AS departure_planned,
+                min(service_class) AS service_class,
                 max(observed_at) AS last_obs,
                 count(*) AS observations
             FROM series_obs
@@ -1045,9 +1045,9 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 "rows": int(row[2]),
                 "eligible": int(row[3]),
                 "covered_share": None if row[4] is None else float(row[4]),
-                "mean_tail_h": None if row[5] is None else float(row[5]),
-                "mean_gap_h": None if row[6] is None else float(row[6]),
-                "median_gap_h": None if row[7] is None else float(row[7]),
+                "mean_tail_h": None if row[5] is None else round(float(row[5]), 6),
+                "mean_gap_h": None if row[6] is None else round(float(row[6]), 6),
+                "median_gap_h": None if row[7] is None else round(float(row[7]), 6),
             }
             for row in coverage_r24
         ],
