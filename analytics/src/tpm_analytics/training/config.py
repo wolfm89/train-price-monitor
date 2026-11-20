@@ -146,6 +146,7 @@ class CalibrationConfig:
 @dataclass(frozen=True)
 class ReportConfig:
     bootstrap_replicates: int
+    metric_bootstrap_replicates: int
     bootstrap_cluster: str
     threshold_precision_floor: float
     calibration_bins: int
@@ -155,6 +156,8 @@ class ReportConfig:
     def validate(self) -> None:
         if not 1 <= self.bootstrap_replicates <= 5000:
             raise ConfigError("report.bootstrap_replicates must be between 1 and 5000")
+        if not 1 <= self.metric_bootstrap_replicates <= 2000:
+            raise ConfigError("report.metric_bootstrap_replicates must be between 1 and 2000")
         if self.bootstrap_cluster not in {"departure_date", "route_day"}:
             raise ConfigError("report.bootstrap_cluster must be departure_date or route_day")
         if not 0 <= self.threshold_precision_floor <= 1:
@@ -311,6 +314,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
         ),
         report=ReportConfig(
             bootstrap_replicates=_int(report_raw, "bootstrap_replicates", minimum=1),
+            metric_bootstrap_replicates=_int(report_raw, "metric_bootstrap_replicates", minimum=1),
             bootstrap_cluster=_str(report_raw, "bootstrap_cluster"),
             threshold_precision_floor=_float(report_raw, "threshold_precision_floor"),
             calibration_bins=_int(report_raw, "calibration_bins", minimum=2),

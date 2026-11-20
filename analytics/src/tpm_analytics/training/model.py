@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import importlib
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import joblib
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from scipy.special import expit
@@ -35,6 +38,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
+from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, band_labels, ttd_band
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
 
@@ -56,6 +60,10 @@ class TabularData:
     future_observations: Array
     headroom: Array
     departure_date: Array
+    snapshot_at: Array
+    observation_era: Array
+    observation_week: Array
+    check_price: Array
 
     def __len__(self) -> int:
         return len(self.y)
@@ -71,6 +79,10 @@ class TabularData:
             future_observations=self.future_observations[indices],
             headroom=self.headroom[indices],
             departure_date=self.departure_date[indices],
+            snapshot_at=self.snapshot_at[indices],
+            observation_era=self.observation_era[indices],
+            observation_week=self.observation_week[indices],
+            check_price=self.check_price[indices],
         )
 
     def select(self, names: tuple[str, ...]) -> TabularData:
@@ -84,6 +96,10 @@ class TabularData:
             future_observations=self.future_observations,
             headroom=self.headroom,
             departure_date=self.departure_date,
+            snapshot_at=self.snapshot_at,
+            observation_era=self.observation_era,
+            observation_week=self.observation_week,
+            check_price=self.check_price,
         )
 
 
@@ -138,6 +154,9 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             "headroom_pct",
             "departure_date",
             "snapshot_at",
+            "observation_era",
+            "strftime(snapshot_at, '%G-W%V') AS observation_week",
+            "check_price_eur",
             "bin_regime",
             "bin_index",
         )
@@ -175,6 +194,10 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=np.asarray(rows["headroom_pct"], dtype=np.int16),
         departure_date=np.asarray(rows["departure_date"], dtype=str),
+        snapshot_at=np.asarray(rows["snapshot_at"], dtype=str),
+        observation_era=_categorical(rows["observation_era"]),
+        observation_week=_categorical(rows["observation_week"]),
+        check_price=_filled64(rows["check_price_eur"], np.nan),
     )
 
 
@@ -353,6 +376,75 @@ def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: Train
     return FittedModel(name=name, estimator=estimator, encoder=encoder, spec=spec)
 
 
+@dataclass(frozen=True)
+class ClimatologyModel:
+    """Smoothed train prevalence by TTD band, headroom and service class."""
+
+    cells: dict[tuple[str, int, str], float]
+    band_headroom: dict[tuple[str, int], float]
+    headroom: dict[int, float]
+    global_rate: float
+
+    def predict(self, data: TabularData, headroom: int | None = None) -> Array:
+        hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
+        bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
+        heads = data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16)
+        classes = np.asarray(data.features["service_class"], dtype=str)
+        values = np.empty(len(data), dtype=np.float64)
+        for index, (band, head, service_class) in enumerate(zip(bands, heads, classes, strict=True)):
+            key = (band, int(head), str(service_class))
+            values[index] = self.cells.get(
+                key,
+                self.band_headroom.get(
+                    (band, int(head)),
+                    self.headroom.get(int(head), self.global_rate),
+                ),
+            )
+        return values
+
+
+def fit_climatology(data: TabularData, *, strength: float = 50.0) -> ClimatologyModel:
+    """Fit a hierarchical prevalence baseline with a Beta-style prior on thin cells."""
+    hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
+    bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
+    heads = np.asarray(data.headroom, dtype=np.int64)
+    classes = np.asarray(data.features["service_class"], dtype=str)
+    global_count = len(data)
+    global_positives = int(np.sum(data.y))
+    global_rate = (global_positives + 1.0) / (global_count + 2.0)
+    head_counts: dict[int, list[int]] = {}
+    band_counts: dict[tuple[str, int], list[int]] = {}
+    cell_counts: dict[tuple[str, int, str], list[int]] = {}
+    for band, head, service_class, target in zip(bands, heads, classes, data.y, strict=True):
+        head_counts.setdefault(int(head), [0, 0])
+        head_counts[int(head)][0] += 1
+        head_counts[int(head)][1] += int(target)
+        band_counts.setdefault((band, int(head)), [0, 0])
+        band_counts[(band, int(head))][0] += 1
+        band_counts[(band, int(head))][1] += int(target)
+        cell_counts.setdefault((band, int(head), str(service_class)), [0, 0])
+        cell_counts[(band, int(head), str(service_class))][0] += 1
+        cell_counts[(band, int(head), str(service_class))][1] += int(target)
+    head_rate = {
+        head: (positive + strength * global_rate) / (count + strength)
+        for head, (count, positive) in head_counts.items()
+    }
+    band_rate = {
+        key: (positive + strength * head_rate.get(key[1], global_rate)) / (count + strength)
+        for key, (count, positive) in band_counts.items()
+    }
+    cell_rate = {
+        key: (positive + strength * band_rate.get((key[0], key[1]), global_rate)) / (count + strength)
+        for key, (count, positive) in cell_counts.items()
+    }
+    return ClimatologyModel(
+        cells=cell_rate,
+        band_headroom=band_rate,
+        headroom=head_rate,
+        global_rate=global_rate,
+    )
+
+
 class ScoreCalibrator:
     """A calibrator over raw probabilities, fitted on a held-out slice."""
 
@@ -461,6 +553,23 @@ class Evaluation:
     importance: tuple[dict[str, Any], ...]
     bootstrap: dict[str, list[float]]
     split_sizes: dict[str, int]
+    headroom_ttd: tuple[dict[str, Any], ...] = ()
+    strata: tuple[dict[str, Any], ...] = ()
+    strata_compare: tuple[dict[str, Any], ...] = ()
+    calibration_stats: dict[str, float | None] = field(default_factory=dict)
+    calibration_groups: tuple[dict[str, Any], ...] = ()
+    climatology: dict[str, Any] = field(default_factory=dict)
+    decision_value: tuple[dict[str, Any], ...] = ()
+    intervals: dict[str, list[float]] = field(default_factory=dict)
+    paired: dict[str, Any] = field(default_factory=dict)
+    prediction_series: Array | None = field(default=None, repr=False, compare=False)
+    prediction_snapshot_at: Array | None = field(default=None, repr=False, compare=False)
+    prediction_route_day: Array | None = field(default=None, repr=False, compare=False)
+    prediction_headroom: Array | None = field(default=None, repr=False, compare=False)
+    prediction_raw: Array | None = field(default=None, repr=False, compare=False)
+    prediction_calibrated: Array | None = field(default=None, repr=False, compare=False)
+    prediction_y: Array | None = field(default=None, repr=False, compare=False)
+    prediction_split: str = field(default="", repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -486,6 +595,15 @@ class Evaluation:
             "importance": list(self.importance),
             "bootstrap": self.bootstrap,
             "split_sizes": self.split_sizes,
+            "headroom_ttd": list(self.headroom_ttd),
+            "strata": list(self.strata),
+            "strata_compare": list(self.strata_compare),
+            "calibration_stats": self.calibration_stats,
+            "calibration_groups": list(self.calibration_groups),
+            "climatology": self.climatology,
+            "decision_value": list(self.decision_value),
+            "intervals": self.intervals,
+            "paired": self.paired,
         }
 
 
@@ -592,6 +710,10 @@ def _permutation_importance(
                 future_observations=data.future_observations,
                 headroom=data.headroom,
                 departure_date=data.departure_date,
+                snapshot_at=data.snapshot_at,
+                observation_era=data.observation_era,
+                observation_week=data.observation_week,
+                check_price=data.check_price,
             )
             probabilities = np.clip(calibrator.predict(model.predict(shuffled)), 1e-9, 1.0 - 1e-9)
             increases.append(float(brier_score_loss(data.y, probabilities)) - baseline)
@@ -626,6 +748,207 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
         "brier": [float(np.percentile(brier, 2.5)), float(np.percentile(brier, 97.5))],
         "log_loss": [float(np.percentile(logloss, 2.5)), float(np.percentile(logloss, 97.5))],
     }
+
+
+def _ttd_array(data: TabularData) -> Array:
+    hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
+    return np.asarray([ttd_band(float(value)) for value in hours], dtype=str)
+
+
+def _calibration_stats(y: Array, probabilities: Array, bins: int) -> dict[str, float | None]:
+    """Return logistic calibration slope/intercept and expected calibration error."""
+    clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
+    slope: float | None = None
+    intercept: float | None = None
+    if len(np.unique(y)) == 2 and len(np.unique(clipped)) > 1:
+        logits = np.log(clipped / (1.0 - clipped))
+        if float(np.std(logits)) > 1e-12:
+            model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+            model.fit(logits.reshape(-1, 1), y)
+            slope = float(model.coef_[0][0])
+            intercept = float(model.intercept_[0])
+    predicted, observed, counts = _calibration_curve(y, clipped, bins)
+    total = float(counts.sum())
+    ece = float(np.sum(counts / total * np.abs(predicted - observed))) if total > 0 else None
+    return {"slope": slope, "intercept": intercept, "ece": ece}
+
+
+def _bootstrap_metrics(
+    y: Array,
+    probabilities: Array,
+    groups: Array,
+    replicates: int,
+    seed: int,
+    threshold: float,
+) -> dict[str, list[float]]:
+    """Cluster bootstrap for the headline metrics that cannot use sufficient statistics."""
+    unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2 or len(y) < 2:
+        return {}
+    clusters = [np.flatnonzero(inverse == index) for index in range(len(unique))]
+    rng = np.random.default_rng(seed)
+    collected: dict[str, list[float]] = {
+        key: [] for key in ("brier", "log_loss", "bss", "roc_auc", "average_precision", "precision", "recall")
+    }
+    for _ in range(replicates):
+        sampled = rng.integers(0, len(unique), size=len(unique))
+        indices = np.concatenate([clusters[index] for index in sampled])
+        yy = y[indices]
+        pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
+        both = len(np.unique(yy)) == 2
+        brier = float(brier_score_loss(yy, pp))
+        base = float(np.mean(yy))
+        collected["brier"].append(brier)
+        collected["log_loss"].append(float(log_loss(yy, pp, labels=[0, 1])))
+        collected["bss"].append(1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan)
+        collected["roc_auc"].append(float(roc_auc_score(yy, pp)) if both else np.nan)
+        collected["average_precision"].append(float(average_precision_score(yy, pp)) if both else np.nan)
+        decisions = _decision_metrics(yy, pp, threshold)
+        collected["precision"].append(decisions["precision_at_threshold"])
+        collected["recall"].append(decisions["recall_at_threshold"])
+    result: dict[str, list[float]] = {}
+    for key, values in collected.items():
+        array = np.asarray(values, dtype=np.float64)
+        array = array[np.isfinite(array)]
+        result[key] = [float(np.percentile(array, 2.5)), float(np.percentile(array, 97.5))] if len(array) else []
+    return result
+
+
+def _bootstrap_paired(
+    y: Array,
+    model_probabilities: Array,
+    baseline_probabilities: Array,
+    groups: Array,
+    replicates: int,
+    seed: int,
+) -> list[float]:
+    """Cluster bootstrap of the Brier difference (model minus baseline)."""
+    unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2:
+        return []
+    difference = (np.clip(model_probabilities, 1e-9, 1.0 - 1e-9) - y) ** 2 - (
+        np.clip(baseline_probabilities, 1e-9, 1.0 - 1e-9) - y
+    ) ** 2
+    sums = np.bincount(inverse, weights=difference, minlength=len(unique))
+    counts = np.bincount(inverse, minlength=len(unique))
+    rng = np.random.default_rng(seed)
+    values = []
+    for _ in range(replicates):
+        sampled = rng.integers(0, len(unique), size=len(unique))
+        values.append(float(sums[sampled].sum() / counts[sampled].sum()))
+    return [float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))]
+
+
+def _cluster_mean_ci(values: Array, groups: Array, replicates: int, seed: int) -> list[float]:
+    unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2 or len(values) == 0:
+        return []
+    sums = np.bincount(inverse, weights=values, minlength=len(unique))
+    counts = np.bincount(inverse, minlength=len(unique))
+    rng = np.random.default_rng(seed)
+    means = []
+    for _ in range(replicates):
+        sampled = rng.integers(0, len(unique), size=len(unique))
+        total = counts[sampled].sum()
+        means.append(float(sums[sampled].sum() / total) if total else np.nan)
+    array = np.asarray(means, dtype=np.float64)
+    array = array[np.isfinite(array)]
+    return [float(np.percentile(array, 2.5)), float(np.percentile(array, 97.5))] if len(array) else []
+
+
+def _stratum_metrics(y: Array, probabilities: Array, train_y: Array, threshold: float) -> dict[str, float | None]:
+    metrics = _metrics(y, probabilities)
+    train_rate = float(np.mean(train_y)) if len(train_y) else float("nan")
+    metrics["bss_train"] = _bss_train(metrics["brier"], y, train_rate) if np.isfinite(train_rate) else None
+    decisions = _decision_metrics(y, probabilities, threshold)
+    metrics["precision_at_threshold"] = decisions["precision_at_threshold"]
+    metrics["recall_at_threshold"] = decisions["recall_at_threshold"]
+    metrics["mean_probability"] = float(np.mean(probabilities))
+    metrics["calibration_gap"] = float(np.mean(probabilities) - np.mean(y))
+    return metrics
+
+
+def _strata_rows(
+    data: TabularData,
+    probabilities: Array,
+    train_data: TabularData,
+    threshold: float,
+) -> list[dict[str, Any]]:
+    """Metrics by TTD band, era, observation week and service class."""
+    dimensions = {
+        "ttd_band": _ttd_array(data),
+        "era": np.asarray(data.observation_era, dtype=str),
+        "week": np.asarray(data.observation_week, dtype=str),
+        "service_class": np.asarray(data.features["service_class"], dtype=str),
+    }
+    train_dimensions = {
+        "ttd_band": _ttd_array(train_data),
+        "era": np.asarray(train_data.observation_era, dtype=str),
+        "week": np.asarray(train_data.observation_week, dtype=str),
+        "service_class": np.asarray(train_data.features["service_class"], dtype=str),
+    }
+    rows: list[dict[str, Any]] = []
+    for dimension, values in dimensions.items():
+        for value in sorted(set(values.tolist())):
+            mask = values == value
+            if int(mask.sum()) < 20:
+                continue
+            train_mask = train_dimensions[dimension] == value
+            train_y = train_data.y[train_mask] if int(train_mask.sum()) else train_data.y
+            item = _stratum_metrics(data.y[mask], probabilities[mask], train_y, threshold)
+            rows.append(
+                {
+                    "dimension": dimension,
+                    "value": str(value),
+                    "rows": int(mask.sum()),
+                    **item,
+                }
+            )
+    return rows
+
+
+def _decision_value_rows(
+    data: TabularData,
+    headroom_values: tuple[int, ...],
+    probabilities: list[Array],
+    bands: Array,
+    threshold: float,
+    replicates: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Diagnostic value of alerting now versus booking now or at the next check."""
+    rows: list[dict[str, Any]] = []
+    for headroom, probabilities_at_headroom in zip(headroom_values, probabilities, strict=True):
+        for band in band_labels():
+            mask = (bands == band) & np.isfinite(data.check_price) & np.isfinite(data.price) & (data.price > 0)
+            if int(mask.sum()) < 20:
+                continue
+            price = data.price[mask]
+            check = data.check_price[mask]
+            alert = probabilities_at_headroom[mask] >= threshold
+            saving = check - price
+            selected = alert
+            if int(selected.sum()) == 0:
+                continue
+            mean_saving = float(np.mean(saving[selected]))
+            mean_pct = float(np.mean(saving[selected] / price[selected]))
+            ci = _cluster_mean_ci(saving[selected], data.departure_date[mask][selected], replicates, seed)
+            rows.append(
+                {
+                    "headroom_pct": int(headroom),
+                    "band": band,
+                    "rows": int(mask.sum()),
+                    "alert_rows": int(selected.sum()),
+                    "alert_share": float(selected.mean()),
+                    "mean_saving_eur": mean_saving,
+                    "mean_saving_pct": mean_pct,
+                    "ci_eur": ci,
+                    "always_wait_eur": float(np.mean(saving)),
+                    "always_wait_pct": float(np.mean(saving / price)),
+                    "always_book_eur": 0.0,
+                }
+            )
+    return rows
 
 
 def train_and_evaluate(
@@ -750,8 +1073,9 @@ def train_and_evaluate(
         test_tier = "all_labelled_rows"
     test_tier_rows = len(eval_rows)
     train_eval = train.subset(train.future_observations >= 2) if test_tier == "two_plus_observations" else train
+    raw_eval_source = model.predict(eval_data)
     calibrated_eval = (
-        calibrator.predict(model.predict(eval_rows))
+        calibrator.predict(raw_eval_source)
         if evaluate_test
         else (
             oof_predictions[calibration_method][evidence]
@@ -759,6 +1083,9 @@ def train_and_evaluate(
             else oof_predictions[calibration_method]
         )
     )
+    bands_eval = _ttd_array(eval_rows)
+    bands_train = _ttd_array(train_eval)
+
     test_metrics = _metrics(eval_rows.y, calibrated_eval)
     train_rate = _train_prevalence(train, test_tier)
     test_metrics["bss_train"] = _bss_train(test_metrics["brier"], eval_rows.y, train_rate)
@@ -768,13 +1095,45 @@ def train_and_evaluate(
         _metric_value(test_metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
     )
 
+    # Climatology baseline: smoothed train prevalence by TTD band, headroom and service class.
+    climatology = fit_climatology(train)
+    clim_raw_cal = climatology.predict(cal_data)
+    clim_oof = _cross_fitted(
+        clim_raw_cal,
+        cal_data.y,
+        cal_data.route_day,
+        calibration_method,
+        config,
+    )
+    if evaluate_test:
+        clim_calibrator = fit_calibrator(
+            clim_raw_cal,
+            cal_data.y,
+            calibration_method,
+            min_positives=config.calibration.min_positives,
+        )
+        clim_eval = clim_calibrator.predict(climatology.predict(eval_rows))
+    else:
+        clim_eval = clim_oof[evidence] if len(eval_rows) != len(cal_data) else clim_oof
+    climatology_metrics: dict[str, Any] = dict(_metrics(eval_rows.y, clim_eval))
+    climatology_metrics["bss_train"] = _bss_train(climatology_metrics["brier"], eval_rows.y, train_rate)
+    climatology_metrics["method"] = calibration_method
+
     headroom = []
+    headroom_ttd = []
     headroom_probabilities: list[Array] = []
+    raw_headroom_probabilities: list[Array] = []
+    y_headroom_arrays: list[Array] = []
+    climatology_by_headroom: list[Array] = []
     for value in config.label.headroom_pct:
         y_headroom = (eval_rows.future_max >= eval_rows.price * (1.0 + value / 100.0)).astype(np.int8)
         if evaluate_test:
-            probabilities = calibrator.predict(model.predict(eval_rows, headroom=value))
+            raw_headroom = model.predict(eval_rows, headroom=value)
+            probabilities = calibrator.predict(raw_headroom)
+            clim_headroom = clim_calibrator.predict(climatology.predict(eval_rows, headroom=value))
         else:
+            raw_cal_headroom = model.predict(cal_data, headroom=value)
+            raw_headroom = raw_cal_headroom[evidence] if len(eval_rows) != len(cal_data) else raw_cal_headroom
             oof_headroom = _cross_fitted_apply(
                 model.predict(cal_data),
                 cal_data.y,
@@ -784,6 +1143,16 @@ def train_and_evaluate(
                 config,
             )
             probabilities = oof_headroom[evidence] if len(eval_rows) != len(cal_data) else oof_headroom
+            clim_raw_headroom = climatology.predict(cal_data, headroom=value)
+            clim_headroom = _cross_fitted_apply(
+                clim_raw_cal,
+                cal_data.y,
+                cal_data.route_day,
+                clim_raw_headroom,
+                calibration_method,
+                config,
+            )
+            clim_headroom = clim_headroom[evidence] if len(eval_rows) != len(cal_data) else clim_headroom
         item = _metrics(y_headroom, probabilities)
         item["headroom_pct"] = value
         item["mean_probability"] = float(np.mean(probabilities))
@@ -794,13 +1163,77 @@ def train_and_evaluate(
         train_headroom = train_eval.y[train_eval.headroom == value]
         train_rate_h = float(np.mean(train_headroom)) if len(train_headroom) else train_rate
         item["bss_train"] = _bss_train(item["brier"], y_headroom, train_rate_h)
+        clim_reference = float(np.mean((y_headroom - clim_headroom) ** 2))
+        item["bss_climatology"] = (
+            1.0 - item["brier"] / clim_reference if item["brier"] is not None and clim_reference > 0 else None
+        )
+        calibration = _calibration_stats(y_headroom, probabilities, config.report.calibration_bins)
+        item["calibration_slope"] = calibration["slope"]
+        item["calibration_intercept"] = calibration["intercept"]
+        item["ece"] = calibration["ece"]
         headroom_probabilities.append(probabilities)
+        raw_headroom_probabilities.append(raw_headroom)
+        y_headroom_arrays.append(y_headroom)
+        climatology_by_headroom.append(clim_headroom)
         headroom.append(item)
+        for band in band_labels():
+            mask = bands_eval == band
+            if int(mask.sum()) < 20:
+                continue
+            band_metrics: dict[str, Any] = dict(_metrics(y_headroom[mask], probabilities[mask]))
+            train_mask = (bands_train == band) & (train_eval.headroom == value)
+            train_band_rate = float(np.mean(train_eval.y[train_mask])) if int(train_mask.sum()) else train_rate_h
+            band_metrics["bss_train"] = _bss_train(band_metrics["brier"], y_headroom[mask], train_band_rate)
+            clim_band_reference = float(np.mean((y_headroom[mask] - clim_headroom[mask]) ** 2))
+            band_metrics["bss_climatology"] = (
+                1.0 - band_metrics["brier"] / clim_band_reference
+                if band_metrics["brier"] is not None and clim_band_reference > 0
+                else None
+            )
+            band_metrics["roc_auc_raw"] = (
+                float(roc_auc_score(y_headroom[mask], raw_headroom[mask]))
+                if len(np.unique(y_headroom[mask])) == 2
+                else None
+            )
+            band_metrics["headroom_pct"] = value
+            band_metrics["ttd_band"] = band
+            headroom_ttd.append(band_metrics)
 
     test_metrics["headroom_monotonic"] = bool(
         all(np.all(left >= right) for left, right in itertools.pairwise(headroom_probabilities))
     )
     prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
+    calibration_stats = _calibration_stats(eval_rows.y, calibrated_eval, config.report.calibration_bins)
+    calibration_groups: list[dict[str, Any]] = []
+    for value_index, value in enumerate(config.label.headroom_pct):
+        for band in band_labels():
+            for era in sorted(set(np.asarray(eval_rows.observation_era, dtype=str).tolist())):
+                mask = (bands_eval == band) & (np.asarray(eval_rows.observation_era, dtype=str) == era)
+                if int(mask.sum()) < 20:
+                    continue
+                group_pred, group_true, group_counts = _calibration_curve(
+                    y_headroom_arrays[value_index][mask],
+                    headroom_probabilities[value_index][mask],
+                    config.report.calibration_bins,
+                )
+                stats = _calibration_stats(
+                    y_headroom_arrays[value_index][mask],
+                    headroom_probabilities[value_index][mask],
+                    config.report.calibration_bins,
+                )
+                calibration_groups.append(
+                    {
+                        "headroom_pct": value,
+                        "ttd_band": band,
+                        "era": era,
+                        "rows": int(mask.sum()),
+                        "prob_pred": [float(item) for item in group_pred],
+                        "prob_true": [float(item) for item in group_true],
+                        "counts": [int(item) for item in group_counts],
+                        **stats,
+                    }
+                )
+
     groups = eval_rows.departure_date if config.report.bootstrap_cluster == "departure_date" else eval_rows.route_day
     bootstrap = _bootstrap(
         eval_rows.y,
@@ -809,7 +1242,117 @@ def train_and_evaluate(
         config.report.bootstrap_replicates,
         config.seed,
     )
+    intervals = _bootstrap_metrics(
+        eval_rows.y,
+        calibrated_eval,
+        groups,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 1,
+        threshold,
+    )
+    positive_rate = float(np.mean(eval_rows.y))
+    if bootstrap.get("brier"):
+        reference = positive_rate * (1.0 - positive_rate)
+        if reference > 0:
+            intervals["bss"] = [
+                1.0 - bootstrap["brier"][1] / reference,
+                1.0 - bootstrap["brier"][0] / reference,
+            ]
+    paired: dict[str, Any] = {}
+    paired["vs_climatology_brier_point"] = float(
+        np.mean((np.clip(calibrated_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+        - np.mean((np.clip(clim_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+    )
+    paired["vs_climatology_brier"] = _bootstrap_paired(
+        eval_rows.y,
+        calibrated_eval,
+        clim_eval,
+        groups,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 2,
+    )
+    if "logistic" in candidates:
+        logistic_raw_cal = candidates["logistic"].predict(cal_data)
+        if evaluate_test:
+            logistic_calibrator = fit_calibrator(
+                logistic_raw_cal,
+                cal_data.y,
+                calibration_method,
+                min_positives=config.calibration.min_positives,
+            )
+            logistic_eval = logistic_calibrator.predict(candidates["logistic"].predict(eval_rows))
+        else:
+            logistic_oof = _cross_fitted(
+                logistic_raw_cal,
+                cal_data.y,
+                cal_data.route_day,
+                calibration_method,
+                config,
+            )
+            logistic_eval = logistic_oof[evidence] if len(eval_rows) != len(cal_data) else logistic_oof
+        paired["vs_logistic_brier_point"] = float(
+            np.mean((np.clip(calibrated_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+            - np.mean((np.clip(logistic_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+        )
+        paired["vs_logistic_brier"] = _bootstrap_paired(
+            eval_rows.y,
+            calibrated_eval,
+            logistic_eval,
+            groups,
+            config.report.metric_bootstrap_replicates,
+            config.seed + 3,
+        )
+    else:
+        paired["vs_logistic_brier_point"] = None
+        paired["vs_logistic_brier"] = []
+
+    strata = _strata_rows(eval_rows, calibrated_eval, train_eval, threshold)
+    strata_compare: list[dict[str, Any]] = []
+    if evaluate_test:
+        validation_evidence = validation_calibrate.future_observations >= 2
+        if int(validation_evidence.sum()) >= 100:
+            validation_rows = validation_calibrate.subset(validation_evidence)
+        else:
+            validation_rows = validation_calibrate
+        validation_calibrated = (
+            oof_predictions[calibration_method][validation_evidence]
+            if len(validation_rows) != len(cal_data)
+            else oof_predictions[calibration_method]
+        )
+        validation_strata = {
+            (item["dimension"], item["value"]): item
+            for item in _strata_rows(validation_rows, validation_calibrated, train_eval, threshold)
+        }
+        test_strata = {(item["dimension"], item["value"]): item for item in strata}
+        for key, test_item in test_strata.items():
+            validation_item = validation_strata.get(key)
+            if validation_item is None:
+                continue
+            strata_compare.append(
+                {
+                    "dimension": key[0],
+                    "value": key[1],
+                    "validation_rows": validation_item["rows"],
+                    "test_rows": test_item["rows"],
+                    "validation_brier": validation_item["brier"],
+                    "test_brier": test_item["brier"],
+                    "validation_bss": validation_item["bss"],
+                    "test_bss": test_item["bss"],
+                }
+            )
+
+    decision_value = _decision_value_rows(
+        eval_rows,
+        config.label.headroom_pct,
+        headroom_probabilities,
+        bands_eval,
+        threshold,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 4,
+    )
+
     importance = _permutation_importance(model, calibrator, validation_select, spec, seed=config.seed)
+    prediction_headroom = np.repeat(np.asarray(config.label.headroom_pct, dtype=np.int16), len(eval_rows))
     evaluation = Evaluation(
         chosen_model=chosen,
         calibration_method=calibration_method,
@@ -830,5 +1373,89 @@ def train_and_evaluate(
         importance=importance,
         bootstrap=bootstrap,
         split_sizes={name: len(data) for name, data in splits.items()},
+        headroom_ttd=tuple(headroom_ttd),
+        strata=tuple(strata),
+        strata_compare=tuple(strata_compare),
+        calibration_stats=calibration_stats,
+        calibration_groups=tuple(calibration_groups),
+        climatology=climatology_metrics,
+        decision_value=tuple(decision_value),
+        intervals=intervals,
+        paired=paired,
+        prediction_series=np.tile(eval_rows.series, len(config.label.headroom_pct)),
+        prediction_snapshot_at=np.tile(eval_rows.snapshot_at, len(config.label.headroom_pct)),
+        prediction_route_day=np.tile(eval_rows.route_day, len(config.label.headroom_pct)),
+        prediction_headroom=prediction_headroom,
+        prediction_raw=np.concatenate(raw_headroom_probabilities),
+        prediction_calibrated=np.concatenate(headroom_probabilities),
+        prediction_y=np.concatenate(y_headroom_arrays),
+        prediction_split=evaluation_split,
     )
     return evaluation, candidates, calibrator
+
+
+def write_evaluation_artifacts(
+    out_dir: Path,
+    evaluation: Evaluation,
+    fitted: dict[str, FittedModel],
+    calibrator: ScoreCalibrator,
+    spec: FeatureSpec,
+    config: TrainingConfig,
+) -> None:
+    """Persist the calibrated model and per-headroom predictions as local artifacts."""
+    required = (
+        evaluation.prediction_series,
+        evaluation.prediction_snapshot_at,
+        evaluation.prediction_route_day,
+        evaluation.prediction_headroom,
+        evaluation.prediction_raw,
+        evaluation.prediction_calibrated,
+        evaluation.prediction_y,
+    )
+    if any(value is None for value in required):
+        raise ModelError("evaluation has no prediction arrays to persist")
+    series = evaluation.prediction_series
+    snapshots = evaluation.prediction_snapshot_at
+    route_days = evaluation.prediction_route_day
+    headrooms = evaluation.prediction_headroom
+    raw_scores = evaluation.prediction_raw
+    calibrated_scores = evaluation.prediction_calibrated
+    labels = evaluation.prediction_y
+    if (
+        series is None
+        or snapshots is None
+        or route_days is None
+        or headrooms is None
+        or raw_scores is None
+        or calibrated_scores is None
+        or labels is None
+    ):
+        raise ModelError("evaluation has no prediction arrays to persist")
+    predictions_dir = out_dir / "predictions"
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    table = pa.table(
+        {
+            "series_key": series,
+            "snapshot_at": snapshots,
+            "route_day": route_days,
+            "headroom_pct": headrooms,
+            "raw_score": raw_scores,
+            "calibrated_score": calibrated_scores,
+            "label": labels,
+            "split": [evaluation.prediction_split] * len(labels),
+        }
+    )
+    pq.write_table(table, predictions_dir / f"{evaluation.prediction_split}.parquet", compression="zstd")
+    joblib.dump(
+        {
+            "model": fitted[evaluation.chosen_model],
+            "calibrator": calibrator,
+            "feature_spec": list(spec.names),
+            "calendar_set": spec.calendar_set,
+            "chosen_model": evaluation.chosen_model,
+            "calibration_method": evaluation.calibration_method,
+            "threshold": evaluation.threshold,
+            "config": config.to_dict(),
+        },
+        out_dir / "model.joblib",
+    )

@@ -45,6 +45,7 @@
   },
   "report": {
     "bootstrap_replicates": 2000,
+    "metric_bootstrap_replicates": 400,
     "bootstrap_cluster": "departure_date",
     "threshold_precision_floor": 0.7,
     "calibration_bins": 10,

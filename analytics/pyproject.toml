@@ -19,7 +19,9 @@ dev = [
   "ty==0.0.104",
 ]
 train = [
+  "joblib==1.6.0",
   "numpy==2.5.5",
+  "pyarrow==26.0.1",
   "scikit-learn==1.9.1",
   "scipy==1.18.1",
 ]
