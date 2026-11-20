@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
 from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
 from tpm_analytics.training.dataset import DatasetError, DatasetStats, SplitStats, build_dataset
@@ -23,8 +24,10 @@ from tpm_analytics.training.model import (
     TabularData,
     _bss_train,
     _calibration_curve,
+    _calibration_stats,
     _train_prevalence,
     fit_calibrator,
+    fit_climatology,
     load_split,
     train_and_evaluate,
 )
@@ -648,10 +651,15 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     assert (30.0, "1h") in regimes
 
 
-def _tabular(y: np.ndarray, future_observations: np.ndarray, headroom: np.ndarray) -> TabularData:
+def _tabular(
+    y: np.ndarray,
+    future_observations: np.ndarray,
+    headroom: np.ndarray,
+    features: dict[str, np.ndarray] | None = None,
+) -> TabularData:
     size = len(y)
     return TabularData(
-        features={},
+        features=features or {},
         y=y,
         series=np.array([f"s{index}" for index in range(size)], dtype=object),
         route_day=np.arange(size, dtype=np.int64),
@@ -660,6 +668,10 @@ def _tabular(y: np.ndarray, future_observations: np.ndarray, headroom: np.ndarra
         future_observations=future_observations,
         headroom=headroom,
         departure_date=np.full(size, "2026-07-01", dtype=object),
+        snapshot_at=np.array([f"2026-07-01T{index % 24:02d}:00:00" for index in range(size)], dtype=object),
+        observation_era=np.full(size, "dense", dtype=object),
+        observation_week=np.full(size, "2026-W27", dtype=object),
+        check_price=np.full(size, np.nan, dtype=np.float64),
     )
 
 
@@ -754,6 +766,46 @@ def test_prevalence_warnings_are_formatted_and_gated() -> None:
     assert not any("calibration and evaluation" in warning for warning in _warnings(_stats(), validation_only))
 
 
+def test_ttd_band_boundaries() -> None:
+    assert ttd_band(24) == "1-3d"
+    assert ttd_band(71.999) == "1-3d"
+    assert ttd_band(72) == "3-5d"
+    assert ttd_band(336) == "14-30d"
+    assert ttd_band(720) == "14-30d"
+    assert ttd_band(721) == "unknown"
+    assert len(HEADLINE_BANDS) == 5
+
+
+def test_climatology_smoothing_is_bounded() -> None:
+    data = _tabular(
+        y=np.array([1, 0, 1, 0, 1, 0], dtype=np.int8),
+        future_observations=np.full(6, 2, dtype=np.int16),
+        headroom=np.array([5, 5, 10, 10, 30, 30], dtype=np.int16),
+        features={
+            "hours_to_departure": np.array([30, 30, 60, 60, 300, 300], dtype=np.float32),
+            "service_class": np.array(["2", "1", "2", "1", "2", "1"], dtype=object),
+        },
+    )
+    model = fit_climatology(data)
+    predictions = model.predict(data)
+    assert np.all(predictions > 0)
+    assert np.all(predictions < 1)
+    at_30 = model.predict(data, headroom=30)
+    at_1 = model.predict(data, headroom=1)
+    assert np.mean(at_30) <= np.mean(at_1)
+
+
+def test_calibration_stats_are_reported() -> None:
+    y = np.array(([0] * 200) + ([1] * 200), dtype=np.int8)
+    probabilities = np.clip(y * 0.8 + 0.1, 0.0, 1.0)
+    stats = _calibration_stats(y, probabilities, 10)
+    assert stats["slope"] is not None
+    assert stats["slope"] > 0
+    assert stats["intercept"] is not None
+    assert stats["ece"] is not None
+    assert stats["ece"] >= 0
+
+
 def test_calibration_counts_match_quantile_bins() -> None:
     rng = np.random.default_rng(3)
     y = rng.integers(0, 2, size=10_000).astype(np.int8)
@@ -784,6 +836,11 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         == 0
     )
     assert (profile_out / "profile.json").is_file()
+    profile_json = json.loads((profile_out / "profile.json").read_text())
+    assert profile_json["profile"]["cohort"]
+    assert profile_json["profile"]["label"]
+    assert profile_json["profile"]["journey"]["total_journeys"] >= 0
+    assert profile_json["profile"]["two_plus_week"] is not None
 
     run_out = tmp_path / "run"
     assert (
@@ -803,6 +860,17 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert (run_out / "metrics.json").is_file()
     assert (run_out / "calibration.csv").is_file()
     assert (run_out / "manifest.json").is_file()
+    connection = duckdb.connect()
+    try:
+        columns = {
+            row[0]
+            for row in connection.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{run_out / 'dataset' / 'train.parquet'}')"
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+    assert {"check_at", "check_lag_h", "cov_tail_h", "cov_max_gap_h", "breached_at_check"} <= columns
     report_text = (run_out / "report.md").read_text()
     assert "Known limitations" in report_text
     assert "Prevalence:" in report_text
@@ -816,6 +884,12 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert metrics["evaluation"]["test_evaluated"] is False
     assert metrics["evaluation"]["metrics"]["split"] == "validation_calibrate"
     assert "test" not in metrics["evaluation"]
+    assert metrics["evaluation"]["climatology"]["brier"] is not None
+    assert 0 < len(metrics["evaluation"]["headroom_ttd"]) <= 25
+    assert (run_out / "predictions" / "validation_calibrate.parquet").is_file()
+    assert (run_out / "model.joblib").is_file()
+    assert "predictions/validation_calibrate.parquet" in manifest_json["artifacts"]
+    assert manifest_json["model"]["predictions"] == "predictions/validation_calibrate.parquet"
 
     test_out = tmp_path / "tested"
     assert (
@@ -836,6 +910,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert tested["evaluation"]["test_evaluated"] is True
     assert tested["evaluation"]["metrics"]["split"] == "test"
     assert tested["test_evaluated"] is True
+    assert (test_out / "predictions" / "test.parquet").is_file()
 
     ablation_out = tmp_path / "ablation"
     assert (

@@ -102,6 +102,350 @@ def _report(
         for item in stats.profile.get("coverage", [])
     ]
     era_rows = [[item["split"], item["observation_era"], item["rows"]] for item in stats.profile.get("era", [])]
+
+    def _p(value: Any) -> str:
+        return "—" if value is None else f"{float(value):.1%}"
+
+    cohort_rows = [
+        [
+            item["split"],
+            item["rows"],
+            item["labelled"],
+            item["check_eligible"],
+            item["two_plus"],
+            _p(item["labelled_share"]),
+            _p(item["prevalence"]),
+            _p(item.get("two_plus_prevalence")),
+            _p(item["check_prevalence"]),
+        ]
+        for item in stats.profile.get("cohort", [])
+    ]
+    r24_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["rows"],
+            item["eligible"],
+            _p(item["covered_share"]),
+            _fmt(item["mean_tail_h"], 1),
+            _fmt(item["mean_gap_h"], 1),
+            _fmt(item["median_gap_h"], 1),
+            _p(item["share_gap_gt24h"]),
+        ]
+        for item in stats.profile.get("coverage_r24", [])
+    ]
+    label_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["labelled"],
+            item["check_eligible"],
+            _p(item["within_day_rate"]),
+            _p(item["next_day_rate"]),
+            _p(item["narrow_rate"]),
+            _p(item["crossed_back_rate"]),
+            item["dearer"],
+            item["cheaper"],
+            item["unchanged"],
+        ]
+        for item in stats.profile.get("label", [])
+    ]
+    tier_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["one_observations"],
+            _p(item["one_prevalence"]),
+            item["two_plus"],
+            _p(item["two_plus_prevalence"]),
+        ]
+        for item in stats.profile.get("label", [])
+    ]
+    lag_rows = [
+        [
+            item["split"],
+            item["band"],
+            _fmt(item["median_single_lag_h"], 1),
+            _fmt(item["p10_single_lag_h"], 1),
+            _fmt(item["p90_single_lag_h"], 1),
+        ]
+        for item in stats.profile.get("label", [])
+    ]
+    two_plus_week_rows = [
+        [item["split"], item["week"], item["rows"], _p(item["two_plus_share"])]
+        for item in stats.profile.get("two_plus_week", [])
+    ]
+    journey = stats.profile.get("journey", {})
+    journey_groups: dict[tuple[str, str], int] = {}
+    for item in journey.get("groups", []):
+        key = (item["band"], item["successor"])
+        journey_groups[key] = journey_groups.get(key, 0) + item["journeys"]
+    journey_rows = [[band, successor, count] for (band, successor), count in sorted(journey_groups.items())]
+    unlabelled_agg: dict[tuple[str, str, str], list[float]] = {}
+    for item in stats.profile.get("unlabelled", []):
+        key = (item["split"], item["band"], item["era"])
+        bucket = unlabelled_agg.setdefault(key, [0.0, 0.0])
+        bucket[0] += item["rows"]
+        bucket[1] += item["rows"] * item["unlabelled_share"]
+    unlabelled_rows = [
+        [split, band, era, int(rows), _p(share / rows if rows else None)]
+        for (split, band, era), (rows, share) in sorted(unlabelled_agg.items())
+    ]
+    weekly_agg: dict[tuple[str, str], list[float]] = {}
+    for item in stats.profile.get("unlabelled", []):
+        key = (item["split"], item["week"])
+        bucket = weekly_agg.setdefault(key, [0.0, 0.0])
+        bucket[0] += item["rows"]
+        bucket[1] += item["rows"] * item["unlabelled_share"]
+    weekly_rows = sorted(
+        (
+            [split, week, int(rows), share / rows if rows else 0.0]
+            for (split, week), (rows, share) in weekly_agg.items()
+        ),
+        key=lambda row: float(row[3]),
+        reverse=True,
+    )[:12]
+    weekly_rows = [[row[0], row[1], row[2], _p(row[3])] for row in weekly_rows]
+    headroom_ttd_rows = [
+        [
+            item["ttd_band"],
+            item["headroom_pct"],
+            item.get("positive_rate"),
+            _fmt(item.get("brier")),
+            _fmt(item.get("bss")),
+            _fmt(item.get("bss_train")),
+            _fmt(item.get("bss_climatology")),
+            _fmt(item.get("roc_auc")),
+            _fmt(item.get("average_precision")),
+            _fmt(item.get("roc_auc_raw")),
+        ]
+        for item in evaluation.headroom_ttd
+    ]
+    strata_rows = [
+        [
+            item["dimension"],
+            item["value"],
+            item["rows"],
+            _p(item.get("positive_rate")),
+            _fmt(item.get("brier")),
+            _fmt(item.get("bss")),
+            _fmt(item.get("bss_train")),
+            _fmt(item.get("roc_auc")),
+            _fmt(item.get("average_precision")),
+            _fmt(item.get("calibration_gap"), 4),
+        ]
+        for item in evaluation.strata
+    ]
+    strata_compare_rows = [
+        [
+            item["dimension"],
+            item["value"],
+            item["validation_rows"],
+            item["test_rows"],
+            _fmt(item["validation_brier"]),
+            _fmt(item["test_brier"]),
+            _fmt(item["validation_bss"]),
+            _fmt(item["test_bss"]),
+        ]
+        for item in evaluation.strata_compare
+    ]
+    headroom_cal_rows = [
+        [
+            item["headroom_pct"],
+            _fmt(item.get("calibration_slope"), 3),
+            _fmt(item.get("calibration_intercept"), 3),
+            _fmt(item.get("ece"), 4),
+        ]
+        for item in evaluation.headroom
+    ]
+    calibration_group_rows = [
+        [
+            item["headroom_pct"],
+            item["ttd_band"],
+            item["era"],
+            item["rows"],
+            _fmt(item.get("slope"), 3),
+            _fmt(item.get("intercept"), 3),
+            _fmt(item.get("ece"), 4),
+        ]
+        for item in evaluation.calibration_groups
+    ]
+    decision_rows = [
+        [
+            item["band"],
+            item["headroom_pct"],
+            item["alert_rows"],
+            _p(item["alert_share"]),
+            _fmt(item["mean_saving_eur"], 2),
+            _p(item["mean_saving_pct"]),
+            _fmt(item["ci_eur"][0], 2) + ".." + _fmt(item["ci_eur"][1], 2) if item["ci_eur"] else "—",
+            _fmt(item["always_wait_eur"], 2),
+            _p(item["always_wait_pct"]),
+        ]
+        for item in evaluation.decision_value
+    ]
+    interval_labels = {
+        "brier": "Brier",
+        "log_loss": "log loss",
+        "bss": "BSS",
+        "roc_auc": "ROC-AUC",
+        "average_precision": "average precision",
+        "precision": "precision",
+        "recall": "recall",
+    }
+    interval_rows = [
+        [interval_labels.get(key, key), _fmt(values[0]), _fmt(values[1])]
+        for key, values in evaluation.intervals.items()
+        if len(values) == 2
+    ]
+    paired_rows = []
+    for name, label in (("vs_climatology", "model - climatology"), ("vs_logistic", "model - logistic")):
+        point = evaluation.paired.get(f"{name}_brier_point")
+        interval = evaluation.paired.get(f"{name}_brier", [])
+        paired_rows.append(
+            [
+                label,
+                _fmt(point),
+                _fmt(interval[0]) if len(interval) == 2 else "—",
+                _fmt(interval[1]) if len(interval) == 2 else "—",
+            ]
+        )
+    model_metrics = evaluation.test
+    clim_metrics = evaluation.climatology
+    clim_rows = [
+        [
+            name,
+            _fmt(metrics.get("brier")),
+            _fmt(metrics.get("bss")),
+            _fmt(metrics.get("bss_train")),
+            _fmt(metrics.get("roc_auc")),
+            _fmt(metrics.get("average_precision")),
+        ]
+        for name, metrics in (("model", model_metrics), ("climatology", clim_metrics))
+    ]
+    cohort_table = _table(
+        [
+            "split",
+            "rows",
+            "labelled",
+            "check eligible",
+            "two-plus",
+            "labelled share",
+            "prevalence",
+            "two-plus prevalence",
+            "check prevalence",
+        ],
+        cohort_rows,
+    )
+    label_table = _table(
+        [
+            "split",
+            "TTD band",
+            "labelled",
+            "check eligible",
+            "within-day max",
+            "next-day point",
+            "22-26 h point",
+            "crossed back",
+            "dearer",
+            "cheaper",
+            "unchanged",
+        ],
+        label_rows,
+    )
+    tier_table = _table(
+        ["split", "TTD band", "one future scrape", "one prevalence", "two or more", "two-plus prevalence"], tier_rows
+    )
+    lag_table = _table(["split", "TTD band", "median single lag h", "p10 h", "p90 h"], lag_rows)
+    two_plus_week_table = _table(["split", "week", "rows", "two-plus share"], two_plus_week_rows)
+    journey_table = _table(["TTD band", "successor", "journeys"], journey_rows)
+    unlabelled_table = _table(["split", "TTD band", "era", "rows", "unlabelled"], unlabelled_rows)
+    weekly_table = _table(["split", "week", "rows", "unlabelled"], weekly_rows)
+    r24_table = _table(
+        [
+            "split",
+            "TTD band",
+            "rows",
+            "coverage known",
+            "R24 covered",
+            "mean tail h",
+            "mean max gap h",
+            "median gap h",
+            "gap > 24 h",
+        ],
+        r24_rows,
+    )
+    clim_table = _table(["score", "Brier", "BSS slice", "BSS train", "ROC-AUC", "average precision"], clim_rows)
+    interval_table = _table(["metric", "2.5 %", "97.5 %"], interval_rows)
+    paired_table = _table(["comparison", "Brier difference", "2.5 %", "97.5 %"], paired_rows)
+    headroom_ttd_table = _table(
+        [
+            "TTD band",
+            "headroom %",
+            "positive rate",
+            "Brier",
+            "BSS slice",
+            "BSS train",
+            "BSS clim",
+            "ROC-AUC",
+            "avg precision",
+            "ROC-AUC raw",
+        ],
+        headroom_ttd_rows,
+    )
+    strata_table = _table(
+        [
+            "dimension",
+            "value",
+            "rows",
+            "prevalence",
+            "Brier",
+            "BSS",
+            "BSS train",
+            "ROC-AUC",
+            "avg precision",
+            "calibration gap",
+        ],
+        strata_rows,
+    )
+    strata_compare_table = (
+        _table(
+            [
+                "dimension",
+                "value",
+                "validation rows",
+                "test rows",
+                "validation Brier",
+                "test Brier",
+                "validation BSS",
+                "test BSS",
+            ],
+            strata_compare_rows,
+        )
+        if strata_compare_rows
+        else "- Test was not evaluated; no like-for-like table."
+    )
+    headroom_cal_table = _table(["headroom %", "slope", "intercept", "ECE"], headroom_cal_rows)
+    calibration_group_table = _table(
+        ["headroom %", "TTD band", "era", "rows", "slope", "intercept", "ECE"], calibration_group_rows
+    )
+    decision_table = _table(
+        [
+            "TTD band",
+            "headroom %",
+            "alerts",
+            "alert share",
+            "mean saving €",
+            "mean saving %",
+            "95% CI €",
+            "always wait €",
+            "always wait %",
+        ],
+        decision_rows,
+    )
+    journey_total = int(journey.get("total_journeys", 0))
+    journey_disappeared = int(journey.get("disappeared", 0))
+    journey_share = _p(journey.get("share"))
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -227,10 +571,56 @@ def _report(
 
 {_table(["split", "era", "rows"], era_rows)}
 
+### Cohort and eligibility
+
+{cohort_table}
+
+### Label and check-window diagnostics
+
+{label_table}
+
+`crossed back` is the share whose within-day maximum breached but the next-day point did not.
+
+Prevalence by evidence tier:
+
+{tier_table}
+
+Single future scrape lag:
+
+{lag_table}
+
+14-30 d snapshots with two or more future scrapes, by observation week:
+
+{two_plus_week_table}
+
+### Journey disappearance
+
+- Journeys with at least 3 observations: **{journey_total:,}**
+- Disappeared more than 24 h before departure while the route-day was still scraped:
+  **{journey_disappeared:,}** ({journey_share})
+
+{journey_table}
+
+### Unlabelled shares
+
+{unlabelled_table}
+
+Highest weekly unlabelled shares:
+
+{weekly_table}
+
+### Within-24 h coverage (R24)
+
+{r24_table}
+
 ## Model comparison (cross-fitted validation-select)
 
 {_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_rows)}
 {ablation_section}
+
+### Climatology baseline
+
+{clim_table}
 
 ## {eval_label} metrics
 
@@ -248,9 +638,41 @@ def _report(
 
 {risk_bands}
 
+### Bootstrap intervals and paired Brier differences
+
+{interval_table}
+
+{paired_table}
+
+Negative Brier differences mean the model is better than the baseline.
+
 ## Per-headroom evaluation metrics
 
 {_table(headroom_headers, headroom_rows)}
+
+### Per-headroom x TTD band
+
+{headroom_ttd_table}
+
+### Strata
+
+{strata_table}
+
+### Like-for-like validation vs test (only with --evaluate-test)
+
+{strata_compare_table}
+
+### Calibration statistics
+
+{headroom_cal_table}
+
+Per-headroom x TTD band x era:
+
+{calibration_group_table}
+
+### Decision value (diagnostic on the current label)
+
+{decision_table}
 
 ## Calibration
 
@@ -337,6 +759,8 @@ def write_report(
         "ablation": ablation,
         "runner": runner,
         "dropped_features": list(evaluation.dropped_features),
+        "predictions": f"predictions/{evaluation.prediction_split}.parquet",
+        "model_file": "model.joblib",
         "package_versions": {
             "python": platform.python_version(),
             "numpy": numpy.__version__,
@@ -353,6 +777,8 @@ def write_report(
         "report.md",
         "metrics.json",
         "calibration.csv",
+        f"predictions/{evaluation.prediction_split}.parquet",
+        "model.joblib",
     ]
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"

@@ -151,13 +151,14 @@ def main(argv: list[str] | None = None) -> int:
         spec = feature_spec(primary_set)
         full_splits = _load_splits(out_dir, feature_spec(build_set))
         splits = {name: data.select(spec.names) for name, data in full_splits.items()}
-        evaluation, _, _ = training_model.train_and_evaluate(
+        evaluation, fitted, calibrator = training_model.train_and_evaluate(
             splits,
             spec,
             config,
             evaluate_test=args.evaluate_test and not args.ablation,
         )
         ablation = _ablation(full_splits, config, primary_set, evaluation) if args.ablation else None
+        training_model.write_evaluation_artifacts(out_dir, evaluation, fitted, calibrator, spec, config)
         write_report(
             out_dir,
             stats,
@@ -177,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
             "calibration": evaluation.calibration_method,
             "evaluation_split": evaluation.evaluation_split,
             "test_evaluated": evaluation.test_evaluated,
+            "predictions": f"predictions/{evaluation.prediction_split}.parquet",
+            "model_file": "model.joblib",
             "brier": evaluation.test["brier"],
             "log_loss": evaluation.test["log_loss"],
             "ablation": ablation,
