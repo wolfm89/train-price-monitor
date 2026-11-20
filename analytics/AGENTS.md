@@ -126,7 +126,12 @@ v2-only and mixed-schema input.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
   `model.candidates` unless a future plan changes that decision.
 - `predictions/<split>.parquet` and `model.joblib` are local artifacts. Never load or trust a model
-  file you did not produce; they are not uploaded.
+  file you did not produce; they are not uploaded. Verify `model.joblib` against
+  `manifest.json.artifact_sha256` before loading.
+- In predictions, `raw_score` is the model score at that row's headroom, `raw_score_pooled` is the
+  assigned-headroom score used to fit the calibrator, and `calibration_mode`/`calibration_fold`
+  say whether `calibrated_score` is out-of-fold (`oof`) or a full refit (`full`). Do not fit a new
+  calibrator to `raw_score` and expect the stored calibrated score.
 - A clean rerun must match the per-split content digests in `dataset_manifest.json`. Do not remove
   the total `ORDER BY` in the Parquet writer.
 

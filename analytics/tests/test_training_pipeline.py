@@ -17,7 +17,7 @@ import pytest
 from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
 from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
-from tpm_analytics.training.dataset import DatasetError, DatasetStats, SplitStats, build_dataset
+from tpm_analytics.training.dataset import DatasetError, DatasetStats, SplitStats, _final_columns, build_dataset
 from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.model import (
     Evaluation,
@@ -25,9 +25,11 @@ from tpm_analytics.training.model import (
     _bss_train,
     _calibration_curve,
     _calibration_stats,
+    _strata_rows,
     _train_prevalence,
     fit_calibrator,
     fit_climatology,
+    load_model,
     load_split,
     train_and_evaluate,
 )
@@ -269,6 +271,79 @@ def test_headroom_bucket_assignment_is_golden(tmp_path: Path) -> None:
         assert actual == grid[bucket]
 
 
+def test_check_grid_and_coverage(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    source = tmp_path / "check-grid.parquet"
+    _write_silver(
+        source,
+        [
+            _row(
+                observed_at=departure - timedelta(hours=47),
+                departure=departure,
+                route="check",
+                train="ICE-CHECK",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=departure - timedelta(hours=24),
+                departure=departure,
+                route="check",
+                train="ICE-CHECK",
+                fare=90.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 15, 10, 0),
+                departure=datetime(2026, 7, 16, 10, 0),
+                route="select",
+                train="ICE-SELECT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 22, 10, 0),
+                departure=datetime(2026, 7, 23, 10, 0),
+                route="calibrate",
+                train="ICE-CAL",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 29, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE-TEST",
+                fare=80.0,
+            ),
+        ],
+    )
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="check", build_id=None, manifest_sha256=None),
+            config,
+            tmp_path / "check-run",
+            run_id="check",
+        )
+        row = connection.execute(
+            "SELECT check_at, check_lag_h, check_price_eur, cov_tail_h, cov_max_gap_h, r24_covered "
+            "FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00'",
+            [str(tmp_path / "check-run" / "dataset" / "train.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert str(row[0]) == "2026-07-04 10:00:00"
+    assert row[1] == pytest.approx(-1.0)
+    assert row[2] == pytest.approx(90.0)
+    assert row[3] == pytest.approx(1.0)
+    assert row[4] == pytest.approx(23.0)
+    assert row[5] is False
+
+
 def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
     source = tmp_path / "silver.parquet"
     _write_silver(source, _rows())
@@ -291,6 +366,19 @@ def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
     assert digests[0]["sum64"] == digests[1]["sum64"]
     assert digests[0]["xor64"] == digests[1]["xor64"]
     assert digests[0]["rows"] == digests[1]["rows"]
+    # The content digest must reproduce from the written Parquet, not only from the in-memory relation.
+    columns = _final_columns("full")
+    payload = ", ".join(f"coalesce(CAST({column} AS VARCHAR), '<null>')" for column in columns)
+    hash_expression = f"CAST(('0x' || substr(sha256(concat_ws('|', {payload})), 1, 16)) AS UBIGINT)"
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            f"SELECT count(*), sum({hash_expression}), bit_xor({hash_expression}) "
+            f"FROM read_parquet('{(tmp_path / 'a' / 'dataset' / 'train.parquet').as_posix()}')"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row == (digests[0]["rows"], digests[0]["sum64"], digests[0]["xor64"])
     # The byte hash is the guard for the total ORDER BY: the content digest is order-independent.
     assert digests[0]["sha256"] == digests[1]["sha256"]
 
@@ -795,6 +883,32 @@ def test_climatology_smoothing_is_bounded() -> None:
     assert np.mean(at_30) <= np.mean(at_1)
 
 
+def test_strata_do_not_fall_back_to_pooled_prevalence() -> None:
+    size = 20
+    data = _tabular(
+        y=np.array([1, 0] * (size // 2), dtype=np.int8),
+        future_observations=np.full(size, 2, dtype=np.int16),
+        headroom=np.full(size, 5, dtype=np.int16),
+        features={
+            "hours_to_departure": np.full(size, 30.0, dtype=np.float32),
+            "service_class": np.full(size, "A", dtype=object),
+        },
+    )
+    train = _tabular(
+        y=np.array([1, 0], dtype=np.int8),
+        future_observations=np.full(2, 2, dtype=np.int16),
+        headroom=np.full(2, 5, dtype=np.int16),
+        features={
+            "hours_to_departure": np.full(2, 30.0, dtype=np.float32),
+            "service_class": np.array(["B", "B"], dtype=object),
+        },
+    )
+    rows = _strata_rows(data, np.full(size, 0.5), train, 0.5)
+    service = next(item for item in rows if item["dimension"] == "service_class")
+    assert service["train_rows"] == 0
+    assert service["bss_train"] is None
+
+
 def test_calibration_stats_are_reported() -> None:
     y = np.array(([0] * 200) + ([1] * 200), dtype=np.int8)
     probabilities = np.clip(y * 0.8 + 0.1, 0.0, 1.0)
@@ -891,6 +1005,36 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert (run_out / "model.joblib").is_file()
     assert "predictions/validation_calibrate.parquet" in manifest_json["artifacts"]
     assert manifest_json["model"]["predictions"] == "predictions/validation_calibrate.parquet"
+    assert "config_sha256" not in manifest_json
+    assert manifest_json["build_config_sha256"]
+    assert "evaluation_config" in manifest_json
+    assert "model.joblib" in manifest_json["artifact_sha256"]
+    predictions = pq.read_table(run_out / "predictions" / "validation_calibrate.parquet").to_pydict()
+    assert len(predictions["label"]) == 5 * metrics["evaluation"]["test_tier_rows"]
+    assert set(predictions["calibration_mode"]) == {"oof"}
+    assert min(predictions["calibration_fold"]) >= 0
+    assert "raw_score_pooled" in predictions
+    connection = duckdb.connect()
+    try:
+        mismatch_row = connection.execute(
+            "SELECT count(*) FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at) "
+            "WHERE p.headroom_pct = 1 "
+            "AND p.label != CAST(d.future_max_fare_24h >= d.price_eur * 1.01 AS TINYINT)",
+            [
+                str(run_out / "predictions" / "validation_calibrate.parquet"),
+                str(run_out / "dataset" / "validation_calibrate.parquet"),
+            ],
+        ).fetchone()
+        assert mismatch_row is not None
+        mismatches = mismatch_row[0]
+    finally:
+        connection.close()
+    assert mismatches == 0
+    model_payload = load_model(run_out / "model.joblib", manifest_json["artifact_sha256"]["model.joblib"])
+    assert model_payload["chosen_model"] == metrics["evaluation"]["chosen_model"]
+    assert model_payload["calibration_mode"] == "oof"
+    assert "source" not in model_payload["config"]
+    assert "prediction_series" not in metrics["evaluation"]
 
     test_out = tmp_path / "tested"
     assert (
@@ -912,6 +1056,9 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert tested["evaluation"]["metrics"]["split"] == "test"
     assert tested["test_evaluated"] is True
     assert (test_out / "predictions" / "test.parquet").is_file()
+    tested_predictions = pq.read_table(test_out / "predictions" / "test.parquet").to_pydict()
+    assert set(tested_predictions["calibration_mode"]) == {"full"}
+    assert set(tested_predictions["calibration_fold"]) == {-1}
 
     ablation_out = tmp_path / "ablation"
     assert (

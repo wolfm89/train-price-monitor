@@ -116,6 +116,8 @@ def _report(
             item["rows"],
             item["labelled"],
             item["check_eligible"],
+            item.get("check_priced", "—"),
+            item.get("check_censored", "—"),
             item["two_plus"],
             _p(item["labelled_share"]),
             _p(item["prevalence"]),
@@ -134,7 +136,6 @@ def _report(
             _fmt(item["mean_tail_h"], 1),
             _fmt(item["mean_gap_h"], 1),
             _fmt(item["median_gap_h"], 1),
-            _p(item["share_gap_gt24h"]),
         ]
         for item in stats.profile.get("coverage_r24", [])
     ]
@@ -144,10 +145,14 @@ def _report(
             item["band"],
             item["labelled"],
             item["check_eligible"],
+            item.get("check_priced", "—"),
+            item.get("check_censored", "—"),
             _p(item["within_day_rate"]),
+            _p(item.get("priced_within_day_rate")),
             _p(item["next_day_rate"]),
             _p(item["narrow_rate"]),
             _p(item["crossed_back_rate"]),
+            _p(item.get("censored_within_day_rate")),
             item["dearer"],
             item["cheaper"],
             item["unchanged"],
@@ -214,8 +219,10 @@ def _report(
         [
             item["ttd_band"],
             item["headroom_pct"],
+            item.get("train_rows"),
             item.get("positive_rate"),
             _fmt(item.get("brier")),
+            _fmt(item.get("log_loss")),
             _fmt(item.get("bss")),
             _fmt(item.get("bss_train")),
             _fmt(item.get("bss_climatology")),
@@ -230,6 +237,7 @@ def _report(
             item["dimension"],
             item["value"],
             item["rows"],
+            item.get("train_rows"),
             _p(item.get("positive_rate")),
             _fmt(item.get("brier")),
             _fmt(item.get("bss")),
@@ -280,8 +288,9 @@ def _report(
             item["headroom_pct"],
             item["alert_rows"],
             _p(item["alert_share"]),
-            _fmt(item["mean_saving_eur"], 2),
-            _p(item["mean_saving_pct"]),
+            _fmt(item["policy_saving_eur"], 2),
+            _p(item["policy_saving_pct"]),
+            _fmt(item["conditional_saving_eur"], 2),
             _fmt(item["ci_eur"][0], 2) + ".." + _fmt(item["ci_eur"][1], 2) if item["ci_eur"] else "—",
             _fmt(item["always_wait_eur"], 2),
             _p(item["always_wait_pct"]),
@@ -297,9 +306,12 @@ def _report(
         "precision": "precision",
         "recall": "recall",
     }
+    interval_values = dict(evaluation.intervals)
+    interval_values["brier"] = evaluation.bootstrap.get("brier", interval_values.get("brier", []))
+    interval_values["log_loss"] = evaluation.bootstrap.get("log_loss", interval_values.get("log_loss", []))
     interval_rows = [
         [interval_labels.get(key, key), _fmt(values[0]), _fmt(values[1])]
-        for key, values in evaluation.intervals.items()
+        for key, values in interval_values.items()
         if len(values) == 2
     ]
     paired_rows = []
@@ -333,6 +345,8 @@ def _report(
             "rows",
             "labelled",
             "check eligible",
+            "check priced",
+            "check censored",
             "two-plus",
             "labelled share",
             "prevalence",
@@ -347,10 +361,14 @@ def _report(
             "TTD band",
             "labelled",
             "check eligible",
-            "within-day max",
+            "check priced",
+            "check censored",
+            "within-day all",
+            "within-day priced",
             "next-day point",
-            "22-26 h point",
+            "22-24 h point",
             "crossed back",
+            "censored within-day",
             "dearer",
             "cheaper",
             "unchanged",
@@ -375,7 +393,6 @@ def _report(
             "mean tail h",
             "mean max gap h",
             "median gap h",
-            "gap > 24 h",
         ],
         r24_rows,
     )
@@ -386,8 +403,10 @@ def _report(
         [
             "TTD band",
             "headroom %",
+            "train rows",
             "positive rate",
             "Brier",
+            "log loss",
             "BSS slice",
             "BSS train",
             "BSS clim",
@@ -402,6 +421,7 @@ def _report(
             "dimension",
             "value",
             "rows",
+            "train rows",
             "prevalence",
             "Brier",
             "BSS",
@@ -439,17 +459,20 @@ def _report(
             "headroom %",
             "alerts",
             "alert share",
-            "mean saving €",
-            "mean saving %",
-            "95% CI €",
+            "policy € / snapshot",
+            "policy % / snapshot",
+            "conditional € / alert",
+            "policy 95% CI €",
             "always wait €",
             "always wait %",
         ],
         decision_rows,
     )
     journey_total = int(journey.get("total_journeys", 0))
+    journey_at_risk = int(journey.get("at_risk", 0))
     journey_disappeared = int(journey.get("disappeared", 0))
     journey_share = _p(journey.get("share"))
+    journey_share_at_risk = _p(journey.get("share_at_risk"))
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -506,7 +529,10 @@ def _report(
             f"The headline uses {evaluation.test_tier.replace('_', ' ')}."
         )
         if evaluation.test_all is not None
-        else "- Test was not evaluated; this report shows validation-calibrate only."
+        else (
+            "- Test was not evaluated; model metrics are validation-calibrate only. "
+            "Test cohort diagnostics above are descriptive."
+        )
     )
     headroom_headers = [
         "headroom %",
@@ -521,10 +547,7 @@ def _report(
         "precision",
         "recall",
     ]
-    risk_bands = (
-        "Risk bands: `< 0.15` low, `0.15-0.35` watch, `>= 0.35` high. "
-        "The threshold is a reporting choice, not a product decision."
-    )
+    risk_bands = "The threshold is a reporting choice, not a product decision."
     eval_label = "Test" if evaluation.test_evaluated else "Validation-calibrate"
     threshold_caveat = (
         "- Validation precision and recall use the same validation-calibrate rows that selected the "
@@ -545,6 +568,8 @@ def _report(
         f"{threshold_caveat}"
         "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
         "validation-select rows.\n"
+        "- Dataset diagnostics for the test cohort are descriptive; test model metrics are written "
+        "only with `--evaluate-test`.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
@@ -600,8 +625,9 @@ Single future scrape lag:
 ### Journey disappearance
 
 - Journeys with at least 3 observations: **{journey_total:,}**
+- At risk (a later route-day scrape exists): **{journey_at_risk:,}**
 - Disappeared more than 24 h before departure while the route-day was still scraped:
-  **{journey_disappeared:,}** ({journey_share})
+  **{journey_disappeared:,}** of all journeys ({journey_share}); {journey_share_at_risk} of at-risk
 
 {journey_table}
 
@@ -615,11 +641,17 @@ Highest weekly unlabelled shares:
 
 ### Within-24 h coverage (R24)
 
+R24 requires the last scrape within {config["report"]["r24_max_tail_hours"]} h of `t + 24 h`
+and no gap above {config["report"]["r24_max_gap_hours"]} h.
+
 {r24_table}
 
 ## Model comparison (cross-fitted validation-select)
 
 {_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_rows)}
+
+Candidate calibration method: `{evaluation.candidate_calibration_method}`; the final model uses
+`{evaluation.calibration_method}`.
 
 ### Train-split diagnostics (in-sample)
 
@@ -677,6 +709,9 @@ Negative Brier differences mean the model is better than the baseline.
 Per-headroom x TTD band x era:
 
 {calibration_group_table}
+
+Full reliability arrays (predicted/observed/counts) for every group are in `metrics.json` under
+`evaluation.calibration_groups`.
 
 ### Decision value (diagnostic on the current label)
 
@@ -749,9 +784,10 @@ def write_report(
         ):
             writer.writerow([float(prob), float(true), int(count)])
     manifest = dict(dataset_manifest)
+    manifest.pop("config_sha256", None)
     manifest["build_config"] = build_config or config
     manifest["build_config_sha256"] = dataset_manifest.get("config_sha256")
-    manifest["config"] = config
+    manifest["evaluation_config"] = config
     manifest["evaluation_config_sha256"] = hashlib.sha256(
         json.dumps(config, sort_keys=True, default=str).encode()
     ).hexdigest()
@@ -788,6 +824,11 @@ def write_report(
         f"predictions/{evaluation.prediction_split}.parquet",
         "model.joblib",
     ]
+    manifest["artifact_sha256"] = {
+        relative: hashlib.sha256((out_dir / relative).read_bytes()).hexdigest()
+        for relative in manifest["artifacts"]
+        if (out_dir / relative).is_file()
+    }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
