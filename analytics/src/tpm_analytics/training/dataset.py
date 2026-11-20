@@ -81,6 +81,12 @@ def _source_count(connection: duckdb.DuckDBPyConnection, source_sql: str) -> int
     return _scalar(connection, f"SELECT count(*) FROM {source_sql}")
 
 
+def _dict_rows(connection: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str, Any]]:
+    cursor = connection.execute(sql)
+    columns = [item[0] for item in cursor.description or []]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
 def _git_state() -> tuple[str | None, bool]:
     """Return the checkout's HEAD and dirty flag.
 
@@ -203,15 +209,21 @@ def _create_views(
     )
     v2_rows = _scalar(
         connection,
-        "SELECT count(*) FROM base_all WHERE ("
-        f"departure_date <= DATE '{splits.train_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}' "
-        f"AND DATE '{splits.validation_select_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}' "
-        f"AND DATE '{splits.validation_calibrate_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{splits.test_start.isoformat()}' "
-        f"AND DATE '{splits.test_end.isoformat()}') "
-        "AND (schema_version != 1 OR journey_id IS NOT NULL)",
+        f"""
+        SELECT count(*) FROM {source_sql}
+        WHERE fare_lowest_eur IS NOT NULL
+          AND observed_at < departure_planned
+          AND (
+            departure_date <= DATE '{splits.train_end.isoformat()}'
+            OR departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
+                AND DATE '{splits.validation_select_end.isoformat()}'
+            OR departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}'
+                AND DATE '{splits.validation_calibrate_end.isoformat()}'
+            OR departure_date BETWEEN DATE '{splits.test_start.isoformat()}'
+                AND DATE '{splits.test_end.isoformat()}'
+          )
+          AND (schema_version != 1 OR journey_id IS NOT NULL)
+        """,
     )
     if v2_rows:
         raise DatasetError(f"{v2_rows} v2 rows fall inside the baseline splits; this baseline is v1-only")
@@ -238,6 +250,16 @@ def _create_views(
         CREATE OR REPLACE TEMP VIEW scrape_grid AS
         SELECT DISTINCT route_id, departure_date, observed_at
         FROM base_sampled
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW scrape_grid_all AS
+        SELECT DISTINCT route_id, departure_date, observed_at
+        FROM {source_sql}
+        WHERE departure_date <= DATE '{config.splits.test_end.isoformat()}'
+          AND observed_at < departure_planned
+          AND schema_version = 1
         """
     )
     connection.execute(
@@ -394,7 +416,7 @@ def _create_views(
           ON g.route_id = n.route_id
          AND g.departure_date = n.departure_date
         WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
-                                AND n.snapshot_at + INTERVAL 28 HOUR
+                                AND n.snapshot_at + INTERVAL 24 HOUR
           AND g.observed_at < n.departure_planned
         """
     )
@@ -428,7 +450,7 @@ def _create_views(
           ON g.route_id = n.route_id
          AND g.departure_date = n.departure_date
         WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 22 HOUR
-                                AND n.snapshot_at + INTERVAL 26 HOUR
+                                AND n.snapshot_at + INTERVAL 24 HOUR
           AND g.observed_at < n.departure_planned
         """
     )
@@ -484,7 +506,7 @@ def _create_views(
         """
     )
     connection.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP VIEW snapshot_diag AS
         SELECT
             n.*,
@@ -498,7 +520,8 @@ def _create_views(
             cv.cov_max_gap_h,
             CASE
                 WHEN cv.cov_tail_h IS NULL THEN NULL
-                ELSE (cv.cov_tail_h <= 4 AND cv.cov_max_gap_h <= 6)
+                ELSE (cv.cov_tail_h <= {config.report.r24_max_tail_hours}
+                      AND cv.cov_max_gap_h <= {config.report.r24_max_gap_hours})
             END AS r24_covered
         FROM snapshot n
         LEFT JOIN check_points c USING (series_key, snapshot_at)
@@ -579,15 +602,17 @@ def _create_views(
             r.price_min_7d,
             r.price_max_7d,
             r.history_depth_h,
-            sum(
-                CASE
-                    WHEN p.prev_price IS NOT NULL
-                     AND abs(p.price_eur - p.prev_price) / nullif(p.prev_price, 0) > 0.05
-                    THEN 1 ELSE 0
-                END
-            ) OVER (
-                PARTITION BY p.series_key ORDER BY epoch(p.observed_at) / 3600.0
-                RANGE BETWEEN 24 PRECEDING AND CURRENT ROW
+            CAST(
+                sum(
+                    CASE
+                        WHEN p.prev_price IS NOT NULL
+                         AND abs(p.price_eur - p.prev_price) / nullif(p.prev_price, 0) > 0.05
+                        THEN 1 ELSE 0
+                    END
+                ) OVER (
+                    PARTITION BY p.series_key ORDER BY epoch(p.observed_at) / 3600.0
+                    RANGE BETWEEN 24 PRECEDING AND CURRENT ROW
+                ) AS DOUBLE
             ) AS price_jumps_24h
         FROM features_base p
         JOIN raw_features r USING (series_key, observed_at)
@@ -747,13 +772,16 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         ORDER BY split
         """
     ).fetchall()
-    cohort = connection.execute(
+    cohort = _dict_rows(
+        connection,
         """
         SELECT
             split,
             count(*) AS rows,
             sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
             sum(CASE WHEN check_at IS NOT NULL THEN 1 ELSE 0 END) AS check_eligible,
+            sum(CASE WHEN check_at IS NOT NULL AND check_price_eur IS NOT NULL THEN 1 ELSE 0 END) AS check_priced,
+            sum(CASE WHEN check_at IS NOT NULL AND check_price_eur IS NULL THEN 1 ELSE 0 END) AS check_censored,
             sum(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus,
             avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
             avg(CASE WHEN label_observed THEN breached_in_24h END) AS prevalence,
@@ -763,8 +791,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         WHERE split IS NOT NULL
         GROUP BY split
         ORDER BY split
-        """
-    ).fetchall()
+        """,
+    )
     ttd = connection.execute(
         """
         SELECT
@@ -779,16 +807,22 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         ORDER BY split, ttd_band
         """
     ).fetchall()
-    label = connection.execute(
+    label = _dict_rows(
+        connection,
         """
         SELECT
             split,
-            ttd_band,
+            ttd_band AS band,
             count(*) FILTER (WHERE label_observed) AS labelled,
             count(*) FILTER (WHERE check_at IS NOT NULL) AS check_eligible,
+            count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NOT NULL) AS check_priced,
+            count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NULL) AS check_censored,
             count(*) FILTER (WHERE future_observations = 1) AS one_observations,
             count(*) FILTER (WHERE future_observations >= 2) AS two_plus,
             avg(breached_in_24h) FILTER (WHERE label_observed) AS within_day_rate,
+            avg(breached_in_24h) FILTER (
+                WHERE label_observed AND check_price_eur IS NOT NULL
+            ) AS priced_within_day_rate,
             avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations = 1) AS one_prevalence,
             avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations >= 2) AS two_plus_prevalence,
             median(future_span_h) FILTER (WHERE future_observations = 1) AS median_single_lag_h,
@@ -797,6 +831,9 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             avg(breached_at_check) FILTER (WHERE breached_at_check IS NOT NULL) AS next_day_rate,
             avg(breached_at_check_narrow) FILTER (WHERE breached_at_check_narrow IS NOT NULL) AS narrow_rate,
             avg(crossed_and_came_back) FILTER (WHERE crossed_and_came_back IS NOT NULL) AS crossed_back_rate,
+            avg(breached_in_24h) FILTER (
+                WHERE label_observed AND check_at IS NOT NULL AND check_price_eur IS NULL
+            ) AS censored_within_day_rate,
             count(*) FILTER (WHERE price_change_24h > 0.005 * price_eur) AS dearer,
             count(*) FILTER (WHERE price_change_24h < -0.005 * price_eur) AS cheaper,
             count(*) FILTER (
@@ -807,8 +844,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         WHERE split IS NOT NULL
         GROUP BY split, ttd_band
         ORDER BY split, ttd_band
-        """
-    ).fetchall()
+        """,
+    )
     unlabelled = connection.execute(
         """
         SELECT
@@ -834,8 +871,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             avg(r24_covered::INT) AS covered_share,
             avg(cov_tail_h) AS mean_tail_h,
             avg(cov_max_gap_h) AS mean_gap_h,
-            median(cov_max_gap_h) AS median_gap_h,
-            avg(CASE WHEN cov_max_gap_h > 24 THEN 1.0 ELSE 0.0 END) AS share_gap_gt24h
+            median(cov_max_gap_h) AS median_gap_h
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split, ttd_band
@@ -869,7 +905,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 departure_date,
                 observed_at,
                 train_number,
-                departure_planned
+                departure_planned,
+                service_class
             FROM base_sampled
             WHERE departure_date <= DATE '{max_departure}'
         ),
@@ -880,6 +917,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 any_value(departure_date) AS departure_date,
                 any_value(train_number) AS train_number,
                 any_value(departure_planned) AS departure_planned,
+                any_value(service_class) AS service_class,
                 max(observed_at) AS last_obs,
                 count(*) AS observations
             FROM series_obs
@@ -895,7 +933,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 s.*,
                 min(g.observed_at) AS next_s
             FROM eligible s
-            JOIN scrape_grid g
+            JOIN scrape_grid_all g
               ON g.route_id = s.route_id
              AND g.departure_date = s.departure_date
              AND g.observed_at > s.last_obs
@@ -906,6 +944,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 s.departure_date,
                 s.train_number,
                 s.departure_planned,
+                s.service_class,
                 s.last_obs,
                 s.observations
         ),
@@ -919,6 +958,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                           AND o.departure_date = n.departure_date
                           AND o.observed_at = n.next_s
                           AND o.train_number IS NOT DISTINCT FROM n.train_number
+                          AND o.service_class = n.service_class
                           AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 900
                     ) THEN 'same_train'
                     WHEN EXISTS (
@@ -935,6 +975,10 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         )
         SELECT
             (SELECT count(*) FROM eligible) AS total_journeys,
+            (
+                SELECT count(*) FROM eligible
+                WHERE last_obs <= departure_planned - INTERVAL 24 HOUR
+            ) AS at_risk,
             count(*) AS disappeared,
             ttd_band,
             observation_week,
@@ -946,7 +990,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         """
     ).fetchall()
     total_journeys = int(journey_row[0][0]) if journey_row else 0
-    disappeared = sum(int(row[1]) for row in journey_row)
+    at_risk = int(journey_row[0][1]) if journey_row else 0
+    disappeared = sum(int(row[2]) for row in journey_row)
     return {
         "headroom": [
             {
@@ -970,20 +1015,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             }
             for row in coverage
         ],
-        "cohort": [
-            {
-                "split": str(row[0]),
-                "rows": int(row[1]),
-                "labelled": int(row[2]),
-                "check_eligible": int(row[3]),
-                "two_plus": int(row[4]),
-                "labelled_share": float(row[5] or 0.0),
-                "prevalence": None if row[6] is None else float(row[6]),
-                "two_plus_prevalence": None if row[7] is None else float(row[7]),
-                "check_prevalence": None if row[8] is None else float(row[8]),
-            }
-            for row in cohort
-        ],
+        "cohort": cohort,
         "ttd": [
             {
                 "split": str(row[0]),
@@ -994,29 +1026,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             }
             for row in ttd
         ],
-        "label": [
-            {
-                "split": str(row[0]),
-                "band": str(row[1]),
-                "labelled": int(row[2]),
-                "check_eligible": int(row[3]),
-                "one_observations": int(row[4]),
-                "two_plus": int(row[5]),
-                "within_day_rate": None if row[6] is None else float(row[6]),
-                "one_prevalence": None if row[7] is None else float(row[7]),
-                "two_plus_prevalence": None if row[8] is None else float(row[8]),
-                "median_single_lag_h": None if row[9] is None else float(row[9]),
-                "p10_single_lag_h": None if row[10] is None else float(row[10]),
-                "p90_single_lag_h": None if row[11] is None else float(row[11]),
-                "next_day_rate": None if row[12] is None else float(row[12]),
-                "narrow_rate": None if row[13] is None else float(row[13]),
-                "crossed_back_rate": None if row[14] is None else float(row[14]),
-                "dearer": int(row[15]),
-                "cheaper": int(row[16]),
-                "unchanged": int(row[17]),
-            }
-            for row in label
-        ],
+        "label": label,
         "unlabelled": [
             {
                 "split": str(row[0]),
@@ -1038,7 +1048,6 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 "mean_tail_h": None if row[5] is None else float(row[5]),
                 "mean_gap_h": None if row[6] is None else float(row[6]),
                 "median_gap_h": None if row[7] is None else float(row[7]),
-                "share_gap_gt24h": None if row[8] is None else float(row[8]),
             }
             for row in coverage_r24
         ],
@@ -1054,14 +1063,16 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         ],
         "journey": {
             "total_journeys": total_journeys,
+            "at_risk": at_risk,
             "disappeared": disappeared,
             "share": 0.0 if total_journeys == 0 else disappeared / total_journeys,
+            "share_at_risk": 0.0 if at_risk == 0 else disappeared / at_risk,
             "groups": [
                 {
-                    "band": str(row[2]),
-                    "week": str(row[3]),
-                    "successor": str(row[4]),
-                    "journeys": int(row[5]),
+                    "band": str(row[3]),
+                    "week": str(row[4]),
+                    "successor": str(row[5]),
+                    "journeys": int(row[6]),
                 }
                 for row in journey_row
             ],
