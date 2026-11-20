@@ -13,6 +13,9 @@ HEADLINE_BANDS: tuple[tuple[str, int, int], ...] = (
     ("14-30d", 336, 720),
 )
 
+# Journey diagnostics include disappearances earlier than the 30-day model domain.
+JOURNEY_BANDS: tuple[tuple[str, int, int], ...] = (*HEADLINE_BANDS, (">30d", 720, 87_600))
+
 # Finer bands below 48 h for the climatology baseline; the remaining bands match the headline.
 CLIMATOLOGY_BANDS: tuple[tuple[str, int, int], ...] = (
     ("24-48h", 24, 48),

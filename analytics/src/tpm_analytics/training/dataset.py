@@ -21,7 +21,7 @@ import duckdb
 
 from tpm_analytics import calendar
 from tpm_analytics.silver._duck import read_parquet, sql_string
-from tpm_analytics.training.bands import ttd_band_case
+from tpm_analytics.training.bands import JOURNEY_BANDS, ttd_band_case
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import AUDIT_COLUMNS, feature_spec
 from tpm_analytics.training.sources import SourceSpec
@@ -889,7 +889,6 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             SELECT *
             FROM series_info
             WHERE observations >= 3
-              AND date_diff('second', last_obs, departure_planned) / 3600.0 BETWEEN 24 AND 720
         ),
         next_scrape AS (
             SELECT
@@ -930,7 +929,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                     ) THEN 'other_train'
                     ELSE 'none'
                 END AS successor,
-                {ttd_band_case("date_diff('second', last_obs, departure_planned) / 3600.0")} AS ttd_band,
+                {ttd_band_case("date_diff('second', last_obs, departure_planned) / 3600.0", JOURNEY_BANDS)} AS ttd_band,
                 strftime(last_obs, '%G-W%V') AS observation_week
             FROM next_scrape n
         )
