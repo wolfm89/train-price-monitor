@@ -120,14 +120,15 @@ v2-only and mixed-schema input.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
   and `--ablation` report validation only.
-- `check_at` (20-24 h for the PR 2 diagnostics, so the point stays inside the 24 h maximum), `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the
+- `check_at` (20-24 h for crossed-back; 20-28 h and 22-26 h for next-day coverage/prevalence), `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the
   label diagnostics are audit columns, not model features. They may use future scrapes only for
   evaluation, never inside the feature matrix.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
   `model.candidates` unless a future plan changes that decision.
 - `predictions/<split>.parquet` and `model.joblib` are local artifacts. Never load or trust a model
   file you did not produce; they are not uploaded. Verify `model.joblib` against
-  `manifest.json.artifact_sha256` before loading.
+  `manifest.json.artifact_sha256` before loading; the hash proves integrity, not authenticity,
+  because the expected value ships in the same directory.
 - In predictions, `raw_score` is the model score at that row's headroom, `raw_score_pooled` is the
   assigned-headroom score used to fit the calibrator, and `calibration_mode`/`calibration_fold`
   say whether `calibrated_score` is out-of-fold (`oof`) or a full refit (`full`). Do not fit a new
