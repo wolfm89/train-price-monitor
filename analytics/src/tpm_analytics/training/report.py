@@ -26,6 +26,8 @@ def _fmt(value: Any, digits: int = 4) -> str:
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> str:
+    if any(len(row) != len(headers) for row in rows):
+        raise ValueError("table row width does not match the header width")
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
     lines.extend("| " + " | ".join(_fmt(cell) for cell in row) + " |" for row in rows)
     return "\n".join(lines)
@@ -50,6 +52,8 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
     if not evaluation.test.get("headroom_monotonic"):
         warning_items.append("calibrated breach probability is not monotone across headroom")
     for split in stats.splits:
+        if not evaluation.test_evaluated and split.split == "test":
+            continue
         share = split.labelled / split.rows if split.rows else 0.0
         if share < 0.9:
             warning_items.append(f"{split.split} has only {share:.1%} labelled rows")
@@ -70,6 +74,7 @@ def _report(
     split_rows = [
         [item.split, item.rows, item.series, item.route_days, item.labelled, item.positives, item.positive_rate]
         for item in stats.splits
+        if evaluation.test_evaluated or item.split != "test"
     ]
     candidate_rows = [
         [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
@@ -104,11 +109,21 @@ def _report(
     coverage_rows = [
         [item["split"], item["labelled_share"], item["one_observation_share"], item["two_plus_share"]]
         for item in stats.profile.get("coverage", [])
+        if evaluation.test_evaluated or item["split"] != "test"
     ]
-    era_rows = [[item["split"], item["observation_era"], item["rows"]] for item in stats.profile.get("era", [])]
+    era_rows = [
+        [item["split"], item["observation_era"], item["rows"]]
+        for item in stats.profile.get("era", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
 
     def _p(value: Any) -> str:
         return "—" if value is None else f"{float(value):.1%}"
+
+    def _share(numerator: Any, denominator: Any) -> str:
+        if numerator is None or not denominator:
+            return "—"
+        return _p(float(numerator) / float(denominator))
 
     def _ci(values: Any) -> str:
         if not isinstance(values, list) or len(values) != 2:
@@ -120,6 +135,7 @@ def _report(
             item["split"],
             item["rows"],
             item["labelled"],
+            _share(item.get("two_plus"), item["rows"]),
             item["check_eligible"],
             item.get("check_priced", "—"),
             item.get("check_censored", "—"),
@@ -130,6 +146,7 @@ def _report(
             _p(item["check_prevalence"]),
         ]
         for item in stats.profile.get("cohort", [])
+        if evaluation.test_evaluated or item["split"] != "test"
     ]
     r24_rows = [
         [
@@ -143,19 +160,28 @@ def _report(
             _fmt(item["median_gap_h"], 1),
         ]
         for item in stats.profile.get("coverage_r24", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    label_items = [
+        item for item in stats.profile.get("label", []) if evaluation.test_evaluated or item["split"] != "test"
     ]
     label_rows = [
         [
             item["split"],
             item["band"],
+            item["rows"],
             item["labelled"],
+            _share(item.get("two_plus"), item["rows"]),
             item["check_eligible"],
+            _share(item["check_eligible"], item["rows"]),
             item.get("check_priced", "—"),
             item.get("check_censored", "—"),
             item.get("check_eligible_2028", "—"),
+            _share(item.get("check_eligible_2028"), item["rows"]),
             item.get("check_priced_2028", "—"),
             _p(item.get("next_day_2028_rate")),
             item.get("check_eligible_2226", "—"),
+            _share(item.get("check_eligible_2226"), item["rows"]),
             item.get("check_priced_2226", "—"),
             _p(item.get("next_day_2226_rate")),
             _p(item["within_day_rate"]),
@@ -168,7 +194,39 @@ def _report(
             item["cheaper"],
             item["unchanged"],
         ]
-        for item in stats.profile.get("label", [])
+        for item in label_items
+    ]
+    label_era_rows = [
+        [
+            item["split"],
+            item["era"],
+            item["band"],
+            item["rows"],
+            _share(item.get("check_eligible_2028"), item["rows"]),
+            _share(item.get("check_priced_2028"), item["rows"]),
+            _p(item.get("next_day_2028_rate")),
+            _share(item.get("check_eligible_2226"), item["rows"]),
+            _share(item.get("check_priced_2226"), item["rows"]),
+            _p(item.get("next_day_2226_rate")),
+        ]
+        for item in stats.profile.get("label_era", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    label_week_rows = [
+        [
+            item["split"],
+            item["week"],
+            item["band"],
+            item["rows"],
+            _share(item.get("check_eligible_2028"), item["rows"]),
+            _share(item.get("check_priced_2028"), item["rows"]),
+            _p(item.get("next_day_2028_rate")),
+            _share(item.get("check_eligible_2226"), item["rows"]),
+            _share(item.get("check_priced_2226"), item["rows"]),
+            _p(item.get("next_day_2226_rate")),
+        ]
+        for item in stats.profile.get("label_week", [])
+        if evaluation.test_evaluated or item["split"] != "test"
     ]
     forward_rows = [
         [
@@ -178,7 +236,7 @@ def _report(
             item.get("forward_cheaper", 0),
             max(0, item.get("check_priced_2028", 0) - item.get("forward_dearer", 0) - item.get("forward_cheaper", 0)),
         ]
-        for item in stats.profile.get("label", [])
+        for item in label_items
     ]
     a29_rows = [
         [
@@ -190,6 +248,7 @@ def _report(
             _p(item["crossed_back_rate"]),
         ]
         for item in stats.profile.get("a29", [])
+        if evaluation.test_evaluated or item["split"] != "test"
     ]
     tier_rows = [
         [
@@ -200,7 +259,7 @@ def _report(
             item["two_plus"],
             _p(item["two_plus_prevalence"]),
         ]
-        for item in stats.profile.get("label", [])
+        for item in label_items
     ]
     lag_rows = [
         [
@@ -210,20 +269,40 @@ def _report(
             _fmt(item["p10_single_lag_h"], 1),
             _fmt(item["p90_single_lag_h"], 1),
         ]
-        for item in stats.profile.get("label", [])
+        for item in label_items
     ]
     two_plus_week_rows = [
         [item["split"], item["week"], item["rows"], _p(item["two_plus_share"])]
         for item in stats.profile.get("two_plus_week", [])
+        if evaluation.test_evaluated or item["split"] != "test"
     ]
     journey = stats.profile.get("journey", {})
-    journey_groups: dict[tuple[str, str], int] = {}
+    journey_groups: dict[tuple[str, str, str], int] = {}
+    journey_60_groups: dict[tuple[str, str, str], int] = {}
     for item in journey.get("groups", []):
-        key = (item["band"], item["successor"])
+        key = (item["band"], "15 min", item["successor"])
         journey_groups[key] = journey_groups.get(key, 0) + item["journeys"]
-    journey_rows = [[band, successor, count] for (band, successor), count in sorted(journey_groups.items())]
+        key_60 = (item["band"], "60 min", item["successor_60"])
+        journey_60_groups[key_60] = journey_60_groups.get(key_60, 0) + item["journeys"]
+    journey_rows = []
+    for band in sorted({key[0] for key in journey_groups}):
+        for rule in ("15 min", "60 min"):
+            groups = journey_60_groups if rule == "60 min" else journey_groups
+            total = sum(groups.get((band, rule, successor), 0) for successor in ("same_train", "other_train", "none"))
+            journey_rows.append(
+                [
+                    band,
+                    rule,
+                    _share(groups.get((band, rule, "same_train"), 0), total),
+                    _share(groups.get((band, rule, "other_train"), 0), total),
+                    _share(groups.get((band, rule, "none"), 0), total),
+                    total,
+                ]
+            )
     unlabelled_agg: dict[tuple[str, str, str], list[float]] = {}
     for item in stats.profile.get("unlabelled", []):
+        if not evaluation.test_evaluated and item["split"] == "test":
+            continue
         key = (item["split"], item["band"], item["era"])
         bucket = unlabelled_agg.setdefault(key, [0.0, 0.0])
         bucket[0] += item["rows"]
@@ -234,6 +313,8 @@ def _report(
     ]
     weekly_agg: dict[tuple[str, str], list[float]] = {}
     for item in stats.profile.get("unlabelled", []):
+        if not evaluation.test_evaluated and item["split"] == "test":
+            continue
         key = (item["split"], item["week"])
         bucket = weekly_agg.setdefault(key, [0.0, 0.0])
         bucket[0] += item["rows"]
@@ -327,7 +408,9 @@ def _report(
             item["alert_rows"],
             _p(item["alert_share"]),
             _fmt(item["saving_vs_always_wait_eur"], 2),
+            _p(item["saving_vs_always_wait_pct"]),
             _fmt(item["saving_vs_always_book_eur"], 2),
+            _p(item["saving_vs_always_book_pct"]),
             _fmt(item["conditional_saving_when_alert_eur"], 2),
             _fmt(item["cost_of_waiting_eur"], 2),
             _fmt(item["ci_saving_vs_wait_eur"][0], 2) + ".." + _fmt(item["ci_saving_vs_wait_eur"][1], 2)
@@ -386,6 +469,7 @@ def _report(
             "split",
             "rows",
             "labelled",
+            "two-plus share",
             "check eligible",
             "check priced",
             "check censored",
@@ -401,19 +485,24 @@ def _report(
         [
             "split",
             "TTD band",
+            "rows",
             "labelled",
-            "check eligible",
-            "check priced 20-24",
-            "check censored 20-24",
-            "check eligible 20-28",
-            "check priced 20-28",
+            "two-plus share",
+            "eligible 20-24",
+            "coverage 20-24",
+            "priced 20-24",
+            "censored 20-24",
+            "eligible 20-28",
+            "coverage 20-28",
+            "priced 20-28",
             "next-day 20-28",
-            "check eligible 22-26",
-            "check priced 22-26",
+            "eligible 22-26",
+            "coverage 22-26",
+            "priced 22-26",
             "next-day 22-26",
             "within-day all",
             "within-day priced",
-            "next-day point",
+            "next-day 20-24",
             "22-24 h point",
             "crossed back",
             "censored within-day",
@@ -423,6 +512,36 @@ def _report(
         ],
         label_rows,
     )
+    label_era_table = _table(
+        [
+            "split",
+            "era",
+            "TTD band",
+            "rows",
+            "coverage 20-28",
+            "priced 20-28",
+            "next-day 20-28",
+            "coverage 22-26",
+            "priced 22-26",
+            "next-day 22-26",
+        ],
+        label_era_rows,
+    )
+    label_week_table = _table(
+        [
+            "split",
+            "week",
+            "TTD band",
+            "rows",
+            "coverage 20-28",
+            "priced 20-28",
+            "next-day 20-28",
+            "coverage 22-26",
+            "priced 22-26",
+            "next-day 22-26",
+        ],
+        label_week_rows,
+    )
     a29_table = _table(["split", "TTD band", "rows", "within-day 5%", "next-day 5%", "crossed back 5%"], a29_rows)
     forward_table = _table(["split", "TTD band", "forward dearer", "forward cheaper", "unchanged"], forward_rows)
     tier_table = _table(
@@ -430,7 +549,7 @@ def _report(
     )
     lag_table = _table(["split", "TTD band", "median single lag h", "p10 h", "p90 h"], lag_rows)
     two_plus_week_table = _table(["split", "week", "rows", "two-plus share"], two_plus_week_rows)
-    journey_table = _table(["TTD band", "successor", "journeys"], journey_rows)
+    journey_table = _table(["TTD band", "rule", "same train", "other train", "none", "journeys"], journey_rows)
     unlabelled_table = _table(["split", "TTD band", "era", "rows", "unlabelled"], unlabelled_rows)
     weekly_table = _table(["split", "week", "rows", "unlabelled"], weekly_rows)
     r24_table = _table(
@@ -512,7 +631,9 @@ def _report(
             "alerts",
             "alert share",
             "saving vs wait €",
+            "saving vs wait %",
             "saving vs book €",
+            "saving vs book %",
             "conditional € / alert",
             "cost of waiting €",
             "95% CI vs wait",
@@ -520,12 +641,28 @@ def _report(
         ],
         decision_rows,
     )
+    book_cis = [
+        item["ci_saving_vs_book_eur"] for item in evaluation.decision_value if item.get("ci_saving_vs_book_eur")
+    ]
+    book_worse = sum(1 for interval in book_cis if interval[1] < 0.0)
+    book_better = sum(1 for interval in book_cis if interval[0] > 0.0)
+    wait_better = sum(
+        1
+        for item in evaluation.decision_value
+        if item.get("ci_saving_vs_wait_eur") and item["ci_saving_vs_wait_eur"][0] > 0.0
+    )
+    decision_summary = (
+        f"Against always booking now, the alert policy is significantly more expensive in "
+        f"{book_worse} of {len(book_cis)} band x headroom cells and significantly cheaper in "
+        f"{book_better}; against always waiting it is significantly cheaper in {wait_better} cells."
+    )
     journey_total = int(journey.get("total_journeys", 0))
     journey_at_risk = int(journey.get("at_risk", 0))
     journey_disappeared = int(journey.get("disappeared", 0))
     journey_share = _p(journey.get("share"))
     journey_share_at_risk = _p(journey.get("share_at_risk"))
     journey_none = sum(item["journeys"] for item in journey.get("groups", []) if item["successor"] == "none")
+    journey_none_60 = sum(item["journeys"] for item in journey.get("groups", []) if item["successor_60"] == "none")
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -664,9 +801,18 @@ def _report(
 
 {label_table}
 
-`crossed back` is the share whose within-day maximum breached but the next-day point did not.
-`dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover only rows with
-a 23-36 h reference; `check priced` is the denominator for the next-day rate.
+`coverage` is the share of rows with a scrape in the window. `crossed back` is the share whose
+within-day maximum breached but the 20-24 h point did not. `dearer`/`cheaper`/`unchanged` use a
++/-0.5 % band around the current fare and cover only rows with a 23-36 h reference; `priced` is the
+denominator for the next-day rate. Test-split rows appear only with `--evaluate-test`.
+
+By observation era:
+
+{label_era_table}
+
+By observation week:
+
+{label_week_table}
 
 A29-like fixed 5 % comparison:
 
@@ -694,7 +840,11 @@ Single future scrape lag:
 - At risk (last observation more than 24 h before departure): **{journey_at_risk:,}**
 - Disappeared while the route-day was still scraped: **{journey_disappeared:,}** of all journeys
   ({journey_share}); {journey_share_at_risk} of at-risk
-- Successor `none`: **{journey_none:,}** (a later scrape existed but contained no priced journey)
+- Successor `none`: **{journey_none:,}** under the 15-minute rule (**{journey_none_60:,}** under
+  the 60-minute rule; no new series started at the next route-day scrape within that window)
+- `same train` requires a new series (`first_obs`) at the next scrape with the same class and train
+  number and a planned departure within 15 minutes; the 60-minute rule is the A31 comparison and
+  counts departures shifted by 15-60 minutes that the 15-minute rule classifies as `other train`
 
 {journey_table}
 
@@ -760,7 +910,9 @@ Negative Brier differences mean the model is better than the baseline.
 
 Per-headroom rows use a separate out-of-fold calibration fitted on that headroom's labels; the
 shipped model uses the pooled calibrator. These are diagnostic and are not directly comparable with
-the PR 1 pooled-calibrator table.
+the PR 1 pooled-calibrator table. The diagnostic probabilities rise with headroom on
+{_p(evaluation.test.get("headroom_diagnostic_nonmonotone_share"))} of rows; the shipped pooled
+calibrator is monotone: {evaluation.test.get("headroom_monotonic")}.
 
 {_table(headroom_headers, headroom_rows)}
 
@@ -793,11 +945,18 @@ Reliability by headroom, TTD band and era:
 {decision_table}
 
 Positive saving means the alert policy costs less than the baseline; negative means it costs
-more. `cost of waiting` is the unconditional cost of always waiting one day.
+more. `%` columns divide summed euros by summed fares; the conditional saving is a mean of
+per-alert ratios and is not comparable with them. `cost of waiting` is the unconditional cost of
+always waiting one day.
+
+{decision_summary}
 
 ## Calibration
 
 {_table(["predicted", "observed", "count"], cal_rows)}
+
+The intercept is the joint Cox intercept from the slope/intercept fit, not calibration-in-the-large;
+ECE uses equal-mass bins.
 
 ## Permutation importance (validation-select sample)
 

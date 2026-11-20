@@ -567,7 +567,6 @@ class Evaluation:
     calibration_prevalence: float
     train_prevalence: float
     dropped_features: tuple[str, ...]
-    calibration: tuple[Array, Array, Array]
     headroom: tuple[dict[str, Any], ...]
     importance: tuple[dict[str, Any], ...]
     bootstrap: dict[str, list[float]]
@@ -1395,6 +1394,10 @@ def train_and_evaluate(
     test_metrics["headroom_monotonic_raw"] = bool(
         all(np.all(left >= right) for left, right in itertools.pairwise(raw_headroom_probabilities))
     )
+    diagnostic_stack = np.vstack(headroom_probabilities)
+    test_metrics["headroom_diagnostic_nonmonotone_share"] = float(
+        np.mean(np.any(np.diff(diagnostic_stack, axis=0) > 0, axis=0))
+    )
     prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
     calibration_stats = _calibration_stats(eval_rows.y, calibrated_eval, config.report.calibration_bins)
     calibration_groups = _calibration_groups(
@@ -1591,7 +1594,7 @@ def write_evaluation_artifacts(
     table = pa.table(
         {
             "series_key": series,
-            "snapshot_at": snapshots,
+            "snapshot_at": pa.array(np.asarray(snapshots, dtype="datetime64[us]")),
             "route_day": route_days,
             "headroom_pct": headrooms,
             "raw_score": raw_scores,
@@ -1601,7 +1604,7 @@ def write_evaluation_artifacts(
             "calibrated_score": calibrated_scores,
             "assigned_headroom": assigned_headroom,
             "calibrated_score_pooled": calibrated_pooled,
-            "departure_date": departure_date,
+            "departure_date": pa.array(np.asarray(departure_date, dtype="datetime64[D]")).cast(pa.date32()),
             "ttd_band": ttd_band,
             "label": labels,
             "split": [evaluation.prediction_split] * len(labels),

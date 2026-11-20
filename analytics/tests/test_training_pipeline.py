@@ -22,9 +22,12 @@ from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.model import (
     Evaluation,
     TabularData,
+    _bootstrap_metrics,
+    _bootstrap_paired,
     _bss_train,
     _calibration_curve,
     _calibration_stats,
+    _cluster_mean_ci,
     _decision_value_rows,
     _strata_rows,
     _train_prevalence,
@@ -286,6 +289,76 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
                 fare=80.0,
             ),
             _row(
+                observed_at=datetime(2026, 7, 2, 10, 0),
+                departure=departure,
+                route="existing",
+                train="ICE-KEEP",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 8, 0),
+                departure=departure,
+                route="existing",
+                train="ICE-KEEP",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 9, 0),
+                departure=departure,
+                route="existing",
+                train="ICE-KEEP",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure,
+                route="existing",
+                train="ICE-KEEP",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 4, 10, 0),
+                departure=departure,
+                route="existing",
+                train="ICE-KEEP",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 2, 10, 0),
+                departure=departure,
+                route="other",
+                train="ICE-GONE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 8, 0),
+                departure=departure,
+                route="other",
+                train="ICE-GONE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure,
+                route="other",
+                train="ICE-GONE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 4, 10, 0),
+                departure=departure,
+                route="other",
+                train="ICE-NEW",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure + timedelta(days=1),
+                route="other",
+                train="ICE-GONE",
+                fare=80.0,
+            ),
+            _row(
                 observed_at=datetime(2026, 7, 3, 9, 0),
                 departure=departure,
                 route="successor",
@@ -304,6 +377,48 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
                 departure=departure + timedelta(minutes=10),
                 route="successor",
                 train="ICE-OLD",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 4, 10, 0),
+                departure=departure + timedelta(minutes=20),
+                route="other",
+                train="ICE-NEW",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 8, 0),
+                departure=departure,
+                route="none",
+                train="ICE-LEAVE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 9, 0),
+                departure=departure,
+                route="none",
+                train="ICE-LEAVE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure,
+                route="none",
+                train="ICE-LEAVE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 2, 10, 0),
+                departure=departure,
+                route="none",
+                train="ICE-EXISTING",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 4, 10, 0),
+                departure=departure,
+                route="none",
+                train="ICE-EXISTING",
                 fare=80.0,
             ),
             _row(
@@ -348,7 +463,11 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
         connection.close()
     profile = json.loads((tmp_path / "successor-run" / "profile.json").read_text())["profile"]
     successors = {group["successor"]: group["journeys"] for group in profile["journey"]["groups"]}
+    successors_60 = {group["successor_60"]: group["journeys"] for group in profile["journey"]["groups"]}
     assert successors.get("same_train", 0) >= 1
+    assert successors.get("other_train", 0) >= 1
+    assert successors.get("none", 0) >= 1
+    assert successors_60.get("none", 0) >= 1
 
 
 def test_check_grid_and_coverage(tmp_path: Path) -> None:
@@ -427,6 +546,76 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     assert str(row[7]) == "2026-07-04 10:00:00"
     assert row[8] == pytest.approx(90.0)
     assert row[9] == pytest.approx(90.0)
+
+
+def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 12, 0)
+    snapshot = departure - timedelta(hours=46)
+    source = tmp_path / "tie.parquet"
+    _write_silver(
+        source,
+        [
+            _row(observed_at=snapshot, departure=departure, route="tie", train="ICE-TIE", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=22),
+                departure=departure,
+                route="tie",
+                train="ICE-TIE",
+                fare=88.0,
+            ),
+            _row(
+                observed_at=snapshot + timedelta(hours=26),
+                departure=departure,
+                route="tie",
+                train="ICE-TIE",
+                fare=99.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 15, 10, 0),
+                departure=datetime(2026, 7, 16, 10, 0),
+                route="select",
+                train="ICE-SELECT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 22, 10, 0),
+                departure=datetime(2026, 7, 23, 10, 0),
+                route="calibrate",
+                train="ICE-CAL",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 29, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE-TEST",
+                fare=80.0,
+            ),
+        ],
+    )
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="tie", build_id=None, manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "tie-run",
+            run_id="tie",
+        )
+        row = connection.execute(
+            "SELECT check_at_2028, check_price_2028_eur FROM read_parquet(?) "
+            "WHERE snapshot_at = TIMESTAMP '2026-07-03 14:00:00'",
+            [str(tmp_path / "tie-run" / "dataset" / "train.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert str(row[0]) == "2026-07-04 12:00:00"
+    assert row[1] == pytest.approx(88.0)
 
 
 def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
@@ -1055,15 +1244,54 @@ def test_strata_do_not_fall_back_to_pooled_prevalence() -> None:
     assert service["bss_train"] is None
 
 
+def test_bootstrap_helpers_produce_bounded_intervals() -> None:
+    y = np.array([0, 1, 0, 1, 1, 0, 1, 0], dtype=np.int8)
+    probabilities = np.array([0.1, 0.8, 0.2, 0.7, 0.9, 0.3, 0.6, 0.4])
+    groups = np.array(["a", "a", "b", "b", "c", "c", "d", "d"], dtype=object)
+    metrics = _bootstrap_metrics(y, probabilities, groups, 20, 7, 0.5)
+    assert set(metrics) == {"bss", "roc_auc", "average_precision", "precision", "recall"}
+    assert all(low <= high for low, high in metrics.values())
+    paired = _bootstrap_paired(y, probabilities, np.full(len(y), 0.5), groups, 20, 8)
+    assert len(paired) == 2
+    assert paired[0] <= paired[1]
+    interval = _cluster_mean_ci(probabilities, groups, 20, 9)
+    assert len(interval) == 2
+    assert interval[0] <= interval[1]
+
+
+def test_cli_failure_leaves_no_output_or_temp(tmp_path: Path) -> None:
+    source = tmp_path / "silver.parquet"
+    _write_silver(source, _rows())
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 2.0
+    config_path.write_text(json.dumps(raw))
+    out = tmp_path / "failed-run"
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "--source",
+                str(source),
+                "--out",
+                str(out),
+            ]
+        )
+        == 2
+    )
+    assert not out.exists()
+    assert not list(tmp_path.glob(".failed-run.*.tmp"))
+
+
 def test_calibration_stats_are_reported() -> None:
-    y = np.array(([0] * 200) + ([1] * 200), dtype=np.int8)
-    probabilities = np.clip(y * 0.8 + 0.1, 0.0, 1.0)
+    rng = np.random.default_rng(11)
+    probabilities = rng.uniform(0.05, 0.95, size=20_000)
+    y = rng.binomial(1, probabilities).astype(np.int8)
     stats = _calibration_stats(y, probabilities, 10)
-    assert stats["slope"] is not None
-    assert stats["slope"] > 0
-    assert stats["intercept"] is not None
-    assert stats["ece"] is not None
-    assert stats["ece"] >= 0
+    assert stats["slope"] == pytest.approx(1.0, abs=0.1)
+    assert stats["intercept"] == pytest.approx(0.0, abs=0.1)
+    assert stats["ece"] == pytest.approx(0.0, abs=0.03)
 
 
 def test_calibration_counts_match_quantile_bins() -> None:
@@ -1101,6 +1329,9 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert profile_json["profile"]["label"]
     assert profile_json["profile"]["journey"]["total_journeys"] >= 0
     assert profile_json["profile"]["two_plus_week"] is not None
+    assert profile_json["profile"]["label_era"]
+    assert profile_json["profile"]["label_week"]
+    assert all("successor_60" in group for group in profile_json["profile"]["journey"]["groups"])
 
     run_out = tmp_path / "run"
     assert (
@@ -1138,6 +1369,8 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     manifest_json = json.loads((run_out / "manifest.json").read_text())
     assert manifest_json["test_evaluated"] is False
     assert "test" not in manifest_json["model"]
+    assert manifest_json["duckdb_settings"]["memory_limit"]
+    assert manifest_json["duckdb_settings"]["max_temp_directory_size"]
     metrics = json.loads((run_out / "metrics.json").read_text())
     assert metrics["evaluation"]["chosen_model"] in {"base_rate", "logistic", "hist_gradient_boosting"}
     assert len(metrics["evaluation"]["headroom"]) == 5
@@ -1148,6 +1381,8 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert set(metrics["evaluation"]["candidate_train"]) == set(metrics["evaluation"]["candidates"])
     assert 0 < len(metrics["evaluation"]["headroom_ttd"]) <= 25
     assert (run_out / "predictions" / "validation_calibrate.parquet").is_file()
+    assert not (run_out / "predictions" / "test.parquet").exists()
+    assert "| test |" not in report_text
     assert (run_out / "model.joblib").is_file()
     assert "predictions/validation_calibrate.parquet" in manifest_json["artifacts"]
     assert manifest_json["model"]["predictions"] == "predictions/validation_calibrate.parquet"
@@ -1155,6 +1390,9 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert manifest_json["build_config_sha256"]
     assert "evaluation_config" in manifest_json
     assert "model.joblib" in manifest_json["artifact_sha256"]
+    predictions_schema = pq.read_schema(run_out / "predictions" / "validation_calibrate.parquet")
+    assert pa.types.is_timestamp(predictions_schema.field("snapshot_at").type)
+    assert pa.types.is_date32(predictions_schema.field("departure_date").type)
     predictions = pq.read_table(run_out / "predictions" / "validation_calibrate.parquet").to_pydict()
     assert len(predictions["label"]) == 5 * metrics["evaluation"]["test_tier_rows"]
     assert set(predictions["calibration_mode"]) == {"oof"}
@@ -1163,18 +1401,20 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     connection = duckdb.connect()
     try:
         mismatch_row = connection.execute(
-            "SELECT count(*) FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at) "
-            "WHERE p.headroom_pct = 1 "
-            "AND p.label != CAST(d.future_max_fare_24h >= d.price_eur * 1.01 AS TINYINT)",
+            "SELECT count(*), count(*) FILTER (WHERE p.label != "
+            "CAST(d.future_max_fare_24h >= d.price_eur * 1.01 AS TINYINT)) "
+            "FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at) "
+            "WHERE p.headroom_pct = 1",
             [
                 str(run_out / "predictions" / "validation_calibrate.parquet"),
                 str(run_out / "dataset" / "validation_calibrate.parquet"),
             ],
         ).fetchone()
         assert mismatch_row is not None
-        mismatches = mismatch_row[0]
+        joined, mismatches = mismatch_row
     finally:
         connection.close()
+    assert joined > 0
     assert mismatches == 0
     model_payload = load_model(run_out / "model.joblib", manifest_json["artifact_sha256"]["model.joblib"])
     assert model_payload["chosen_model"] == metrics["evaluation"]["chosen_model"]
