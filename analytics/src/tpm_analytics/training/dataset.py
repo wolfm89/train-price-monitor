@@ -21,6 +21,7 @@ import duckdb
 
 from tpm_analytics import calendar
 from tpm_analytics.silver._duck import read_parquet, sql_string
+from tpm_analytics.training.bands import ttd_band_case
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import AUDIT_COLUMNS, feature_spec
 from tpm_analytics.training.sources import SourceSpec
@@ -234,6 +235,13 @@ def _create_views(
         )
     connection.execute(
         """
+        CREATE OR REPLACE TEMP VIEW scrape_grid AS
+        SELECT DISTINCT route_id, departure_date, observed_at
+        FROM base_sampled
+        """
+    )
+    connection.execute(
+        """
         CREATE OR REPLACE TEMP VIEW cross_section AS
         SELECT
             *,
@@ -374,12 +382,139 @@ def _create_views(
         """
     )
     connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW check_candidates AS
+        SELECT
+            n.series_key,
+            n.snapshot_at,
+            g.observed_at AS check_at,
+            abs(date_diff('second', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_s
+        FROM snapshot n
+        JOIN scrape_grid g
+          ON g.route_id = n.route_id
+         AND g.departure_date = n.departure_date
+        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
+                                AND n.snapshot_at + INTERVAL 28 HOUR
+          AND g.observed_at < n.departure_planned
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW check_points AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+            ) AS rn
+            FROM check_candidates
+        )
+        WHERE rn = 1
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW check_candidates_narrow AS
+        SELECT
+            n.series_key,
+            n.snapshot_at,
+            g.observed_at AS check_at,
+            abs(date_diff('second', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_s
+        FROM snapshot n
+        JOIN scrape_grid g
+          ON g.route_id = n.route_id
+         AND g.departure_date = n.departure_date
+        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 22 HOUR
+                                AND n.snapshot_at + INTERVAL 26 HOUR
+          AND g.observed_at < n.departure_planned
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW check_points_narrow AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+            ) AS rn
+            FROM check_candidates_narrow
+        )
+        WHERE rn = 1
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW coverage_events AS
+        SELECT
+            n.series_key,
+            n.snapshot_at,
+            g.observed_at AS s,
+            lag(g.observed_at, 1, n.snapshot_at) OVER (
+                PARTITION BY n.series_key, n.snapshot_at ORDER BY g.observed_at
+            ) AS previous_s
+        FROM snapshot n
+        JOIN scrape_grid g
+          ON g.route_id = n.route_id
+         AND g.departure_date = n.departure_date
+        WHERE g.observed_at > n.snapshot_at
+          AND g.observed_at <= n.snapshot_at + INTERVAL 24 HOUR
+          AND g.observed_at < n.departure_planned
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW coverage_stats AS
+        SELECT
+            series_key,
+            snapshot_at,
+            date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR) / 3600.0 AS cov_tail_h,
+            greatest(
+                max(date_diff('second', previous_s, s)),
+                date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR)
+            ) / 3600.0 AS cov_max_gap_h
+        FROM coverage_events
+        GROUP BY series_key, snapshot_at
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW snapshot_diag AS
+        SELECT
+            n.*,
+            c.check_at,
+            c.check_lag_h,
+            cn.check_at AS check_at_narrow,
+            cn.check_lag_h AS check_lag_narrow_h,
+            d.price_eur AS check_price_eur,
+            dn.price_eur AS check_price_narrow_eur,
+            cv.cov_tail_h,
+            cv.cov_max_gap_h,
+            CASE
+                WHEN cv.cov_tail_h IS NULL THEN NULL
+                ELSE (cv.cov_tail_h <= 4 AND cv.cov_max_gap_h <= 6)
+            END AS r24_covered
+        FROM snapshot n
+        LEFT JOIN check_points c USING (series_key, snapshot_at)
+        LEFT JOIN check_points_narrow cn USING (series_key, snapshot_at)
+        LEFT JOIN dedup d ON d.series_key = n.series_key AND d.observed_at = c.check_at
+        LEFT JOIN dedup dn ON dn.series_key = n.series_key AND dn.observed_at = cn.check_at
+        LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
+        """
+    )
+    connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW labelled AS
         SELECT
             *,
             {bucket_expr} AS bucket
-        FROM snapshot
+        FROM snapshot_diag
         """
     )
     connection.execute(
@@ -394,6 +529,21 @@ def _create_views(
                 WHEN future_max_fare_24h >= price_eur * (1 + ({headroom_expr}) / 100.0)
                 THEN 1 ELSE 0
             END AS breached_in_24h,
+            CASE
+                WHEN check_price_eur IS NULL OR price_eur IS NULL THEN NULL
+                WHEN check_price_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS breached_at_check,
+            CASE
+                WHEN check_price_narrow_eur IS NULL OR price_eur IS NULL THEN NULL
+                WHEN check_price_narrow_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS breached_at_check_narrow,
+            CASE
+                WHEN future_max_fare_24h IS NULL OR check_price_eur IS NULL THEN NULL
+                WHEN future_max_fare_24h >= price_eur * (1 + ({headroom_expr}) / 100.0)
+                 AND check_price_eur < price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS crossed_and_came_back,
+            {ttd_band_case("hours_to_departure")} AS ttd_band,
+            strftime(observed_at, '%G-W%V') AS observation_week,
             CASE
                 WHEN departure_date <= DATE '{splits.train_end.isoformat()}' THEN 'train'
                 WHEN departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
@@ -589,13 +739,215 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             split,
             avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
             avg(CASE WHEN future_observations = 1 THEN 1 ELSE 0 END) AS one_observation_share,
-            avg(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus_share
+            avg(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus_share,
+            avg(r24_covered::INT) AS r24_share
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split
         ORDER BY split
         """
     ).fetchall()
+    cohort = connection.execute(
+        """
+        SELECT
+            split,
+            count(*) AS rows,
+            sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
+            sum(CASE WHEN check_at IS NOT NULL THEN 1 ELSE 0 END) AS check_eligible,
+            sum(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus,
+            avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
+            avg(CASE WHEN label_observed THEN breached_in_24h END) AS prevalence,
+            avg(CASE WHEN label_observed AND future_observations >= 2 THEN breached_in_24h END) AS two_plus_prevalence,
+            avg(CASE WHEN check_at IS NOT NULL THEN breached_at_check END) AS check_prevalence
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split
+        ORDER BY split
+        """
+    ).fetchall()
+    ttd = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            count(*) AS rows,
+            sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
+            avg(CASE WHEN label_observed THEN breached_in_24h END) AS positive_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """
+    ).fetchall()
+    label = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            count(*) FILTER (WHERE label_observed) AS labelled,
+            count(*) FILTER (WHERE check_at IS NOT NULL) AS check_eligible,
+            count(*) FILTER (WHERE future_observations = 1) AS one_observations,
+            count(*) FILTER (WHERE future_observations >= 2) AS two_plus,
+            avg(breached_in_24h) FILTER (WHERE label_observed) AS within_day_rate,
+            avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations = 1) AS one_prevalence,
+            avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations >= 2) AS two_plus_prevalence,
+            median(future_span_h) FILTER (WHERE future_observations = 1) AS median_single_lag_h,
+            quantile_cont(future_span_h, 0.1) FILTER (WHERE future_observations = 1) AS p10_single_lag_h,
+            quantile_cont(future_span_h, 0.9) FILTER (WHERE future_observations = 1) AS p90_single_lag_h,
+            avg(breached_at_check) FILTER (WHERE breached_at_check IS NOT NULL) AS next_day_rate,
+            avg(breached_at_check_narrow) FILTER (WHERE breached_at_check_narrow IS NOT NULL) AS narrow_rate,
+            avg(crossed_and_came_back) FILTER (WHERE crossed_and_came_back IS NOT NULL) AS crossed_back_rate,
+            count(*) FILTER (WHERE price_change_24h > 0.005 * price_eur) AS dearer,
+            count(*) FILTER (WHERE price_change_24h < -0.005 * price_eur) AS cheaper,
+            count(*) FILTER (
+                WHERE price_change_24h IS NOT NULL
+                  AND abs(price_change_24h) <= 0.005 * price_eur
+            ) AS unchanged
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """
+    ).fetchall()
+    unlabelled = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            observation_era,
+            observation_week,
+            count(*) AS rows,
+            avg(CASE WHEN label_observed THEN 0.0 ELSE 1.0 END) AS unlabelled_share
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band, observation_era, observation_week
+        ORDER BY split, ttd_band, observation_era, observation_week
+        """
+    ).fetchall()
+    coverage_r24 = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            count(*) AS rows,
+            count(cov_tail_h) AS eligible,
+            avg(r24_covered::INT) AS covered_share,
+            avg(cov_tail_h) AS mean_tail_h,
+            avg(cov_max_gap_h) AS mean_gap_h,
+            median(cov_max_gap_h) AS median_gap_h,
+            avg(CASE WHEN cov_max_gap_h > 24 THEN 1.0 ELSE 0.0 END) AS share_gap_gt24h
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """
+    ).fetchall()
+    max_row = connection.execute("SELECT max(departure_date) FROM sampled").fetchone()
+    if max_row is None or max_row[0] is None:
+        raise DatasetError("no panel rows for journey diagnostics")
+    max_departure = str(max_row[0])
+    two_plus_week = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            observation_week,
+            count(*) AS rows,
+            avg(CASE WHEN future_observations >= 2 THEN 1.0 ELSE 0.0 END) AS two_plus_share
+        FROM sampled
+        WHERE split IS NOT NULL AND ttd_band = '14-30d'
+        GROUP BY split, ttd_band, observation_week
+        ORDER BY split, observation_week
+        """
+    ).fetchall()
+    journey_row = connection.execute(
+        f"""
+        WITH series_obs AS (
+            SELECT DISTINCT
+                series_key,
+                route_id,
+                departure_date,
+                observed_at,
+                train_number,
+                departure_planned
+            FROM base_sampled
+            WHERE departure_date <= DATE '{max_departure}'
+        ),
+        series_info AS (
+            SELECT
+                series_key,
+                any_value(route_id) AS route_id,
+                any_value(departure_date) AS departure_date,
+                any_value(train_number) AS train_number,
+                any_value(departure_planned) AS departure_planned,
+                max(observed_at) AS last_obs,
+                count(*) AS observations
+            FROM series_obs
+            GROUP BY series_key
+        ),
+        eligible AS (
+            SELECT *
+            FROM series_info
+            WHERE observations >= 3
+              AND date_diff('second', last_obs, departure_planned) / 3600.0 BETWEEN 24 AND 720
+        ),
+        next_scrape AS (
+            SELECT
+                s.*,
+                min(g.observed_at) AS next_s
+            FROM eligible s
+            JOIN scrape_grid g
+              ON g.route_id = s.route_id
+             AND g.departure_date = s.departure_date
+             AND g.observed_at > s.last_obs
+            WHERE s.last_obs <= s.departure_planned - INTERVAL 24 HOUR
+            GROUP BY
+                s.series_key,
+                s.route_id,
+                s.departure_date,
+                s.train_number,
+                s.departure_planned,
+                s.last_obs,
+                s.observations
+        ),
+        classified AS (
+            SELECT
+                n.*,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM series_obs o
+                        WHERE o.route_id = n.route_id
+                          AND o.departure_date = n.departure_date
+                          AND o.observed_at = n.next_s
+                          AND o.train_number IS NOT DISTINCT FROM n.train_number
+                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 900
+                    ) THEN 'same_train'
+                    WHEN EXISTS (
+                        SELECT 1 FROM series_obs o
+                        WHERE o.route_id = n.route_id
+                          AND o.departure_date = n.departure_date
+                          AND o.observed_at = n.next_s
+                    ) THEN 'other_train'
+                    ELSE 'none'
+                END AS successor,
+                {ttd_band_case("date_diff('second', last_obs, departure_planned) / 3600.0")} AS ttd_band,
+                strftime(last_obs, '%G-W%V') AS observation_week
+            FROM next_scrape n
+        )
+        SELECT
+            (SELECT count(*) FROM eligible) AS total_journeys,
+            count(*) AS disappeared,
+            ttd_band,
+            observation_week,
+            successor,
+            count(*) AS journeys
+        FROM classified
+        GROUP BY ttd_band, observation_week, successor
+        ORDER BY ttd_band, observation_week, successor
+        """
+    ).fetchall()
+    total_journeys = int(journey_row[0][0]) if journey_row else 0
+    disappeared = sum(int(row[1]) for row in journey_row)
     return {
         "headroom": [
             {
@@ -615,9 +967,106 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 "labelled_share": float(row[1] or 0.0),
                 "one_observation_share": float(row[2] or 0.0),
                 "two_plus_share": float(row[3] or 0.0),
+                "r24_share": None if row[4] is None else float(row[4]),
             }
             for row in coverage
         ],
+        "cohort": [
+            {
+                "split": str(row[0]),
+                "rows": int(row[1]),
+                "labelled": int(row[2]),
+                "check_eligible": int(row[3]),
+                "two_plus": int(row[4]),
+                "labelled_share": float(row[5] or 0.0),
+                "prevalence": None if row[6] is None else float(row[6]),
+                "two_plus_prevalence": None if row[7] is None else float(row[7]),
+                "check_prevalence": None if row[8] is None else float(row[8]),
+            }
+            for row in cohort
+        ],
+        "ttd": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "rows": int(row[2]),
+                "labelled": int(row[3]),
+                "positive_rate": None if row[4] is None else float(row[4]),
+            }
+            for row in ttd
+        ],
+        "label": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "labelled": int(row[2]),
+                "check_eligible": int(row[3]),
+                "one_observations": int(row[4]),
+                "two_plus": int(row[5]),
+                "within_day_rate": None if row[6] is None else float(row[6]),
+                "one_prevalence": None if row[7] is None else float(row[7]),
+                "two_plus_prevalence": None if row[8] is None else float(row[8]),
+                "median_single_lag_h": None if row[9] is None else float(row[9]),
+                "p10_single_lag_h": None if row[10] is None else float(row[10]),
+                "p90_single_lag_h": None if row[11] is None else float(row[11]),
+                "next_day_rate": None if row[12] is None else float(row[12]),
+                "narrow_rate": None if row[13] is None else float(row[13]),
+                "crossed_back_rate": None if row[14] is None else float(row[14]),
+                "dearer": int(row[15]),
+                "cheaper": int(row[16]),
+                "unchanged": int(row[17]),
+            }
+            for row in label
+        ],
+        "unlabelled": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "era": str(row[2]),
+                "week": str(row[3]),
+                "rows": int(row[4]),
+                "unlabelled_share": float(row[5] or 0.0),
+            }
+            for row in unlabelled
+        ],
+        "coverage_r24": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "rows": int(row[2]),
+                "eligible": int(row[3]),
+                "covered_share": None if row[4] is None else float(row[4]),
+                "mean_tail_h": None if row[5] is None else float(row[5]),
+                "mean_gap_h": None if row[6] is None else float(row[6]),
+                "median_gap_h": None if row[7] is None else float(row[7]),
+                "share_gap_gt24h": None if row[8] is None else float(row[8]),
+            }
+            for row in coverage_r24
+        ],
+        "two_plus_week": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "week": str(row[2]),
+                "rows": int(row[3]),
+                "two_plus_share": float(row[4] or 0.0),
+            }
+            for row in two_plus_week
+        ],
+        "journey": {
+            "total_journeys": total_journeys,
+            "disappeared": disappeared,
+            "share": 0.0 if total_journeys == 0 else disappeared / total_journeys,
+            "groups": [
+                {
+                    "band": str(row[2]),
+                    "week": str(row[3]),
+                    "successor": str(row[4]),
+                    "journeys": int(row[5]),
+                }
+                for row in journey_row
+            ],
+        },
     }
 
 
