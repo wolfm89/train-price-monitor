@@ -282,6 +282,11 @@ def _report(
         ]
         for item in evaluation.calibration_groups
     ]
+    reliability_rows = [
+        [group["headroom_pct"], group["ttd_band"], group["era"], _fmt(pred), _fmt(obs), count]
+        for group in evaluation.calibration_groups
+        for pred, obs, count in zip(group["prob_pred"], group["prob_true"], group["counts"], strict=True)
+    ]
     decision_rows = [
         [
             item["band"],
@@ -453,6 +458,7 @@ def _report(
     calibration_group_table = _table(
         ["headroom %", "TTD band", "era", "rows", "slope", "intercept", "ECE"], calibration_group_rows
     )
+    reliability_table = _table(["headroom %", "TTD band", "era", "predicted", "observed", "count"], reliability_rows)
     decision_table = _table(
         [
             "TTD band",
@@ -715,8 +721,9 @@ Per-headroom x TTD band x era:
 
 {calibration_group_table}
 
-Full reliability arrays (predicted/observed/counts) for every group are in `metrics.json` under
-`evaluation.calibration_groups`.
+Reliability by headroom, TTD band and era:
+
+{reliability_table}
 
 ### Decision value (diagnostic on the current label)
 
