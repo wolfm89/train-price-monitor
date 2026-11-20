@@ -36,6 +36,7 @@ request.json
 # plans
 .github/plans/
 .opencode/plans/
+.opencode/reviews/
 
 # stats
 stats/
@@ -55,6 +56,8 @@ backend/src/schema/schema.generated.json
 # analytics (Python)
 analytics/.venv/
 analytics/.duckdb-extensions/
+analytics/.data/
+analytics/artifacts/
 analytics/**/__pycache__/
 analytics/.pytest_cache/
 analytics/.ruff_cache/

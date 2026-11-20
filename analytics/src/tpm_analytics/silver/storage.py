@@ -11,6 +11,32 @@ from typing import Any, Protocol
 
 import boto3
 
+from tpm_analytics.silver._duck import S3Secret
+
+
+def s3_secret_from_session() -> S3Secret:
+    """Freeze the current boto3 credentials for DuckDB's temporary secret.
+
+    The training CLI uses the same profile/role as the rest of the local tooling. The secret is
+    passed to DuckDB in memory and is never written to the manifest or a log line.
+    """
+    session = boto3.Session()
+    credentials = session.get_credentials()
+    if credentials is None:
+        raise RuntimeError("no AWS credentials found; run aws sso login or set a profile")
+    frozen = credentials.get_frozen_credentials()
+    if frozen.access_key is None or frozen.secret_key is None:
+        raise RuntimeError("AWS credentials are missing an access key or secret")
+    region = (
+        session.region_name or os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "eu-central-1"
+    )
+    return S3Secret(
+        access_key=frozen.access_key,
+        secret_key=frozen.secret_key,
+        session_token=frozen.token or "",
+        region=region,
+    )
+
 
 class ObjectStore(Protocol):
     """The subset of S3 the publisher needs."""

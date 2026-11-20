@@ -3,7 +3,7 @@ UV_FROZEN = "1"
 
 [tasks.install]
 description = "Create the uv environment from the lockfile"
-run = "uv sync"
+run = "uv sync --group train"
 
 [tasks.build]
 description = "Build the wheel and sdist (assets included)"
@@ -11,11 +11,11 @@ run = "uv build"
 
 [tasks.typecheck]
 description = "Type check with ty"
-run = "uv run ty check"
+run = "uv run --group train ty check"
 
 [tasks.test]
 description = "Run the fixture tests"
-run = "uv run pytest"
+run = "uv run --group train pytest"
 
 [tasks.lint]
 description = "Lint with ruff"
@@ -48,3 +48,19 @@ run = "rm -rf dist .pytest_cache .ruff_cache"
 [tasks."silver:local"]
 description = "Build silver from a local bronze glob; pass --source <glob> --target <dir> after --"
 run = "uv run python -m tpm_analytics.silver.build"
+
+[tasks.train]
+description = "Build the baseline training set and report; pass --source <pointer|glob> after --"
+run = "uv run --group train python -m tpm_analytics.training.cli"
+
+[tasks."train:profile"]
+description = "Profile the training source without training"
+run = "uv run --group train python -m tpm_analytics.training.cli --profile"
+
+[tasks."train:ablation"]
+description = "Run the four calendar feature sets on one full dataset"
+run = "uv run --group train python -m tpm_analytics.training.cli --ablation"
+
+[tasks."train:clean"]
+description = "Remove local training artifacts"
+run = "rm -rf artifacts"

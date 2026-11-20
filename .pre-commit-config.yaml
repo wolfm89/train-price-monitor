@@ -72,7 +72,7 @@ repos:
         <<: *typecheck
       - id: typecheck-analytics
         name: ty (analytics)
-        entry: uv run --directory analytics ty check
+        entry: uv run --directory analytics --group train ty check
         <<: *typecheck
 
   - repo: https://github.com/astral-sh/uv-pre-commit

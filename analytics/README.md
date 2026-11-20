@@ -359,6 +359,34 @@ Regenerate with `mise run //analytics:calendar` and check drift with
 `mise run //analytics:calendar:check`. The schema, source filters, licence and refresh runbook are
 in [src/tpm_analytics/data/README.md](src/tpm_analytics/data/README.md).
 
+## Baseline training builder
+
+The optional `train` group builds a **v1-only** journey panel with a 24-hour price-breach label,
+joins the holiday calendar and writes one Parquet file per split. Training is local: nothing is
+uploaded and no AWS resource is created. Downloaded silver belongs under the ignored
+`analytics/.data/` directory.
+
+```bash
+uv sync --group train
+mise run //analytics:train -- --source .data/silver/<build> --profile   # profile only
+mise run //analytics:train -- --source .data/silver/<build>
+mise run //analytics:train:ablation -- --source .data/silver/<build>
+```
+
+`--source` accepts an S3 pointer, a Parquet glob, a single file, a local directory or a local
+`_latest.json` pointer; S3 needs `DUCKDB_EXTENSION_DIR` and the httpfs extension
+(`mise run //analytics:httpfs`). The default config is `config/training.json`.
+
+Runs are validation-only by default; `--evaluate-test` scores the test split once, and `--ablation`
+stays validation-only while comparing the four calendar sets. Two clean builds write
+order-independent digests to `dataset_manifest.json` and must match. The report shows label
+coverage, the two-or-more-observation headline, known limitations and the git/silver/config
+provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
+
+The label is the maximum over scraped observations in the next 24 hours (often one scrape about
+13 hours ahead). The domain is `24 h <= hours_to_departure <= 30 d`; the test split is a
+future-**departure** cohort, not a future-era holdout.
+
 ## Semantics the transform encodes
 
 - `schema_version` is `1` when the column is absent or null (files written before schema v2).
