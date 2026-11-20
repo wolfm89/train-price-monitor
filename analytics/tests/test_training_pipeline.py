@@ -885,6 +885,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert metrics["evaluation"]["metrics"]["split"] == "validation_calibrate"
     assert "test" not in metrics["evaluation"]
     assert metrics["evaluation"]["climatology"]["brier"] is not None
+    assert set(metrics["evaluation"]["candidate_train"]) == set(metrics["evaluation"]["candidates"])
     assert 0 < len(metrics["evaluation"]["headroom_ttd"]) <= 25
     assert (run_out / "predictions" / "validation_calibrate.parquet").is_file()
     assert (run_out / "model.joblib").is_file()

@@ -553,6 +553,7 @@ class Evaluation:
     importance: tuple[dict[str, Any], ...]
     bootstrap: dict[str, list[float]]
     split_sizes: dict[str, int]
+    candidate_train: dict[str, dict[str, float | None]] = field(default_factory=dict)
     headroom_ttd: tuple[dict[str, Any], ...] = ()
     strata: tuple[dict[str, Any], ...] = ()
     strata_compare: tuple[dict[str, Any], ...] = ()
@@ -578,6 +579,7 @@ class Evaluation:
             "threshold": self.threshold,
             "threshold_precision_floor_met": self.threshold_precision_floor_met,
             "candidates": self.candidates,
+            "candidate_train": self.candidate_train,
             "metrics": {"split": self.evaluation_split, "values": self.test},
             "test_all": self.test_all,
             "test_tier": self.test_tier,
@@ -979,9 +981,11 @@ def train_and_evaluate(
                 raise ModelError(f"series crosses splits {left}/{right}: {next(iter(overlap))}")
     candidates: dict[str, FittedModel] = {}
     candidate_metrics: dict[str, dict[str, float | None]] = {}
+    candidate_train_metrics: dict[str, dict[str, float | None]] = {}
     for name in config.model.candidates:
         model = fit_candidate(name, train, spec, config)
         candidates[name] = model
+        candidate_train_metrics[name] = _metrics(train.y, model.predict(train))
         raw = model.predict(validation_select)
         if name == "base_rate":
             candidate_metrics[name] = _metrics(validation_select.y, raw)
@@ -1359,6 +1363,7 @@ def train_and_evaluate(
         threshold=threshold,
         threshold_precision_floor_met=threshold_met,
         candidates=candidate_metrics,
+        candidate_train=candidate_train_metrics,
         test=test_metrics,
         test_all=test_all,
         test_tier=test_tier,

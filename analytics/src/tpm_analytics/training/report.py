@@ -75,6 +75,10 @@ def _report(
         [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
         for name, metrics in evaluation.candidates.items()
     ]
+    candidate_train_rows = [
+        [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
+        for name, metrics in evaluation.candidate_train.items()
+    ]
     headroom_rows = [
         [
             item["headroom_pct"],
@@ -616,6 +620,10 @@ Highest weekly unlabelled shares:
 ## Model comparison (cross-fitted validation-select)
 
 {_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_rows)}
+
+### Train-split diagnostics (in-sample)
+
+{_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_train_rows)}
 {ablation_section}
 
 ### Climatology baseline
