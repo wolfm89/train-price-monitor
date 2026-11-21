@@ -21,12 +21,13 @@ From the repository root, use `mise run //frontend:dev` and `mise run //frontend
 
 The app needs Cognito and GraphQL values at build/dev time:
 
-- `REACT_APP_GRAPHQL_ENDPOINT` — API Gateway base URL; the client appends `graphql`.
+- `REACT_APP_GRAPHQL_ENDPOINT` — API Gateway base URL for production builds; the dev server proxies
+  `/graphql` to `VITE_DEV_BACKEND_URL` instead (default `http://127.0.0.1:4000`).
 - `REACT_APP_COGNITO_USER_POOL_ID`
 - `REACT_APP_COGNITO_CLIENT_ID`
 - `REACT_APP_COGNITO_IDENTITY_POOL_ID`
 
-`mise run env:local` writes `frontend/.env` and `frontend/.env.development` from the deployed stack.
+`mise run env:local` writes `frontend/.env` from the deployed stack.
 Vite also accepts the unprefixed `COGNITO_*` names. See
 [docs/configuration.md](../docs/configuration.md#frontend-build) for the full reference.
 

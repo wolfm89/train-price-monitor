@@ -14,17 +14,11 @@ declare -A CLOUD_FORMATION_OUTPUTS=(
 declare -A ENV_FILE_FIELDS=(
   [backend/.env]='AWS_PROFILE PROFILE_IMAGE_BUCKET_NAME TPM_SQS_QUEUE_URL COGNITO_USER_POOL_ID'
   [frontend/.env]='COGNITO_USER_POOL_ID COGNITO_CLIENT_ID COGNITO_IDENTITY_POOL_ID AWS_REGION'
-  [frontend/.env.development]='REACT_APP_GRAPHQL_ENDPOINT'
-)
-
-declare -A STATIC_VALUES=(
-  [REACT_APP_GRAPHQL_ENDPOINT]='http://localhost:4000/'
 )
 
 ENV_FILES=(
   backend/.env
   frontend/.env
-  frontend/.env.development
 )
 
 require_value() {
@@ -67,10 +61,6 @@ done
 
 COGNITO_CLIENT_ID="$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query 'UserPoolClients[0].ClientId' --output text)"
 require_value "Cognito app client for user pool ${COGNITO_USER_POOL_ID}" "$COGNITO_CLIENT_ID"
-
-for env_name in "${!STATIC_VALUES[@]}"; do
-  printf -v "$env_name" '%s' "${STATIC_VALUES[$env_name]}"
-done
 
 for file_path in "${ENV_FILES[@]}"; do
   write_env_file "$file_path" "${ENV_FILE_FIELDS[$file_path]}"
