@@ -389,7 +389,13 @@ provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 
 The label is the maximum over scraped observations in the next 24 hours (often one scrape about
 13 hours ahead). The domain is `24 h <= hours_to_departure <= 30 d`; the test split is a
-future-**departure** cohort, not a future-era holdout.
+future-**departure** cohort, not a future-era holdout. Since PR 3 the label window and the
+history features follow the **journey chain**, not the itinerary-keyed series: a series that stops
+appearing is linked to the next series with the same route, class and first-train number, a planned
+departure within 15 minutes and its first observation at the next route-day scrape. Links are
+one-to-one and the closest departure wins. An arrival change therefore keeps the journey; a
+different train or a shift above 15 minutes starts a new chain. `--strict-chains` drops ambiguous
+candidates and is the sensitivity run, not the default.
 
 The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
 (`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
@@ -400,6 +406,11 @@ came back" comparison and the decision-value diagnostic (the table states this).
 `predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
 produce. Test-split label and model diagnostics are gated by `--evaluate-test`; journey
 disappearance is a corpus-level diagnostic that includes test departures.
+
+The profile also reports the chain link rate, the v2 `journey_id` overlap (split/merge rate),
+route-day scrape cadence, same-scrape duplicate keys and the cross-sections whose three-peer status
+depends on them. `column_roles.json` lists every output column as `features`, `labels` or `audit`;
+`observation_week` is the Europe/Berlin ISO week.
 
 ## Semantics the transform encodes
 

@@ -18,7 +18,14 @@ import pytest
 from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
 from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
-from tpm_analytics.training.dataset import DatasetError, DatasetStats, SplitStats, _final_columns, build_dataset
+from tpm_analytics.training.dataset import (
+    DatasetError,
+    DatasetStats,
+    SplitStats,
+    _final_columns,
+    _git_state,
+    build_dataset,
+)
 from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.model import (
     Evaluation,
@@ -508,6 +515,212 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
     assert successors_60.get("other_train", 0) < successors.get("other_train", 0)
 
 
+def _chain_fixture(
+    *,
+    successor_train: str = "ICE-CHAIN",
+    successor_departure: datetime | None = None,
+    successor_arrival_offset: timedelta = timedelta(minutes=16),
+    second_successor: bool = False,
+) -> list[dict[str, object]]:
+    departure = datetime(2026, 7, 6, 20, 0)
+    successor_departure = successor_departure or departure
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 3, 20, 0),
+            departure=departure,
+            route="chain",
+            train="ICE-CHAIN",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 20, 0),
+            departure=departure,
+            route="chain",
+            train="ICE-CHAIN",
+            fare=82.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=successor_departure,
+            arrival_planned=successor_departure + timedelta(hours=4) + successor_arrival_offset,
+            route="chain",
+            train=successor_train,
+            fare=99.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 22, 0),
+            departure=successor_departure,
+            arrival_planned=successor_departure + timedelta(hours=4) + successor_arrival_offset,
+            route="chain",
+            train=successor_train,
+            fare=70.0,
+        ),
+    ]
+    if second_successor:
+        rows.append(
+            _row(
+                observed_at=datetime(2026, 7, 5, 10, 0),
+                departure=departure + timedelta(minutes=10),
+                arrival_planned=departure + timedelta(hours=4),
+                route="chain",
+                train="ICE-CHAIN",
+                fare=97.0,
+            )
+        )
+    return rows
+
+
+def _build_chain_dataset(
+    tmp_path: Path, rows: list[dict[str, object]], *, strict: bool = False
+) -> tuple[DatasetStats, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    source = tmp_path / "chain.parquet"
+    _write_silver(source, _rows() + rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="chain", build_id="chain", manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "chain-run",
+            run_id="chain",
+            write_splits=True,
+            strict_chains=strict,
+        )
+    finally:
+        connection.close()
+    return stats, tmp_path / "chain-run"
+
+
+def test_observation_week_uses_berlin_time(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 10, 10, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 5, 23, 30),
+            departure=departure,
+            route="week",
+            train="ICE-WEEK",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 6, 20, 0),
+            departure=departure,
+            route="week",
+            train="ICE-WEEK",
+            fare=90.0,
+        ),
+    ]
+    _, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    index = next(
+        index
+        for index, route in enumerate(predictions["route_id"])
+        if route == "week" and str(predictions["snapshot_at"][index]) == "2026-07-05 23:30:00"
+    )
+    assert predictions["observation_week"][index] == "2026-W28"
+    data = load_split(out / "dataset" / "train.parquet", feature_spec("full"))
+    week_index = next(
+        index for index, snapshot in enumerate(data.snapshot_at) if str(snapshot).startswith("2026-07-05T23:30")
+    )
+    assert str(data.observation_week[week_index]) == "2026-W28"
+
+
+def test_v2_overlap_audit_runs(tmp_path: Path) -> None:
+    departure = datetime(2026, 8, 20, 10, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 8, 18, 10, 0),
+            departure=departure,
+            route="overlap",
+            train="ICE-OVER",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 8, 19, 10, 0),
+            departure=departure,
+            route="overlap",
+            train="ICE-OVER",
+            fare=82.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 8, 19, 12, 0),
+            departure=departure,
+            route="overlap",
+            train="ICE-OVER",
+            fare=90.0,
+            schema_version=2,
+            journey_id="journey-overlap",
+        ),
+    ]
+    _, out = _build_chain_dataset(tmp_path, rows)
+    profile = json.loads((out / "profile.json").read_text())["profile"]
+    audit = profile["chain_v2"]
+    assert audit is not None
+    assert audit["v2_journeys"] == 1
+    assert audit["matched_journeys"] == 1
+    assert audit["split_rate"] == 0.0
+    assert audit["merge_rate"] == 0.0
+
+
+def test_chain_follows_arrival_change(tmp_path: Path) -> None:
+    stats, out = _build_chain_dataset(tmp_path, _chain_fixture())
+    assert stats.profile["chain"]["links"] >= 1
+    assert stats.profile["chain"]["chains"] >= 1
+    assert stats.profile["duplicates"]["rows"] > 0
+    assert stats.profile["scrape_gap"]
+    assert stats.profile["chain_v2"] is None
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    route_rows = [index for index, route in enumerate(predictions["route_id"]) if route == "chain"]
+    assert len(route_rows) == 3
+    assert len({predictions["chain_id"][index] for index in route_rows}) == 1
+    assert len({predictions["series_key"][index] for index in route_rows}) == 2
+    before = next(index for index in route_rows if str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00")
+    after = next(index for index in route_rows if str(predictions["snapshot_at"][index]) == "2026-07-05 10:00:00")
+    assert predictions["future_max_fare_24h"][before] == pytest.approx(99.0)
+    assert predictions["future_observations"][before] == 1
+    assert predictions["history_depth_h"][after] == pytest.approx(38.0)
+
+
+def test_chain_rejects_different_train_and_large_shift(tmp_path: Path) -> None:
+    for rows in (
+        _chain_fixture(successor_train="ICE-OTHER"),
+        _chain_fixture(successor_departure=datetime(2026, 7, 6, 20, 16)),
+    ):
+        stats, out = _build_chain_dataset(
+            tmp_path / rows[0]["train_number"].__class__.__name__ if False else tmp_path, rows
+        )
+        predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+        route_rows = [index for index, route in enumerate(predictions["route_id"]) if route == "chain"]
+        assert len({predictions["chain_id"][index] for index in route_rows}) == 2
+        before = next(index for index in route_rows if str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00")
+        assert predictions["future_max_fare_24h"][before] is None
+        assert stats.profile["chain"]["links"] == 0
+
+
+def test_chain_one_to_one_picks_closest_departure_and_strict_drops_ambiguity(tmp_path: Path) -> None:
+    _, out = _build_chain_dataset(tmp_path, _chain_fixture(second_successor=True))
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    route_rows = [index for index, route in enumerate(predictions["route_id"]) if route == "chain"]
+    chain_ids = {predictions["chain_id"][index] for index in route_rows}
+    assert len(chain_ids) == 2
+    first_successor = next(
+        index
+        for index in route_rows
+        if str(predictions["snapshot_at"][index]) == "2026-07-05 10:00:00"
+        and predictions["price_eur"][index] == pytest.approx(99.0)
+    )
+    before = next(index for index in route_rows if str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00")
+    assert predictions["chain_id"][before] == predictions["chain_id"][first_successor]
+    _, strict_out = _build_chain_dataset(tmp_path / "strict", _chain_fixture(second_successor=True), strict=True)
+    strict_predictions = pq.read_table(strict_out / "dataset" / "train.parquet").to_pydict()
+    strict_rows = [index for index, route in enumerate(strict_predictions["route_id"]) if route == "chain"]
+    assert len({strict_predictions["chain_id"][index] for index in strict_rows}) == 3
+
+
 def test_journey_next_scrape_stops_at_departure(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 5, 10, 0)
     source = tmp_path / "journey-boundary.parquet"
@@ -665,9 +878,9 @@ def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
         == 0
     )
     metrics = json.loads((out / "metrics.json").read_text())
-    assert metrics["evaluation"]["test_evaluated"] is True
-    assert metrics["evaluation"]["test_tier"] == "two_plus_observations"
-    assert metrics["evaluation"]["test_tier_rows"] >= 1
+    assert metrics["evaluation"]["evaluation_on_test"] is True
+    assert metrics["evaluation"]["evaluation_tier"] == "two_plus_observations"
+    assert metrics["evaluation"]["evaluation_tier_rows"] >= 1
     assert (out / "predictions" / "test.parquet").is_file()
 
 
@@ -1032,6 +1245,31 @@ def test_two_builds_have_same_content_digest(tmp_path: Path) -> None:
     assert digests[0]["sha256"] == digests[1]["sha256"]
 
 
+def test_unknown_git_state_is_not_reported_as_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def fail(*args: object, **kwargs: object) -> str:
+        raise OSError("git is unavailable")
+
+    monkeypatch.setattr(subprocess, "check_output", fail)
+    assert _git_state() == (None, None)
+
+
+def test_column_roles_and_source_inventory(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    roles = json.loads((out / "column_roles.json").read_text())
+    manifest = json.loads((out / "dataset_manifest.json").read_text())
+    assert manifest["column_roles"] == "column_roles.json"
+    assert roles["version"] == 1
+    assert set(roles["features"]) == set(feature_spec("full").names)
+    assert not set(roles["features"]) & set(roles["labels"])
+    assert not set(roles["features"]) & set(roles["audit"])
+    assert not set(roles["labels"]) & set(roles["audit"])
+    assert set(roles["features"] + roles["labels"] + roles["audit"]) == set(_final_columns("full"))
+    assert manifest["source_inventory"]
+    assert all(item["sha256"] and item["bytes"] for item in manifest["source_inventory"])
+
+
 def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 10, 10, 0)
 
@@ -1118,8 +1356,8 @@ def test_train_evaluate_is_permutation_invariant(tmp_path: Path) -> None:
     rng = np.random.default_rng(11)
     shuffled = {name: data.subset(rng.permutation(len(data))) for name, data in splits.items()}
     second, _, _ = train_and_evaluate(shuffled, spec, config)
-    assert first.test["brier"] == pytest.approx(second.test["brier"], rel=1e-6)
-    assert first.test["log_loss"] == pytest.approx(second.test["log_loss"], rel=1e-6)
+    assert first.metrics["brier"] == pytest.approx(second.metrics["brier"], rel=1e-6)
+    assert first.metrics["log_loss"] == pytest.approx(second.metrics["log_loss"], rel=1e-6)
 
     def stable(value: object) -> object:
         if isinstance(value, float):
@@ -1435,7 +1673,7 @@ def _tabular(
 
 
 def _evaluation(
-    *, test_evaluated: bool, calibration_prevalence: float, train_prevalence: float, positive_rate: float
+    *, evaluation_on_test: bool, calibration_prevalence: float, train_prevalence: float, positive_rate: float
 ) -> Evaluation:
     return Evaluation(
         chosen_model="logistic",
@@ -1443,7 +1681,7 @@ def _evaluation(
         threshold=0.5,
         threshold_precision_floor_met=True,
         candidates={},
-        test={
+        metrics={
             "brier": 0.2,
             "log_loss": 0.5,
             "roc_auc": 0.7,
@@ -1452,11 +1690,11 @@ def _evaluation(
             "precision_floor_met_on_evaluation": True,
             "headroom_monotonic": True,
         },
-        test_all=None,
-        test_tier="two_plus_observations",
-        test_tier_rows=1_000,
-        evaluation_split="test" if test_evaluated else "validation_calibrate",
-        test_evaluated=test_evaluated,
+        metrics_all=None,
+        evaluation_tier="two_plus_observations",
+        evaluation_tier_rows=1_000,
+        evaluation_split="test" if evaluation_on_test else "validation_calibrate",
+        evaluation_on_test=evaluation_on_test,
         calibration_prevalence=calibration_prevalence,
         train_prevalence=train_prevalence,
         dropped_features=(),
@@ -1507,7 +1745,7 @@ def test_bss_train_uses_matching_train_prevalence() -> None:
 
 def test_prevalence_warnings_are_formatted_and_gated() -> None:
     evaluated = _evaluation(
-        test_evaluated=True,
+        evaluation_on_test=True,
         calibration_prevalence=0.27037560714730513,
         train_prevalence=0.27037560714730513,
         positive_rate=0.2392969572255863,
@@ -1517,7 +1755,7 @@ def test_prevalence_warnings_are_formatted_and_gated() -> None:
     assert "prevalence shift between train and evaluation: 0.270 vs 0.239" in warnings
     assert all("0.27037560714730513" not in warning for warning in warnings)
     validation_only = _evaluation(
-        test_evaluated=False,
+        evaluation_on_test=False,
         calibration_prevalence=0.27037560714730513,
         train_prevalence=0.2392969572255863,
         positive_rate=0.2392969572255863,
@@ -1862,14 +2100,14 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert "Prevalence:" in report_text
     assert "average precision" in report_text
     manifest_json = json.loads((run_out / "manifest.json").read_text())
-    assert manifest_json["test_evaluated"] is False
+    assert manifest_json["evaluation_on_test"] is False
     assert "test" not in manifest_json["model"]
     assert manifest_json["duckdb_settings"]["memory_limit"]
     assert manifest_json["duckdb_settings"]["max_temp_directory_size"]
     metrics = json.loads((run_out / "metrics.json").read_text())
     assert metrics["evaluation"]["chosen_model"] in {"base_rate", "logistic", "hist_gradient_boosting"}
     assert len(metrics["evaluation"]["headroom"]) == 5
-    assert metrics["evaluation"]["test_evaluated"] is False
+    assert metrics["evaluation"]["evaluation_on_test"] is False
     assert metrics["evaluation"]["metrics"]["split"] == "validation_calibrate"
     assert "test" not in metrics["evaluation"]
     assert metrics["evaluation"]["climatology"]["brier"] is not None
@@ -1889,7 +2127,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert pa.types.is_timestamp(predictions_schema.field("snapshot_at").type)
     assert pa.types.is_date32(predictions_schema.field("departure_date").type)
     predictions = pq.read_table(run_out / "predictions" / "validation_calibrate.parquet").to_pydict()
-    assert len(predictions["label"]) == 5 * metrics["evaluation"]["test_tier_rows"]
+    assert len(predictions["label"]) == 5 * metrics["evaluation"]["evaluation_tier_rows"]
     assert set(predictions["calibration_mode"]) == {"oof"}
     assert min(predictions["calibration_fold"]) >= 0
     assert {"raw_score_pooled", "assigned_headroom", "calibrated_score_pooled", "ttd_band"} <= set(predictions)
@@ -1933,9 +2171,9 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         == 0
     )
     tested = json.loads((test_out / "metrics.json").read_text())
-    assert tested["evaluation"]["test_evaluated"] is True
+    assert tested["evaluation"]["evaluation_on_test"] is True
     assert tested["evaluation"]["metrics"]["split"] == "test"
-    assert tested["test_evaluated"] is True
+    assert tested["evaluation_on_test"] is True
     assert (test_out / "predictions" / "test.parquet").is_file()
     tested_predictions = pq.read_table(test_out / "predictions" / "test.parquet").to_pydict()
     assert set(tested_predictions["calibration_mode"]) == {"full"}
@@ -1957,5 +2195,5 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         == 0
     )
     ablated = json.loads((ablation_out / "metrics.json").read_text())
-    assert ablated["test_evaluated"] is False
+    assert ablated["evaluation_on_test"] is False
     assert all("test_brier" not in item for item in ablated["ablation"].values())

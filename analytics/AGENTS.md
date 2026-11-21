@@ -128,6 +128,22 @@ v2-only and mixed-schema input.
   and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
   journey disappearance is corpus-level and includes test departures. `profile.json` and
   `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
+- **Journey identity (L12).** The series key follows the itinerary (route, first train, class,
+  arrival and transfers in 15-minute buckets). When a series stops appearing, the chain links it to
+  the next series with the same route, class and first-train number, a planned departure within
+  15 minutes and its first observation at the next route-day scrape. Links are one-to-one; the
+  closest departure wins. The chain id, not `series_key`, is the identity for the label window,
+  the history features and the split assignment. An arrival change therefore continues the
+  journey; a different train or a departure shift above 15 minutes does not. `--strict-chains`
+  drops every candidate whose predecessor or successor has more than one candidate and is the
+  sensitivity run, not the default.
+- The 15-minute series buckets are floored, so their edges sit 7.5 minutes from the midpoint
+  (`:07:30`, `:22:30`, `:37:30`, `:52:30`). `price_rank_route_day` ranks every priced journey in
+  the route-day x class x scrape cross-section before resampling; route-day sampling keeps the
+  whole cross-section. `column_roles.json` records which output columns are features, labels or
+  audit so a new diagnostic cannot quietly enter the model matrix.
+- `observation_week` is the Europe/Berlin ISO week. `identity.berlin_week_sql` implements the EU
+  DST rule directly because DuckDB's ICU timezone functions need `pytz` in the Python client.
 - `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
   next-day coverage/prevalence),
   `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the label diagnostics are

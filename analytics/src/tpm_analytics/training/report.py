@@ -35,10 +35,10 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
 
 def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
     warning_items = list(stats.warnings)
-    positives = float(evaluation.test.get("positive_rate") or 0.0)
-    if not evaluation.test.get("precision_floor_met_on_evaluation"):
+    positives = float(evaluation.metrics.get("positive_rate") or 0.0)
+    if not evaluation.metrics.get("precision_floor_met_on_evaluation"):
         warning_items.append("precision floor missed on the evaluated split")
-    if evaluation.test_evaluated and abs(positives - evaluation.calibration_prevalence) > 0.02:
+    if evaluation.evaluation_on_test and abs(positives - evaluation.calibration_prevalence) > 0.02:
         warning_items.append(
             "prevalence shift between calibration and evaluation: "
             f"{evaluation.calibration_prevalence:.3f} vs {positives:.3f}"
@@ -49,12 +49,12 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
         warning_items.append(
             f"prevalence shift between train and evaluation: {evaluation.train_prevalence:.3f} vs {positives:.3f}"
         )
-    if not evaluation.test.get("headroom_monotonic"):
+    if not evaluation.metrics.get("headroom_monotonic"):
         warning_items.append("calibrated breach probability is not monotone across headroom")
     if evaluation.calibration_constant:
         warning_items.append("calibration labels are single-class; the shipped calibrator is constant")
     for split in stats.splits:
-        if not evaluation.test_evaluated and split.split == "test":
+        if not evaluation.evaluation_on_test and split.split == "test":
             continue
         share = split.labelled / split.rows if split.rows else 0.0
         if share < 0.9:
@@ -76,7 +76,7 @@ def _report(
     split_rows = [
         [item.split, item.rows, item.series, item.route_days, item.labelled, item.positives, item.positive_rate]
         for item in stats.splits
-        if evaluation.test_evaluated or item.split != "test"
+        if evaluation.evaluation_on_test or item.split != "test"
     ]
     candidate_rows = [
         [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
@@ -111,12 +111,12 @@ def _report(
     coverage_rows = [
         [item["split"], item["labelled_share"], item["one_observation_share"], item["two_plus_share"]]
         for item in stats.profile.get("coverage", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     era_rows = [
         [item["split"], item["observation_era"], item["rows"]]
         for item in stats.profile.get("era", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
 
     def _p(value: Any) -> str:
@@ -148,7 +148,7 @@ def _report(
             _p(item["check_prevalence"]),
         ]
         for item in stats.profile.get("cohort", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     r24_rows = [
         [
@@ -162,10 +162,10 @@ def _report(
             _fmt(item["median_gap_h"], 1),
         ]
         for item in stats.profile.get("coverage_r24", [])
-        if item["band"] in {"1-3d", "3-5d", "5-7d"} and (evaluation.test_evaluated or item["split"] != "test")
+        if item["band"] in {"1-3d", "3-5d", "5-7d"} and (evaluation.evaluation_on_test or item["split"] != "test")
     ]
     label_items = [
-        item for item in stats.profile.get("label", []) if evaluation.test_evaluated or item["split"] != "test"
+        item for item in stats.profile.get("label", []) if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     label_rows = [
         [
@@ -212,7 +212,7 @@ def _report(
             _p(item.get("next_day_2226_rate")),
         ]
         for item in stats.profile.get("label_era", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     label_week_rows = [
         [
@@ -228,7 +228,7 @@ def _report(
             _p(item.get("next_day_2226_rate")),
         ]
         for item in stats.profile.get("label_week", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     forward_rows = [
         [
@@ -250,7 +250,7 @@ def _report(
             _p(item["crossed_back_rate"]),
         ]
         for item in stats.profile.get("a29", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     tier_rows = [
         [
@@ -276,7 +276,7 @@ def _report(
     two_plus_week_rows = [
         [item["split"], item["week"], item["rows"], _p(item["two_plus_share"])]
         for item in stats.profile.get("two_plus_week", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     journey = stats.profile.get("journey", {})
     journey_groups: dict[tuple[str, str, str], int] = {}
@@ -312,9 +312,69 @@ def _report(
         [week, counts["total"], counts["same_train"], counts["other_train"], counts["none"]]
         for week, counts in sorted(journey_week_groups.items())
     ]
+    chain = stats.profile.get("chain", {})
+    chain_rows = [
+        [
+            chain.get("series", 0),
+            chain.get("at_risk_series", 0),
+            chain.get("at_risk_series_3plus", 0),
+            chain.get("candidate_links", 0),
+            chain.get("links", 0),
+            chain.get("chains", 0),
+            chain.get("linked_series", 0),
+            chain.get("largest_chain", 0),
+            _p(chain.get("link_rate")),
+            _p(chain.get("link_rate_3plus")),
+            _p(chain.get("series_link_rate")),
+            chain.get("ambiguous_predecessors", 0),
+            chain.get("ambiguous_successors", 0),
+            chain.get("dropped_candidates", 0),
+        ]
+    ]
+    chain_size_rows = [[size, count] for size, count in chain.get("size_histogram", []) if int(size) > 1]
+    chain_v2 = stats.profile.get("chain_v2")
+    chain_v2_rows = (
+        [
+            [
+                f"{chain_v2['departure_window'][0]}..{chain_v2['departure_window'][1]}",
+                chain_v2["v2_journeys"],
+                chain_v2["matched_journeys"],
+                _p(chain_v2["unmatched_share"]),
+                chain_v2["split_journeys"],
+                _p(chain_v2["split_rate"]),
+                chain_v2["matched_chains"],
+                chain_v2["merged_chains"],
+                _p(chain_v2["merge_rate"]),
+            ]
+        ]
+        if chain_v2
+        else []
+    )
+    scrape_gap_rows = [
+        [
+            item["era"],
+            item["band"],
+            item["scrapes"],
+            _fmt(item.get("median_gap_h"), 1),
+            _p(item.get("without_24h_share")),
+        ]
+        for item in stats.profile.get("scrape_gap", [])
+    ]
+    duplicate = stats.profile.get("duplicates", {})
+    duplicate_rows = [
+        [
+            duplicate.get("rows", 0),
+            duplicate.get("duplicate_groups", 0),
+            duplicate.get("duplicate_rows", 0),
+            _p(duplicate.get("duplicate_share")),
+            duplicate.get("cross_sections_ge3", 0),
+            duplicate.get("cross_sections_ge3_after_dedup", 0),
+            duplicate.get("dependent_cross_sections", 0),
+        ]
+    ]
     unlabelled_agg: dict[tuple[str, str, str], list[float]] = {}
     for item in stats.profile.get("unlabelled", []):
-        if not evaluation.test_evaluated and item["split"] == "test":
+        if not evaluation.evaluation_on_test and item["split"] == "test":
             continue
         key = (item["split"], item["band"], item["era"])
         bucket = unlabelled_agg.setdefault(key, [0.0, 0.0])
@@ -326,7 +386,7 @@ def _report(
     ]
     weekly_agg: dict[tuple[str, str], list[float]] = {}
     for item in stats.profile.get("unlabelled", []):
-        if not evaluation.test_evaluated and item["split"] == "test":
+        if not evaluation.evaluation_on_test and item["split"] == "test":
             continue
         key = (item["split"], item["week"])
         bucket = weekly_agg.setdefault(key, [0.0, 0.0])
@@ -462,7 +522,7 @@ def _report(
                 _fmt(interval[1]) if len(interval) == 2 else "—",
             ]
         )
-    model_metrics = evaluation.test
+    model_metrics = evaluation.metrics
     clim_metrics = evaluation.climatology
     clim_rows = [
         [
@@ -562,6 +622,56 @@ def _report(
     two_plus_week_table = _table(["split", "week", "rows", "two-plus share"], two_plus_week_rows)
     journey_table = _table(["TTD band", "rule", "same train", "other train", "none", "journeys"], journey_rows)
     journey_week_table = _table(["week", "journeys", "same train (60 min)", "other train", "none"], journey_week_rows)
+    chain_table = _table(
+        [
+            "series",
+            "at risk",
+            "at risk (3+ obs)",
+            "candidate links",
+            "links",
+            "chains",
+            "linked series",
+            "largest chain",
+            "link rate",
+            "link rate (3+ obs)",
+            "series link rate",
+            "ambiguous predecessors",
+            "ambiguous successors",
+            "dropped candidates",
+        ],
+        chain_rows,
+    )
+    chain_size_table = _table(["chain size", "chains"], chain_size_rows)
+    chain_v2_table = _table(
+        [
+            "departure window",
+            "v2 journeys",
+            "matched",
+            "unmatched",
+            "split journeys",
+            "split rate",
+            "matched chains",
+            "merged chains",
+            "merge rate",
+        ],
+        chain_v2_rows,
+    )
+    scrape_gap_table = _table(
+        ["era", "TTD band", "scrapes", "median gap (h)", "without 24 h successor"],
+        scrape_gap_rows,
+    )
+    duplicate_table = _table(
+        [
+            "rows",
+            "duplicate groups",
+            "duplicate rows",
+            "duplicate share",
+            "cross-sections >=3",
+            "cross-sections >=3 after dedup",
+            "dependent cross-sections",
+        ],
+        duplicate_rows,
+    )
     unlabelled_table = _table(["split", "TTD band", "era", "rows", "unlabelled"], unlabelled_rows)
     weekly_table = _table(["split", "week", "rows", "unlabelled"], weekly_rows)
     r24_table = _table(
@@ -740,7 +850,7 @@ def _report(
         )
     dataset_scope = (
         "includes it because `--evaluate-test` was used"
-        if evaluation.test_evaluated
+        if evaluation.evaluation_on_test
         else "omits it in this validation-only run"
     )
     sample = config["sample"]
@@ -776,30 +886,30 @@ def _report(
     )
     brier_ci = evaluation.bootstrap.get("brier", [])
     logloss_ci = evaluation.bootstrap.get("log_loss", [])
-    brier_line = f"- Brier: **{_fmt(evaluation.test.get('brier'))}** " + (
+    brier_line = f"- Brier: **{_fmt(evaluation.metrics.get('brier'))}** " + (
         f"(grouped bootstrap 95% CI {_fmt(brier_ci[0])}-{_fmt(brier_ci[1])})"
         if len(brier_ci) == 2
         else "(no 95% CI; fewer than two departure-date clusters)"
     )
-    logloss_line = f"- Log loss: **{_fmt(evaluation.test.get('log_loss'))}** " + (
+    logloss_line = f"- Log loss: **{_fmt(evaluation.metrics.get('log_loss'))}** " + (
         f"(95% CI {_fmt(logloss_ci[0])}-{_fmt(logloss_ci[1])})"
         if len(logloss_ci) == 2
         else "(no 95% CI; fewer than two departure-date clusters)"
     )
     bss_line = (
-        f"- Brier skill score vs the slice base rate: {_fmt(evaluation.test.get('bss'))}\n"
-        f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.test.get('bss_train'))}\n"
-        f"- Brier skill score vs climatology: {_fmt(evaluation.test.get('bss_climatology'))}\n"
+        f"- Brier skill score vs the slice base rate: {_fmt(evaluation.metrics.get('bss'))}\n"
+        f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.metrics.get('bss_train'))}\n"
+        f"- Brier skill score vs climatology: {_fmt(evaluation.metrics.get('bss_climatology'))}\n"
         f"- Train prevalence of the evaluated subset: {_fmt(evaluation.train_prevalence)}"
     )
-    test_all_line = (
+    metrics_all_line = (
         (
             f"- All labelled rows (including one-observation windows): "
-            f"Brier {_fmt(evaluation.test_all.get('brier'))}, "
-            f"ROC-AUC {_fmt(evaluation.test_all.get('roc_auc'))}. "
-            f"The headline uses {evaluation.test_tier.replace('_', ' ')}."
+            f"Brier {_fmt(evaluation.metrics_all.get('brier'))}, "
+            f"ROC-AUC {_fmt(evaluation.metrics_all.get('roc_auc'))}. "
+            f"The headline uses {evaluation.evaluation_tier.replace('_', ' ')}."
         )
-        if evaluation.test_all is not None
+        if evaluation.metrics_all is not None
         else (
             "- Test was not evaluated; model metrics are validation-calibrate only and no test label "
             "or model diagnostics are printed."
@@ -819,11 +929,11 @@ def _report(
         "recall",
     ]
     risk_bands = "The threshold is a reporting choice, not a product decision."
-    eval_label = "Test" if evaluation.test_evaluated else "Validation-calibrate"
+    eval_label = "Test" if evaluation.evaluation_on_test else "Validation-calibrate"
     threshold_caveat = (
         "- Validation precision and recall use the same validation-calibrate rows that selected the "
         "threshold; they are optimistic.\n"
-        if not evaluation.test_evaluated
+        if not evaluation.evaluation_on_test
         else ""
     )
     known_limitations = (
@@ -946,6 +1056,43 @@ By observation week (60-minute rule):
 
 {journey_week_table}
 
+### Journey identity chains
+
+A chain links a series that stops appearing to the next series with the same route, class and
+first-train number, a planned departure within 15 minutes and its first observation at the next
+route-day scrape. Links are one-to-one; the closest departure wins. `link rate` is links divided by
+series that have a next route-day scrape before departure; `series link rate` divides by all
+series. The chain id is used for the label window, the history features and the split assignment.
+`strict` builds drop every candidate whose predecessor or successor has more than one candidate.
+
+{chain_table}
+
+{chain_size_table}
+
+The v2 overlap compares the v1 chains with the v2 `journey_id` sequence, per `(journey_id,
+service_class)` because the v2 id does not distinguish service class. A v2 sequence that matches
+several chains is a split; a chain that matches several v2 sequences is a merge. This audit needs
+v2 rows and is omitted for a v1-only source.
+
+{chain_v2_table}
+
+### Key audit (A20)
+
+{duplicate_table}
+
+`duplicate share` counts rows in a same-scrape `(series_key, observed_at)` group, including the
+first one. `dependent cross-sections` are route-day x class x scrape cross-sections that reach the
+three-peer threshold before dedup and fall below it after. `price_rank_route_day` counts every
+journey in the scrape before resampling; the 15-minute series buckets are floored, so their edges
+sit 7.5 minutes from the bucket midpoint (`:07:30`, `:22:30`, `:37:30`, `:52:30`).
+
+### Route-day scrape cadence (A3)
+
+{scrape_gap_table}
+
+The band is the time from the scrape to noon UTC on the departure date, matching the scraper's
+target tier. `without 24 h successor` counts the last scrape of a route-day or a gap above 24 h.
+
 ### Unlabelled shares
 
 {unlabelled_table}
@@ -985,15 +1132,16 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 {brier_line}
 {logloss_line}
 {bss_line}
-- ROC-AUC: {_fmt(evaluation.test.get("roc_auc"))}; average precision: {_fmt(evaluation.test.get("average_precision"))}
-- Prevalence: {_fmt(evaluation.test.get("positive_rate"))}
-- Precision at threshold: {_fmt(evaluation.test.get("precision_at_threshold"))}
-- Recall at threshold: {_fmt(evaluation.test.get("recall_at_threshold"))}
-- Headroom monotonic (shipped pooled calibrator): {evaluation.test.get("headroom_monotonic")}
-- Headroom monotonic (raw scores): {evaluation.test.get("headroom_monotonic_raw")}
-- Evaluation tier: `{evaluation.test_tier}` ({evaluation.test_tier_rows} rows)
-- Precision floor met on evaluation: {evaluation.test.get("precision_floor_met_on_evaluation")}
-{test_all_line}
+- ROC-AUC: {_fmt(evaluation.metrics.get("roc_auc"))}; average precision:
+  {_fmt(evaluation.metrics.get("average_precision"))}
+- Prevalence: {_fmt(evaluation.metrics.get("positive_rate"))}
+- Precision at threshold: {_fmt(evaluation.metrics.get("precision_at_threshold"))}
+- Recall at threshold: {_fmt(evaluation.metrics.get("recall_at_threshold"))}
+- Headroom monotonic (shipped pooled calibrator): {evaluation.metrics.get("headroom_monotonic")}
+- Headroom monotonic (raw scores): {evaluation.metrics.get("headroom_monotonic_raw")}
+- Evaluation tier: `{evaluation.evaluation_tier}` ({evaluation.evaluation_tier_rows} rows)
+- Precision floor met on evaluation: {evaluation.metrics.get("precision_floor_met_on_evaluation")}
+{metrics_all_line}
 
 {risk_bands}
 
@@ -1014,8 +1162,8 @@ shipped model uses the pooled calibrator. These are diagnostic and are not direc
 the PR 1 pooled-calibrator table. The near-zero calibration gap and slope near 1 follow from
 cross-fitting by route-day on the same evaluation rows: same-date shocks appear in both the fit and
 predict folds. The diagnostic probabilities rise with headroom on
-{_p(evaluation.test.get("headroom_diagnostic_nonmonotone_share"))} of rows; the shipped pooled
-calibrator is monotone: {evaluation.test.get("headroom_monotonic")}.
+{_p(evaluation.metrics.get("headroom_diagnostic_nonmonotone_share"))} of rows; the shipped pooled
+calibrator is monotone: {evaluation.metrics.get("headroom_monotonic")}.
 
 {_table(headroom_headers, headroom_rows)}
 
@@ -1100,7 +1248,8 @@ def write_report(
     )
     evaluation_hash = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
     provenance_lines = (
-        f"- Git: `{dataset_manifest.get('git_sha')}` (dirty: {dataset_manifest.get('git_dirty')})\n"
+        f"- Git: `{dataset_manifest.get('git_sha')}` (dirty: "
+        f"{'unknown' if dataset_manifest.get('git_dirty') is None else dataset_manifest.get('git_dirty')})\n"
         f"- Silver build: `{dataset_manifest.get('silver_build_id')}`\n"
         f"- Build config hash: `{dataset_manifest.get('config_sha256')}`\n"
         f"- Evaluation config hash: `{evaluation_hash}`\n"
@@ -1117,7 +1266,7 @@ def write_report(
         "dataset": stats.to_dict(),
         "feature_spec": {"calendar_set": spec.calendar_set, "features": list(spec.names)},
         "evaluation": evaluation.to_dict(),
-        "test_evaluated": evaluation.test_evaluated,
+        "evaluation_on_test": evaluation.evaluation_on_test,
         "evaluation_split": evaluation.evaluation_split,
     }
     if ablation is not None:
@@ -1140,14 +1289,14 @@ def write_report(
     manifest["evaluation_config_sha256"] = hashlib.sha256(
         json.dumps(config, sort_keys=True, default=str).encode()
     ).hexdigest()
-    manifest["test_evaluated"] = evaluation.test_evaluated
+    manifest["evaluation_on_test"] = evaluation.evaluation_on_test
     manifest["evaluation_split"] = evaluation.evaluation_split
     manifest["model"] = {
         "chosen": evaluation.chosen_model,
         "calibration": evaluation.calibration_method,
         "threshold": evaluation.threshold,
         "candidates": evaluation.candidates,
-        "metrics": evaluation.test,
+        "metrics": evaluation.metrics,
         "bootstrap": evaluation.bootstrap,
         "ablation": ablation,
         "runner": runner,
@@ -1166,6 +1315,7 @@ def write_report(
         "dataset/validation_calibrate.parquet",
         "dataset/test.parquet",
         "dataset_manifest.json",
+        "column_roles.json",
         "profile.json",
         "report.md",
         "metrics.json",

@@ -7,6 +7,7 @@ It deliberately does not generate SQL: a mismatch is an error rather than a sile
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from tpm_analytics.training.config import CALENDAR_SETS
 
@@ -116,16 +117,7 @@ def feature_spec(calendar_set: str) -> FeatureSpec:
     return FeatureSpec(calendar_set, CORE_FEATURES + CALENDAR_FEATURES[calendar_set])
 
 
-AUDIT_COLUMNS = (
-    "series_key",
-    "journey_id",
-    "service_class",
-    "route_id",
-    "departure_planned",
-    "departure_date",
-    "snapshot_at",
-    "hours_to_departure",
-    "headroom_pct",
+LABEL_COLUMNS = (
     "limit_eur",
     "breached_in_24h",
     "label_observed",
@@ -154,6 +146,20 @@ AUDIT_COLUMNS = (
     "cov_tail_h",
     "cov_max_gap_h",
     "r24_covered",
+)
+
+AUDIT_COLUMNS = (
+    "series_key",
+    "chain_id",
+    "chain_departure_date",
+    "journey_id",
+    "service_class",
+    "route_id",
+    "departure_planned",
+    "departure_date",
+    "snapshot_at",
+    "hours_to_departure",
+    "headroom_pct",
     "ttd_band",
     "observation_week",
     "bin_regime",
@@ -165,3 +171,16 @@ AUDIT_COLUMNS = (
     "fare_available",
     "split",
 )
+
+
+def column_roles(spec: FeatureSpec) -> dict[str, Any]:
+    """Return the feature/label/audit role of every output column.
+
+    The Parquet files keep one flat schema for compatibility with DuckDB and the model loader.
+    The sidecar makes the non-feature columns explicit so a new join or diagnostic cannot quietly
+    enter the model matrix.
+    """
+    features = list(spec.names)
+    labels = [name for name in LABEL_COLUMNS if name not in features]
+    audit = [name for name in AUDIT_COLUMNS if name not in features and name not in labels]
+    return {"version": 1, "features": features, "labels": labels, "audit": audit}
