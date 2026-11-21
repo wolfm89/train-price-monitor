@@ -128,11 +128,36 @@ v2-only and mixed-schema input.
   and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
   journey disappearance is corpus-level and includes test departures. `profile.json` and
   `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
+- **Journey identity (L12).** The series key follows the itinerary (route, first train, class,
+  15-minute departure and arrival buckets, and the exact transfer count). When a series stops
+  appearing, the chain links it to
+  the next series with the same route, class and first-train number, a planned departure within
+  15 minutes and its first observation at the next route-day scrape. Links are one-to-one; the
+  matcher maximises the number of links and prefers the closest departure, but a crossing pattern
+  may use a predecessor's second-closest candidate to keep the matching maximum. The chain id, not
+  `series_key`, is the identity for the label window, the history features and the split assignment.
+  An arrival change therefore continues the journey; a different train or a departure shift above
+  15 minutes does not. `--strict-chains` drops every candidate whose predecessor or successor has
+  more than one candidate; it is the sensitivity run, not the default, and its Brier difference is
+  within refit noise.
+- The link decision uses the predecessor's full observation history: it links only if the series
+  never returns after the gap. The 5 % review build measured 858 additional successor series that
+  an online rule would link (about 12 % of all link events). A later training stage decides links
+  causally at the check; until then, successor features before a returning predecessor are not
+  strictly point-in-time.
+- The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
+  their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
+  starts a new series. `price_rank_route_day` ranks every priced journey in
+  the route-day x class x scrape cross-section before resampling; route-day sampling keeps the
+  whole cross-section. `column_roles.json` records which output columns are features, labels or
+  audit so a new diagnostic cannot quietly enter the model matrix.
+- `observation_week` is the Europe/Berlin ISO week. `identity.berlin_week_sql` implements the EU
+  DST rule directly because DuckDB's ICU timezone functions need `pytz` in the Python client.
 - `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
   next-day coverage/prevalence),
-  `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the label diagnostics are
-  audit columns, not model features. They may use future scrapes only for evaluation, never inside
-  the feature matrix.
+  `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the check/label diagnostics
+  are label columns, not model features. They may use future scrapes only for evaluation, never
+  inside the feature matrix.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
   `model.candidates` unless a future plan changes that decision.
 - `predictions/<split>.parquet` and `model.joblib` are local artifacts. Never load or trust a model

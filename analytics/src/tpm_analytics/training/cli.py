@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import resource
 import shutil
 import sys
 import tempfile
@@ -37,6 +38,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default=None, help="explicit run id; default: UTC timestamp + config hash")
     parser.add_argument("--calendar-features", choices=CALENDAR_SETS, default=None)
     parser.add_argument("--profile", action="store_true", help="build and profile without training")
+    parser.add_argument(
+        "--strict-chains",
+        action="store_true",
+        help="drop ambiguous journey-chain links; use for the identity sensitivity run",
+    )
     parser.add_argument("--ablation", action="store_true", help="compare the four calendar feature sets")
     parser.add_argument(
         "--evaluate-test",
@@ -70,9 +76,9 @@ def _ablation(
         primary_set: {
             "chosen_model": primary.chosen_model,
             "calibration": primary.calibration_method,
-            "validation_brier": primary.test.get("brier"),
-            "validation_log_loss": primary.test.get("log_loss"),
-            "validation_roc_auc": primary.test.get("roc_auc"),
+            "validation_brier": primary.metrics.get("brier"),
+            "validation_log_loss": primary.metrics.get("log_loss"),
+            "validation_roc_auc": primary.metrics.get("roc_auc"),
         }
     }
     for calendar_set in CALENDAR_SETS:
@@ -84,15 +90,21 @@ def _ablation(
         results[calendar_set] = {
             "chosen_model": evaluation.chosen_model,
             "calibration": evaluation.calibration_method,
-            "validation_brier": evaluation.test.get("brier"),
-            "validation_log_loss": evaluation.test.get("log_loss"),
-            "validation_roc_auc": evaluation.test.get("roc_auc"),
+            "validation_brier": evaluation.metrics.get("brier"),
+            "validation_log_loss": evaluation.metrics.get("log_loss"),
+            "validation_roc_auc": evaluation.metrics.get("roc_auc"),
         }
     return results
 
 
+def _peak_rss_kb() -> int:
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform != "darwin" else value // 1024
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    run_started = time.perf_counter()
     work_dir: Path | None = None
     logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO))
     try:
@@ -146,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                 write_splits=not args.profile,
                 cli_argv=tuple(sys.argv),
                 threads=threads,
+                strict_chains=args.strict_chains,
             )
         finally:
             connection.close()
@@ -165,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         ablation = _ablation(full_splits, config, primary_set, evaluation) if args.ablation else None
         training_model.write_evaluation_artifacts(work_dir, evaluation, fitted, calibrator, spec, config)
+        runtime = {
+            "wall_seconds": round(time.perf_counter() - run_started, 3),
+            "peak_rss_kb": _peak_rss_kb(),
+        }
         write_report(
             work_dir,
             stats,
@@ -174,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             runner="local",
             ablation=ablation,
             build_config=build_config.to_dict(),
+            runtime=runtime,
         )
         os.replace(work_dir, out_dir)
         summary = {
@@ -184,12 +202,13 @@ def main(argv: list[str] | None = None) -> int:
             "chosen_model": evaluation.chosen_model,
             "calibration": evaluation.calibration_method,
             "evaluation_split": evaluation.evaluation_split,
-            "test_evaluated": evaluation.test_evaluated,
+            "evaluation_on_test": evaluation.evaluation_on_test,
             "predictions": f"predictions/{evaluation.prediction_split}.parquet",
             "model_file": "model.joblib",
-            "brier": evaluation.test["brier"],
-            "log_loss": evaluation.test["log_loss"],
+            "brier": evaluation.metrics["brier"],
+            "log_loss": evaluation.metrics["log_loss"],
             "ablation": ablation,
+            **runtime,
         }
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))
         return 0

@@ -2,15 +2,20 @@
 
 The pipeline stays in SQL until the model matrix: DuckDB handles the 100M-row scan, the exact
 forward-looking label window (a numeric ``RANGE`` frame over epoch hours), the route-day
-cross-section and the calendar join. Every step is a view so DuckDB can keep the plan lazy.
+cross-section and the calendar join. Most steps are views so DuckDB can keep the plan lazy; the
+sampled panel, chain map, scrape grid, snapshot and check tables are materialised where they are
+reused.
 """
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import platform
+import resource
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
@@ -21,9 +26,17 @@ import duckdb
 
 from tpm_analytics import calendar
 from tpm_analytics.silver._duck import read_parquet, sql_string
+from tpm_analytics.training.audits import duplicate_audit, scrape_gap_audit, v2_chain_audit
 from tpm_analytics.training.bands import JOURNEY_BANDS, ttd_band_case
+from tpm_analytics.training.chains import ChainStats, build_chain_map
 from tpm_analytics.training.config import TrainingConfig
-from tpm_analytics.training.features import AUDIT_COLUMNS, feature_spec
+from tpm_analytics.training.features import AUDIT_COLUMNS, LABEL_COLUMNS, column_roles, feature_spec
+from tpm_analytics.training.identity import (
+    LINK_TOLERANCE_SECONDS,
+    SAME_SCRAPE_ORDER,
+    berlin_week_sql,
+    series_key_sql,
+)
 from tpm_analytics.training.sources import SourceSpec
 
 
@@ -40,6 +53,7 @@ class SplitStats:
     labelled: int
     positives: int
     positive_rate: float
+    chains: int = 0
 
 
 @dataclass(frozen=True)
@@ -87,13 +101,19 @@ def _dict_rows(connection: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _git_state() -> tuple[str | None, bool]:
+def _peak_rss_kb() -> int:
+    """Return the process peak RSS in KiB (Linux/macOS units normalised to KiB)."""
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform != "darwin" else value // 1024
+
+
+def _git_state() -> tuple[str | None, bool | None]:
     """Return the checkout's HEAD and dirty flag.
 
-    ``git status`` runs at the repository root, so a change in any module marks the run dirty.
+    ``git status`` runs from the analytics directory, so a change in any module marks the run dirty.
     The flag is conservative: a clean flag means the whole checkout matches HEAD, and a
     false-positive dirty flag is preferred over claiming provenance the run cannot prove.
-    Unknown git state (a wheel outside a checkout) is returned as ``(None, False)``.
+    Unknown git state (a wheel outside a checkout) is returned as ``(None, None)``.
     """
     root = Path(__file__).resolve().parents[3]
     try:
@@ -101,7 +121,7 @@ def _git_state() -> tuple[str | None, bool]:
         dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
         return sha or None, dirty
     except OSError, subprocess.CalledProcessError:
-        return None, False
+        return None, None
 
 
 def _lock_sha256() -> str | None:
@@ -134,6 +154,36 @@ def _duckdb_settings(connection: duckdb.DuckDBPyConnection) -> dict[str, str | N
     return settings
 
 
+def _source_inventory(connection: duckdb.DuckDBPyConnection, source: SourceSpec) -> list[dict[str, Any]]:
+    """List the scanned Parquet files so a glob source is localisable.
+
+    Local files get a size and SHA-256; S3 keys get the row count from Parquet metadata. The S3
+    listing does not issue one HEAD request per object, so sizes and ETags stay out of the manifest.
+    """
+    if source.glob.startswith("s3://"):
+        try:
+            rows = connection.execute(
+                f"SELECT file_name, num_rows FROM parquet_file_metadata('{sql_string(source.glob)}')"
+            ).fetchall()
+        except duckdb.Error:
+            return []
+        return [{"path": str(row[0]), "rows": int(row[1])} for row in rows]
+    files = sorted(glob.glob(source.glob, recursive=True))
+    inventory: list[dict[str, Any]] = []
+    for name in files:
+        path = Path(name)
+        if not path.is_file():
+            continue
+        inventory.append(
+            {
+                "path": path.resolve().as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    return inventory
+
+
 def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: tuple[str, ...]) -> dict[str, Any]:
     """Return an order-independent digest for one split.
 
@@ -157,7 +207,7 @@ def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: 
 
 def _final_columns(calendar_set: str) -> tuple[str, ...]:
     spec = feature_spec(calendar_set)
-    return tuple(dict.fromkeys((*AUDIT_COLUMNS, *spec.names)))
+    return tuple(dict.fromkeys((*AUDIT_COLUMNS, *LABEL_COLUMNS, *spec.names)))
 
 
 def _create_views(
@@ -165,7 +215,9 @@ def _create_views(
     source_sql: str,
     config: TrainingConfig,
     calendar_set: str,
-) -> None:
+    *,
+    strict_chains: bool = False,
+) -> ChainStats:
     splits = config.splits
     label = config.label
     resample = config.resample
@@ -204,14 +256,7 @@ def _create_views(
             scrapes_per_route_day_final,
             schema_version,
             journey_id,
-            'v1:' || sha256(concat_ws('|',
-                route_id,
-                coalesce(train_number, ''),
-                service_class,
-                CAST(epoch(departure_planned) / 900 AS BIGINT),
-                CAST(epoch(arrival_planned) / 900 AS BIGINT),
-                coalesce(transfers_actual, -1)
-            )) AS series_key,
+            {series_key_sql()} AS series_key,
             date_diff('second', observed_at, departure_planned) / 3600.0 AS hours_to_departure,
             {route_day_hash_expr} AS route_day_hash
         FROM {source_sql}
@@ -243,7 +288,8 @@ def _create_views(
     threshold = max(1, round(config.sample.sample_rate * 10000))
     if config.sample.max_route_days is None:
         connection.execute(
-            f"CREATE OR REPLACE TEMP VIEW base_sampled AS SELECT * FROM base_all WHERE route_day_hash < {threshold}"
+            f"CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all "
+            f"WHERE route_day_hash < {threshold}"
         )
     else:
         connection.execute(
@@ -254,25 +300,48 @@ def _create_views(
             f") ORDER BY route_day_hash, route_id, departure_date LIMIT {config.sample.max_route_days}"
         )
         connection.execute(
-            "CREATE OR REPLACE TEMP VIEW base_sampled AS "
+            "CREATE OR REPLACE TEMP VIEW base_sampled_view AS "
             "SELECT b.* FROM base_all b JOIN selected_route_days s "
             "USING (route_id, departure_date)"
         )
+    # The chain map, cross-section, dedup and profile audits all read this panel. Materialise it
+    # once instead of re-scanning and re-hashing the source for each consumer.
+    connection.execute("CREATE OR REPLACE TEMP TABLE base_sampled AS SELECT * FROM base_sampled_view")
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW scrape_grid AS
+        CREATE OR REPLACE TEMP TABLE scrape_grid AS
         SELECT DISTINCT route_id, departure_date, observed_at
         FROM base_sampled
         """
     )
+    chain_stats = build_chain_map(
+        connection,
+        base_view="base_sampled",
+        grid_view="scrape_grid",
+        prefix="chain",
+        map_table="chain_map",
+        strict=strict_chains,
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW base_chained AS
+        SELECT b.*, m.chain_id, m.chain_departure_date
+        FROM base_sampled b
+        JOIN chain_map m USING (series_key)
+        """
+    )
     connection.execute(
         f"""
-        CREATE OR REPLACE TEMP VIEW scrape_grid_all AS
-        SELECT DISTINCT route_id, departure_date, observed_at
+        CREATE OR REPLACE TEMP TABLE scrape_grid_all AS
+        SELECT
+            route_id,
+            departure_date,
+            observed_at,
+            min(observation_era) AS observation_era
         FROM {source_sql}
-        WHERE departure_date <= DATE '{config.splits.test_end.isoformat()}'
-          AND observed_at < departure_planned
+        WHERE observed_at < departure_planned
           AND schema_version = 1
+        GROUP BY route_id, departure_date, observed_at
         """
     )
     connection.execute(
@@ -289,20 +358,19 @@ def _create_views(
                     ORDER BY price_eur
                 )
             END AS price_rank_route_day
-        FROM base_sampled
+        FROM base_chained
         """
     )
     connection.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP VIEW dedup_candidates AS
         SELECT
             *,
             row_number() OVER (
                 PARTITION BY series_key, observed_at
-                ORDER BY price_eur DESC, load_factor_ordinal DESC NULLS LAST,
-                         train_number, departure_planned, arrival_planned, transfers_actual
+                ORDER BY {SAME_SCRAPE_ORDER}
             ) AS dedup_rank
-        FROM base_sampled
+        FROM base_chained
         """
     )
     connection.execute(
@@ -315,9 +383,32 @@ def _create_views(
     )
     connection.execute(
         """
+        CREATE OR REPLACE TEMP TABLE chain_dedup AS
+        SELECT chain_id, observed_at, price_eur, load_factor_ordinal, series_key
+        FROM (
+            SELECT
+                c.chain_id,
+                d.observed_at,
+                d.price_eur,
+                d.load_factor_ordinal,
+                d.series_key,
+                row_number() OVER (
+                    PARTITION BY c.chain_id, d.observed_at
+                    ORDER BY s.first_obs DESC, d.price_eur DESC,
+                             d.load_factor_ordinal DESC NULLS LAST, d.series_key
+                ) AS chain_rank
+            FROM dedup d
+            JOIN chain_map c USING (series_key)
+            JOIN chain_series s USING (series_key)
+        )
+        WHERE chain_rank = 1
+        """
+    )
+    connection.execute(
+        """
         CREATE OR REPLACE TEMP VIEW history AS
-        SELECT series_key, observed_at, price_eur, load_factor_ordinal
-        FROM dedup
+        SELECT chain_id, observed_at, price_eur, load_factor_ordinal
+        FROM chain_dedup
         """
     )
     connection.execute(
@@ -326,24 +417,24 @@ def _create_views(
         SELECT
             *,
             price_eur - min(price_eur) OVER (
-                PARTITION BY series_key ORDER BY observed_at
+                PARTITION BY chain_id ORDER BY observed_at
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS price_vs_series_min,
             price_eur / median(price_eur) OVER (
-                PARTITION BY series_key ORDER BY observed_at
+                PARTITION BY chain_id ORDER BY observed_at
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS price_vs_series_median,
             min(price_eur) OVER (
-                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
+                PARTITION BY chain_id ORDER BY epoch(observed_at) / 3600.0
                 RANGE BETWEEN 168 PRECEDING AND CURRENT ROW
             ) AS price_min_7d,
             max(price_eur) OVER (
-                PARTITION BY series_key ORDER BY epoch(observed_at) / 3600.0
+                PARTITION BY chain_id ORDER BY epoch(observed_at) / 3600.0
                 RANGE BETWEEN 168 PRECEDING AND CURRENT ROW
             ) AS price_max_7d,
-            date_diff('second', min(observed_at) OVER (PARTITION BY series_key), observed_at) / 3600.0
+            date_diff('second', min(observed_at) OVER (PARTITION BY chain_id), observed_at) / 3600.0
                 AS history_depth_h
-        FROM dedup
+        FROM chain_dedup
         """
     )
     # Start the label window an epsilon after the snapshot so a row never contributes to its own
@@ -352,24 +443,24 @@ def _create_views(
         f"""
         CREATE OR REPLACE TEMP VIEW future AS
         SELECT
-            series_key,
+            chain_id,
             observed_at,
             max(price_eur) OVER (
-                PARTITION BY series_key
+                PARTITION BY chain_id
                 ORDER BY epoch(observed_at) / 3600.0
                 RANGE BETWEEN 0.000001 FOLLOWING AND {label.horizon_hours} FOLLOWING
             ) AS future_max_fare_24h,
             count(*) OVER (
-                PARTITION BY series_key
+                PARTITION BY chain_id
                 ORDER BY epoch(observed_at) / 3600.0
                 RANGE BETWEEN 0.000001 FOLLOWING AND {label.horizon_hours} FOLLOWING
             ) AS future_observations,
             max(observed_at) OVER (
-                PARTITION BY series_key
+                PARTITION BY chain_id
                 ORDER BY epoch(observed_at) / 3600.0
                 RANGE BETWEEN 0.000001 FOLLOWING AND {label.horizon_hours} FOLLOWING
             ) AS future_last_observed_at
-        FROM dedup
+        FROM chain_dedup
         """
     )
     connection.execute(
@@ -388,7 +479,7 @@ def _create_views(
                 THEN {resample.outer_bin_hours} ELSE {resample.inner_bin_hours} END AS bin_width_hours,
             row_number() OVER (
                 PARTITION BY
-                    series_key,
+                    chain_id,
                     CASE WHEN hours_to_departure > {resample.outer_threshold_hours} THEN '12h' ELSE '1h' END,
                     CASE
                         WHEN hours_to_departure > {resample.outer_threshold_hours}
@@ -412,7 +503,7 @@ def _create_views(
             f.future_last_observed_at,
             (f.future_max_fare_24h IS NOT NULL) AS label_observed
         FROM resampled r
-        LEFT JOIN future f USING (series_key, observed_at)
+        LEFT JOIN future f ON f.chain_id = r.chain_id AND f.observed_at = r.observed_at
         WHERE r.rn = 1
         """
     )
@@ -424,6 +515,7 @@ def _create_views(
         SELECT
             n.series_key,
             n.snapshot_at,
+            n.chain_id,
             g.observed_at AS check_at,
             abs(date_diff('microsecond', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_us
         FROM snapshot n
@@ -442,6 +534,7 @@ def _create_views(
         SELECT
             series_key,
             snapshot_at,
+            chain_id,
             check_at,
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
@@ -460,6 +553,7 @@ def _create_views(
         SELECT
             series_key,
             snapshot_at,
+            chain_id,
             check_at,
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
@@ -479,6 +573,7 @@ def _create_views(
         SELECT
             series_key,
             snapshot_at,
+            chain_id,
             check_at,
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
@@ -496,6 +591,7 @@ def _create_views(
         SELECT
             series_key,
             snapshot_at,
+            chain_id,
             check_at,
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
@@ -513,18 +609,18 @@ def _create_views(
     connection.execute(
         """
         CREATE OR REPLACE TEMP TABLE check_prices AS
-        SELECT d.series_key, d.observed_at AS check_at, d.price_eur
-        FROM dedup d
+        SELECT d.chain_id, d.observed_at AS check_at, d.price_eur
+        FROM chain_dedup d
         JOIN (
-            SELECT series_key, check_at FROM check_points
+            SELECT chain_id, check_at FROM check_points
             UNION
-            SELECT series_key, check_at FROM check_points_narrow
+            SELECT chain_id, check_at FROM check_points_narrow
             UNION
-            SELECT series_key, check_at FROM check_points_2028
+            SELECT chain_id, check_at FROM check_points_2028
             UNION
-            SELECT series_key, check_at FROM check_points_2226
+            SELECT chain_id, check_at FROM check_points_2226
         ) p
-          ON p.series_key = d.series_key
+          ON p.chain_id = d.chain_id
          AND p.check_at = d.observed_at
         """
     )
@@ -594,10 +690,10 @@ def _create_views(
         LEFT JOIN check_points_narrow cn USING (series_key, snapshot_at)
         LEFT JOIN check_points_2028 c28 USING (series_key, snapshot_at)
         LEFT JOIN check_points_2226 c26 USING (series_key, snapshot_at)
-        LEFT JOIN check_prices d ON d.series_key = n.series_key AND d.check_at = c.check_at
-        LEFT JOIN check_prices dn ON dn.series_key = n.series_key AND dn.check_at = cn.check_at
-        LEFT JOIN check_prices d28 ON d28.series_key = n.series_key AND d28.check_at = c28.check_at
-        LEFT JOIN check_prices d26 ON d26.series_key = n.series_key AND d26.check_at = c26.check_at
+        LEFT JOIN check_prices d ON d.chain_id = n.chain_id AND d.check_at = c.check_at
+        LEFT JOIN check_prices dn ON dn.chain_id = n.chain_id AND dn.check_at = cn.check_at
+        LEFT JOIN check_prices d28 ON d28.chain_id = n.chain_id AND d28.check_at = c28.check_at
+        LEFT JOIN check_prices d26 ON d26.chain_id = n.chain_id AND d26.check_at = c26.check_at
         LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
         """
     )
@@ -644,14 +740,14 @@ def _create_views(
                  AND check_price_eur < price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
             END AS crossed_and_came_back,
             {ttd_band_case("hours_to_departure")} AS ttd_band,
-            strftime(observed_at, '%G-W%V') AS observation_week,
+            {berlin_week_sql("observed_at")} AS observation_week,
             CASE
-                WHEN departure_date <= DATE '{splits.train_end.isoformat()}' THEN 'train'
-                WHEN departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
+                WHEN chain_departure_date <= DATE '{splits.train_end.isoformat()}' THEN 'train'
+                WHEN chain_departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
                     AND DATE '{splits.validation_select_end.isoformat()}' THEN 'validation_select'
-                WHEN departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}'
+                WHEN chain_departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}'
                     AND DATE '{splits.validation_calibrate_end.isoformat()}' THEN 'validation_calibrate'
-                WHEN departure_date BETWEEN DATE '{splits.test_start.isoformat()}'
+                WHEN chain_departure_date BETWEEN DATE '{splits.test_start.isoformat()}'
                     AND DATE '{splits.test_end.isoformat()}' THEN 'test'
                 ELSE NULL
             END AS split,
@@ -666,7 +762,7 @@ def _create_views(
         CREATE OR REPLACE TEMP VIEW features_base AS
         SELECT
             *,
-            lag(price_eur) OVER (PARTITION BY series_key ORDER BY observed_at) AS prev_price
+            lag(price_eur) OVER (PARTITION BY chain_id ORDER BY observed_at, series_key) AS prev_price
         FROM split_rows
         """
     )
@@ -688,12 +784,12 @@ def _create_views(
                         THEN 1 ELSE 0
                     END
                 ) OVER (
-                    PARTITION BY p.series_key ORDER BY epoch(p.observed_at) / 3600.0
+                    PARTITION BY p.chain_id ORDER BY epoch(p.observed_at) / 3600.0
                     RANGE BETWEEN 24 PRECEDING AND CURRENT ROW
                 ) AS DOUBLE
             ) AS price_jumps_24h
         FROM features_base p
-        JOIN raw_features r USING (series_key, observed_at)
+        JOIN raw_features r USING (chain_id, observed_at)
         """
     )
     connection.execute(
@@ -707,7 +803,7 @@ def _create_views(
             h.load_factor_ordinal AS ref_load_factor
         FROM features_window p
         ASOF LEFT JOIN history h
-            ON p.series_key = h.series_key
+            ON p.chain_id = h.chain_id
             AND (p.observed_at - INTERVAL 23 HOUR) >= h.observed_at
         """
     )
@@ -778,6 +874,7 @@ def _create_views(
     null_splits = _scalar(connection, "SELECT count(*) FROM sampled WHERE split IS NULL")
     if null_splits:
         raise DatasetError(f"{null_splits} rows fall between configured splits; make the split dates contiguous")
+    return chain_stats
 
 
 def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...]:
@@ -787,6 +884,7 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
             split,
             count(*) AS rows,
             count(DISTINCT series_key) AS series,
+            count(DISTINCT chain_id) AS chains,
             count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) AS route_days,
             sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
             sum(CASE WHEN label_observed THEN breached_in_24h ELSE 0 END) AS positives,
@@ -802,10 +900,11 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
             split=str(row[0]),
             rows=int(row[1]),
             series=int(row[2]),
-            route_days=int(row[3]),
-            labelled=int(row[4]),
-            positives=int(row[5]),
-            positive_rate=0.0 if row[6] is None else float(row[6]),
+            chains=int(row[3]),
+            route_days=int(row[4]),
+            labelled=int(row[5]),
+            positives=int(row[6]),
+            positive_rate=0.0 if row[7] is None else float(row[7]),
         )
         for row in rows
     )
@@ -837,7 +936,11 @@ def _label_window_profile(
     )
 
 
-def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
+def _profile(
+    connection: duckdb.DuckDBPyConnection,
+    chain_stats: ChainStats,
+    source_sql: str,
+) -> dict[str, Any]:
     headroom = connection.execute(
         """
         SELECT
@@ -1056,7 +1159,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 min(service_class) AS service_class,
                 min(observed_at) AS first_obs,
                 max(observed_at) AS last_obs,
-                count(*) AS observations
+                count(DISTINCT observed_at) AS observations
             FROM series_obs
             GROUP BY series_key
         ),
@@ -1109,7 +1212,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                         WHERE ns.route_id = n.route_id
                           AND ns.departure_date = n.departure_date
                           AND ns.first_obs = n.next_s
-                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.train_number IS NOT NULL
+                          AND ns.train_number = n.train_number
                           AND ns.service_class = n.service_class
                           AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 900
                     ) THEN 'same_train'
@@ -1128,7 +1232,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                         WHERE ns.route_id = n.route_id
                           AND ns.departure_date = n.departure_date
                           AND ns.first_obs = n.next_s
-                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.train_number IS NOT NULL
+                          AND ns.train_number = n.train_number
                           AND ns.service_class = n.service_class
                           AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
                     ) THEN 'same_train'
@@ -1142,7 +1247,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                     ELSE 'none'
                 END AS successor_60,
                 {ttd_band_case("date_diff('second', last_obs, departure_planned) / 3600.0", JOURNEY_BANDS)} AS ttd_band,
-                strftime(last_obs, '%G-W%V') AS observation_week
+                {berlin_week_sql("last_obs")} AS observation_week
             FROM next_scrape n
         )
         SELECT
@@ -1168,6 +1273,10 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     at_risk = int(journey_totals[1]) if journey_totals else 0
     disappeared = sum(int(row[2]) for row in journey_groups)
     return {
+        "chain": chain_stats.to_dict(),
+        "chain_v2": v2_chain_audit(connection, source_sql, strict=chain_stats.strict),
+        "duplicates": duplicate_audit(connection),
+        "scrape_gap": scrape_gap_audit(connection),
         "headroom": [
             {
                 "split": str(row[0]),
@@ -1243,8 +1352,11 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             "total_journeys": total_journeys,
             "at_risk": at_risk,
             "disappeared": disappeared,
+            "at_risk_with_next_scrape": disappeared,
+            "end_of_observation_at_risk": max(0, at_risk - disappeared),
             "share": 0.0 if total_journeys == 0 else disappeared / total_journeys,
             "share_at_risk": 0.0 if at_risk == 0 else disappeared / at_risk,
+            "share_end_of_observation": 0.0 if at_risk == 0 else max(0, at_risk - disappeared) / at_risk,
             "groups": [
                 {
                     "band": str(row[3]),
@@ -1294,6 +1406,7 @@ def build_dataset(
     write_splits: bool = True,
     cli_argv: tuple[str, ...] | None = None,
     threads: int | None = None,
+    strict_chains: bool = False,
 ) -> DatasetStats:
     """Build the panel, profile it and write the Parquet splits."""
     started = time.perf_counter()
@@ -1306,7 +1419,13 @@ def build_dataset(
     if source_rows == 0:
         raise DatasetError(f"source {source.label} contains no rows")
 
-    _create_views(connection, source_sql, config, calendar_set)
+    chain_stats = _create_views(
+        connection,
+        source_sql,
+        config,
+        calendar_set,
+        strict_chains=strict_chains,
+    )
 
     columns = _final_columns(calendar_set)
     missing = set(columns) - {row[0] for row in connection.execute("DESCRIBE SELECT * FROM sampled").fetchall()}
@@ -1315,7 +1434,7 @@ def build_dataset(
     selected = ", ".join(columns)
     split_names = ("train", "validation_select", "validation_calibrate", "test")
     splits = _split_stats(connection)
-    profile = _profile(connection)
+    profile = _profile(connection, chain_stats, source_sql)
     if {item.split for item in splits} != set(split_names):
         raise DatasetError(f"missing split(s): {sorted({item.split for item in splits})}")
 
@@ -1345,6 +1464,15 @@ def build_dataset(
         warnings.append(f"panel has {total_rows} rows; above the 5M target, reduce sample_rate")
     if total_rows < 2_000_000:
         warnings.append(f"panel has {total_rows} rows; below the 2M target, raise sample_rate")
+    if not chain_stats.strict and (chain_stats.ambiguous_predecessors or chain_stats.ambiguous_successors):
+        warnings.append(
+            "ambiguous chain candidates: "
+            f"{chain_stats.ambiguous_predecessors} predecessors / "
+            f"{chain_stats.ambiguous_successors} successors; run --strict-chains"
+        )
+    source_inventory = _source_inventory(connection, source)
+    if not source_inventory:
+        warnings.append("source inventory is empty; the scanned file set is not localisable")
     stats = replace(stats, warnings=tuple(warnings))
     git_sha, git_dirty = _git_state()
 
@@ -1370,12 +1498,16 @@ def build_dataset(
                 }
             )
 
+    roles_payload = column_roles(spec)
+    roles_bytes = (json.dumps(roles_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     manifest = {
-        "manifest_version": 2,
+        "manifest_version": 3,
         "run_id": run_id,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source": source.label,
         "source_rows": source_rows,
+        "source_inventory": source_inventory,
+        "dataset_peak_rss_kb": _peak_rss_kb(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "uv_lock_sha256": _lock_sha256(),
@@ -1389,6 +1521,15 @@ def build_dataset(
         "calendar_version": calendar.dataset_version(),
         "calendar_feature_set": calendar_set,
         "features": list(spec.names),
+        "column_roles": "column_roles.json",
+        "column_roles_sha256": hashlib.sha256(roles_bytes).hexdigest(),
+        "chains": {
+            "strict": chain_stats.strict,
+            "link_tolerance_seconds": LINK_TOLERANCE_SECONDS,
+            "links": chain_stats.links,
+            "link_rate": chain_stats.link_rate,
+        },
+        "strict_chains": strict_chains,
         "resample": {
             "outer_bin_hours": config.resample.outer_bin_hours,
             "outer_threshold_hours": config.resample.outer_threshold_hours,
@@ -1428,6 +1569,7 @@ def build_dataset(
         "package_versions": _package_versions(),
         "warnings": list(warnings),
     }
+    (out_dir / "column_roles.json").write_bytes(roles_bytes)
     (out_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )

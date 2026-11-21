@@ -43,6 +43,7 @@ from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, band_labels, ttd_band
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
+from tpm_analytics.training.identity import berlin_week_sql
 
 Array = NDArray[Any]
 
@@ -66,6 +67,7 @@ class TabularData:
     observation_era: Array
     observation_week: Array
     check_price: Array
+    chain: Array | None = None
 
     def __len__(self) -> int:
         return len(self.y)
@@ -85,6 +87,7 @@ class TabularData:
             observation_era=self.observation_era[indices],
             observation_week=self.observation_week[indices],
             check_price=self.check_price[indices],
+            chain=self.chain[indices] if self.chain is not None else None,
         )
 
     def select(self, names: tuple[str, ...]) -> TabularData:
@@ -102,6 +105,7 @@ class TabularData:
             observation_era=self.observation_era,
             observation_week=self.observation_week,
             check_price=self.check_price,
+            chain=self.chain,
         )
 
 
@@ -149,6 +153,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             *spec.names,
             "breached_in_24h",
             "series_key",
+            "chain_id",
             "route_id || '|' || CAST(departure_date AS VARCHAR) AS route_day",
             "price_eur",
             "future_max_fare_24h",
@@ -157,7 +162,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             "departure_date",
             "snapshot_at",
             "observation_era",
-            "strftime(snapshot_at, '%G-W%V') AS observation_week",
+            f"{berlin_week_sql('snapshot_at')} AS observation_week",
             "check_price_eur",
             "bin_regime",
             "bin_index",
@@ -200,6 +205,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         observation_era=_categorical(rows["observation_era"]),
         observation_week=_categorical(rows["observation_week"]),
         check_price=_filled64(rows["check_price_eur"], np.nan),
+        chain=np.asarray(rows["chain_id"], dtype=str),
     )
 
 
@@ -558,12 +564,12 @@ class Evaluation:
     threshold: float
     threshold_precision_floor_met: bool
     candidates: dict[str, dict[str, float | None]]
-    test: dict[str, Any]
-    test_all: dict[str, Any] | None
-    test_tier: str
-    test_tier_rows: int
+    metrics: dict[str, Any]
+    metrics_all: dict[str, Any] | None
+    evaluation_tier: str
+    evaluation_tier_rows: int
     evaluation_split: str
-    test_evaluated: bool
+    evaluation_on_test: bool
     calibration_prevalence: float
     train_prevalence: float
     dropped_features: tuple[str, ...]
@@ -587,6 +593,7 @@ class Evaluation:
     paired: dict[str, Any] = field(default_factory=dict)
     bootstrap_clusters: int = 0
     prediction_series: Array | None = field(default=None, repr=False, compare=False)
+    prediction_chain: Array | None = field(default=None, repr=False, compare=False)
     prediction_snapshot_at: Array | None = field(default=None, repr=False, compare=False)
     prediction_route_day: Array | None = field(default=None, repr=False, compare=False)
     prediction_headroom: Array | None = field(default=None, repr=False, compare=False)
@@ -612,11 +619,11 @@ class Evaluation:
             "candidates": self.candidates,
             "candidate_train": self.candidate_train,
             "candidate_calibration_method": self.candidate_calibration_method,
-            "metrics": {"split": self.evaluation_split, "values": self.test},
-            "test_all": self.test_all,
-            "test_tier": self.test_tier,
-            "test_tier_rows": self.test_tier_rows,
-            "test_evaluated": self.test_evaluated,
+            "metrics": {"split": self.evaluation_split, "values": self.metrics},
+            "metrics_all": self.metrics_all,
+            "evaluation_tier": self.evaluation_tier,
+            "evaluation_tier_rows": self.evaluation_tier_rows,
+            "evaluation_on_test": self.evaluation_on_test,
             "calibration_prevalence": self.calibration_prevalence,
             "train_prevalence": self.train_prevalence,
             "dropped_features": list(self.dropped_features),
@@ -1024,10 +1031,11 @@ def _pooled_decision_value_rows(
 
 
 def _canonical(data: TabularData) -> TabularData:
+    identity = data.chain if data.chain is not None else data.series
     order = np.lexsort(
         (
             np.asarray(data.snapshot_at, dtype=str),
-            np.asarray(data.series, dtype=str),
+            np.asarray(identity, dtype=str),
         )
     )
     return data.subset(order)
@@ -1354,14 +1362,16 @@ def train_and_evaluate(
     train = splits["train"]
     validation_select = splits["validation_select"]
     validation_calibrate = splits["validation_calibrate"]
-    test = splits["test"]
-    series_sets = {name: set(data.series.tolist()) for name, data in splits.items()}
-    names = list(series_sets)
+    test_split = splits["test"]
+    identity_sets = {
+        name: set((data.chain if data.chain is not None else data.series).tolist()) for name, data in splits.items()
+    }
+    names = list(identity_sets)
     for index, left in enumerate(names):
         for right in names[index + 1 :]:
-            overlap = series_sets[left] & series_sets[right]
+            overlap = identity_sets[left] & identity_sets[right]
             if overlap:
-                raise ModelError(f"series crosses splits {left}/{right}: {next(iter(overlap))}")
+                raise ModelError(f"chain crosses splits {left}/{right}: {next(iter(overlap))}")
 
     candidates, candidate_metrics, candidate_train_metrics = _fit_candidates(train, validation_select, spec, config)
     chosen = _choose_candidate(candidate_metrics)
@@ -1376,9 +1386,9 @@ def train_and_evaluate(
         threshold_met,
     ) = _fit_final_calibration(model, validation_calibrate, config)
 
-    eval_data = test if evaluate_test else cal_data
+    eval_data = test_split if evaluate_test else cal_data
     evaluation_split = "test" if evaluate_test else "validation_calibrate"
-    test_all = None
+    metrics_all = None
     if evaluate_test:
         all_calibrator = fit_calibrator(
             model.predict(validation_calibrate),
@@ -1386,18 +1396,18 @@ def train_and_evaluate(
             calibration_method,
             min_positives=config.calibration.min_positives,
         )
-        test_all = _metrics(test.y, all_calibrator.predict(model.predict(test)))
+        metrics_all = _metrics(test_split.y, all_calibrator.predict(model.predict(test_split)))
 
     evidence = eval_data.future_observations >= 2
     if int(evidence.sum()) >= config.report.min_tier_rows:
         eval_rows = eval_data.subset(evidence)
-        test_tier = "two_plus_observations"
+        evaluation_tier = "two_plus_observations"
         eval_mask: Array | None = evidence
     else:
         eval_rows = eval_data
-        test_tier = "all_labelled_rows"
+        evaluation_tier = "all_labelled_rows"
         eval_mask = None
-    train_eval = train.subset(train.future_observations >= 2) if test_tier == "two_plus_observations" else train
+    train_eval = train.subset(train.future_observations >= 2) if evaluation_tier == "two_plus_observations" else train
     raw_eval_source = model.predict(eval_data)
     calibrated_eval = _select(
         calibrator.predict(raw_eval_source) if evaluate_test else oof_predictions[calibration_method],
@@ -1407,13 +1417,13 @@ def train_and_evaluate(
     bands_eval = _ttd_array(eval_rows)
     bands_train = _ttd_array(train_eval)
 
-    test_metrics = _metrics(eval_rows.y, calibrated_eval)
-    train_rate = _train_prevalence(train, test_tier)
-    test_metrics["bss_train"] = _bss_train(test_metrics["brier"], eval_rows.y, train_rate)
-    test_metrics["threshold"] = threshold
-    test_metrics.update(_decision_metrics(eval_rows.y, calibrated_eval, threshold))
-    test_metrics["precision_floor_met_on_evaluation"] = bool(
-        _metric_value(test_metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
+    metrics = _metrics(eval_rows.y, calibrated_eval)
+    train_rate = _train_prevalence(train, evaluation_tier)
+    metrics["bss_train"] = _bss_train(metrics["brier"], eval_rows.y, train_rate)
+    metrics["threshold"] = threshold
+    metrics.update(_decision_metrics(eval_rows.y, calibrated_eval, threshold))
+    metrics["precision_floor_met_on_evaluation"] = bool(
+        _metric_value(metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
     )
 
     climatology = fit_climatology(train)
@@ -1432,9 +1442,7 @@ def train_and_evaluate(
     climatology_metrics["bss_train"] = _bss_train(climatology_metrics["brier"], eval_rows.y, train_rate)
     climatology_metrics["method"] = calibration_method
     clim_reference = float(np.mean((eval_rows.y - clim_eval) ** 2))
-    test_metrics["bss_climatology"] = (
-        1.0 - _metric_value(test_metrics["brier"]) / clim_reference if clim_reference > 0 else None
-    )
+    metrics["bss_climatology"] = 1.0 - _metric_value(metrics["brier"]) / clim_reference if clim_reference > 0 else None
 
     headroom, headroom_ttd, headroom_probabilities, raw_headroom_probabilities, fold_assignments, y_headroom_arrays = (
         _headroom_diagnostics(
@@ -1455,14 +1463,14 @@ def train_and_evaluate(
     shipped_headroom = [
         calibrator.predict(model.predict(eval_rows, headroom=value)) for value in config.label.headroom_pct
     ]
-    test_metrics["headroom_monotonic"] = bool(
+    metrics["headroom_monotonic"] = bool(
         all(np.all(left >= right) for left, right in itertools.pairwise(shipped_headroom))
     )
-    test_metrics["headroom_monotonic_raw"] = bool(
+    metrics["headroom_monotonic_raw"] = bool(
         all(np.all(left >= right) for left, right in itertools.pairwise(raw_headroom_probabilities))
     )
     diagnostic_stack = np.vstack(headroom_probabilities)
-    test_metrics["headroom_diagnostic_nonmonotone_share"] = float(
+    metrics["headroom_diagnostic_nonmonotone_share"] = float(
         np.mean(np.any(np.diff(diagnostic_stack, axis=0) > 0, axis=0))
     )
     prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
@@ -1535,7 +1543,7 @@ def train_and_evaluate(
 
     strata = _strata_rows(eval_rows, calibrated_eval, train_eval, threshold)
     if evaluate_test:
-        if test_tier == "two_plus_observations":
+        if evaluation_tier == "two_plus_observations":
             compare_mask = cal_data.future_observations >= 2
             compare_data = cal_data.subset(compare_mask)
             compare_oof = oof_predictions[calibration_method][compare_mask]
@@ -1573,12 +1581,12 @@ def train_and_evaluate(
         candidates=candidate_metrics,
         candidate_train=candidate_train_metrics,
         candidate_calibration_method=next(iter(config.calibration.methods)),
-        test=test_metrics,
-        test_all=test_all,
-        test_tier=test_tier,
-        test_tier_rows=len(eval_rows),
+        metrics=metrics,
+        metrics_all=metrics_all,
+        evaluation_tier=evaluation_tier,
+        evaluation_tier_rows=len(eval_rows),
         evaluation_split=evaluation_split,
-        test_evaluated=evaluate_test,
+        evaluation_on_test=evaluate_test,
         calibration_prevalence=float(np.mean(cal_data.y)),
         train_prevalence=train_rate,
         dropped_features=tuple(sorted({name for fitted in candidates.values() for name in fitted.dropped})),
@@ -1599,6 +1607,10 @@ def train_and_evaluate(
         paired=paired,
         bootstrap_clusters=len(np.unique(groups)),
         prediction_series=np.tile(eval_rows.series, len(config.label.headroom_pct)),
+        prediction_chain=np.tile(
+            eval_rows.chain if eval_rows.chain is not None else eval_rows.series,
+            len(config.label.headroom_pct),
+        ),
         prediction_snapshot_at=np.tile(eval_rows.snapshot_at, len(config.label.headroom_pct)),
         prediction_route_day=np.tile(eval_rows.route_day, len(config.label.headroom_pct)),
         prediction_headroom=prediction_headroom,
@@ -1628,6 +1640,7 @@ def write_evaluation_artifacts(
     """Persist the calibrated model and per-headroom predictions as local artifacts."""
     required = (
         evaluation.prediction_series,
+        evaluation.prediction_chain,
         evaluation.prediction_snapshot_at,
         evaluation.prediction_route_day,
         evaluation.prediction_headroom,
@@ -1638,6 +1651,7 @@ def write_evaluation_artifacts(
     if any(value is None for value in required):
         raise ModelError("evaluation has no prediction arrays to persist")
     series = evaluation.prediction_series
+    chains = evaluation.prediction_chain
     snapshots = evaluation.prediction_snapshot_at
     route_days = evaluation.prediction_route_day
     headrooms = evaluation.prediction_headroom
@@ -1652,6 +1666,7 @@ def write_evaluation_artifacts(
     labels = evaluation.prediction_y
     if (
         series is None
+        or chains is None
         or snapshots is None
         or route_days is None
         or headrooms is None
@@ -1671,6 +1686,7 @@ def write_evaluation_artifacts(
     table = pa.table(
         {
             "series_key": series,
+            "chain_id": chains,
             "snapshot_at": pa.array(np.asarray(snapshots, dtype="datetime64[us]")),
             "route_day": route_days,
             "headroom_pct": headrooms,
