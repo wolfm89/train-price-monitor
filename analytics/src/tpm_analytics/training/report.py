@@ -346,7 +346,7 @@ def _report(
             item.get("train_rows"),
             item.get("positive_rate"),
             _fmt(item.get("brier")),
-            _ci(item.get("brier_ci")),
+            _ci(item.get("brier_ci"), 4),
             _fmt(item.get("log_loss")),
             _fmt(item.get("bss")),
             _fmt(item.get("bss_train")),
@@ -726,6 +726,11 @@ def _report(
         ablation_section = "\n## Calendar ablation\n\n" + _table(
             ["feature set", "validation Brier", "validation log loss", "validation ROC-AUC"], rows
         )
+    dataset_scope = (
+        "includes it because `--evaluate-test` was used"
+        if evaluation.test_evaluated
+        else "omits it in this validation-only run"
+    )
     sample = config["sample"]
     resample = config["resample"]
     sample_line = (
@@ -777,8 +782,8 @@ def _report(
         )
         if evaluation.test_all is not None
         else (
-            "- Test was not evaluated; model metrics are validation-calibrate only and no test-cohort "
-            "diagnostics are printed."
+            "- Test was not evaluated; model metrics are validation-calibrate only and no test label "
+            "or model diagnostics are printed."
         )
     )
     headroom_headers = [
@@ -811,7 +816,7 @@ def _report(
         "set; the September departure cohort has been evaluated before this run.\n"
         "- These are development figures, not a production estimate. The product's hourly refresher "
         "and 7-30 d booking window are not fully represented.\n"
-        "- Pooled metrics include headroom identification; per-headroom rows are the primary view.\n"
+        "- Pooled metrics include headroom identification; per-headroom rows are the diagnostic view.\n"
         f"{threshold_caveat}"
         "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
         "validation-select rows.\n"
@@ -833,6 +838,7 @@ def _report(
 
 - Runner: `{runner}`
 - Rows: **{stats.rows:,}** total, **{stats.labelled_rows:,}** labelled
+- Header totals include the test split; the Dataset table {dataset_scope}.
 - Series: **{stats.series:,}**; route-days: **{stats.route_days:,}**
 - Calendar feature set: `{spec.calendar_set}`
 {model_line}
