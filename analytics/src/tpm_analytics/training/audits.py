@@ -184,6 +184,8 @@ def v2_chain_audit(
             departure_date,
             transfers_actual,
             observation_era,
+            fare_lowest_eur AS price_eur,
+            load_factor_ordinal,
             {series_key_sql()} AS series_key
         FROM {source_sql}
         WHERE schema_version = 1
@@ -219,7 +221,8 @@ def v2_chain_audit(
             departure_date,
             arrival_planned,
             transfers_actual,
-            first_obs
+            first_obs,
+            {series_key_sql()} AS itinerary_key
         FROM (
             SELECT
                 journey_id,
@@ -266,7 +269,8 @@ def v2_chain_audit(
             v.service_class,
             m.chain_id,
             v.arrival_planned,
-            v.transfers_actual
+            v.transfers_actual,
+            v.itinerary_key
         FROM v2_journeys v
         JOIN v2audit_series s
           ON s.route_id = v.route_id
@@ -310,8 +314,7 @@ def v2_chain_audit(
             SELECT
                 chain_id,
                 count(DISTINCT journey_id || '|' || CAST(service_class AS VARCHAR)) AS journeys,
-                count(DISTINCT arrival_planned) AS arrivals,
-                count(DISTINCT coalesce(transfers_actual, -1)) AS transfers
+                count(DISTINCT itinerary_key) AS itineraries
             FROM v2_matches
             GROUP BY chain_id
             HAVING count(DISTINCT journey_id || '|' || CAST(service_class AS VARCHAR)) > 1
@@ -331,7 +334,7 @@ def v2_chain_audit(
             (SELECT journeys FROM split_parallel) AS parallel_split_journeys,
             (SELECT count(DISTINCT chain_id) FROM v2_matches) AS matched_series,
             (SELECT count(*) FROM merged_detail) AS merged_series,
-            (SELECT count(*) FROM merged_detail WHERE arrivals = 1 AND transfers = 1) AS same_itinerary_merges
+            (SELECT count(*) FROM merged_detail WHERE itineraries = 1) AS same_itinerary_merges
         """
     ).fetchone()
     if totals is None:

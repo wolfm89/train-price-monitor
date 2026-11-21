@@ -4,6 +4,13 @@ from __future__ import annotations
 
 LINK_TOLERANCE_SECONDS = 900
 
+# The canonical row for a same-scrape duplicate group. The training dedup and the chain series
+# summary must use the same rule so a series' transition departure does not depend on scan order.
+SAME_SCRAPE_ORDER = (
+    "price_eur DESC, load_factor_ordinal DESC NULLS LAST, "
+    "train_number, departure_planned, arrival_planned, transfers_actual"
+)
+
 
 def berlin_local_sql(column: str) -> str:
     """Return ``column`` shifted from UTC to Europe/Berlin wall time.

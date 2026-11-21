@@ -31,7 +31,12 @@ from tpm_analytics.training.bands import JOURNEY_BANDS, ttd_band_case
 from tpm_analytics.training.chains import ChainStats, build_chain_map
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import AUDIT_COLUMNS, LABEL_COLUMNS, column_roles, feature_spec
-from tpm_analytics.training.identity import LINK_TOLERANCE_SECONDS, berlin_week_sql, series_key_sql
+from tpm_analytics.training.identity import (
+    LINK_TOLERANCE_SECONDS,
+    SAME_SCRAPE_ORDER,
+    berlin_week_sql,
+    series_key_sql,
+)
 from tpm_analytics.training.sources import SourceSpec
 
 
@@ -357,14 +362,13 @@ def _create_views(
         """
     )
     connection.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP VIEW dedup_candidates AS
         SELECT
             *,
             row_number() OVER (
                 PARTITION BY series_key, observed_at
-                ORDER BY price_eur DESC, load_factor_ordinal DESC NULLS LAST,
-                         train_number, departure_planned, arrival_planned, transfers_actual
+                ORDER BY {SAME_SCRAPE_ORDER}
             ) AS dedup_rank
         FROM base_chained
         """

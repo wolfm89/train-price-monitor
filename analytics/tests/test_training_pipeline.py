@@ -978,6 +978,94 @@ def test_s3_source_inventory_shape() -> None:
     assert inventory == [{"path": "s3://bucket/build/file.parquet", "rows": 42}]
 
 
+def test_chain_is_independent_of_same_scrape_row_order(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 4, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4),
+            route="scan-order",
+            train="ICE-SCAN",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 10, 0),
+            departure=departure + timedelta(minutes=5),
+            arrival_planned=departure + timedelta(hours=4, minutes=5),
+            route="scan-order",
+            train="ICE-SCAN",
+            fare=90.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure + timedelta(minutes=16),
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="scan-order",
+            train="ICE-SCAN",
+            fare=95.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 22, 0),
+            departure=departure + timedelta(minutes=16),
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="scan-order",
+            train="ICE-SCAN",
+            fare=96.0,
+        ),
+    ]
+    stats_a, out_a = _build_chain_dataset(tmp_path / "order-a", rows)
+    stats_b, out_b = _build_chain_dataset(tmp_path / "order-b", list(reversed(rows)))
+    assert stats_a.profile["chain"] == stats_b.profile["chain"]
+    assert stats_a.profile["chain"]["links"] == 1
+    for out in (out_a, out_b):
+        predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+        route_rows = [index for index, route in enumerate(predictions["route_id"]) if route == "scan-order"]
+        assert len(route_rows) == 2
+        assert len({predictions["chain_id"][index] for index in route_rows}) == 1
+
+
+def test_v2_handover_same_itinerary_merge(tmp_path: Path) -> None:
+    departure = datetime(2026, 8, 20, 10, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 8, 18, 10, 0),
+            departure=departure,
+            route="same-itin",
+            train="ICE-SI",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 8, 19, 10, 0),
+            departure=departure,
+            route="same-itin",
+            train="ICE-SI",
+            fare=82.0,
+        ),
+    ]
+    for journey in ("same-itin-1", "same-itin-2"):
+        rows.append(
+            _row(
+                observed_at=datetime(2026, 8, 19, 12, 0),
+                departure=departure,
+                route="same-itin",
+                train="ICE-SI",
+                fare=90.0,
+                schema_version=2,
+                journey_id=journey,
+            )
+        )
+    _, out = _build_chain_dataset(tmp_path, rows)
+    audit = json.loads((out / "profile.json").read_text())["profile"]["chain_v2"]
+    assert audit is not None
+    assert audit["v2_journeys"] == 2
+    assert audit["matched_journeys"] == 2
+    assert audit["matched_series"] == 1
+    assert audit["merged_series"] == 1
+    assert audit["same_itinerary_merges"] == 1
+    assert audit["different_itinerary_merges"] == 0
+
+
 def test_chain_rejects_different_train_and_large_shift(tmp_path: Path) -> None:
     for name, rows in (
         ("train", _chain_fixture(successor_train="ICE-OTHER")),

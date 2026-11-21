@@ -26,7 +26,7 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
-from tpm_analytics.training.identity import LINK_TOLERANCE_SECONDS
+from tpm_analytics.training.identity import LINK_TOLERANCE_SECONDS, SAME_SCRAPE_ORDER
 
 
 @dataclass(frozen=True)
@@ -216,6 +216,21 @@ def build_chain_map(
     """
     connection.execute(
         f"""
+        CREATE OR REPLACE TEMP TABLE {prefix}_canonical AS
+        SELECT * FROM (
+            SELECT
+                *,
+                row_number() OVER (
+                    PARTITION BY series_key, observed_at
+                    ORDER BY {SAME_SCRAPE_ORDER}
+                ) AS canonical_rank
+            FROM {base_view}
+        )
+        WHERE canonical_rank = 1
+        """
+    )
+    connection.execute(
+        f"""
         CREATE OR REPLACE TEMP TABLE {prefix}_series AS
         SELECT
             series_key,
@@ -229,7 +244,7 @@ def build_chain_map(
             min(observed_at) AS first_obs,
             max(observed_at) AS last_obs,
             count(DISTINCT observed_at) AS observations
-        FROM {base_view}
+        FROM {prefix}_canonical
         GROUP BY series_key
         """
     )
