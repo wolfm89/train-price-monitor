@@ -1742,6 +1742,42 @@ def test_single_class_calibration_preserves_requested_method() -> None:
     assert mixed.method != "constant"
 
 
+def test_calibration_metadata_records_sigmoid_fallback() -> None:
+    size = 20
+    y = np.zeros(size, dtype=np.int8)
+    y[0] = 1
+    data = TabularData(
+        features={},
+        y=y,
+        series=np.array([f"s{index}" for index in range(size)], dtype=object),
+        route_day=np.arange(size, dtype=np.int64),
+        price=np.full(size, 100.0),
+        future_max=np.full(size, 90.0),
+        future_observations=np.full(size, 2, dtype=np.int16),
+        headroom=np.full(size, 1, dtype=np.int16),
+        departure_date=np.array([f"2026-07-{index % 5 + 1:02d}" for index in range(size)], dtype=object),
+        snapshot_at=np.array([f"2026-06-{index + 1:02d}T10:00:00" for index in range(size)], dtype=object),
+        observation_era=np.full(size, "dense", dtype=object),
+        observation_week=np.full(size, "2026-W27", dtype=object),
+        check_price=np.full(size, np.nan),
+    )
+
+    class FakeModel:
+        def predict(self, rows: TabularData, headroom: int | None = None) -> np.ndarray:
+            return np.linspace(0.1, 0.9, len(rows))
+
+    config = load_config(DEFAULT_CONFIG_PATH)
+    config = replace(
+        config,
+        calibration=replace(config.calibration, methods=("isotonic",), min_positives=1_000),
+    )
+    _, calibrator, method, constant, oof, _, _ = _fit_final_calibration(cast(FittedModel, FakeModel()), data, config)
+    assert calibrator.method == "sigmoid"
+    assert method == "sigmoid"
+    assert constant is False
+    assert len(oof["sigmoid"]) == size
+
+
 def test_calibration_stats_are_reported() -> None:
     rng = np.random.default_rng(11)
     probabilities = rng.uniform(0.05, 0.95, size=20_000)

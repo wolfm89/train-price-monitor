@@ -1106,11 +1106,13 @@ def _fit_final_calibration(
         requested,
         min_positives=config.calibration.min_positives,
     )
-    # Preserve the requested method for downstream refits. A single-class calibration set
-    # returns a constant calibrator; that must not be passed as the method for a mixed-label
-    # headroom or all-labelled test refit.
+    # Preserve the requested method only for the single-class constant calibrator; otherwise
+    # record the effective method (for example an isotonic-to-sigmoid fallback) and use its
+    # matching out-of-fold predictions.
     calibration_constant = calibrator.method == "constant"
-    method = requested
+    method = requested if calibration_constant else calibrator.method
+    if method not in oof_predictions:
+        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
     threshold, threshold_met = _threshold(
         cal_data.y,
         oof_predictions[method],
@@ -1532,17 +1534,17 @@ def train_and_evaluate(
         paired["vs_logistic_brier"] = []
 
     strata = _strata_rows(eval_rows, calibrated_eval, train_eval, threshold)
-    strata_compare = (
-        _strata_comparison(
-            strata,
-            cal_data,
-            oof_predictions[calibration_method],
-            train_eval,
-            threshold,
-        )
-        if evaluate_test
-        else []
-    )
+    if evaluate_test:
+        if test_tier == "two_plus_observations":
+            compare_mask = cal_data.future_observations >= 2
+            compare_data = cal_data.subset(compare_mask)
+            compare_oof = oof_predictions[calibration_method][compare_mask]
+        else:
+            compare_data = cal_data
+            compare_oof = oof_predictions[calibration_method]
+        strata_compare = _strata_comparison(strata, compare_data, compare_oof, train_eval, threshold)
+    else:
+        strata_compare = []
     decision_value = _decision_value_rows(
         eval_rows,
         config.label.headroom_pct,
