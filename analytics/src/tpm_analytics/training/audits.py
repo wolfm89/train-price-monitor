@@ -41,7 +41,7 @@ def duplicate_audit(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             GROUP BY route_id, departure_date, service_class, observed_at
         )
         SELECT
-            (SELECT count(*) FROM pairs),
+            (SELECT sum(rows) FROM pairs),
             duplicates.groups,
             duplicates.rows,
             (SELECT count(*) FROM pre_cross WHERE peers >= 3) AS pre_ge3,
