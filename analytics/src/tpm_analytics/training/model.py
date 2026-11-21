@@ -581,6 +581,7 @@ class Evaluation:
     calibration_groups: tuple[dict[str, Any], ...] = ()
     climatology: dict[str, Any] = field(default_factory=dict)
     decision_value: tuple[dict[str, Any], ...] = ()
+    decision_value_pooled: tuple[dict[str, Any], ...] = ()
     intervals: dict[str, list[float]] = field(default_factory=dict)
     paired: dict[str, Any] = field(default_factory=dict)
     bootstrap_clusters: int = 0
@@ -633,6 +634,7 @@ class Evaluation:
             "calibration_groups": list(self.calibration_groups),
             "climatology": self.climatology,
             "decision_value": list(self.decision_value),
+            "decision_value_pooled": list(self.decision_value_pooled),
             "intervals": self.intervals,
             "paired": self.paired,
             "bootstrap_clusters": self.bootstrap_clusters,
@@ -916,6 +918,40 @@ def _strata_rows(
     return rows
 
 
+def _decision_row(
+    *,
+    band: str,
+    headroom_pct: int | None,
+    price: Array,
+    saving: Array,
+    alert: Array,
+    groups: Array,
+    replicates: int,
+    seed: int,
+) -> dict[str, Any]:
+    """One decision-value row for an alert mask and a set of check prices."""
+    saving_vs_wait = np.where(alert, saving, 0.0)
+    saving_vs_book = -np.where(alert, 0.0, saving)
+    row: dict[str, Any] = {
+        "band": band,
+        "rows": len(price),
+        "alert_rows": int(alert.sum()),
+        "alert_share": float(alert.mean()),
+        "saving_vs_always_wait_eur": float(np.mean(saving_vs_wait)),
+        "saving_vs_always_wait_pct": float(np.sum(saving_vs_wait) / np.sum(price)),
+        "saving_vs_always_book_eur": float(np.mean(saving_vs_book)),
+        "saving_vs_always_book_pct": float(np.sum(saving_vs_book) / np.sum(price)),
+        "conditional_saving_when_alert_eur": float(np.mean(saving[alert])),
+        "cost_of_waiting_eur": float(np.mean(saving)),
+        "cost_of_waiting_pct": float(np.sum(saving) / np.sum(price)),
+        "ci_saving_vs_wait_eur": _cluster_mean_ci(saving_vs_wait, groups, replicates, seed),
+        "ci_saving_vs_book_eur": _cluster_mean_ci(saving_vs_book, groups, replicates, seed + 1),
+    }
+    if headroom_pct is not None:
+        row["headroom_pct"] = int(headroom_pct)
+    return row
+
+
 def _decision_value_rows(
     data: TabularData,
     headroom_values: tuple[int, ...],
@@ -932,36 +968,53 @@ def _decision_value_rows(
             mask = (bands == band) & np.isfinite(data.check_price) & np.isfinite(data.price) & (data.price > 0)
             if int(mask.sum()) < 20:
                 continue
-            price = data.price[mask]
-            check = data.check_price[mask]
             alert = probabilities_at_headroom[mask] >= threshold
-            saving = check - price
             if int(alert.sum()) == 0:
                 continue
-            saving_vs_wait = np.where(alert, saving, 0.0)
-            saving_vs_book = -np.where(alert, 0.0, saving)
             rows.append(
-                {
-                    "headroom_pct": int(headroom),
-                    "band": band,
-                    "rows": int(mask.sum()),
-                    "alert_rows": int(alert.sum()),
-                    "alert_share": float(alert.mean()),
-                    "saving_vs_always_wait_eur": float(np.mean(saving_vs_wait)),
-                    "saving_vs_always_wait_pct": float(np.sum(saving_vs_wait) / np.sum(price)),
-                    "saving_vs_always_book_eur": float(np.mean(saving_vs_book)),
-                    "saving_vs_always_book_pct": float(np.sum(saving_vs_book) / np.sum(price)),
-                    "conditional_saving_when_alert_eur": float(np.mean(saving[alert])),
-                    "cost_of_waiting_eur": float(np.mean(saving)),
-                    "cost_of_waiting_pct": float(np.sum(saving) / np.sum(price)),
-                    "ci_saving_vs_wait_eur": _cluster_mean_ci(
-                        saving_vs_wait, data.departure_date[mask], replicates, seed
-                    ),
-                    "ci_saving_vs_book_eur": _cluster_mean_ci(
-                        saving_vs_book, data.departure_date[mask], replicates, seed + 1
-                    ),
-                }
+                _decision_row(
+                    band=band,
+                    headroom_pct=headroom,
+                    price=data.price[mask],
+                    saving=data.check_price[mask] - data.price[mask],
+                    alert=alert,
+                    groups=data.departure_date[mask],
+                    replicates=replicates,
+                    seed=seed,
+                )
             )
+    return rows
+
+
+def _pooled_decision_value_rows(
+    data: TabularData,
+    probabilities: Array,
+    bands: Array,
+    threshold: float,
+    replicates: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Decision value of the shipped pooled calibrator, one row per TTD band."""
+    rows: list[dict[str, Any]] = []
+    for band in band_labels():
+        mask = (bands == band) & np.isfinite(data.check_price) & np.isfinite(data.price) & (data.price > 0)
+        if int(mask.sum()) < 20:
+            continue
+        alert = probabilities[mask] >= threshold
+        if int(alert.sum()) == 0:
+            continue
+        rows.append(
+            _decision_row(
+                band=band,
+                headroom_pct=None,
+                price=data.price[mask],
+                saving=data.check_price[mask] - data.price[mask],
+                alert=alert,
+                groups=data.departure_date[mask],
+                replicates=replicates,
+                seed=seed,
+            )
+        )
     return rows
 
 
@@ -1487,6 +1540,14 @@ def train_and_evaluate(
         config.report.metric_bootstrap_replicates,
         config.seed + 4,
     )
+    decision_value_pooled = _pooled_decision_value_rows(
+        eval_rows,
+        calibrated_eval,
+        bands_eval,
+        threshold,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 5,
+    )
     importance = _permutation_importance(model, calibrator, validation_select, spec, seed=config.seed)
     prediction_headroom = np.repeat(np.asarray(config.label.headroom_pct, dtype=np.int16), len(eval_rows))
     evaluation = Evaluation(
@@ -1518,6 +1579,7 @@ def train_and_evaluate(
         calibration_groups=tuple(calibration_groups),
         climatology=climatology_metrics,
         decision_value=tuple(decision_value),
+        decision_value_pooled=tuple(decision_value_pooled),
         intervals=intervals,
         paired=paired,
         bootstrap_clusters=len(np.unique(groups)),

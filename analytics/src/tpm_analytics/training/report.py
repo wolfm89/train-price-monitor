@@ -125,10 +125,10 @@ def _report(
             return "—"
         return _p(float(numerator) / float(denominator))
 
-    def _ci(values: Any) -> str:
+    def _ci(values: Any, digits: int = 2) -> str:
         if not isinstance(values, list) or len(values) != 2:
             return "—"
-        return f"{_fmt(values[0])}..{_fmt(values[1])}"
+        return f"{_fmt(values[0], digits)}..{_fmt(values[1], digits)}"
 
     cohort_rows = [
         [
@@ -299,6 +299,17 @@ def _report(
                     total,
                 ]
             )
+    journey_week_groups: dict[str, dict[str, int]] = {}
+    for item in journey.get("groups", []):
+        bucket = journey_week_groups.setdefault(
+            item["week"], {"total": 0, "same_train": 0, "other_train": 0, "none": 0}
+        )
+        bucket["total"] += item["journeys"]
+        bucket[item["successor_60"]] += item["journeys"]
+    journey_week_rows = [
+        [week, counts["total"], counts["same_train"], counts["other_train"], counts["none"]]
+        for week, counts in sorted(journey_week_groups.items())
+    ]
     unlabelled_agg: dict[tuple[str, str, str], list[float]] = {}
     for item in stats.profile.get("unlabelled", []):
         if not evaluation.test_evaluated and item["split"] == "test":
@@ -405,6 +416,7 @@ def _report(
         [
             item["band"],
             item["headroom_pct"],
+            item["rows"],
             item["alert_rows"],
             _p(item["alert_share"]),
             _fmt(item["saving_vs_always_wait_eur"], 2),
@@ -413,12 +425,8 @@ def _report(
             _p(item["saving_vs_always_book_pct"]),
             _fmt(item["conditional_saving_when_alert_eur"], 2),
             _fmt(item["cost_of_waiting_eur"], 2),
-            _fmt(item["ci_saving_vs_wait_eur"][0], 2) + ".." + _fmt(item["ci_saving_vs_wait_eur"][1], 2)
-            if item["ci_saving_vs_wait_eur"]
-            else "—",
-            _fmt(item["ci_saving_vs_book_eur"][0], 2) + ".." + _fmt(item["ci_saving_vs_book_eur"][1], 2)
-            if item["ci_saving_vs_book_eur"]
-            else "—",
+            _ci(item["ci_saving_vs_wait_eur"], 3),
+            _ci(item["ci_saving_vs_book_eur"], 3),
         ]
         for item in evaluation.decision_value
     ]
@@ -550,6 +558,7 @@ def _report(
     lag_table = _table(["split", "TTD band", "median single lag h", "p10 h", "p90 h"], lag_rows)
     two_plus_week_table = _table(["split", "week", "rows", "two-plus share"], two_plus_week_rows)
     journey_table = _table(["TTD band", "rule", "same train", "other train", "none", "journeys"], journey_rows)
+    journey_week_table = _table(["week", "journeys", "same train (60 min)", "other train", "none"], journey_week_rows)
     unlabelled_table = _table(["split", "TTD band", "era", "rows", "unlabelled"], unlabelled_rows)
     weekly_table = _table(["split", "week", "rows", "unlabelled"], weekly_rows)
     r24_table = _table(
@@ -628,6 +637,7 @@ def _report(
         [
             "TTD band",
             "headroom %",
+            "rows",
             "alerts",
             "alert share",
             "saving vs wait €",
@@ -641,6 +651,32 @@ def _report(
         ],
         decision_rows,
     )
+    pooled_decision_rows = [
+        [
+            item["band"],
+            item["rows"],
+            item["alert_rows"],
+            _p(item["alert_share"]),
+            _fmt(item["saving_vs_always_wait_eur"], 2),
+            _fmt(item["saving_vs_always_book_eur"], 2),
+            _ci(item["ci_saving_vs_wait_eur"], 3),
+            _ci(item["ci_saving_vs_book_eur"], 3),
+        ]
+        for item in evaluation.decision_value_pooled
+    ]
+    pooled_decision_table = _table(
+        [
+            "TTD band",
+            "rows",
+            "alerts",
+            "alert share",
+            "saving vs wait €",
+            "saving vs book €",
+            "95% CI vs wait",
+            "95% CI vs book",
+        ],
+        pooled_decision_rows,
+    )
     book_cis = [
         item["ci_saving_vs_book_eur"] for item in evaluation.decision_value if item.get("ci_saving_vs_book_eur")
     ]
@@ -652,9 +688,21 @@ def _report(
         if item.get("ci_saving_vs_wait_eur") and item["ci_saving_vs_wait_eur"][0] > 0.0
     )
     decision_summary = (
-        f"Against always booking now, the alert policy is significantly more expensive in "
-        f"{book_worse} of {len(book_cis)} band x headroom cells and significantly cheaper in "
-        f"{book_better}; against always waiting it is significantly cheaper in {wait_better} cells."
+        f"Under per-headroom diagnostic calibration, the alert policy is significantly more expensive "
+        f"than always booking now in {book_worse} of {len(book_cis)} band x headroom cells and "
+        f"significantly cheaper in {book_better}; against always waiting it is significantly cheaper "
+        f"in {wait_better} cells."
+    )
+    pooled_book = [item["ci_saving_vs_book_eur"] for item in evaluation.decision_value_pooled]
+    pooled_wait = [item["ci_saving_vs_wait_eur"] for item in evaluation.decision_value_pooled]
+    pooled_book_worse = sum(1 for interval in pooled_book if interval and interval[1] < 0.0)
+    pooled_book_better = sum(1 for interval in pooled_book if interval and interval[0] > 0.0)
+    pooled_wait_better = sum(1 for interval in pooled_wait if interval and interval[0] > 0.0)
+    pooled_decision_summary = (
+        f"With the shipped pooled calibrator, the policy is significantly more expensive than always "
+        f"booking now in {pooled_book_worse} of {len(pooled_book)} bands and significantly cheaper in "
+        f"{pooled_book_better}; against always waiting it is significantly cheaper in "
+        f"{pooled_wait_better} bands."
     )
     journey_total = int(journey.get("total_journeys", 0))
     journey_at_risk = int(journey.get("at_risk", 0))
@@ -678,6 +726,14 @@ def _report(
         ablation_section = "\n## Calendar ablation\n\n" + _table(
             ["feature set", "validation Brier", "validation log loss", "validation ROC-AUC"], rows
         )
+    sample = config["sample"]
+    resample = config["resample"]
+    sample_line = (
+        f"- Sample: {float(sample['sample_rate']):.1%} of route-days (seed {sample['seed']}); resampled "
+        f"at {resample['inner_bin_hours']} h inside {resample['outer_threshold_hours']} h and "
+        f"{resample['outer_bin_hours']} h outside. Counts are sample counts; bootstrap CIs are "
+        "conditional on the sampled route-days."
+    )
     split_caveat = (
         "The test split is a future-departure cohort, not a future-era holdout. "
         "The report shows era composition for the evaluated splits; test rows are omitted unless "
@@ -759,10 +815,14 @@ def _report(
         f"{threshold_caveat}"
         "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
         "validation-select rows.\n"
-        "- Dataset diagnostics for the test cohort are descriptive; test model metrics are written "
-        "only with `--evaluate-test`.\n"
+        "- Test-split label and model diagnostics are gated by `--evaluate-test`; journey "
+        "disappearance is a corpus-level diagnostic that includes test departures.\n"
+        "- Counts are from the configured route-day sample, not the full silver corpus; bootstrap "
+        "intervals resample departure dates within that sample.\n"
         "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
-        "uses the pooled calibrator, so PR 1 and PR 2 per-headroom numbers are not like-for-like.\n"
+        "uses the pooled calibrator, so PR 1 and PR 2 per-headroom numbers are not like-for-like. "
+        "The near-zero gap and slope near 1 follow from cross-fitting by route-day on the same "
+        "evaluation rows.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
@@ -777,6 +837,7 @@ def _report(
 - Calendar feature set: `{spec.calendar_set}`
 {model_line}
 {split_line}
+{sample_line}
 {ttd_line}
 {provenance_lines}
 - {split_caveat}
@@ -803,9 +864,12 @@ def _report(
 
 `coverage` is the share of rows with a scrape in the window. `crossed back` is the share whose
 within-day maximum breached but the 20-24 h point did not. `dearer`/`cheaper`/`unchanged` use a
-+/-0.5 % band around the current fare and cover only rows with a 23-36 h reference. In the main
++/-0.5 % band around the current fare and cover only rows with a backward 23-36 h reference. In the main
 table `priced` is a count and the denominator for the next-day rate; the era and week tables show
-priced shares. Test-split rows appear only with `--evaluate-test`.
+priced shares. Test-split rows appear in the label, era and week tables only with
+`--evaluate-test`; journey disappearance is corpus-level and includes test departures. The 20-24 h
+bound is inclusive, so a few 20-28 h picks a few milliseconds after `t + 24 h` are excluded from the
+20-24 h point.
 
 By observation era:
 
@@ -848,8 +912,14 @@ Single future scrape lag:
 - `same train` requires a new series (`first_obs`) at the next scrape with the same class and train
   number and a planned departure within 15 minutes; the 60-minute rule is the A31 comparison and
   counts departures shifted by 15-60 minutes that the 15-minute rule classifies as `other train`
+- This section is corpus-level and includes test-split departures; it is not gated by
+  `--evaluate-test`.
 
 {journey_table}
+
+By observation week (60-minute rule):
+
+{journey_week_table}
 
 ### Unlabelled shares
 
@@ -863,7 +933,9 @@ Highest weekly unlabelled shares:
 
 R24 is defined only for 24 h-7 d. It requires the last scrape within
 {config["report"]["r24_max_tail_hours"]} h of `t + 24 h` and no gap above
-{config["report"]["r24_max_gap_hours"]} h; later bands are omitted.
+{config["report"]["r24_max_gap_hours"]} h; later bands are omitted. `coverage known` counts rows
+with a scrape in the 24 h window; `R24 covered` averages over all rows in the band, so rows with no
+scrape count as not covered.
 
 {r24_table}
 
@@ -914,7 +986,9 @@ Negative Brier differences mean the model is better than the baseline.
 
 Per-headroom rows use a separate out-of-fold calibration fitted on that headroom's labels; the
 shipped model uses the pooled calibrator. These are diagnostic and are not directly comparable with
-the PR 1 pooled-calibrator table. The diagnostic probabilities rise with headroom on
+the PR 1 pooled-calibrator table. The near-zero calibration gap and slope near 1 follow from
+cross-fitting by route-day on the same evaluation rows: same-date shocks appear in both the fit and
+predict folds. The diagnostic probabilities rise with headroom on
 {_p(evaluation.test.get("headroom_diagnostic_nonmonotone_share"))} of rows; the shipped pooled
 calibrator is monotone: {evaluation.test.get("headroom_monotonic")}.
 
@@ -944,16 +1018,23 @@ Reliability by headroom, TTD band and era:
 
 {reliability_table}
 
-### Decision value (20-24 h check, diagnostic on the current label)
+### Decision value (per-headroom diagnostic calibration, 20-24 h check)
 
 {decision_table}
 
 Positive saving means the alert policy costs less than the baseline; negative means it costs
 more. `%` columns divide summed euros by summed fares; the conditional saving is the mean euro
 saving over alerted rows and is not a ratio. `cost of waiting` is the unconditional cost of always
-waiting one day. This diagnostic uses the 20-24 h check, inside the 24 h maximum.
+waiting one day. This table uses per-headroom out-of-fold calibration and is diagnostic; the
+shipped model uses the pooled calibrator. It uses the 20-24 h check, inside the 24 h maximum.
 
 {decision_summary}
+
+Shipped pooled policy (one row per TTD band):
+
+{pooled_decision_table}
+
+{pooled_decision_summary}
 
 ## Calibration
 

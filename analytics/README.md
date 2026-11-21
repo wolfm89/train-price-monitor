@@ -398,7 +398,8 @@ calibration slope/intercept/ECE and a decision-value diagnostic. The next-day di
 reported for both the 20-28 h and 22-26 h windows; the 20-24 h check is kept for the "crossed and
 came back" comparison and the decision-value diagnostic (the table states this). Each run also writes
 `predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
-produce.
+produce. Test-split label and model diagnostics are gated by `--evaluate-test`; journey
+disappearance is a corpus-level diagnostic that includes test departures.
 
 ## Semantics the transform encodes
 

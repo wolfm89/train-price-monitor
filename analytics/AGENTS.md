@@ -124,8 +124,9 @@ v2-only and mixed-schema input.
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
-  and `--ablation` report validation only. `--evaluate-test` gates the report and model metrics;
-  `profile.json` and `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
+  and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
+  journey disappearance is corpus-level and includes test departures. `profile.json` and
+  `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
 - `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
   next-day coverage/prevalence),
   `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the label diagnostics are
