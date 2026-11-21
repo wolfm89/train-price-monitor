@@ -664,7 +664,9 @@ class Evaluation:
             "headroom": list(self.headroom),
             "importance": list(self.importance),
             "bootstrap": self.bootstrap,
-            "split_sizes": self.split_sizes,
+            "split_sizes": {
+                name: size for name, size in self.split_sizes.items() if self.evaluation_on_test or name != "test"
+            },
             "headroom_ttd": list(self.headroom_ttd),
             "strata": list(self.strata),
             "strata_compare": list(self.strata_compare),

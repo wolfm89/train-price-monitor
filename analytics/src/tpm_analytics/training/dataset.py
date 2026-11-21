@@ -1074,19 +1074,19 @@ def _profile(
     label_week = _label_window_profile(connection, "observation_week", "week")
     a29 = _dict_rows(
         connection,
-        """
+        f"""
         SELECT
             split,
             ttd_band AS band,
             count(*) AS rows,
-            avg(CASE WHEN future_max_fare_24h_cents * 100 >= price_cents * 105
+            avg(CASE WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", "5")}
                 THEN 1.0 ELSE 0.0 END) AS within_day_rate,
-            avg(CASE WHEN check_price_cents * 100 >= price_cents * 105
+            avg(CASE WHEN {breach_sql("check_price_cents", "price_cents", "5")}
                 THEN 1.0 ELSE 0.0 END) AS next_day_rate,
-            avg(CASE WHEN check_price_2024_cents * 100 >= price_cents * 105
+            avg(CASE WHEN {breach_sql("check_price_2024_cents", "price_cents", "5")}
                 THEN 1.0 ELSE 0.0 END) AS next_day_2024_rate,
-            avg(CASE WHEN future_max_fare_24h_cents * 100 >= price_cents * 105
-                      AND NOT (check_price_2024_cents * 100 >= price_cents * 105)
+            avg(CASE WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", "5")}
+                      AND NOT {breach_sql("check_price_2024_cents", "price_cents", "5")}
                 THEN 1.0 ELSE 0.0 END) AS crossed_back_rate
         FROM sampled
         WHERE split IS NOT NULL

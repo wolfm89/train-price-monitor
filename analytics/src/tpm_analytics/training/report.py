@@ -36,13 +36,20 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
 def _gated_dataset_payload(stats: DatasetStats, evaluation_on_test: bool) -> dict[str, Any]:
     """Mirror the dataset in ``metrics.json`` with test rows removed from a validation-only run.
 
-    ``profile.json`` and ``dataset_manifest.json`` keep the descriptive test aggregates; the
-    machine-readable metrics payload follows the same gating as the report.
+    Split-keyed lists and the aggregate totals are gated; corpus-level diagnostics that do not
+    carry a split key (chain, duplicate and scrape-cadence audits) stay whole. ``profile.json``
+    and ``dataset_manifest.json`` keep the descriptive test aggregates.
     """
     payload = stats.to_dict()
     if evaluation_on_test:
         return payload
     payload["splits"] = [item for item in payload.get("splits", []) if item.get("split") != "test"]
+    # Keep the aggregate totals consistent with the retained splits. Series and route-days cannot
+    # span a split because the split follows the chain departure date.
+    payload["rows"] = sum(int(item.get("rows", 0)) for item in payload["splits"])
+    payload["labelled_rows"] = sum(int(item.get("labelled", 0)) for item in payload["splits"])
+    payload["series"] = sum(int(item.get("series", 0)) for item in payload["splits"])
+    payload["route_days"] = sum(int(item.get("route_days", 0)) for item in payload["splits"])
     profile = payload.get("profile")
     if isinstance(profile, dict):
         for key, value in list(profile.items()):
@@ -1023,7 +1030,7 @@ def _report(
         f"- Brier skill score vs the slice base rate: {_fmt(evaluation.metrics.get('bss'))}\n"
         f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.metrics.get('bss_train'))}\n"
         f"- Brier skill score vs climatology: {_fmt(evaluation.metrics.get('bss_climatology'))}\n"
-        f"- Train prevalence of the evaluated subset: {_fmt(evaluation.train_prevalence)}"
+        f"- Train prevalence (all train rows): {_fmt(evaluation.train_prevalence)}"
     )
     metrics_all_line = (
         "- One population: training, calibration, threshold and evaluation use every eligible row "

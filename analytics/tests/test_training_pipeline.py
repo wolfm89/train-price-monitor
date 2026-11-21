@@ -968,6 +968,58 @@ def test_same_scrape_rekey_does_not_split_the_series(tmp_path: Path) -> None:
     assert stats.profile["chain"]["links"] == 0
 
 
+def test_split_requires_matching_train_and_departure(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 8, 20, 0)
+    cases = (
+        ("different-train", "ICE-OTHER", departure),
+        ("shifted", "ICE-P", departure + timedelta(minutes=16)),
+    )
+    for name, successor_train, successor_departure in cases:
+        rows = [
+            _row(
+                observed_at=datetime(2026, 7, 5, 20, 0),
+                departure=departure,
+                route=name,
+                train="ICE-P",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 6, 20, 0),
+                departure=departure,
+                route=name,
+                train="ICE-P",
+                fare=82.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 7, 10, 0),
+                departure=successor_departure,
+                arrival_planned=successor_departure + timedelta(hours=4, minutes=16),
+                route=name,
+                train=successor_train,
+                fare=99.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 7, 12, 0),
+                departure=departure,
+                route=name,
+                train="ICE-P",
+                fare=85.0,
+            ),
+        ]
+        stats, out = _build_chain_dataset(tmp_path / name, rows)
+        assert stats.profile["chain"]["split_series"] == 0
+        predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+        by_time = {
+            str(predictions["snapshot_at"][index]): index
+            for index, route in enumerate(predictions["route_id"])
+            if route == name and predictions["price_eur"][index] in {82.0, 85.0}
+        }
+        assert (
+            predictions["chain_id"][by_time["2026-07-06 20:00:00"]]
+            == predictions["chain_id"][by_time["2026-07-07 12:00:00"]]
+        )
+
+
 def test_chain_map_is_series_level_and_row_map_is_unique() -> None:
     connection = duckdb.connect()
     try:
@@ -1501,6 +1553,7 @@ def test_evaluate_test_uses_one_population(tmp_path: Path) -> None:
     assert metrics["evaluation"]["calibration_rows"] == calibration_split["labelled"]
     assert metrics["evaluation"]["evaluation_tier_rows"] == test_split["labelled"]
     assert any(item["split"] == "test" for item in metrics["dataset"]["splits"])
+    assert "test" in metrics["evaluation"]["split_sizes"]
     assert (out / "predictions" / "test.parquet").is_file()
 
 
@@ -3139,6 +3192,12 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert manifest_json["git_sha_end"]
     assert isinstance(manifest_json["git_dirty"], bool)
     assert all(item["split"] != "test" for item in metrics["dataset"]["splits"])
+    splits = metrics["dataset"]["splits"]
+    assert metrics["dataset"]["rows"] == sum(item["rows"] for item in splits)
+    assert metrics["dataset"]["labelled_rows"] == sum(item["labelled"] for item in splits)
+    assert metrics["dataset"]["series"] == sum(item["series"] for item in splits)
+    assert metrics["dataset"]["route_days"] == sum(item["route_days"] for item in splits)
+    assert "test" not in metrics["evaluation"]["split_sizes"]
     for key in (
         "headroom",
         "coverage",
