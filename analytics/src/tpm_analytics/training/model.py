@@ -67,6 +67,7 @@ class TabularData:
     observation_era: Array
     observation_week: Array
     check_price: Array
+    chain: Array | None = None
 
     def __len__(self) -> int:
         return len(self.y)
@@ -86,6 +87,7 @@ class TabularData:
             observation_era=self.observation_era[indices],
             observation_week=self.observation_week[indices],
             check_price=self.check_price[indices],
+            chain=self.chain[indices] if self.chain is not None else None,
         )
 
     def select(self, names: tuple[str, ...]) -> TabularData:
@@ -103,6 +105,7 @@ class TabularData:
             observation_era=self.observation_era,
             observation_week=self.observation_week,
             check_price=self.check_price,
+            chain=self.chain,
         )
 
 
@@ -150,6 +153,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             *spec.names,
             "breached_in_24h",
             "series_key",
+            "chain_id",
             "route_id || '|' || CAST(departure_date AS VARCHAR) AS route_day",
             "price_eur",
             "future_max_fare_24h",
@@ -201,6 +205,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         observation_era=_categorical(rows["observation_era"]),
         observation_week=_categorical(rows["observation_week"]),
         check_price=_filled64(rows["check_price_eur"], np.nan),
+        chain=np.asarray(rows["chain_id"], dtype=str),
     )
 
 
@@ -1025,10 +1030,11 @@ def _pooled_decision_value_rows(
 
 
 def _canonical(data: TabularData) -> TabularData:
+    identity = data.chain if data.chain is not None else data.series
     order = np.lexsort(
         (
             np.asarray(data.snapshot_at, dtype=str),
-            np.asarray(data.series, dtype=str),
+            np.asarray(identity, dtype=str),
         )
     )
     return data.subset(order)
@@ -1356,13 +1362,15 @@ def train_and_evaluate(
     validation_select = splits["validation_select"]
     validation_calibrate = splits["validation_calibrate"]
     test_split = splits["test"]
-    series_sets = {name: set(data.series.tolist()) for name, data in splits.items()}
-    names = list(series_sets)
+    identity_sets = {
+        name: set((data.chain if data.chain is not None else data.series).tolist()) for name, data in splits.items()
+    }
+    names = list(identity_sets)
     for index, left in enumerate(names):
         for right in names[index + 1 :]:
-            overlap = series_sets[left] & series_sets[right]
+            overlap = identity_sets[left] & identity_sets[right]
             if overlap:
-                raise ModelError(f"series crosses splits {left}/{right}: {next(iter(overlap))}")
+                raise ModelError(f"chain crosses splits {left}/{right}: {next(iter(overlap))}")
 
     candidates, candidate_metrics, candidate_train_metrics = _fit_candidates(train, validation_select, spec, config)
     chosen = _choose_candidate(candidate_metrics)

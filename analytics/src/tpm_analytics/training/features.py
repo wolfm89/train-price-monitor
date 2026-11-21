@@ -24,6 +24,8 @@ class Feature:
     source: str = "silver"
 
 
+# The names keep the historical "series" wording. Since the journey-identity change, the history
+# and label partitions are the journey chain, not the itinerary-keyed series.
 CORE_FEATURES: tuple[Feature, ...] = (
     Feature("price_eur", NUMERIC, source="resampled fare"),
     Feature("headroom_pct", NUMERIC, source="synthetic limit"),
@@ -181,6 +183,11 @@ def column_roles(spec: FeatureSpec) -> dict[str, Any]:
     enter the model matrix.
     """
     features = list(spec.names)
+    allowed_overlaps = {"headroom_pct", "hours_to_departure", "service_class"}
+    overlaps = (set(LABEL_COLUMNS) | set(AUDIT_COLUMNS)) & set(features)
+    unexpected = overlaps - allowed_overlaps
+    if unexpected:
+        raise ValueError(f"label/audit columns collide with features: {sorted(unexpected)}")
     labels = [name for name in LABEL_COLUMNS if name not in features]
     audit = [name for name in AUDIT_COLUMNS if name not in features and name not in labels]
     return {"version": 1, "features": features, "labels": labels, "audit": audit}

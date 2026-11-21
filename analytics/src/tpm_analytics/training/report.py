@@ -54,7 +54,11 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
     if evaluation.calibration_constant:
         warning_items.append("calibration labels are single-class; the shipped calibrator is constant")
     chain = stats.profile.get("chain", {})
-    if chain.get("ambiguous_predecessors") or chain.get("ambiguous_successors"):
+    if (
+        not chain.get("strict")
+        and (chain.get("ambiguous_predecessors") or chain.get("ambiguous_successors"))
+        and not any(item.startswith("ambiguous chain candidates") for item in warning_items)
+    ):
         warning_items.append(
             "ambiguous chain candidates: "
             f"{chain.get('ambiguous_predecessors', 0)} predecessors / "
@@ -322,12 +326,16 @@ def _report(
     chain = stats.profile.get("chain", {})
     chain_rows = [
         [
+            "yes" if chain.get("strict") else "no",
             chain.get("series", 0),
             chain.get("at_risk_series", 0),
             chain.get("at_risk_series_3plus", 0),
             chain.get("candidate_links", 0),
             chain.get("links", 0),
+            chain.get("links_3plus", 0),
             chain.get("chains", 0),
+            chain.get("identities", 0),
+            chain.get("singleton_chains", 0),
             chain.get("linked_series", 0),
             chain.get("largest_chain", 0),
             _p(chain.get("link_rate")),
@@ -335,7 +343,9 @@ def _report(
             _p(chain.get("series_link_rate")),
             chain.get("ambiguous_predecessors", 0),
             chain.get("ambiguous_successors", 0),
-            chain.get("dropped_candidates", 0),
+            chain.get("strict_dropped", 0),
+            chain.get("unused_candidates", 0),
+            chain.get("overlap_candidates", 0),
         ]
     ]
     chain_size_rows = [[size, count] for size, count in chain.get("size_histogram", []) if int(size) > 1]
@@ -344,13 +354,22 @@ def _report(
         [
             [
                 f"{chain_v2['departure_window'][0]}..{chain_v2['departure_window'][1]}",
+                chain_v2["v1_series"],
+                chain_v2["v1_linked_chains"],
                 chain_v2["v2_journeys"],
+                chain_v2["no_v1_counterpart"],
+                _p(chain_v2["no_v1_counterpart_share"]),
+                chain_v2["overlap_journeys"],
                 chain_v2["matched_journeys"],
                 _p(chain_v2["unmatched_share"]),
                 chain_v2["split_journeys"],
+                chain_v2["parallel_split_journeys"],
+                chain_v2["sequential_split_journeys"],
                 _p(chain_v2["split_rate"]),
-                chain_v2["matched_chains"],
-                chain_v2["merged_chains"],
+                chain_v2["matched_series"],
+                chain_v2["merged_series"],
+                chain_v2["same_itinerary_merges"],
+                chain_v2["different_itinerary_merges"],
                 _p(chain_v2["merge_rate"]),
             ]
         ]
@@ -373,7 +392,8 @@ def _report(
             duplicate.get("rows", 0),
             duplicate.get("duplicate_groups", 0),
             duplicate.get("duplicate_rows", 0),
-            _p(duplicate.get("duplicate_share")),
+            duplicate.get("extra_duplicate_rows", 0),
+            _p(duplicate.get("extra_duplicate_share")),
             duplicate.get("cross_sections_ge3", 0),
             duplicate.get("cross_sections_ge3_after_dedup", 0),
             duplicate.get("dependent_cross_sections", 0),
@@ -631,12 +651,16 @@ def _report(
     journey_week_table = _table(["week", "journeys", "same train (60 min)", "other train", "none"], journey_week_rows)
     chain_table = _table(
         [
+            "strict",
             "series",
             "at risk",
             "at risk (3+ obs)",
             "candidate links",
             "links",
-            "chains",
+            "links (3+ obs)",
+            "linked chains",
+            "identities",
+            "singleton chains",
             "linked series",
             "largest chain",
             "link rate",
@@ -644,24 +668,47 @@ def _report(
             "series link rate",
             "ambiguous predecessors",
             "ambiguous successors",
-            "dropped candidates",
+            "strict-dropped",
+            "unused candidates",
+            "overlap candidates",
         ],
         chain_rows,
     )
-    chain_size_table = _table(["chain size", "chains"], chain_size_rows)
+    chain_size_table = _table(["linked chain size", "chains"], chain_size_rows)
     chain_v2_table = _table(
         [
             "departure window",
+            "v1 series",
+            "v1 linked chains",
             "v2 journeys",
+            "no v1 counterpart",
+            "share",
+            "overlap journeys",
             "matched",
-            "unmatched",
+            "unmatched overlap",
             "split journeys",
+            "parallel splits",
+            "sequential splits",
             "split rate",
-            "matched chains",
-            "merged chains",
+            "matched series",
+            "merged series",
+            "same-itinerary merges",
+            "different-itinerary merges",
             "merge rate",
         ],
         chain_v2_rows,
+    )
+    chain_v2_section = (
+        "The v2 handover audit compares the v1 chains with the v2 `journey_id` sequence, per "
+        "`(journey_id, service_class)` because the v2 id does not distinguish service class. "
+        "`no v1 counterpart` counts sequences whose departure has no earlier v1 series at all; "
+        "the unmatched share uses only the overlap. A v2 sequence that matches several chains is "
+        "a split; a chain matched by several v2 sequences is a merge. The v2 id hashes the full "
+        "vehicle itinerary while the v1 series key includes arrival and transfers, so part of the "
+        "split/merge rate is itinerary granularity; the parallel/sequential and same/different "
+        "itinerary columns show how much.\n\n" + chain_v2_table
+        if chain_v2
+        else "No v2 rows are present in the source; the v2 handover audit is omitted."
     )
     scrape_gap_table = _table(
         ["era", "TTD band", "scrapes", "median gap (h)", "without 24 h successor"],
@@ -669,10 +716,11 @@ def _report(
     )
     duplicate_table = _table(
         [
-            "rows",
+            "pre-resampling rows",
             "duplicate groups",
-            "duplicate rows",
-            "duplicate share",
+            "rows in duplicate groups",
+            "extra duplicate rows",
+            "extra duplicate share",
             "cross-sections >=3",
             "cross-sections >=3 after dedup",
             "dependent cross-sections",
@@ -838,7 +886,10 @@ def _report(
     journey_disappeared = int(journey.get("disappeared", 0))
     journey_share = _p(journey.get("share"))
     journey_share_at_risk = _p(journey.get("share_at_risk"))
+    journey_censored = int(journey.get("censored_at_risk", 0))
+    journey_share_censored = _p(journey.get("share_censored_at_risk"))
     journey_none = sum(item["journeys"] for item in journey.get("groups", []) if item["successor"] == "none")
+    journey_none_60 = sum(item["journeys"] for item in journey.get("groups", []) if item["successor_60"] == "none")
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -961,7 +1012,7 @@ def _report(
         "- Counts are from the configured route-day sample, not the full silver corpus; bootstrap "
         "intervals resample departure dates within that sample.\n"
         "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
-        "uses the pooled calibrator, so PR 1 and PR 2 per-headroom numbers are not like-for-like. "
+        "uses the pooled calibrator, so earlier per-headroom numbers are not like-for-like. "
         "The near-zero gap and slope near 1 follow from cross-fitting by route-day on the same "
         "evaluation rows.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
@@ -1023,7 +1074,7 @@ By observation week:
 
 {label_week_table}
 
-A29-like fixed 5 % comparison:
+Fixed 5 % comparison:
 
 {a29_table}
 
@@ -1043,16 +1094,22 @@ Single future scrape lag:
 
 {two_plus_week_table}
 
-### Journey disappearance
+### Journey disappearance (series-level, pre-chain diagnostic)
 
-- Journeys with at least 3 observations: **{journey_total:,}**
+This section uses the pre-chain `series_key`, the whole sampled panel (all TTD bands, before
+resampling) and a three-observation threshold. It is a series-level diagnostic; the chain table
+below is the identity used by the label and the model.
+
+- Series with at least 3 observations: **{journey_total:,}**
 - At risk (last observation more than 24 h before departure): **{journey_at_risk:,}**
-- Disappeared while the route-day was still scraped: **{journey_disappeared:,}** of all journeys
-  ({journey_share}); {journey_share_at_risk} of at-risk
-- Successor `none`: **{journey_none:,}** (no new series started at the next route-day scrape
-  within 60 minutes; the count is invariant to the 15/60-minute same-train rule)
+- Observed to disappear at the next route-day scrape: **{journey_disappeared:,}** of all series
+  ({journey_share}); {journey_share_at_risk} of at-risk. The remaining {journey_censored:,}
+  at-risk series ({journey_share_censored}) had no later scrape before departure and are censored,
+  so they are not evidence of disappearance.
+- Successor `none`: **{journey_none:,}** under the 15-minute rule and **{journey_none_60:,}** under
+  the 60-minute rule (no new series started at the next route-day scrape within that window)
 - `same train` requires a new series (`first_obs`) at the next scrape with the same class and train
-  number and a planned departure within 15 minutes; the 60-minute rule is the A31 comparison and
+  number and a planned departure within 15 minutes; the 60-minute rule is the wider comparison and
   counts departures shifted by 15-60 minutes that the 15-minute rule classifies as `other train`
 - This section is corpus-level and includes test-split departures; it is not gated by
   `--evaluate-test`.
@@ -1067,38 +1124,45 @@ By observation week (60-minute rule):
 
 A chain links a series that stops appearing to the next series with the same route, class and
 first-train number, a planned departure within 15 minutes and its first observation at the next
-route-day scrape. Links are one-to-one; the closest departure wins. `link rate` is links divided by
-series that have a next route-day scrape before departure; `series link rate` divides by all
-series. The chain id is used for the label window, the history features and the split assignment.
-`strict` builds drop every candidate whose predecessor or successor has more than one candidate.
+route-day scrape. Links are one-to-one; the matcher maximises the number of links and tries the
+closest departure first. `link rate` is links divided by series that have a next route-day scrape
+before departure; `series link rate` divides by all series. The chain id is used for the label
+window, the history features and the split assignment. `linked chains` counts components with at
+least two series; `identities` also counts singleton series. `strict` builds drop every candidate
+whose predecessor or successor has more than one candidate. `unused candidates` includes strict
+drops and fully matched conflicts; `overlap candidates` are re-keys that appear in the same scrape
+as the predecessor's last observation and are deliberately not chained.
+
+This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and
+include test departures. They are not the 24 h-30 d model domain.
 
 {chain_table}
 
 {chain_size_table}
 
-The v2 overlap compares the v1 chains with the v2 `journey_id` sequence, per `(journey_id,
-service_class)` because the v2 id does not distinguish service class. A v2 sequence that matches
-several chains is a split; a chain that matches several v2 sequences is a merge. This audit needs
-v2 rows and is omitted for a v1-only source.
+{chain_v2_section}
 
-{chain_v2_table}
-
-### Key audit (A20)
+### Same-scrape key audit
 
 {duplicate_table}
 
-`duplicate share` counts rows in a same-scrape `(series_key, observed_at)` group, including the
-first one. `dependent cross-sections` are route-day x class x scrape cross-sections that reach the
-three-peer threshold before dedup and fall below it after. `price_rank_route_day` counts every
-journey in the scrape before resampling; the 15-minute series buckets are floored, so the bucket
-midpoint sits at `:07:30` and a departure shift of up to 7.5 minutes stays in the same bucket.
+`rows in duplicate groups` includes the first row of each same-scrape `(series_key, observed_at)`
+group; `extra duplicate rows` and `extra duplicate share` count only the redundant rows. The
+denominator is the pre-resampling sampled panel. `dependent cross-sections` are route-day x class x
+scrape cross-sections that reach the three-peer threshold before dedup and fall below it after.
+`price_rank_route_day` counts every journey in the scrape before resampling. The 15-minute series
+buckets are rounded, so the bucket centres are at `:00 / :15 / :30 / :45` and the edges at
+`:07:30 / :22:30 / :37:30 / :52:30`.
 
-### Route-day scrape cadence (A3)
+### Route-day scrape cadence
 
 {scrape_gap_table}
 
-The band is the time from the scrape to noon UTC on the departure date, matching the scraper's
-target tier. `without 24 h successor` counts the last scrape of a route-day or a gap above 24 h.
+This is a pre-fix, full-corpus, v1-only baseline (departures through the test end), not the
+route-day sample and not the current schedule. The dense medians reproduce the old tier intervals;
+the current schedule is NEAR 24 h, MID 8 d and FAR 16 d. The band is the time from the scrape to
+noon UTC on the departure date. `without 24 h successor` counts the last scrape of a route-day or
+a gap above 24 h; the median excludes the null last-scrape gap.
 
 ### Unlabelled shares
 
@@ -1166,7 +1230,7 @@ Negative Brier differences mean the model is better than the baseline.
 
 Per-headroom rows use a separate out-of-fold calibration fitted on that headroom's labels; the
 shipped model uses the pooled calibrator. These are diagnostic and are not directly comparable with
-the PR 1 pooled-calibrator table. The near-zero calibration gap and slope near 1 follow from
+the pooled-calibrator table. The near-zero calibration gap and slope near 1 follow from
 cross-fitting by route-day on the same evaluation rows: same-date shocks appear in both the fit and
 predict folds. The diagnostic probabilities rise with headroom on
 {_p(evaluation.metrics.get("headroom_diagnostic_nonmonotone_share"))} of rows; the shipped pooled
@@ -1254,12 +1318,15 @@ def write_report(
         f"{item['split']}:{item.get('sum64')}:{item.get('xor64')}" for item in dataset_manifest.get("dataset_files", [])
     )
     evaluation_hash = hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
+    git_sha = dataset_manifest.get("git_sha") or "unknown"
+    chain_mode = "strict" if dataset_manifest.get("chains", {}).get("strict") else "default"
     provenance_lines = (
-        f"- Git: `{dataset_manifest.get('git_sha')}` (dirty: "
+        f"- Git: `{git_sha}` (dirty: "
         f"{'unknown' if dataset_manifest.get('git_dirty') is None else dataset_manifest.get('git_dirty')})\n"
         f"- Silver build: `{dataset_manifest.get('silver_build_id')}`\n"
         f"- Build config hash: `{dataset_manifest.get('config_sha256')}`\n"
         f"- Evaluation config hash: `{evaluation_hash}`\n"
+        f"- Chain mode: `{chain_mode}`\n"
         f"- Dataset digests: `{digests}`"
     )
     (out_dir / "report.md").write_text(
@@ -1330,10 +1397,11 @@ def write_report(
         f"predictions/{evaluation.prediction_split}.parquet",
         "model.joblib",
     ]
+    missing_artifacts = [relative for relative in manifest["artifacts"] if not (out_dir / relative).is_file()]
+    if missing_artifacts:
+        raise RuntimeError(f"report artifacts are missing: {missing_artifacts}")
     manifest["artifact_sha256"] = {
-        relative: hashlib.sha256((out_dir / relative).read_bytes()).hexdigest()
-        for relative in manifest["artifacts"]
-        if (out_dir / relative).is_file()
+        relative: hashlib.sha256((out_dir / relative).read_bytes()).hexdigest() for relative in manifest["artifacts"]
     }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"

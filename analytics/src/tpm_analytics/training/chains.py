@@ -1,18 +1,19 @@
 """Journey identity chains for the v1 baseline.
 
-The series key follows the itinerary: route, first-train number, class and 15-minute buckets for
-the planned departure, arrival and transfer count. When the itinerary is re-keyed (usually because
+The series key follows the itinerary: route, first-train number, class, 15-minute buckets for the
+planned departure and arrival, and the exact transfer count. When the itinerary is re-keyed (usually because
 the arrival moved), the fare history and the label window split. A chain links a series that stops
 appearing to the series with the same route, class and first-train number whose planned departure
 is within 15 minutes and whose first observation is the next route-day scrape.
 
-Links are one-to-one. Candidate pairs are assigned in departure-distance order, so the closest
-departure wins; equal distances fall back to the series keys for a deterministic result. The chain
-id is the lexicographically smallest series key in the component.
+Links are one-to-one. The matcher maximises the number of links and tries the closest departure
+first; equal distances fall back to the series keys for a deterministic result. The chain id is the
+lexicographically smallest series key in the component.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,14 +34,19 @@ class ChainStats:
     candidate_links: int
     ambiguous_predecessors: int
     ambiguous_successors: int
-    dropped_candidates: int
+    strict_dropped: int
+    unused_candidates: int
+    overlap_candidates: int
     links: int
+    links_3plus: int
     chains: int
+    identities: int
+    singleton_chains: int
     linked_series: int
     largest_chain: int
-    link_rate: float
-    link_rate_3plus: float
-    series_link_rate: float
+    link_rate: float | None
+    link_rate_3plus: float | None
+    series_link_rate: float | None
     size_histogram: tuple[tuple[int, int], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -52,9 +58,14 @@ class ChainStats:
             "candidate_links": self.candidate_links,
             "ambiguous_predecessors": self.ambiguous_predecessors,
             "ambiguous_successors": self.ambiguous_successors,
-            "dropped_candidates": self.dropped_candidates,
+            "strict_dropped": self.strict_dropped,
+            "unused_candidates": self.unused_candidates,
+            "overlap_candidates": self.overlap_candidates,
             "links": self.links,
+            "links_3plus": self.links_3plus,
             "chains": self.chains,
+            "identities": self.identities,
+            "singleton_chains": self.singleton_chains,
             "linked_series": self.linked_series,
             "largest_chain": self.largest_chain,
             "link_rate": self.link_rate,
@@ -65,10 +76,14 @@ class ChainStats:
 
 
 def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
-    row = connection.execute(sql).fetchone()
-    if row is None:
+    rows = connection.execute(sql).fetchall()
+    if not rows:
         raise RuntimeError(f"query returned no row: {sql[:80]}")
-    return int(row[0])
+    return int(rows[0][0])
+
+
+def _optional_rate(numerator: int, denominator: int) -> float | None:
+    return None if denominator == 0 else numerator / denominator
 
 
 def _pyarrow_table(rows: list[tuple[str, str]], names: tuple[str, ...]) -> pa.Table:
@@ -102,6 +117,7 @@ def _match_candidates(
     connection: duckdb.DuckDBPyConnection,
     prefix: str,
 ) -> list[tuple[str, str]]:
+    """Return a maximum-cardinality one-to-one matching, closest departure first."""
     rows = connection.execute(
         f"""
         SELECT predecessor, successor, departure_delta_s
@@ -109,16 +125,53 @@ def _match_candidates(
         ORDER BY departure_delta_s, predecessor, successor
         """
     ).fetchall()
-    used_predecessors: set[str] = set()
-    used_successors: set[str] = set()
-    links: list[tuple[str, str]] = []
-    for predecessor, successor, _ in rows:
-        if predecessor in used_predecessors or successor in used_successors:
-            continue
-        used_predecessors.add(predecessor)
-        used_successors.add(successor)
-        links.append((str(predecessor), str(successor)))
-    return links
+    adjacency: dict[str, list[str]] = {}
+    deltas: dict[tuple[str, str], int] = {}
+    for predecessor, successor, delta in rows:
+        left = str(predecessor)
+        right = str(successor)
+        adjacency.setdefault(left, []).append(right)
+        deltas[(left, right)] = int(delta)
+
+    pair_left: dict[str, str] = {}
+    pair_right: dict[str, str] = {}
+    distance: dict[str, int] = {}
+
+    def bfs() -> bool:
+        queue: deque[str] = deque()
+        for left in adjacency:
+            if left not in pair_left:
+                distance[left] = 0
+                queue.append(left)
+            else:
+                distance[left] = -1
+        found = False
+        while queue:
+            left = queue.popleft()
+            for right in adjacency[left]:
+                matched = pair_right.get(right)
+                if matched is None:
+                    found = True
+                elif distance.get(matched, -1) < 0:
+                    distance[matched] = distance[left] + 1
+                    queue.append(matched)
+        return found
+
+    def dfs(left: str) -> bool:
+        for right in adjacency[left]:
+            matched = pair_right.get(right)
+            if matched is None or (distance.get(matched) == distance[left] + 1 and dfs(matched)):
+                pair_left[left] = right
+                pair_right[right] = left
+                return True
+        distance[left] = -1
+        return False
+
+    while bfs():
+        for left in adjacency:
+            if left not in pair_left:
+                dfs(left)
+    return sorted(pair_left.items(), key=lambda item: (deltas[item], item[0], item[1]))
 
 
 def _chain_components(links: list[tuple[str, str]]) -> dict[str, str]:
@@ -161,6 +214,8 @@ def build_chain_map(
             min(train_number) AS train_number,
             min(service_class) AS service_class,
             min(departure_planned) AS departure_planned,
+            arg_min(departure_planned, observed_at) AS first_departure,
+            arg_max(departure_planned, observed_at) AS last_departure,
             min(observed_at) AS first_obs,
             max(observed_at) AS last_obs,
             count(DISTINCT observed_at) AS observations
@@ -177,7 +232,7 @@ def build_chain_map(
           ON g.route_id = s.route_id
          AND g.departure_date = s.departure_date
          AND g.observed_at > s.last_obs
-         AND g.observed_at < s.departure_planned
+         AND g.observed_at < s.last_departure
         GROUP BY ALL
         """
     )
@@ -187,15 +242,15 @@ def build_chain_map(
         SELECT
             n.series_key AS predecessor,
             ns.series_key AS successor,
-            abs(date_diff('second', ns.departure_planned, n.departure_planned)) AS departure_delta_s
+            abs(date_diff('second', ns.first_departure, n.last_departure)) AS departure_delta_s
         FROM {prefix}_next n
         JOIN {prefix}_series ns
           ON ns.route_id = n.route_id
          AND ns.departure_date = n.departure_date
          AND ns.first_obs = n.next_s
-         AND ns.service_class = n.service_class
+         AND ns.service_class IS NOT DISTINCT FROM n.service_class
          AND ns.train_number IS NOT DISTINCT FROM n.train_number
-         AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= {LINK_TOLERANCE_SECONDS}
+         AND abs(date_diff('second', ns.first_departure, n.last_departure)) <= {LINK_TOLERANCE_SECONDS}
         """
     )
     series = _scalar(connection, f"SELECT count(*) FROM {prefix}_series")
@@ -229,6 +284,25 @@ def build_chain_map(
     links = _match_candidates(connection, prefix)
     connection.register(f"{prefix}_link_data", _pyarrow_table(links, ("predecessor", "successor")))
     connection.execute(f"CREATE OR REPLACE TEMP TABLE {prefix}_links AS SELECT * FROM {prefix}_link_data")
+    links_3plus = _scalar(
+        connection,
+        f"SELECT count(*) FROM {prefix}_links l "
+        f"JOIN {prefix}_series s ON s.series_key = l.predecessor WHERE s.observations >= 3",
+    )
+    overlap_candidates = _scalar(
+        connection,
+        f"""
+        SELECT count(*)
+        FROM {prefix}_series n
+        JOIN {prefix}_series ns
+          ON ns.route_id = n.route_id
+         AND ns.departure_date = n.departure_date
+         AND ns.service_class IS NOT DISTINCT FROM n.service_class
+         AND ns.train_number IS NOT DISTINCT FROM n.train_number
+         AND ns.first_obs = n.last_obs
+         AND abs(date_diff('second', ns.first_departure, n.last_departure)) <= {LINK_TOLERANCE_SECONDS}
+        """,
+    )
     mapping = _chain_components(links)
     connection.register(
         f"{prefix}_component_data",
@@ -266,6 +340,8 @@ def build_chain_map(
     for size in sizes.values():
         histogram[size] = histogram.get(size, 0) + 1
     linked_series = sum(sizes.values())
+    linked_chains = len(sizes)
+    identities = series - linked_series + linked_chains
     return ChainStats(
         strict=strict,
         series=series,
@@ -274,13 +350,18 @@ def build_chain_map(
         candidate_links=candidates,
         ambiguous_predecessors=ambiguous_predecessors,
         ambiguous_successors=ambiguous_successors,
-        dropped_candidates=candidates - remaining,
+        strict_dropped=candidates - remaining,
+        unused_candidates=candidates - len(links),
+        overlap_candidates=overlap_candidates,
         links=len(links),
-        chains=len(sizes),
+        links_3plus=links_3plus,
+        chains=linked_chains,
+        identities=identities,
+        singleton_chains=series - linked_series,
         linked_series=linked_series,
         largest_chain=max(sizes.values(), default=0),
-        link_rate=len(links) / at_risk if at_risk else 0.0,
-        link_rate_3plus=len(links) / at_risk_3plus if at_risk_3plus else 0.0,
-        series_link_rate=linked_series / series if series else 0.0,
+        link_rate=_optional_rate(len(links), at_risk),
+        link_rate_3plus=_optional_rate(links_3plus, at_risk_3plus),
+        series_link_rate=_optional_rate(linked_series, series),
         size_histogram=tuple(sorted(histogram.items())),
     )

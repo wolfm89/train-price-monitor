@@ -35,13 +35,15 @@ def series_key_sql() -> str:
     """Return the v1 itinerary key expression.
 
     The key follows the itinerary, not the train: it includes the arrival and transfer count, and
-    both planned times are floored to 15-minute buckets. A re-keyed itinerary therefore starts a
-    new series; :mod:`tpm_analytics.training.chains` links it back to its predecessor.
+    rounds both planned times to the nearest 15-minute bucket. The bucket edges therefore sit at
+    ``:07:30 / :22:30 / :37:30 / :52:30`` and the centres at ``:00 / :15 / :30 / :45``. An arrival
+    or transfer change starts a new series; :mod:`tpm_analytics.training.chains` links it back to
+    its predecessor.
     """
     return (
         "'v1:' || sha256(concat_ws('|', "
         "route_id, coalesce(train_number, ''), service_class, "
-        "CAST(epoch(departure_planned) / 900 AS BIGINT), "
-        "CAST(epoch(arrival_planned) / 900 AS BIGINT), "
+        "CAST(round(epoch(departure_planned) / 900) AS BIGINT), "
+        "CAST(round(epoch(arrival_planned) / 900) AS BIGINT), "
         "coalesce(transfers_actual, -1)))"
     )

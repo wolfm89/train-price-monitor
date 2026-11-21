@@ -389,7 +389,7 @@ provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 
 The label is the maximum over scraped observations in the next 24 hours (often one scrape about
 13 hours ahead). The domain is `24 h <= hours_to_departure <= 30 d`; the test split is a
-future-**departure** cohort, not a future-era holdout. Since PR 3 the label window and the
+future-**departure** cohort, not a future-era holdout. Since the journey-identity change the label window and the
 history features follow the **journey chain**, not the itinerary-keyed series: a series that stops
 appearing is linked to the next series with the same route, class and first-train number, a planned
 departure within 15 minutes and its first observation at the next route-day scrape. Links are

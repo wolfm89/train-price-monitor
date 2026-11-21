@@ -2,7 +2,9 @@
 
 The pipeline stays in SQL until the model matrix: DuckDB handles the 100M-row scan, the exact
 forward-looking label window (a numeric ``RANGE`` frame over epoch hours), the route-day
-cross-section and the calendar join. Every step is a view so DuckDB can keep the plan lazy.
+cross-section and the calendar join. Most steps are views so DuckDB can keep the plan lazy; the
+sampled panel, chain map, scrape grid, snapshot and check tables are materialised where they are
+reused.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from tpm_analytics.training.bands import JOURNEY_BANDS, ttd_band_case
 from tpm_analytics.training.chains import ChainStats, build_chain_map
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import AUDIT_COLUMNS, LABEL_COLUMNS, column_roles, feature_spec
-from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
+from tpm_analytics.training.identity import LINK_TOLERANCE_SECONDS, berlin_week_sql, series_key_sql
 from tpm_analytics.training.sources import SourceSpec
 
 
@@ -94,7 +96,7 @@ def _dict_rows(connection: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str
 def _git_state() -> tuple[str | None, bool | None]:
     """Return the checkout's HEAD and dirty flag.
 
-    ``git status`` runs at the repository root, so a change in any module marks the run dirty.
+    ``git status`` runs from the analytics directory, so a change in any module marks the run dirty.
     The flag is conservative: a clean flag means the whole checkout matches HEAD, and a
     false-positive dirty flag is preferred over claiming provenance the run cannot prove.
     Unknown git state (a wheel outside a checkout) is returned as ``(None, None)``.
@@ -160,7 +162,7 @@ def _source_inventory(connection: duckdb.DuckDBPyConnection, source: SourceSpec)
             continue
         inventory.append(
             {
-                "path": str(path),
+                "path": path.resolve().as_posix(),
                 "bytes": path.stat().st_size,
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             }
@@ -272,7 +274,8 @@ def _create_views(
     threshold = max(1, round(config.sample.sample_rate * 10000))
     if config.sample.max_route_days is None:
         connection.execute(
-            f"CREATE OR REPLACE TEMP VIEW base_sampled AS SELECT * FROM base_all WHERE route_day_hash < {threshold}"
+            f"CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all "
+            f"WHERE route_day_hash < {threshold}"
         )
     else:
         connection.execute(
@@ -283,10 +286,13 @@ def _create_views(
             f") ORDER BY route_day_hash, route_id, departure_date LIMIT {config.sample.max_route_days}"
         )
         connection.execute(
-            "CREATE OR REPLACE TEMP VIEW base_sampled AS "
+            "CREATE OR REPLACE TEMP VIEW base_sampled_view AS "
             "SELECT b.* FROM base_all b JOIN selected_route_days s "
             "USING (route_id, departure_date)"
         )
+    # The chain map, cross-section, dedup and profile audits all read this panel. Materialise it
+    # once instead of re-scanning and re-hashing the source for each consumer.
+    connection.execute("CREATE OR REPLACE TEMP TABLE base_sampled AS SELECT * FROM base_sampled_view")
     connection.execute(
         """
         CREATE OR REPLACE TEMP TABLE scrape_grid AS
@@ -461,7 +467,7 @@ def _create_views(
                 THEN {resample.outer_bin_hours} ELSE {resample.inner_bin_hours} END AS bin_width_hours,
             row_number() OVER (
                 PARTITION BY
-                    series_key,
+                    chain_id,
                     CASE WHEN hours_to_departure > {resample.outer_threshold_hours} THEN '12h' ELSE '1h' END,
                     CASE
                         WHEN hours_to_departure > {resample.outer_threshold_hours}
@@ -919,7 +925,6 @@ def _label_window_profile(
 def _profile(
     connection: duckdb.DuckDBPyConnection,
     chain_stats: ChainStats,
-    source: SourceSpec,
     source_sql: str,
 ) -> dict[str, Any]:
     headroom = connection.execute(
@@ -1140,7 +1145,7 @@ def _profile(
                 min(service_class) AS service_class,
                 min(observed_at) AS first_obs,
                 max(observed_at) AS last_obs,
-                count(*) AS observations
+                count(DISTINCT observed_at) AS observations
             FROM series_obs
             GROUP BY series_key
         ),
@@ -1253,7 +1258,7 @@ def _profile(
     disappeared = sum(int(row[2]) for row in journey_groups)
     return {
         "chain": chain_stats.to_dict(),
-        "chain_v2": v2_chain_audit(connection, source, source_sql),
+        "chain_v2": v2_chain_audit(connection, source_sql, strict=chain_stats.strict),
         "duplicates": duplicate_audit(connection),
         "scrape_gap": scrape_gap_audit(connection),
         "headroom": [
@@ -1331,8 +1336,11 @@ def _profile(
             "total_journeys": total_journeys,
             "at_risk": at_risk,
             "disappeared": disappeared,
+            "at_risk_with_next_scrape": disappeared,
+            "censored_at_risk": max(0, at_risk - disappeared),
             "share": 0.0 if total_journeys == 0 else disappeared / total_journeys,
             "share_at_risk": 0.0 if at_risk == 0 else disappeared / at_risk,
+            "share_censored_at_risk": 0.0 if at_risk == 0 else max(0, at_risk - disappeared) / at_risk,
             "groups": [
                 {
                     "band": str(row[3]),
@@ -1410,7 +1418,7 @@ def build_dataset(
     selected = ", ".join(columns)
     split_names = ("train", "validation_select", "validation_calibrate", "test")
     splits = _split_stats(connection)
-    profile = _profile(connection, chain_stats, source, source_sql)
+    profile = _profile(connection, chain_stats, source_sql)
     if {item.split for item in splits} != set(split_names):
         raise DatasetError(f"missing split(s): {sorted({item.split for item in splits})}")
 
@@ -1440,6 +1448,15 @@ def build_dataset(
         warnings.append(f"panel has {total_rows} rows; above the 5M target, reduce sample_rate")
     if total_rows < 2_000_000:
         warnings.append(f"panel has {total_rows} rows; below the 2M target, raise sample_rate")
+    if not chain_stats.strict and (chain_stats.ambiguous_predecessors or chain_stats.ambiguous_successors):
+        warnings.append(
+            "ambiguous chain candidates: "
+            f"{chain_stats.ambiguous_predecessors} predecessors / "
+            f"{chain_stats.ambiguous_successors} successors; run --strict-chains"
+        )
+    source_inventory = _source_inventory(connection, source)
+    if not source_inventory:
+        warnings.append("source inventory is empty; the scanned file set is not localisable")
     stats = replace(stats, warnings=tuple(warnings))
     git_sha, git_dirty = _git_state()
 
@@ -1465,13 +1482,15 @@ def build_dataset(
                 }
             )
 
+    roles_payload = column_roles(spec)
+    roles_bytes = (json.dumps(roles_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     manifest = {
-        "manifest_version": 2,
+        "manifest_version": 3,
         "run_id": run_id,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source": source.label,
         "source_rows": source_rows,
-        "source_inventory": _source_inventory(connection, source),
+        "source_inventory": source_inventory,
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "uv_lock_sha256": _lock_sha256(),
@@ -1486,12 +1505,14 @@ def build_dataset(
         "calendar_feature_set": calendar_set,
         "features": list(spec.names),
         "column_roles": "column_roles.json",
+        "column_roles_sha256": hashlib.sha256(roles_bytes).hexdigest(),
         "chains": {
             "strict": chain_stats.strict,
-            "link_tolerance_seconds": 900,
+            "link_tolerance_seconds": LINK_TOLERANCE_SECONDS,
             "links": chain_stats.links,
             "link_rate": chain_stats.link_rate,
         },
+        "strict_chains": strict_chains,
         "resample": {
             "outer_bin_hours": config.resample.outer_bin_hours,
             "outer_threshold_hours": config.resample.outer_threshold_hours,
@@ -1531,9 +1552,7 @@ def build_dataset(
         "package_versions": _package_versions(),
         "warnings": list(warnings),
     }
-    (out_dir / "column_roles.json").write_text(
-        json.dumps(column_roles(spec), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    (out_dir / "column_roles.json").write_bytes(roles_bytes)
     (out_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )

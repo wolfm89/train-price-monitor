@@ -129,7 +129,8 @@ v2-only and mixed-schema input.
   journey disappearance is corpus-level and includes test departures. `profile.json` and
   `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
 - **Journey identity (L12).** The series key follows the itinerary (route, first train, class,
-  arrival and transfers in 15-minute buckets). When a series stops appearing, the chain links it to
+  15-minute departure and arrival buckets, and the exact transfer count). When a series stops
+  appearing, the chain links it to
   the next series with the same route, class and first-train number, a planned departure within
   15 minutes and its first observation at the next route-day scrape. Links are one-to-one; the
   closest departure wins. The chain id, not `series_key`, is the identity for the label window,
@@ -137,9 +138,9 @@ v2-only and mixed-schema input.
   journey; a different train or a departure shift above 15 minutes does not. `--strict-chains`
   drops every candidate whose predecessor or successor has more than one candidate and is the
   sensitivity run, not the default.
-- The 15-minute series buckets are floored, so the bucket midpoint sits at `:07:30` and a
-  departure shift of up to 7.5 minutes stays in the same bucket. `price_rank_route_day` ranks
-  every priced journey in
+- The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
+  their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
+  starts a new series. `price_rank_route_day` ranks every priced journey in
   the route-day x class x scrape cross-section before resampling; route-day sampling keeps the
   whole cross-section. `column_roles.json` records which output columns are features, labels or
   audit so a new diagnostic cannot quietly enter the model matrix.
