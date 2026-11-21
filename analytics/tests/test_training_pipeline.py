@@ -1980,7 +1980,6 @@ def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
     raw["report"]["min_eligible_rows"] = 0
     raw["report"]["min_split_positives"] = 0
     raw["report"]["min_band_positives"] = 0
-    raw["report"]["min_label_coverage"] = 0.0
     config_path = tmp_path / "future.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -2091,7 +2090,6 @@ def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
     raw["report"]["min_eligible_rows"] = 0
     raw["report"]["min_split_positives"] = 0
     raw["report"]["min_band_positives"] = 0
-    raw["report"]["min_label_coverage"] = 0.0
     config_path = tmp_path / "empty-split.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -2159,6 +2157,16 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert (out / "dataset" / "train.parquet").is_file()
+
+
+def test_config_rejects_out_of_range_check_windows(tmp_path: Path) -> None:
+    for window in ([19, 28], [20, 29], [20], [20, "28"]):
+        raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+        raw["label"]["check_window_hours"] = window
+        path = tmp_path / f"window-{window}.json"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(ConfigError):
+            load_config(path)
 
 
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
@@ -2306,7 +2314,6 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     raw["report"]["min_eligible_rows"] = 0
     raw["report"]["min_split_positives"] = 0
     raw["report"]["min_band_positives"] = 0
-    raw["report"]["min_label_coverage"] = 0.0
     config_path = tmp_path / "lag.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)

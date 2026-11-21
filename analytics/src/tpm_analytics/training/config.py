@@ -292,6 +292,13 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
     ):
         raise ConfigError("every config section must be an object")
 
+    check_window = label_raw.get("check_window_hours")
+    if (
+        not isinstance(check_window, list)
+        or len(check_window) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in check_window)
+    ):
+        raise ConfigError("label.check_window_hours must be a two-integer list")
     config = TrainingConfig(
         version=_int(raw, "version", minimum=1),
         seed=_int(raw, "seed", minimum=0),
@@ -309,10 +316,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
         label=LabelConfig(
             estimand=_str(label_raw, "estimand"),
             horizon_hours=_int(label_raw, "horizon_hours", minimum=1),
-            check_window_hours=(
-                int(label_raw["check_window_hours"][0]),
-                int(label_raw["check_window_hours"][1]),
-            ),
+            check_window_hours=(check_window[0], check_window[1]),
             min_hours_to_departure=_int(label_raw, "min_hours_to_departure", minimum=1),
             max_hours_to_departure=_int(label_raw, "max_hours_to_departure", minimum=1),
             headroom_pct=tuple(int(value) for value in label_raw.get("headroom_pct", [])),
