@@ -715,7 +715,7 @@ def _report(
         "`(journey_id, service_class)` because the v2 id does not distinguish service class. "
         "v1 and v2 never share a scrape, so this is a **handover diagnostic, not a link-precision "
         "check**; the sequential splits are possible missed links. A v2-internal `journey_id` "
-        "precision/recall audit is scheduled for PR 4/7. `no v1 counterpart` counts sequences "
+        "precision/recall audit is scheduled for a later training stage. `no v1 counterpart` counts sequences "
         "whose departure has no earlier v1 series at all; the unmatched share uses only the "
         "overlap. A v2 sequence that matches several chains is a split; a chain matched by several "
         "v2 sequences is a merge. The v2 id hashes the full vehicle itinerary while the v1 series "
@@ -1023,12 +1023,13 @@ def _report(
         "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
         "validation-select rows.\n"
         "- Test-split label and model diagnostics are gated by `--evaluate-test`. Journey "
-        "disappearance, chains, duplicates and scrape cadence are dataset-wide and include test "
-        "departures; the v2 handover cohort is after the test window.\n"
+        "disappearance, chains, duplicates and scrape cadence are dataset-wide; the scrape-cadence "
+        "table includes test departures and runs through the last v1 departure. The v2 handover "
+        "cohort is after the test window.\n"
         "- Dataset counts use the configured route-day sample; the chain, duplicate and "
         "scrape-cadence sections state their own pre-resampling or full-corpus scope. Bootstrap "
         "intervals resample departure dates within the sample.\n"
-        "- The PR 2 -> PR 3 and default -> strict comparisons are unpaired. The observed Brier "
+        "- The before/after and default -> strict comparisons are unpaired. The observed Brier "
         "differences are within refit noise at this sample size (dropping 200 random train rows "
         "moves the Brier by about 0.0003-0.0005); the default chain mode is kept by rule, not by "
         "the metric.\n"
@@ -1158,8 +1159,8 @@ as the predecessor's last observation and are deliberately not chained.
 The link decision uses the predecessor's full observation history: a series is linked only if it
 never returns after the gap. On this corpus 858 of 6,407 links (about 12 % of the offline+online link
 events) would be decided differently by an online rule. Features at successor snapshots before a
-returning predecessor are therefore not strictly point-in-time; PR 4 decides links causally at the
-check.
+returning predecessor are therefore not strictly point-in-time; the next training stage decides
+links causally at the check.
 
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and
 include test departures. They are not the 24 h-30 d model domain.

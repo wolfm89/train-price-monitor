@@ -888,9 +888,18 @@ def test_chain_does_not_cross_departure_date(tmp_path: Path) -> None:
         _row(observed_at=datetime(2026, 7, 4, 10, 0), departure=first, route="midnight", train="ICE-MID", fare=80.0),
         _row(observed_at=datetime(2026, 7, 5, 10, 0), departure=first, route="midnight", train="ICE-MID", fare=81.0),
         _row(observed_at=datetime(2026, 7, 5, 22, 0), departure=first, route="midnight", train="ICE-FILL", fare=80.0),
-        _row(observed_at=datetime(2026, 7, 5, 22, 0), departure=second, route="midnight", train="ICE-MID", fare=90.0),
+        _row(
+            observed_at=datetime(2026, 7, 5, 22, 0),
+            departure=second,
+            arrival_planned=second + timedelta(hours=4, minutes=16),
+            route="midnight",
+            train="ICE-MID",
+            fare=90.0,
+        ),
     ]
     stats, _ = _build_chain_dataset(tmp_path, rows)
+    assert stats.profile["chain"]["at_risk_series"] == 1
+    assert stats.profile["chain"]["candidate_links"] == 0
     assert stats.profile["chain"]["links"] == 0
 
 
@@ -1641,6 +1650,7 @@ def test_column_roles_and_source_inventory(tmp_path: Path) -> None:
     assert set(roles["features"] + roles["labels"] + roles["audit"]) == set(_final_columns("full"))
     assert manifest["source_inventory"]
     assert all(item["sha256"] and item["bytes"] for item in manifest["source_inventory"])
+    assert manifest["dataset_peak_rss_kb"] > 0
 
 
 def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:

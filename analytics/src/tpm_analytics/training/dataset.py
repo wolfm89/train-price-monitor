@@ -1208,7 +1208,8 @@ def _profile(
                         WHERE ns.route_id = n.route_id
                           AND ns.departure_date = n.departure_date
                           AND ns.first_obs = n.next_s
-                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.train_number IS NOT NULL
+                          AND ns.train_number = n.train_number
                           AND ns.service_class = n.service_class
                           AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 900
                     ) THEN 'same_train'
@@ -1227,7 +1228,8 @@ def _profile(
                         WHERE ns.route_id = n.route_id
                           AND ns.departure_date = n.departure_date
                           AND ns.first_obs = n.next_s
-                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.train_number IS NOT NULL
+                          AND ns.train_number = n.train_number
                           AND ns.service_class = n.service_class
                           AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
                     ) THEN 'same_train'
@@ -1501,7 +1503,7 @@ def build_dataset(
         "source": source.label,
         "source_rows": source_rows,
         "source_inventory": source_inventory,
-        "peak_rss_kb": _peak_rss_kb(),
+        "dataset_peak_rss_kb": _peak_rss_kb(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "uv_lock_sha256": _lock_sha256(),
