@@ -14,6 +14,17 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: true,
+      // Coder's app proxy requires the session cookie, and a CORS preflight
+      // never carries one, so the browser cannot reach the backend app
+      // cross-origin. Proxy GraphQL through this dev server instead: the
+      // request is same-origin and Vite talks to the backend on loopback.
+      // `localhost`/IP hosts stay allowed, so running the dev server on a
+      // laptop is unaffected.
+      allowedHosts: ['.coder.local.home'],
+      proxy: {
+        '/graphql': 'http://127.0.0.1:4000',
+        '/health': 'http://127.0.0.1:4000',
+      },
     },
     build: {
       outDir: 'build',
@@ -49,7 +60,11 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       global: 'globalThis',
-      'process.env.REACT_APP_GRAPHQL_ENDPOINT': JSON.stringify(env.REACT_APP_GRAPHQL_ENDPOINT),
+      // Dev always talks to the local proxy (same origin); production keeps the
+      // configured endpoint. This makes `mise run env:local` rewrites harmless.
+      'process.env.REACT_APP_GRAPHQL_ENDPOINT': JSON.stringify(
+        mode === 'development' ? '/' : env.REACT_APP_GRAPHQL_ENDPOINT
+      ),
       'process.env.REACT_APP_COGNITO_USER_POOL_ID': JSON.stringify(cognitoUserPoolId),
       'process.env.REACT_APP_COGNITO_IDENTITY_POOL_ID': JSON.stringify(cognitoIdentityPoolId),
       'process.env.REACT_APP_COGNITO_CLIENT_ID': JSON.stringify(cognitoClientId),
