@@ -29,6 +29,7 @@ from tpm_analytics.training.model import (
     _calibration_stats,
     _cluster_mean_ci,
     _decision_value_rows,
+    _pooled_decision_value_rows,
     _strata_rows,
     _train_prevalence,
     fit_calibrator,
@@ -503,6 +504,169 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
     assert successors_60.get("other_train", 0) < successors.get("other_train", 0)
 
 
+def test_journey_next_scrape_stops_at_departure(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    source = tmp_path / "journey-boundary.parquet"
+    _write_silver(
+        source,
+        [
+            _row(
+                observed_at=datetime(2026, 7, 2, 10, 0),
+                departure=departure,
+                route="boundary",
+                train="ICE-EARLY",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 8, 0),
+                departure=departure,
+                route="boundary",
+                train="ICE-EARLY",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure,
+                route="boundary",
+                train="ICE-EARLY",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 5, 11, 0),
+                departure=datetime(2026, 7, 5, 18, 0),
+                route="boundary",
+                train="ICE-LATE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 5, 12, 0),
+                departure=datetime(2026, 7, 5, 18, 0),
+                route="boundary",
+                train="ICE-LATE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 5, 13, 0),
+                departure=datetime(2026, 7, 5, 18, 0),
+                route="boundary",
+                train="ICE-LATE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 15, 10, 0),
+                departure=datetime(2026, 7, 16, 10, 0),
+                route="select",
+                train="ICE-SELECT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 22, 10, 0),
+                departure=datetime(2026, 7, 23, 10, 0),
+                route="calibrate",
+                train="ICE-CAL",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 29, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE-TEST",
+                fare=80.0,
+            ),
+        ],
+    )
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="boundary", build_id=None, manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "boundary-run",
+            run_id="boundary",
+        )
+    finally:
+        connection.close()
+    journey = json.loads((tmp_path / "boundary-run" / "profile.json").read_text())["profile"]["journey"]
+    assert journey["total_journeys"] == 2
+    assert journey["at_risk"] == 1
+    assert journey["disappeared"] == 0
+    assert journey["groups"] == []
+
+
+def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
+    source = tmp_path / "mixed-tier.parquet"
+    rows = _rows()
+    rows.extend(
+        [
+            _row(
+                observed_at=datetime(2026, 7, 27, 10, 0),
+                departure=datetime(2026, 7, 28, 10, 0),
+                route="mixed-two",
+                train="ICE-MIX",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 27, 22, 0),
+                departure=datetime(2026, 7, 28, 10, 0),
+                route="mixed-two",
+                train="ICE-MIX",
+                fare=90.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 28, 9, 0),
+                departure=datetime(2026, 7, 28, 10, 0),
+                route="mixed-two",
+                train="ICE-MIX",
+                fare=90.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 27, 10, 0),
+                departure=datetime(2026, 7, 28, 12, 0),
+                route="mixed-one",
+                train="ICE-ONE",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 27, 22, 0),
+                departure=datetime(2026, 7, 28, 12, 0),
+                route="mixed-one",
+                train="ICE-ONE",
+                fare=90.0,
+            ),
+        ]
+    )
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_tier_rows"] = 1
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    out = tmp_path / "mixed-run"
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "--source",
+                str(source),
+                "--out",
+                str(out),
+                "--evaluate-test",
+            ]
+        )
+        == 0
+    )
+    metrics = json.loads((out / "metrics.json").read_text())
+    assert metrics["evaluation"]["test_evaluated"] is True
+    assert metrics["evaluation"]["test_tier"] == "two_plus_observations"
+    assert metrics["evaluation"]["test_tier_rows"] >= 1
+    assert (out / "predictions" / "test.parquet").is_file()
+
+
 def test_check_grid_and_coverage(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 5, 10, 0)
     source = tmp_path / "check-grid.parquet"
@@ -681,6 +845,78 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
     assert after[3] is None
     assert after[4] is None
     assert after[5] is None
+
+
+def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
+    snapshot = datetime(2026, 7, 3, 10, 0, 0, 900_000)
+    departure = snapshot + timedelta(hours=48)
+    target = snapshot + timedelta(hours=24)
+    source = tmp_path / "microseconds.parquet"
+    _write_silver(
+        source,
+        [
+            _row(observed_at=snapshot, departure=departure, route="subsecond", train="ICE-SUB", fare=80.0),
+            _row(
+                observed_at=target - timedelta(milliseconds=800),
+                departure=departure,
+                route="subsecond",
+                train="ICE-SUB",
+                fare=88.0,
+            ),
+            _row(
+                observed_at=target + timedelta(milliseconds=100),
+                departure=departure,
+                route="subsecond",
+                train="ICE-SUB",
+                fare=96.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 15, 10, 0),
+                departure=datetime(2026, 7, 16, 10, 0),
+                route="select",
+                train="ICE-SELECT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 22, 10, 0),
+                departure=datetime(2026, 7, 23, 10, 0),
+                route="calibrate",
+                train="ICE-CAL",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 29, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE-TEST",
+                fare=80.0,
+            ),
+        ],
+    )
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="microseconds", build_id=None, manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "microseconds-run",
+            run_id="microseconds",
+        )
+        row = connection.execute(
+            "SELECT check_at, check_at_2028, check_price_2028_eur FROM read_parquet(?) "
+            "WHERE route_id = 'subsecond' AND snapshot_at = TIMESTAMP '2026-07-03 10:00:00.900'",
+            [str(tmp_path / "microseconds-run" / "dataset" / "train.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert str(row[0]) == "2026-07-04 10:00:00.100000"
+    assert str(row[1]) == "2026-07-04 10:00:01"
+    assert row[2] == pytest.approx(96.0)
 
 
 def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
@@ -1351,6 +1587,42 @@ def test_decision_value_sign_convention() -> None:
     assert row["saving_vs_always_book_eur"] == pytest.approx(5.0)
     assert row["conditional_saving_when_alert_eur"] == pytest.approx(10.0)
     assert row["cost_of_waiting_eur"] == pytest.approx(0.0)
+
+
+def test_zero_alert_decision_row_is_kept() -> None:
+    size = 20
+    data = _tabular(
+        y=np.zeros(size, dtype=np.int8),
+        future_observations=np.full(size, 2, dtype=np.int16),
+        headroom=np.full(size, 1, dtype=np.int16),
+    )
+    data = TabularData(
+        features=data.features,
+        y=data.y,
+        series=data.series,
+        route_day=data.route_day,
+        price=np.full(size, 100.0),
+        future_max=data.future_max,
+        future_observations=data.future_observations,
+        headroom=data.headroom,
+        departure_date=np.array([f"2026-07-{index % 10 + 1:02d}" for index in range(size)], dtype=object),
+        snapshot_at=data.snapshot_at,
+        observation_era=data.observation_era,
+        observation_week=data.observation_week,
+        check_price=np.full(size, 110.0),
+    )
+    bands = np.array(["1-3d"] * size, dtype=object)
+    rows = _decision_value_rows(data, (1,), [np.full(size, 0.1)], bands, 0.5, 7, 7)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["alert_rows"] == 0
+    assert row["conditional_saving_when_alert_eur"] is None
+    assert row["saving_vs_always_wait_eur"] == pytest.approx(0.0)
+    assert row["saving_vs_always_book_eur"] == pytest.approx(-10.0)
+    pooled = _pooled_decision_value_rows(data, np.full(size, 0.1), bands, 0.5, 7, 7)
+    assert len(pooled) == 1
+    assert pooled[0]["alert_rows"] == 0
+    assert pooled[0]["conditional_saving_when_alert_eur"] is None
 
 
 def test_strata_do_not_fall_back_to_pooled_prevalence() -> None:

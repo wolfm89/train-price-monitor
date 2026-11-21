@@ -943,7 +943,7 @@ def _decision_row(
         "saving_vs_always_wait_pct": float(np.sum(saving_vs_wait) / np.sum(price)),
         "saving_vs_always_book_eur": float(np.mean(saving_vs_book)),
         "saving_vs_always_book_pct": float(np.sum(saving_vs_book) / np.sum(price)),
-        "conditional_saving_when_alert_eur": float(np.mean(saving[alert])),
+        "conditional_saving_when_alert_eur": float(np.mean(saving[alert])) if alert.any() else None,
         "cost_of_waiting_eur": float(np.mean(saving)),
         "cost_of_waiting_pct": float(np.sum(saving) / np.sum(price)),
         "ci_saving_vs_wait_eur": _cluster_mean_ci(saving_vs_wait, groups, replicates, seed),
@@ -971,8 +971,6 @@ def _decision_value_rows(
             if int(mask.sum()) < 20:
                 continue
             alert = probabilities_at_headroom[mask] >= threshold
-            if int(alert.sum()) == 0:
-                continue
             rows.append(
                 _decision_row(
                     band=band,
@@ -1003,8 +1001,6 @@ def _pooled_decision_value_rows(
         if int(mask.sum()) < 20:
             continue
         alert = probabilities[mask] >= threshold
-        if int(alert.sum()) == 0:
-            continue
         rows.append(
             _decision_row(
                 band=band,
@@ -1386,10 +1382,9 @@ def train_and_evaluate(
         eval_mask = None
     train_eval = train.subset(train.future_observations >= 2) if test_tier == "two_plus_observations" else train
     raw_eval_source = model.predict(eval_data)
-    calibrated_eval = (
-        calibrator.predict(raw_eval_source)
-        if evaluate_test
-        else _select(oof_predictions[calibration_method], eval_mask)
+    calibrated_eval = _select(
+        calibrator.predict(raw_eval_source) if evaluate_test else oof_predictions[calibration_method],
+        eval_mask,
     )
     raw_pooled_eval = _select(raw_eval_source, eval_mask)
     bands_eval = _ttd_array(eval_rows)

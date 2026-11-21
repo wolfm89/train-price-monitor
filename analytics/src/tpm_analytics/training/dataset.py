@@ -425,7 +425,7 @@ def _create_views(
             n.series_key,
             n.snapshot_at,
             g.observed_at AS check_at,
-            abs(date_diff('second', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_s
+            abs(date_diff('microsecond', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_us
         FROM snapshot n
         JOIN scrape_grid g
           ON g.route_id = n.route_id
@@ -446,7 +446,7 @@ def _create_views(
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
             SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
             ) AS rn
             FROM check_candidates
             WHERE check_at <= snapshot_at + INTERVAL 24 HOUR
@@ -464,7 +464,7 @@ def _create_views(
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
             SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
             ) AS rn
             FROM check_candidates
             WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
@@ -483,7 +483,7 @@ def _create_views(
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
             SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
             ) AS rn
             FROM check_candidates
         )
@@ -500,7 +500,7 @@ def _create_views(
             date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
         FROM (
             SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_s, check_at
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
             ) AS rn
             FROM check_candidates
             WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
@@ -1087,6 +1087,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
               ON g.route_id = s.route_id
              AND g.departure_date = s.departure_date
              AND g.observed_at > s.last_obs
+             AND g.observed_at < s.departure_planned
             WHERE s.last_obs <= s.departure_planned - INTERVAL 24 HOUR
             GROUP BY
                 s.series_key,
@@ -1157,13 +1158,15 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             successor_60,
             count(*) AS journeys
         FROM classified
-        GROUP BY ttd_band, observation_week, successor, successor_60
-        ORDER BY ttd_band, observation_week, successor, successor_60
+        GROUP BY GROUPING SETS ((ttd_band, observation_week, successor, successor_60), ())
+        ORDER BY GROUPING(ttd_band), ttd_band, observation_week, successor, successor_60
         """
     ).fetchall()
-    total_journeys = int(journey_row[0][0]) if journey_row else 0
-    at_risk = int(journey_row[0][1]) if journey_row else 0
-    disappeared = sum(int(row[2]) for row in journey_row)
+    journey_totals = next((row for row in journey_row if row[3] is None), None)
+    journey_groups = [row for row in journey_row if row[3] is not None]
+    total_journeys = int(journey_totals[0]) if journey_totals else 0
+    at_risk = int(journey_totals[1]) if journey_totals else 0
+    disappeared = sum(int(row[2]) for row in journey_groups)
     return {
         "headroom": [
             {
@@ -1250,7 +1253,7 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                     "successor_60": str(row[6]),
                     "journeys": int(row[7]),
                 }
-                for row in journey_row
+                for row in journey_groups
             ],
         },
     }
