@@ -111,9 +111,23 @@ v2-only and mixed-schema input.
 
 - The baseline is **v1-only**. `journey_id` starts with schema v2 on 2026-11-13; a v2 row inside a
   baseline split fails the build. Do not mix v1 and v2 series keys in one split.
-- The label domain is `24 h <= hours_to_departure <= 30 d`. The dataset stores
-  `future_max_fare_24h`, `future_observations` and `label_window_end`; every headroom label is
-  derived from that evidence. Never train on `future_*`, `label_*` or `limit_eur`.
+- The label is the **next-day fare**: the chain's fare at the route-day check closest to
+  `t + 24 h` inside 20-28 h and before departure. Eligibility depends only on the route-day scrape
+  grid. A chain missing at the check is censored (`censor_reason = 'not_listed'`), not a negative;
+  `fare_lost` is reserved for v2 listed-without-fare events and is false in the v1 baseline.
+  `label_window_end` is the check time and is at most `t + 28 h`.
+- Fares are compared as integer cents with the one shared definition in
+  `training/labels.py`: `check_cents * 100 >= price_cents * (100 + headroom)`. A fare exactly on
+  the limit counts as reached. Never reintroduce euro-float label comparisons.
+- The label domain is `24 h <= hours_to_departure <= 30 d`. `future_max_fare_24h`,
+  `future_observations` and `breached_within_24h` are diagnostics only, reported on R24-covered
+  24 h-7 d rows; they are not the training target. Never train on `future_*`, `label_*`,
+  `breached_*` or `limit_eur`.
+- Snapshots keep the **first observation per bin** (12 h outside 48 h, 1 h inside), with a
+  deterministic tie-break. Do not switch back to the last observation.
+- One population: every eligible row with a known next-day check fare is used for training,
+  selection, calibration, threshold and evaluation. `future_observations >= 2` is a diagnostic
+  stratum only; do not restore a tier-selected headline.
 - The model matrix is an allowlist from `features.py`, not "all columns minus exclusions". Null
   numerics must arrive as `NaN` plus indicators, never as zero; a test covers the DuckDB→numpy
   handoff.
@@ -121,6 +135,8 @@ v2-only and mixed-schema input.
   intact. Cross-sectional features are computed from the sampled route-days; never sample individual
   series or rows.
 - Calibrate on `validation_calibrate`, never on `validation_select` or test. Test is reported once.
+- Dataset gates use minimum eligible rows and positives per split, headroom and TTD band. The old
+  future-selected `min_label_coverage` floor is retired; do not bring it back.
 - Training artifacts are local and ignored. Downloaded silver goes under `analytics/.data/`; never
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
@@ -140,11 +156,10 @@ v2-only and mixed-schema input.
   15 minutes does not. `--strict-chains` drops every candidate whose predecessor or successor has
   more than one candidate; it is the sensitivity run, not the default, and its Brier difference is
   within refit noise.
-- The link decision uses the predecessor's full observation history: it links only if the series
-  never returns after the gap. The 5 % review build measured 858 additional successor series that
-  an online rule would link (about 12 % of all link events). A later training stage decides links
-  causally at the check; until then, successor features before a returning predecessor are not
-  strictly point-in-time.
+- The link decision is causal. A series that is absent at a route-day scrape and has a matching
+  successor there continues into the successor; if the old itinerary later returns, the return is
+  a new incarnation of the same series key (`#r` suffix). No link depends on observations after
+  the scrape that decides it. `split_series` in the chain audit counts the incarnations.
 - The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
   their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
   starts a new series. `price_rank_route_day` ranks every priced journey in
@@ -153,10 +168,11 @@ v2-only and mixed-schema input.
   audit so a new diagnostic cannot quietly enter the model matrix.
 - `observation_week` is the Europe/Berlin ISO week. `identity.berlin_week_sql` implements the EU
   DST rule directly because DuckDB's ICU timezone functions need `pytz` in the Python client.
-- `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
-  next-day coverage/prevalence),
-  `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the check/label diagnostics
-  are label columns, not model features. They may use future scrapes only for evaluation, never
+- `check_at` is the primary 20-28 h next-day check; `check_at_2024` is the crossed-back and
+  decision-value diagnostic; `check_at_2226` is the legacy window sensitivity. `check_lag_h`,
+  `cov_tail_h`, `cov_max_gap_h`, `check_price_eur`, `check_price_cents`, `breached_next_day`,
+  `eligible`, `censor_reason`, `fare_lost`, `price_cents` and the check/label diagnostics are
+  label columns, not model features. They may use future scrapes only for evaluation, never
   inside the feature matrix.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
   `model.candidates` unless a future plan changes that decision.

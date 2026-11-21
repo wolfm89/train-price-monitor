@@ -67,9 +67,9 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
     for split in stats.splits:
         if not evaluation.evaluation_on_test and split.split == "test":
             continue
-        share = split.labelled / split.rows if split.rows else 0.0
+        share = split.labelled / split.eligible if split.eligible else 0.0
         if share < 0.9:
-            warning_items.append(f"{split.split} has only {share:.1%} labelled rows")
+            warning_items.append(f"{split.split} has only {share:.1%} of eligible rows labelled")
     if evaluation.dropped_features:
         warning_items.append(f"constant/all-null features dropped: {', '.join(evaluation.dropped_features)}")
     return warning_items
@@ -92,6 +92,7 @@ def _report(
             item.series,
             item.chains,
             item.route_days,
+            item.eligible,
             item.labelled,
             item.positives,
             item.positive_rate,
@@ -129,16 +130,6 @@ def _report(
             evaluation.calibration[0], evaluation.calibration[1], evaluation.calibration[2], strict=True
         )
     ]
-    coverage_rows = [
-        [item["split"], item["labelled_share"], item["one_observation_share"], item["two_plus_share"]]
-        for item in stats.profile.get("coverage", [])
-        if evaluation.evaluation_on_test or item["split"] != "test"
-    ]
-    era_rows = [
-        [item["split"], item["observation_era"], item["rows"]]
-        for item in stats.profile.get("era", [])
-        if evaluation.evaluation_on_test or item["split"] != "test"
-    ]
 
     def _p(value: Any) -> str:
         return "—" if value is None else f"{float(value):.1%}"
@@ -153,20 +144,37 @@ def _report(
             return "—"
         return f"{_fmt(values[0], digits)}..{_fmt(values[1], digits)}"
 
+    coverage_rows = [
+        [
+            item["split"],
+            _p(item.get("eligible_share")),
+            _p(item.get("labelled_share")),
+            _p(item.get("censor_share")),
+            _p(item.get("r24_share")),
+            _p(item.get("within_24h_r24_rate")),
+        ]
+        for item in stats.profile.get("coverage", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
+    ]
+    era_rows = [
+        [item["split"], item["observation_era"], item["rows"]]
+        for item in stats.profile.get("era", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
+    ]
+
     cohort_rows = [
         [
             item["split"],
             item["rows"],
+            item["eligible"],
             item["labelled"],
-            _share(item.get("two_plus"), item["rows"]),
-            item["check_eligible"],
-            item.get("check_priced", "—"),
-            item.get("check_censored", "—"),
-            item["two_plus"],
-            _p(item["labelled_share"]),
-            _p(item["prevalence"]),
-            _p(item.get("two_plus_prevalence")),
-            _p(item["check_prevalence"]),
+            item["censored"],
+            item["no_check"],
+            item["not_listed"],
+            _p(item.get("eligible_share")),
+            _p(item.get("labelled_share")),
+            _p(item.get("censor_share")),
+            _p(item.get("prevalence")),
         ]
         for item in stats.profile.get("cohort", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
@@ -193,29 +201,21 @@ def _report(
             item["split"],
             item["band"],
             item["rows"],
+            item["eligible"],
+            _share(item["eligible"], item["rows"]),
             item["labelled"],
-            _share(item.get("two_plus"), item["rows"]),
-            item["check_eligible"],
-            _share(item["check_eligible"], item["rows"]),
-            item.get("check_priced", "—"),
-            item.get("check_censored", "—"),
-            item.get("check_eligible_2028", "—"),
-            _share(item.get("check_eligible_2028"), item["rows"]),
-            item.get("check_priced_2028", "—"),
-            _p(item.get("next_day_2028_rate")),
-            item.get("check_eligible_2226", "—"),
-            _share(item.get("check_eligible_2226"), item["rows"]),
-            item.get("check_priced_2226", "—"),
+            item["censored"],
+            _p(item.get("prevalence")),
+            _fmt(item.get("median_check_lag_h"), 1),
+            _fmt(item.get("p10_check_lag_h"), 1),
+            _fmt(item.get("p90_check_lag_h"), 1),
+            _p(item.get("within_24h_r24_rate")),
+            _p(item.get("next_day_2024_rate")),
             _p(item.get("next_day_2226_rate")),
-            _p(item["within_day_rate"]),
-            _p(item.get("priced_within_day_rate")),
-            _p(item["next_day_rate"]),
-            _p(item["narrow_rate"]),
-            _p(item["crossed_back_rate"]),
-            _p(item.get("censored_within_day_rate")),
-            item["dearer"],
-            item["cheaper"],
-            item["unchanged"],
+            _p(item.get("crossed_back_rate")),
+            item.get("dearer", 0),
+            item.get("cheaper", 0),
+            item.get("unchanged", 0),
         ]
         for item in label_items
     ]
@@ -225,12 +225,9 @@ def _report(
             item["era"],
             item["band"],
             item["rows"],
-            _share(item.get("check_eligible_2028"), item["rows"]),
-            _share(item.get("check_priced_2028"), item["rows"]),
-            _p(item.get("next_day_2028_rate")),
-            _share(item.get("check_eligible_2226"), item["rows"]),
-            _share(item.get("check_priced_2226"), item["rows"]),
-            _p(item.get("next_day_2226_rate")),
+            _share(item.get("eligible"), item["rows"]),
+            _share(item.get("labelled"), item["rows"]),
+            _p(item.get("prevalence")),
         ]
         for item in stats.profile.get("label_era", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
@@ -241,34 +238,74 @@ def _report(
             item["week"],
             item["band"],
             item["rows"],
-            _share(item.get("check_eligible_2028"), item["rows"]),
-            _share(item.get("check_priced_2028"), item["rows"]),
-            _p(item.get("next_day_2028_rate")),
-            _share(item.get("check_eligible_2226"), item["rows"]),
-            _share(item.get("check_priced_2226"), item["rows"]),
-            _p(item.get("next_day_2226_rate")),
+            _share(item.get("eligible"), item["rows"]),
+            _share(item.get("labelled"), item["rows"]),
+            _p(item.get("prevalence")),
         ]
         for item in stats.profile.get("label_week", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
     ]
-    forward_rows = [
+    a18_rows = [
+        [
+            item["split"],
+            item["bin_regime"],
+            item["rows"],
+            item["bins"],
+            item["collision_bins"],
+            item["collision_rows"],
+            _share(item.get("collision_rows"), item["rows"]),
+        ]
+        for item in stats.profile.get("a18", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
+    ]
+    a19_rows = [
+        [
+            item["split"],
+            item["rows"],
+            item["rows_23_30d"],
+            item["rows_23_30d_short_history"],
+            _share(item.get("rows_23_30d_short_history"), item.get("rows_23_30d")),
+            item["rows_history_beyond_720"],
+            _share(item.get("rows_history_beyond_720"), item["rows"]),
+        ]
+        for item in stats.profile.get("a19", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
+    ]
+    a24_rows = [
         [
             item["split"],
             item["band"],
-            item.get("forward_dearer", 0),
-            item.get("forward_cheaper", 0),
-            max(0, item.get("check_priced_2028", 0) - item.get("forward_dearer", 0) - item.get("forward_cheaper", 0)),
+            item["era"],
+            item["rows"],
+            item["missing_at_check"],
+            item["miss_one"],
+            item["miss_all"],
+            _share(item.get("miss_one"), item["rows"]),
+            _share(item.get("miss_all"), item["rows"]),
         ]
-        for item in label_items
+        for item in stats.profile.get("a24", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
+    ]
+    a26_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["era"],
+            item["rows"],
+            item["scrape_10_16"],
+            _share(item.get("scrape_10_16"), item["rows"]),
+        ]
+        for item in stats.profile.get("a26", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     a29_rows = [
         [
             item["split"],
             item["band"],
             item["rows"],
-            _p(item["within_day_rate"]),
-            _p(item["next_day_rate"]),
-            _p(item["crossed_back_rate"]),
+            _p(item.get("within_day_rate")),
+            _p(item.get("next_day_rate")),
+            _p(item.get("crossed_back_rate")),
         ]
         for item in stats.profile.get("a29", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
@@ -277,26 +314,12 @@ def _report(
         [
             item["split"],
             item["band"],
-            item["one_observations"],
-            _p(item["one_prevalence"]),
-            item["two_plus"],
-            _p(item["two_plus_prevalence"]),
+            item["tier"],
+            item["rows"],
+            item["labelled"],
+            _p(item.get("prevalence")),
         ]
-        for item in label_items
-    ]
-    lag_rows = [
-        [
-            item["split"],
-            item["band"],
-            _fmt(item["median_single_lag_h"], 1),
-            _fmt(item["p10_single_lag_h"], 1),
-            _fmt(item["p90_single_lag_h"], 1),
-        ]
-        for item in label_items
-    ]
-    two_plus_week_rows = [
-        [item["split"], item["week"], item["rows"], _p(item["two_plus_share"])]
-        for item in stats.profile.get("two_plus_week", [])
+        for item in stats.profile.get("tier", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     journey = stats.profile.get("journey", {})
@@ -338,6 +361,8 @@ def _report(
         [
             "yes" if chain.get("strict") else "no",
             chain.get("series", 0),
+            chain.get("base_series", 0),
+            chain.get("split_series", 0),
             chain.get("at_risk_series", 0),
             chain.get("at_risk_series_3plus", 0),
             chain.get("candidate_links", 0),
@@ -417,9 +442,9 @@ def _report(
         key = (item["split"], item["band"], item["era"])
         bucket = unlabelled_agg.setdefault(key, [0.0, 0.0])
         bucket[0] += item["rows"]
-        bucket[1] += item["rows"] * item["unlabelled_share"]
+        bucket[1] += item["unlabelled"]
     unlabelled_rows = [
-        [split, band, era, int(rows), _p(share / rows if rows else None)]
+        [split, band, era, int(rows), _share(share, rows)]
         for (split, band, era), (rows, share) in sorted(unlabelled_agg.items())
     ]
     weekly_agg: dict[tuple[str, str], list[float]] = {}
@@ -429,7 +454,7 @@ def _report(
         key = (item["split"], item["week"])
         bucket = weekly_agg.setdefault(key, [0.0, 0.0])
         bucket[0] += item["rows"]
-        bucket[1] += item["rows"] * item["unlabelled_share"]
+        bucket[1] += item["unlabelled"]
     weekly_rows = sorted(
         (
             [split, week, int(rows), share / rows if rows else 0.0]
@@ -577,16 +602,15 @@ def _report(
         [
             "split",
             "rows",
+            "eligible",
             "labelled",
-            "two-plus share",
-            "check eligible",
-            "check priced",
-            "check censored",
-            "two-plus",
+            "censored",
+            "no check",
+            "not listed",
+            "eligible share",
             "labelled share",
+            "censor share",
             "prevalence",
-            "two-plus prevalence",
-            "check prevalence",
         ],
         cohort_rows,
     )
@@ -595,26 +619,18 @@ def _report(
             "split",
             "TTD band",
             "rows",
+            "eligible",
+            "eligible share",
             "labelled",
-            "two-plus share",
-            "eligible 20-24",
-            "coverage 20-24",
-            "priced 20-24",
-            "censored 20-24",
-            "eligible 20-28",
-            "coverage 20-28",
-            "priced 20-28",
-            "next-day 20-28",
-            "eligible 22-26",
-            "coverage 22-26",
-            "priced 22-26",
-            "next-day 22-26",
-            "within-day all",
-            "within-day priced",
+            "censored",
+            "prevalence",
+            "median check lag h",
+            "p10 h",
+            "p90 h",
+            "within-24 h R24",
             "next-day 20-24",
-            "22-24 h point",
+            "next-day 22-26",
             "crossed back",
-            "censored within-day",
             "dearer",
             "cheaper",
             "unchanged",
@@ -622,48 +638,22 @@ def _report(
         label_rows,
     )
     label_era_table = _table(
-        [
-            "split",
-            "era",
-            "TTD band",
-            "rows",
-            "coverage 20-28",
-            "priced share 20-28",
-            "next-day 20-28",
-            "coverage 22-26",
-            "priced share 22-26",
-            "next-day 22-26",
-        ],
+        ["split", "era", "TTD band", "rows", "eligible share", "labelled share", "prevalence"],
         label_era_rows,
     )
     label_week_table = _table(
-        [
-            "split",
-            "week",
-            "TTD band",
-            "rows",
-            "coverage 20-28",
-            "priced share 20-28",
-            "next-day 20-28",
-            "coverage 22-26",
-            "priced share 22-26",
-            "next-day 22-26",
-        ],
+        ["split", "week", "TTD band", "rows", "eligible share", "labelled share", "prevalence"],
         label_week_rows,
     )
     a29_table = _table(["split", "TTD band", "rows", "within-day 5%", "next-day 5%", "crossed back 5%"], a29_rows)
-    forward_table = _table(["split", "TTD band", "forward dearer", "forward cheaper", "unchanged"], forward_rows)
-    tier_table = _table(
-        ["split", "TTD band", "one future scrape", "one prevalence", "two or more", "two-plus prevalence"], tier_rows
-    )
-    lag_table = _table(["split", "TTD band", "median single lag h", "p10 h", "p90 h"], lag_rows)
-    two_plus_week_table = _table(["split", "week", "rows", "two-plus share"], two_plus_week_rows)
     journey_table = _table(["TTD band", "rule", "same train", "other train", "none", "journeys"], journey_rows)
     journey_week_table = _table(["week", "journeys", "same train (60 min)", "other train", "none"], journey_week_rows)
     chain_table = _table(
         [
             "strict",
             "series",
+            "base series",
+            "split series",
             "at risk",
             "at risk (3+ obs)",
             "candidate links",
@@ -757,6 +747,33 @@ def _report(
         ],
         r24_rows,
     )
+    a18_table = _table(
+        ["split", "bin", "rows", "bins", "collision bins", "rows in collisions", "collision row share"],
+        a18_rows,
+    )
+    a19_table = _table(
+        ["split", "rows", "rows 23-30 d", "23-30 d with <7 d history", "share", "history beyond 720 h", "share"],
+        a19_rows,
+    )
+    a24_table = _table(
+        [
+            "split",
+            "TTD band",
+            "era",
+            "R24 rows",
+            "missing at check",
+            "miss one",
+            "miss all",
+            "miss-one share",
+            "miss-all share",
+        ],
+        a24_rows,
+    )
+    a26_table = _table(
+        ["split", "TTD band", "era", "rows", "scrape 10-16 h ahead", "share"],
+        a26_rows,
+    )
+    tier_table = _table(["split", "TTD band", "tier", "rows", "labelled", "prevalence"], tier_rows)
     clim_table = _table(["score", "Brier", "BSS slice", "BSS train", "ROC-AUC", "average precision"], clim_rows)
     interval_table = _table(["metric", "2.5 %", "97.5 %"], interval_rows)
     paired_table = _table(["comparison", "Brier difference", "2.5 %", "97.5 %"], paired_rows)
@@ -976,17 +993,8 @@ def _report(
         f"- Train prevalence of the evaluated subset: {_fmt(evaluation.train_prevalence)}"
     )
     metrics_all_line = (
-        (
-            f"- All labelled rows (including one-observation windows): "
-            f"Brier {_fmt(evaluation.metrics_all.get('brier'))}, "
-            f"ROC-AUC {_fmt(evaluation.metrics_all.get('roc_auc'))}. "
-            f"The headline uses {evaluation.evaluation_tier.replace('_', ' ')}."
-        )
-        if evaluation.metrics_all is not None
-        else (
-            "- Test was not evaluated; model metrics are validation-calibrate only and no test label "
-            "or model diagnostics are printed."
-        )
+        "- One population: training, calibration, threshold and evaluation use every eligible row "
+        "with a known next-day check fare; there is no tier sensitivity table."
     )
     headroom_headers = [
         "headroom %",
@@ -1011,17 +1019,20 @@ def _report(
     )
     known_limitations = (
         "## Known limitations\n\n"
-        "- The label is the maximum over scraped observations in the next 24 h; for most rows it is "
-        "one scrape about 13 h ahead. The >=2-scrape tier is selected on future information and its "
-        "mix follows scraper operations.\n"
+        "- The label is the chain's fare at one route-day check 20-28 h after the snapshot. "
+        "Eligibility depends on the route-day scrape grid, not on the journey's own fare, so "
+        "positives and negatives are treated alike; journeys missing at the check are censored, "
+        "not scored as negatives.\n"
+        "- The 7-30 d next-day coverage remains sparse on the current v1 schedule; the paired "
+        "next-day scraper is a separate plan and is not part of this run.\n"
         "- Test snapshots overlap validation-calibrate weeks unless the run used a later forward "
         "set; the September departure cohort has been evaluated before this run.\n"
         "- These are development figures, not a production estimate. The product's hourly refresher "
         "and 7-30 d booking window are not fully represented.\n"
         "- Pooled metrics include headroom identification; per-headroom rows are the diagnostic view.\n"
         f"{threshold_caveat}"
-        "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
-        "validation-select rows.\n"
+        "- One eligible population is used for training, selection, calibration, threshold and "
+        "evaluation; the future evidence tier is a diagnostic stratum only.\n"
         "- Test-split label and model diagnostics are gated by `--evaluate-test`. Journey "
         "disappearance, chains, duplicates and scrape cadence are dataset-wide; the scrape-cadence "
         "table includes test departures and runs through the last v1 departure. The v2 handover "
@@ -1058,11 +1069,26 @@ def _report(
 
 ## Dataset
 
-{_table(["split", "rows", "series", "chains", "route-days", "labelled", "positives", "positive rate"], split_rows)}
+{
+        _table(
+            ["split", "rows", "series", "chains", "route-days", "eligible", "labelled", "positives", "positive rate"],
+            split_rows,
+        )
+    }
 
-### Label coverage
+### Eligibility and label coverage
 
-{_table(["split", "labelled share", "one future observation", "two or more"], coverage_rows)}
+{
+        _table(
+            ["split", "eligible share", "labelled share", "censored share", "R24 share", "within-24 h rate (R24)"],
+            coverage_rows,
+        )
+    }
+
+A row is **eligible** when its route-day scrape grid has a check between 20 h and 28 h after the
+snapshot, before departure. The label is the chain's fare at the check closest to `t + 24 h`; a
+missing chain at that scrape censors the row (`not_listed`) rather than becoming a negative. The
+R24 columns are defined only for 24 h-7 d and use the separate within-24 h maximum diagnostic.
 
 ### Observation-era composition
 
@@ -1072,48 +1098,65 @@ def _report(
 
 {cohort_table}
 
-### Label and check-window diagnostics
+### Next-day label diagnostics
 
 {label_table}
 
-`coverage` is the share of rows with a scrape in the window. `crossed back` is the share whose
-within-day maximum breached but the 20-24 h point did not. `dearer`/`cheaper`/`unchanged` use a
-+/-0.5 % band around the current fare and cover only rows with a backward 23-36 h reference. In the main
-table `priced` is a count and the denominator for the next-day rate; the era and week tables show
-priced shares. Test-split rows appear in the label, era and week tables only with
-`--evaluate-test`; journey disappearance is corpus-level and includes test departures. The 20-24 h
-bound is inclusive, so a few 20-28 h picks a few milliseconds after `t + 24 h` are excluded from the
-20-24 h point.
+`eligible` counts rows with a check scrape; `labelled` counts eligible rows whose chain has a fare
+at that scrape; `censored` is `eligible - labelled`. `median/p10/p90 check lag` is the offset from
+`t + 24 h`. `within-24 h (R24)` is the separate within-day maximum diagnostic on R24-covered
+24 h-7 d rows. `next-day 20-24` and `next-day 22-26` are the legacy window sensitivities.
+`crossed back` is the share of R24-covered rows whose within-day maximum breached but the 20-24 h
+point did not. `dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover
+only rows with a backward 23-36 h reference.
 
 By observation era:
 
 {label_era_table}
 
-In a validation-only run the test split is omitted, so the era table is dense-only.
-
 By observation week:
 
 {label_week_table}
 
-Fixed 5 % comparison:
+### Resampling collisions
+
+First-in-bin selection keeps the earliest observation in each chain x bin. The collision table
+still counts how many bins hold more than one observation, so the rule change is separable from
+the duplicate-key audit.
+
+{a18_table}
+
+### History depth
+
+`rows 23-30 d` are training-domain rows in the last week before departure; the share with less
+than 7 d of chain history is the short-history diagnostic. `history beyond 720 h` counts rows
+whose chain history starts more than 30 d before the snapshot; those observations are allowed by
+the history rule and are outside the model domain.
+
+{a19_table}
+
+### Missing at the check
+
+On R24-covered 24 h-7 d rows, `miss one` means the chain is absent at the check but observed at
+another scrape in the following 24 h; `miss all` means it is absent from every scrape in that
+window. The shares use all R24-covered rows in the band and era.
+
+{a24_table}
+
+### Scrape 10-16 h ahead
+
+The share of snapshots with a route-day scrape 10-16 h later, by band and era. It is the
+operational check on the next-day label's near-term coverage.
+
+{a26_table}
+
+### Within-24 h diagnostic (fixed 5 %)
 
 {a29_table}
 
-Forward day-over-day direction (20-28 h check, +/-0.5 %):
-
-{forward_table}
-
-Prevalence by evidence tier:
+Prevalence by future evidence tier (diagnostic only; the tier is no longer a population):
 
 {tier_table}
-
-Single future scrape lag:
-
-{lag_table}
-
-14-30 d snapshots with two or more future scrapes, by observation week:
-
-{two_plus_week_table}
 
 ### Journey disappearance (series-level, pre-chain diagnostic)
 
@@ -1155,11 +1198,11 @@ whose predecessor or successor has more than one candidate. `unused candidates` 
 drops and fully matched conflicts; `overlap candidates` are re-keys that appear in the same scrape
 as the predecessor's last observation and are deliberately not chained.
 
-The link decision uses the predecessor's full observation history: a series is linked only if it
-never returns after the gap. The 5 % review build measured 858 additional successor series that an
-online rule would link (about 12 % of all link events); this run has {chain.get("links", 0):,}
-links. Features at successor snapshots before a returning predecessor are therefore not strictly
-point-in-time; the next training stage decides links causally at the check.
+Links are decided causally: a series that is absent at a route-day scrape and has a matching
+successor there continues into that successor. If the old itinerary later returns, it becomes a
+new incarnation of the same series key (`#r` suffix), so no link depends on observations after the
+scrape that decides it. This run has {chain.get("links", 0):,} links and {chain.get("split_series", 0):,}
+series split into later incarnations.
 
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and
 include test departures. They are not the 24 h-30 d model domain.

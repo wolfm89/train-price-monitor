@@ -29,6 +29,7 @@ from tpm_analytics.training.dataset import (
 )
 from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
+from tpm_analytics.training.labels import breach, cents
 from tpm_analytics.training.model import (
     Evaluation,
     FittedModel,
@@ -166,6 +167,9 @@ def _config(tmp_path: Path) -> Path:
     raw["sample"]["sample_rate"] = 1.0
     raw["calendar"]["feature_set"] = "full"
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     path = tmp_path / "training.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     return path
@@ -212,9 +216,10 @@ def test_dataset_contract_and_null_handoff(tmp_path: Path) -> None:
     assert not np.isnan(data.features["price_rank_route_day"]).all()
     assert data.features["price_rank_missing"].sum() == 0
     assert set(np.unique(data.headroom)) <= {1, 5, 10, 20, 30}
-    expected = (data.future_max >= data.price * (1 + data.headroom / 100.0)).astype(np.int8)
+    expected = breach(data.price_cents, data.check_price_cents, data.headroom)
     assert np.array_equal(data.y, expected)
     assert (data.headroom == 1).any()
+    assert np.all(np.isfinite(data.check_price))
 
     connection = duckdb.connect()
     try:
@@ -495,7 +500,9 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
     raw["calendar"]["feature_set"] = "none"
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     config = load_config(config_path)
     connection = duckdb.connect()
@@ -587,7 +594,9 @@ def _build_chain_dataset(
     _write_silver(source, _rows() + rows)
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1178,7 +1187,7 @@ def test_resample_keeps_one_row_per_chain_bin(tmp_path: Path) -> None:
     indexes = [index for index, route in enumerate(predictions["route_id"]) if route == "matchbin"]
     in_bin = [index for index in indexes if predictions["bin_index"][index] == 31]
     assert len(in_bin) == 1
-    assert str(predictions["snapshot_at"][in_bin[0]]) == "2026-07-05 12:45:00"
+    assert str(predictions["snapshot_at"][in_bin[0]]) == "2026-07-05 12:30:00"
 
 
 def test_series_key_bucket_edges_round_to_the_half_minute() -> None:
@@ -1317,7 +1326,9 @@ def test_journey_next_scrape_stops_at_departure(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1337,7 +1348,7 @@ def test_journey_next_scrape_stops_at_departure(tmp_path: Path) -> None:
     assert journey["groups"] == []
 
 
-def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
+def test_evaluate_test_uses_one_population(tmp_path: Path) -> None:
     source = tmp_path / "mixed-tier.parquet"
     rows = _rows()
     rows.extend(
@@ -1383,7 +1394,9 @@ def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
     raw["report"]["min_tier_rows"] = 1
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     out = tmp_path / "mixed-run"
     assert (
@@ -1402,10 +1415,108 @@ def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
     )
     metrics = json.loads((out / "metrics.json").read_text())
     assert metrics["evaluation"]["evaluation_on_test"] is True
-    assert metrics["evaluation"]["metrics_all"] is not None
-    assert metrics["evaluation"]["evaluation_tier"] == "two_plus_observations"
+    assert metrics["evaluation"]["metrics_all"] is None
+    assert metrics["evaluation"]["evaluation_tier"] == "all_eligible_rows"
     assert metrics["evaluation"]["evaluation_tier_rows"] >= 1
     assert (out / "predictions" / "test.parquet").is_file()
+
+
+def test_integer_cent_label_counts_an_exact_limit_as_reached() -> None:
+    assert breach(np.array([10_000]), np.array([10_100]), np.array([1])).tolist() == [1]
+    assert breach(np.array([10_000]), np.array([10_099]), np.array([1])).tolist() == [0]
+    assert cents(np.array([100.0, 101.01, np.nan])).tolist() == [10_000, 10_101, -1]
+
+
+def test_next_day_label_and_censoring(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 3, 10, 0), departure=departure, route="censor", train="ICE-A", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 3, 10, 0), departure=departure, route="censor", train="ICE-B", fare=70.0),
+        _row(observed_at=datetime(2026, 7, 4, 10, 0), departure=departure, route="censor", train="ICE-B", fare=75.0),
+        _row(observed_at=datetime(2026, 7, 3, 10, 0), departure=departure, route="nocheck", train="ICE-C", fare=60.0),
+    ]
+    _, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    by_route = {}
+    for index, route in enumerate(predictions["route_id"]):
+        by_route.setdefault(route, []).append(index)
+    labelled = [
+        index
+        for index in by_route["censor"]
+        if predictions["price_eur"][index] == pytest.approx(70.0)
+        and str(predictions["snapshot_at"][index]) == "2026-07-03 10:00:00"
+    ]
+    censored = [
+        index
+        for index in by_route["censor"]
+        if predictions["price_eur"][index] == pytest.approx(80.0)
+        and str(predictions["snapshot_at"][index]) == "2026-07-03 10:00:00"
+    ]
+    assert labelled
+    assert censored
+    later_b = [
+        index
+        for index in by_route["censor"]
+        if predictions["price_eur"][index] == pytest.approx(75.0)
+        and str(predictions["snapshot_at"][index]) == "2026-07-04 10:00:00"
+    ]
+    assert later_b
+    assert predictions["eligible"][later_b[0]] is False
+    assert predictions["eligible"][labelled[0]] is True
+    assert predictions["label_observed"][labelled[0]] is True
+    assert predictions["check_price_eur"][labelled[0]] == pytest.approx(75.0)
+    assert str(predictions["label_window_end"][labelled[0]]) == "2026-07-04 10:00:00"
+    assert predictions["eligible"][censored[0]] is True
+    assert predictions["label_observed"][censored[0]] is False
+    assert predictions["censor_reason"][censored[0]] == "not_listed"
+    assert str(predictions["label_window_end"][censored[0]]) == "2026-07-04 10:00:00"
+    nocheck = by_route["nocheck"][0]
+    assert predictions["eligible"][nocheck] is False
+    assert predictions["label_observed"][nocheck] is False
+    assert predictions["censor_reason"][nocheck] == "no_check"
+    assert predictions["fare_lost"][nocheck] is False
+
+
+def test_chain_links_causally_and_splits_a_later_return(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 8, 20, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 5, 20, 0), departure=departure, route="causal", train="ICE-C", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 6, 20, 0), departure=departure, route="causal", train="ICE-C", fare=82.0),
+        _row(
+            observed_at=datetime(2026, 7, 7, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="causal",
+            train="ICE-C",
+            fare=99.0,
+        ),
+        _row(observed_at=datetime(2026, 7, 7, 12, 0), departure=departure, route="causal", train="ICE-C", fare=85.0),
+        _row(
+            observed_at=datetime(2026, 7, 7, 12, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="causal",
+            train="ICE-C",
+            fare=98.0,
+        ),
+    ]
+    stats, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    by_time = {
+        (str(predictions["snapshot_at"][index]), float(predictions["price_eur"][index])): index
+        for index, route in enumerate(predictions["route_id"])
+        if route == "causal"
+    }
+    assert (
+        predictions["chain_id"][by_time[("2026-07-06 20:00:00", 82.0)]]
+        == predictions["chain_id"][by_time[("2026-07-07 10:00:00", 99.0)]]
+    )
+    assert (
+        predictions["chain_id"][by_time[("2026-07-07 12:00:00", 85.0)]]
+        != predictions["chain_id"][by_time[("2026-07-06 20:00:00", 82.0)]]
+    )
+    assert stats.profile["chain"]["split_series"] >= 1
+    assert stats.profile["chain"]["links"] >= 1
 
 
 def test_check_grid_and_coverage(tmp_path: Path) -> None:
@@ -1453,7 +1564,9 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     config = load_config(config_path)
     connection = duckdb.connect()
@@ -1467,7 +1580,7 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
         )
         row = connection.execute(
             "SELECT check_at, check_lag_h, check_price_eur, cov_tail_h, cov_max_gap_h, r24_covered, "
-            "check_at_2028, check_at_2226, check_price_2028_eur, check_price_2226_eur "
+            "check_at_2024, check_at_2226, check_price_2024_eur, check_price_2226_eur "
             "FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00'",
             [str(tmp_path / "check-run" / "dataset" / "train.parquet")],
         ).fetchone()
@@ -1523,6 +1636,22 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
                 train="ICE-LATE",
                 fare=90.0,
             ),
+            _row(observed_at=snapshot, departure=departure, route="tooearly", train="ICE-EARLY", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=19),
+                departure=departure,
+                route="tooearly",
+                train="ICE-EARLY",
+                fare=90.0,
+            ),
+            _row(observed_at=snapshot, departure=departure, route="toolate", train="ICE-LATE", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=29),
+                departure=departure,
+                route="toolate",
+                train="ICE-LATE",
+                fare=90.0,
+            ),
             _row(
                 observed_at=datetime(2026, 7, 15, 10, 0),
                 departure=datetime(2026, 7, 16, 10, 0),
@@ -1548,7 +1677,9 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1560,8 +1691,8 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
             run_id="windows",
         )
         rows = connection.execute(
-            "SELECT route_id, check_at, check_at_2028, check_at_2226, "
-            "check_price_2028_eur, check_price_2226_eur FROM read_parquet(?) "
+            "SELECT route_id, check_at, check_at_2024, check_at_2226, "
+            "check_price_eur, check_price_2024_eur, check_price_2226_eur FROM read_parquet(?) "
             "WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00' ORDER BY route_id",
             [str(tmp_path / "windows-run" / "dataset" / "train.parquet")],
         ).fetchall()
@@ -1569,23 +1700,32 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
         connection.close()
     by_route = {row[0]: row for row in rows}
     only25 = by_route["only25"]
-    assert only25[1] is None
-    assert str(only25[2]) == "2026-07-04 12:00:00"
+    assert str(only25[1]) == "2026-07-04 12:00:00"
+    assert only25[2] is None
     assert str(only25[3]) == "2026-07-04 12:00:00"
     assert only25[4] == pytest.approx(90.0)
-    assert only25[5] == pytest.approx(90.0)
+    assert only25[5] is None
+    assert only25[6] == pytest.approx(90.0)
     only265 = by_route["only265"]
-    assert only265[1] is None
-    assert str(only265[2]) == "2026-07-04 13:30:00"
+    assert str(only265[1]) == "2026-07-04 13:30:00"
+    assert only265[2] is None
     assert only265[3] is None
     assert only265[4] == pytest.approx(95.0)
     assert only265[5] is None
+    assert only265[6] is None
     after = by_route["after"]
     assert after[1] is None
     assert after[2] is None
     assert after[3] is None
     assert after[4] is None
     assert after[5] is None
+    assert after[6] is None
+    for route in ("tooearly", "toolate"):
+        row = by_route[route]
+        assert row[1] is None
+        assert row[2] is None
+        assert row[3] is None
+        assert row[4] is None
 
 
 def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
@@ -1636,7 +1776,9 @@ def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1648,16 +1790,15 @@ def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
             run_id="microseconds",
         )
         row = connection.execute(
-            "SELECT check_at, check_at_2028, check_price_2028_eur FROM read_parquet(?) "
+            "SELECT check_at, check_price_eur FROM read_parquet(?) "
             "WHERE route_id = 'subsecond' AND snapshot_at = TIMESTAMP '2026-07-03 10:00:00.900'",
             [str(tmp_path / "microseconds-run" / "dataset" / "train.parquet")],
         ).fetchone()
     finally:
         connection.close()
     assert row is not None
-    assert str(row[0]) == "2026-07-04 10:00:00.100000"
-    assert str(row[1]) == "2026-07-04 10:00:01"
-    assert row[2] == pytest.approx(96.0)
+    assert str(row[0]) == "2026-07-04 10:00:01"
+    assert row[1] == pytest.approx(96.0)
 
 
 def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
@@ -1707,7 +1848,9 @@ def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1719,8 +1862,7 @@ def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
             run_id="tie",
         )
         row = connection.execute(
-            "SELECT check_at_2028, check_price_2028_eur FROM read_parquet(?) "
-            "WHERE snapshot_at = TIMESTAMP '2026-07-03 14:00:00'",
+            "SELECT check_at, check_price_eur FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 14:00:00'",
             [str(tmp_path / "tie-run" / "dataset" / "train.parquet")],
         ).fetchone()
     finally:
@@ -1835,6 +1977,9 @@ def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     raw["report"]["min_label_coverage"] = 0.0
     config_path = tmp_path / "future.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -1943,6 +2088,9 @@ def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     raw["report"]["min_label_coverage"] = 0.0
     config_path = tmp_path / "empty-split.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -1988,7 +2136,10 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
-    raw["report"]["min_label_coverage"] = 1.0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 1
     config_path = tmp_path / "coverage-gate.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -1996,12 +2147,12 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     out = tmp_path / "reusable-run"
     connection = duckdb.connect()
     try:
-        with pytest.raises(DatasetError, match="labelled rows"):
+        with pytest.raises(DatasetError, match="eligible rows"):
             build_dataset(connection, spec, config, out, run_id="reusable")
     finally:
         connection.close()
     assert not out.exists()
-    permissive = replace(config, report=replace(config.report, min_label_coverage=0.0))
+    permissive = replace(config, report=replace(config.report, min_eligible_rows=0))
     connection = duckdb.connect()
     try:
         build_dataset(connection, spec, permissive, out, run_id="reusable")
@@ -2045,6 +2196,13 @@ def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -
                     train=f"ICE{index}",
                     fare=110.0,
                 ),
+                _row(
+                    observed_at=departure - timedelta(hours=6),
+                    departure=departure,
+                    route=f"r{index}",
+                    train=f"ICE{index}",
+                    fare=120.0,
+                ),
             ]
         )
     _write_silver(source, rows)
@@ -2053,6 +2211,9 @@ def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path = tmp_path / "window.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -2069,7 +2230,8 @@ def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -
         connection.close()
     data = load_split(tmp_path / "window-run" / "dataset" / "train.parquet", feature_spec("none"))
     assert len(data) == 1
-    assert float(data.future_max[0]) == 110.0
+    assert float(data.check_price[0]) == 120.0
+    assert float(data.future_max[0]) == 120.0
 
 
 def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
@@ -2141,6 +2303,9 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     raw["report"]["min_label_coverage"] = 0.0
     config_path = tmp_path / "lag.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -2216,7 +2381,7 @@ def _evaluation(
             "headroom_monotonic": True,
         },
         metrics_all=None,
-        evaluation_tier="two_plus_observations",
+        evaluation_tier="all_eligible_rows",
         evaluation_tier_rows=1_000,
         evaluation_split="test" if evaluation_on_test else "validation_calibrate",
         evaluation_on_test=evaluation_on_test,
@@ -2240,21 +2405,27 @@ def _stats() -> DatasetStats:
         route_days=10,
         splits=(
             SplitStats(
-                "train", rows=1_000, series=100, route_days=10, labelled=1_000, positives=240, positive_rate=0.24
+                "train",
+                rows=1_000,
+                series=100,
+                route_days=10,
+                eligible=1_000,
+                labelled=1_000,
+                positives=240,
+                positive_rate=0.24,
             ),
         ),
         duration_seconds=1.0,
     )
 
 
-def test_train_prevalence_matches_evaluated_tier() -> None:
+def test_train_prevalence_uses_one_population() -> None:
     train = _tabular(
         y=np.array([1, 0, 1, 0], dtype=np.int8),
         future_observations=np.array([1, 3, 3, 5], dtype=np.int16),
         headroom=np.array([1, 5, 10, 5], dtype=np.int32),
     )
-    assert _train_prevalence(train, "all_labelled_rows") == pytest.approx(0.5)
-    assert _train_prevalence(train, "two_plus_observations") == pytest.approx(1 / 3)
+    assert _train_prevalence(train) == pytest.approx(0.5)
 
 
 def test_bss_train_uses_matching_train_prevalence() -> None:
@@ -2585,7 +2756,10 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert profile_json["profile"]["cohort"]
     assert profile_json["profile"]["label"]
     assert profile_json["profile"]["journey"]["total_journeys"] >= 0
-    assert profile_json["profile"]["two_plus_week"] is not None
+    assert profile_json["profile"]["a18"]
+    assert profile_json["profile"]["a19"]
+    assert profile_json["profile"]["a26"]
+    assert "a24" in profile_json["profile"]
     assert profile_json["profile"]["label_era"]
     assert profile_json["profile"]["label_week"]
     assert all("successor_60" in group for group in profile_json["profile"]["journey"]["groups"])
@@ -2620,7 +2794,18 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         }
     finally:
         connection.close()
-    assert {"check_at", "check_lag_h", "cov_tail_h", "cov_max_gap_h", "breached_at_check"} <= columns
+    assert {
+        "check_at",
+        "check_lag_h",
+        "cov_tail_h",
+        "cov_max_gap_h",
+        "breached_next_day",
+        "eligible",
+        "censor_reason",
+        "price_cents",
+        "check_price_cents",
+        "breached_within_24h",
+    } <= columns
     report_text = (run_out / "report.md").read_text()
     assert "Known limitations" in report_text
     assert "Prevalence:" in report_text
@@ -2667,9 +2852,8 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     connection = duckdb.connect()
     try:
         mismatch_row = connection.execute(
-            "SELECT count(*), count(*) FILTER (WHERE p.label != "
-            "CAST(d.future_max_fare_24h >= d.price_eur * 1.01 AS TINYINT)) "
-            "FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at) "
+            "SELECT count(*), count(*) FILTER (WHERE p.label != d.breached_next_day) "
+            "FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at, headroom_pct) "
             "WHERE p.headroom_pct = 1",
             [
                 str(run_out / "predictions" / "validation_calibrate.parquet"),

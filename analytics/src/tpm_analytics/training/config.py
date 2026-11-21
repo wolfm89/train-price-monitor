@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 CALENDAR_SETS = ("none", "public", "public_school", "full")
+LABEL_ESTIMANDS = ("next_day_fare",)
 MODEL_NAMES = ("base_rate", "logistic", "hist_gradient_boosting", "lightgbm")
 CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
 
@@ -53,16 +54,25 @@ class SplitConfig:
 
 @dataclass(frozen=True)
 class LabelConfig:
+    estimand: str
     horizon_hours: int
+    check_window_hours: tuple[int, int]
     min_hours_to_departure: int
     max_hours_to_departure: int
     headroom_pct: tuple[int, ...]
 
     def validate(self) -> None:
+        if self.estimand not in LABEL_ESTIMANDS:
+            raise ConfigError(f"label.estimand must be one of {LABEL_ESTIMANDS}")
         if self.horizon_hours < 1:
             raise ConfigError("label.horizon_hours must be positive")
         if self.horizon_hours != 24:
-            raise ConfigError("the stored future_max_fare_24h schema requires horizon_hours = 24")
+            raise ConfigError("the next-day label requires horizon_hours = 24")
+        start, end = self.check_window_hours
+        if not 0 < start < end:
+            raise ConfigError("label.check_window_hours must be a positive, increasing pair")
+        if start < self.horizon_hours - 4 or end > self.horizon_hours + 4:
+            raise ConfigError("label.check_window_hours must stay within 20-28 h of the snapshot")
         if self.min_hours_to_departure < self.horizon_hours:
             raise ConfigError("label.min_hours_to_departure must be at least the horizon")
         if self.max_hours_to_departure <= self.min_hours_to_departure:
@@ -150,7 +160,9 @@ class ReportConfig:
     bootstrap_cluster: str
     threshold_precision_floor: float
     calibration_bins: int
-    min_label_coverage: float
+    min_eligible_rows: int
+    min_split_positives: int
+    min_band_positives: int
     min_headroom_positives: int
     min_tier_rows: int = 100
     r24_max_tail_hours: int = 4
@@ -167,8 +179,12 @@ class ReportConfig:
             raise ConfigError("report.threshold_precision_floor must be in [0, 1]")
         if not 2 <= self.calibration_bins <= 50:
             raise ConfigError("report.calibration_bins must be between 2 and 50")
-        if not 0 <= self.min_label_coverage <= 1:
-            raise ConfigError("report.min_label_coverage must be in [0, 1]")
+        if self.min_eligible_rows < 0:
+            raise ConfigError("report.min_eligible_rows must be non-negative")
+        if self.min_split_positives < 0:
+            raise ConfigError("report.min_split_positives must be non-negative")
+        if self.min_band_positives < 0:
+            raise ConfigError("report.min_band_positives must be non-negative")
         if self.min_headroom_positives < 0:
             raise ConfigError("report.min_headroom_positives must be non-negative")
         if self.min_tier_rows < 1:
@@ -291,7 +307,12 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             test_end=_date(splits_raw, "test_end"),
         ),
         label=LabelConfig(
+            estimand=_str(label_raw, "estimand"),
             horizon_hours=_int(label_raw, "horizon_hours", minimum=1),
+            check_window_hours=(
+                int(label_raw["check_window_hours"][0]),
+                int(label_raw["check_window_hours"][1]),
+            ),
             min_hours_to_departure=_int(label_raw, "min_hours_to_departure", minimum=1),
             max_hours_to_departure=_int(label_raw, "max_hours_to_departure", minimum=1),
             headroom_pct=tuple(int(value) for value in label_raw.get("headroom_pct", [])),
@@ -327,7 +348,9 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             bootstrap_cluster=_str(report_raw, "bootstrap_cluster"),
             threshold_precision_floor=_float(report_raw, "threshold_precision_floor"),
             calibration_bins=_int(report_raw, "calibration_bins", minimum=2),
-            min_label_coverage=_float(report_raw, "min_label_coverage"),
+            min_eligible_rows=_int(report_raw, "min_eligible_rows", minimum=0),
+            min_split_positives=_int(report_raw, "min_split_positives", minimum=0),
+            min_band_positives=_int(report_raw, "min_band_positives", minimum=0),
             min_headroom_positives=_int(report_raw, "min_headroom_positives", minimum=0),
             min_tier_rows=_int(report_raw, "min_tier_rows", minimum=1, default=100),
             r24_max_tail_hours=_int(report_raw, "r24_max_tail_hours", minimum=0, default=4),
