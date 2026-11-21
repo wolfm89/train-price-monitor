@@ -938,6 +938,8 @@ def _decision_row(
         "alert_rows": int(alert.sum()),
         "alert_share": float(alert.mean()),
         "saving_vs_always_wait_eur": float(np.mean(saving_vs_wait)),
+        "random_alert_saving_vs_wait_eur": float(alert.mean() * np.mean(saving)),
+        "lift_vs_random_eur": float(np.mean(saving_vs_wait) - alert.mean() * np.mean(saving)),
         "saving_vs_always_wait_pct": float(np.sum(saving_vs_wait) / np.sum(price)),
         "saving_vs_always_book_eur": float(np.mean(saving_vs_book)),
         "saving_vs_always_book_pct": float(np.sum(saving_vs_book) / np.sum(price)),

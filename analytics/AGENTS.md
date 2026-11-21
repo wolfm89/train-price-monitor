@@ -26,12 +26,13 @@ mise run //analytics:train:ablation -- --source .data/silver/<build>
 ```
 
 The `train` group adds numpy, scikit-learn, scipy, joblib and pyarrow. CI installs it for the
-analytics job and the manual pre-commit `ty` hook; `uv export --no-dev` must keep it out of the Lambda image.
+analytics job and the manual pre-commit `ty` hook; `uv export --no-dev` must keep it out of the
+Lambda image.
 
 The training CLI defaults to DuckDB `memory_limit=6GB` and `max_temp_size=20GB`; override them with
 `TRAIN_DUCKDB_MEMORY_LIMIT` and `TRAIN_DUCKDB_MAX_TEMP_SIZE`. Both effective values are recorded in
-`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for the 5 % route-day
-sample; raise it for the 10/25/50 % learning-curve runs.
+`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for the 5 %
+route-day sample; raise it for the 10/25/50 % learning-curve runs.
 
 S3 credentials are frozen into a temporary DuckDB secret for the run. IAM Identity Center role
 sessions default to one hour; for a long scan, download the silver build to `analytics/.data/` and

@@ -420,6 +420,7 @@ def _report(
             item["alert_rows"],
             _p(item["alert_share"]),
             _fmt(item["saving_vs_always_wait_eur"], 2),
+            _fmt(item["lift_vs_random_eur"], 2),
             _p(item["saving_vs_always_wait_pct"]),
             _fmt(item["saving_vs_always_book_eur"], 2),
             _p(item["saving_vs_always_book_pct"]),
@@ -641,6 +642,7 @@ def _report(
             "alerts",
             "alert share",
             "saving vs wait €",
+            "lift vs random €",
             "saving vs wait %",
             "saving vs book €",
             "saving vs book %",
@@ -658,6 +660,7 @@ def _report(
             item["alert_rows"],
             _p(item["alert_share"]),
             _fmt(item["saving_vs_always_wait_eur"], 2),
+            _fmt(item["lift_vs_random_eur"], 2),
             _fmt(item["saving_vs_always_book_eur"], 2),
             _ci(item["ci_saving_vs_wait_eur"], 3),
             _ci(item["ci_saving_vs_book_eur"], 3),
@@ -671,6 +674,7 @@ def _report(
             "alerts",
             "alert share",
             "saving vs wait €",
+            "lift vs random €",
             "saving vs book €",
             "95% CI vs wait",
             "95% CI vs book",
@@ -687,22 +691,28 @@ def _report(
         for item in evaluation.decision_value
         if item.get("ci_saving_vs_wait_eur") and item["ci_saving_vs_wait_eur"][0] > 0.0
     )
+    percell_lifts = [item["lift_vs_random_eur"] for item in evaluation.decision_value]
+    lift_positive = sum(1 for value in percell_lifts if value > 0.0)
     decision_summary = (
         f"Under per-headroom diagnostic calibration, the alert policy is significantly more expensive "
         f"than always booking now in {book_worse} of {len(book_cis)} band x headroom cells and "
         f"significantly cheaper in {book_better}; against always waiting it is significantly cheaper "
-        f"in {wait_better} cells."
+        f"in {wait_better} cells. The lift over a random alert policy at the same alert share is "
+        f"positive in {lift_positive} of {len(percell_lifts)} cells."
     )
     pooled_book = [item["ci_saving_vs_book_eur"] for item in evaluation.decision_value_pooled]
     pooled_wait = [item["ci_saving_vs_wait_eur"] for item in evaluation.decision_value_pooled]
     pooled_book_worse = sum(1 for interval in pooled_book if interval and interval[1] < 0.0)
     pooled_book_better = sum(1 for interval in pooled_book if interval and interval[0] > 0.0)
     pooled_wait_better = sum(1 for interval in pooled_wait if interval and interval[0] > 0.0)
+    pooled_lifts = [item["lift_vs_random_eur"] for item in evaluation.decision_value_pooled]
+    pooled_lift_positive = sum(1 for value in pooled_lifts if value > 0.0)
     pooled_decision_summary = (
         f"With the shipped pooled calibrator, the policy is significantly more expensive than always "
         f"booking now in {pooled_book_worse} of {len(pooled_book)} bands and significantly cheaper in "
         f"{pooled_book_better}; against always waiting it is significantly cheaper in "
-        f"{pooled_wait_better} bands."
+        f"{pooled_wait_better} bands. The lift over a random alert policy at the same alert share is "
+        f"positive in {pooled_lift_positive} of {len(pooled_lifts)} bands."
     )
     journey_total = int(journey.get("total_journeys", 0))
     journey_at_risk = int(journey.get("at_risk", 0))
@@ -1031,8 +1041,10 @@ Reliability by headroom, TTD band and era:
 Positive saving means the alert policy costs less than the baseline; negative means it costs
 more. `%` columns divide summed euros by summed fares; the conditional saving is the mean euro
 saving over alerted rows and is not a ratio. `cost of waiting` is the unconditional cost of always
-waiting one day. This table uses per-headroom out-of-fold calibration and is diagnostic; the
-shipped model uses the pooled calibrator. It uses the 20-24 h check, inside the 24 h maximum.
+waiting one day. `lift vs random` subtracts the expected saving of a random alert policy with the
+same alert share (`alert share x cost of waiting`) from the model's saving versus waiting. This table
+uses per-headroom out-of-fold calibration and is diagnostic; the shipped model uses the pooled
+calibrator. It uses the 20-24 h check, inside the 24 h maximum.
 
 {decision_summary}
 

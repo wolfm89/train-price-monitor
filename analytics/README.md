@@ -394,7 +394,7 @@ future-**departure** cohort, not a future-era holdout.
 The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
 (`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
 diagnostics, the climatology baseline, per-headroom x TTD metrics, strata, clustered intervals,
-calibration slope/intercept/ECE and a decision-value diagnostic. The next-day diagnostic is
+calibration slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The next-day diagnostic is
 reported for both the 20-28 h and 22-26 h windows; the 20-24 h check is kept for the "crossed and
 came back" comparison and the decision-value diagnostic (the table states this). Each run also writes
 `predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
