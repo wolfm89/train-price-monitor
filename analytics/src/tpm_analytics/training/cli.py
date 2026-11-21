@@ -119,7 +119,9 @@ def main(argv: list[str] | None = None) -> int:
         out_dir = out_dir.resolve()
         if out_dir.exists() and any(out_dir.iterdir()):
             raise FileExistsError(f"{out_dir} is not empty; use a new --run-id or --out")
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
         work_dir = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.", suffix=".tmp", dir=out_dir.parent))
+        os.chmod(work_dir, 0o755)
         temp_dir = work_dir / ".duckdb-tmp"
         configured_extensions = os.environ.get("DUCKDB_EXTENSION_DIR")
         if configured_extensions is None and Path(".duckdb-extensions").is_dir():

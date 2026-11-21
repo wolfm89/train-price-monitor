@@ -30,7 +30,8 @@ analytics job and the manual pre-commit `ty` hook; `uv export --no-dev` must kee
 
 The training CLI defaults to DuckDB `memory_limit=6GB` and `max_temp_size=20GB`; override them with
 `TRAIN_DUCKDB_MEMORY_LIMIT` and `TRAIN_DUCKDB_MAX_TEMP_SIZE`. Both effective values are recorded in
-`dataset_manifest.json` under `duckdb_settings`.
+`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for the 5 % route-day
+sample; raise it for the 10/25/50 % learning-curve runs.
 
 S3 credentials are frozen into a temporary DuckDB secret for the run. IAM Identity Center role
 sessions default to one hour; for a long scan, download the silver build to `analytics/.data/` and
@@ -123,8 +124,10 @@ v2-only and mixed-schema input.
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
-  and `--ablation` report validation only.
-- `check_at` (20-24 h for crossed-back; 20-28 h and 22-26 h for next-day coverage/prevalence),
+  and `--ablation` report validation only. `--evaluate-test` gates the report and model metrics;
+  `profile.json` and `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
+- `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
+  next-day coverage/prevalence),
   `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the label diagnostics are
   audit columns, not model features. They may use future scrapes only for evaluation, never inside
   the feature matrix.

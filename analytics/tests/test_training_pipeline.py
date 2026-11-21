@@ -380,6 +380,34 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
                 fare=80.0,
             ),
             _row(
+                observed_at=datetime(2026, 7, 2, 10, 0),
+                departure=departure,
+                route="shift20",
+                train="ICE-SHIFT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 8, 0),
+                departure=departure,
+                route="shift20",
+                train="ICE-SHIFT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 3, 10, 0),
+                departure=departure,
+                route="shift20",
+                train="ICE-SHIFT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 4, 10, 0),
+                departure=departure + timedelta(minutes=20),
+                route="shift20",
+                train="ICE-SHIFT",
+                fare=80.0,
+            ),
+            _row(
                 observed_at=datetime(2026, 7, 4, 10, 0),
                 departure=departure + timedelta(minutes=20),
                 route="other",
@@ -462,12 +490,17 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
     finally:
         connection.close()
     profile = json.loads((tmp_path / "successor-run" / "profile.json").read_text())["profile"]
-    successors = {group["successor"]: group["journeys"] for group in profile["journey"]["groups"]}
-    successors_60 = {group["successor_60"]: group["journeys"] for group in profile["journey"]["groups"]}
+    successors: dict[str, int] = {}
+    successors_60: dict[str, int] = {}
+    for group in profile["journey"]["groups"]:
+        successors[group["successor"]] = successors.get(group["successor"], 0) + group["journeys"]
+        successors_60[group["successor_60"]] = successors_60.get(group["successor_60"], 0) + group["journeys"]
     assert successors.get("same_train", 0) >= 1
     assert successors.get("other_train", 0) >= 1
     assert successors.get("none", 0) >= 1
     assert successors_60.get("none", 0) >= 1
+    assert successors_60.get("same_train", 0) > successors.get("same_train", 0)
+    assert successors_60.get("other_train", 0) < successors.get("other_train", 0)
 
 
 def test_check_grid_and_coverage(tmp_path: Path) -> None:
@@ -546,6 +579,108 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     assert str(row[7]) == "2026-07-04 10:00:00"
     assert row[8] == pytest.approx(90.0)
     assert row[9] == pytest.approx(90.0)
+
+
+def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
+    snapshot = datetime(2026, 7, 3, 11, 0)
+    departure = snapshot + timedelta(hours=48)
+    source = tmp_path / "windows.parquet"
+    _write_silver(
+        source,
+        [
+            _row(observed_at=snapshot, departure=departure, route="only25", train="ICE-25", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=25),
+                departure=departure,
+                route="only25",
+                train="ICE-25",
+                fare=90.0,
+            ),
+            _row(observed_at=snapshot, departure=departure, route="only265", train="ICE-265", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=26, minutes=30),
+                departure=departure,
+                route="only265",
+                train="ICE-265",
+                fare=95.0,
+            ),
+            _row(
+                observed_at=snapshot,
+                departure=snapshot + timedelta(hours=24, minutes=30),
+                route="after",
+                train="ICE-EARLY",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=snapshot + timedelta(hours=25),
+                departure=snapshot + timedelta(hours=33),
+                route="after",
+                train="ICE-LATE",
+                fare=90.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 15, 10, 0),
+                departure=datetime(2026, 7, 16, 10, 0),
+                route="select",
+                train="ICE-SELECT",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 22, 10, 0),
+                departure=datetime(2026, 7, 23, 10, 0),
+                route="calibrate",
+                train="ICE-CAL",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 29, 10, 0),
+                departure=datetime(2026, 7, 30, 10, 0),
+                route="test",
+                train="ICE-TEST",
+                fare=80.0,
+            ),
+        ],
+    )
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_label_coverage"] = 0
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="windows", build_id=None, manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "windows-run",
+            run_id="windows",
+        )
+        rows = connection.execute(
+            "SELECT route_id, check_at, check_at_2028, check_at_2226, "
+            "check_price_2028_eur, check_price_2226_eur FROM read_parquet(?) "
+            "WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00' ORDER BY route_id",
+            [str(tmp_path / "windows-run" / "dataset" / "train.parquet")],
+        ).fetchall()
+    finally:
+        connection.close()
+    by_route = {row[0]: row for row in rows}
+    only25 = by_route["only25"]
+    assert only25[1] is None
+    assert str(only25[2]) == "2026-07-04 12:00:00"
+    assert str(only25[3]) == "2026-07-04 12:00:00"
+    assert only25[4] == pytest.approx(90.0)
+    assert only25[5] == pytest.approx(90.0)
+    only265 = by_route["only265"]
+    assert only265[1] is None
+    assert str(only265[2]) == "2026-07-04 13:30:00"
+    assert only265[3] is None
+    assert only265[4] == pytest.approx(95.0)
+    assert only265[5] is None
+    after = by_route["after"]
+    assert after[1] is None
+    assert after[2] is None
+    assert after[3] is None
+    assert after[4] is None
+    assert after[5] is None
 
 
 def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
@@ -1257,16 +1392,20 @@ def test_bootstrap_helpers_produce_bounded_intervals() -> None:
     interval = _cluster_mean_ci(probabilities, groups, 20, 9)
     assert len(interval) == 2
     assert interval[0] <= interval[1]
+    constant = _cluster_mean_ci(np.full(len(y), 5.0), groups, 20, 9)
+    assert constant == pytest.approx([5.0, 5.0])
+    identical = _bootstrap_paired(y, probabilities, probabilities, groups, 20, 10)
+    assert identical == pytest.approx([0.0, 0.0])
 
 
 def test_cli_failure_leaves_no_output_or_temp(tmp_path: Path) -> None:
     source = tmp_path / "silver.parquet"
-    _write_silver(source, _rows())
+    rows = _rows()
+    rows[-1]["schema_version"] = 2
+    rows[-1]["journey_id"] = "v2-row"
+    _write_silver(source, rows)
     config_path = _config(tmp_path)
-    raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 2.0
-    config_path.write_text(json.dumps(raw))
-    out = tmp_path / "failed-run"
+    out = tmp_path / "nested" / "failed-run"
     assert (
         main(
             [
@@ -1281,6 +1420,7 @@ def test_cli_failure_leaves_no_output_or_temp(tmp_path: Path) -> None:
         == 2
     )
     assert not out.exists()
+    assert (tmp_path / "nested").is_dir()
     assert not list(tmp_path.glob(".failed-run.*.tmp"))
 
 
@@ -1348,6 +1488,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         == 0
     )
     assert (run_out / "report.md").is_file()
+    assert (run_out.stat().st_mode & 0o777) == 0o755
     assert (run_out / "metrics.json").is_file()
     assert (run_out / "calibration.csv").is_file()
     assert (run_out / "manifest.json").is_file()

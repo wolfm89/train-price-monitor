@@ -811,6 +811,32 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
     )
 
 
+def _label_window_profile(
+    connection: duckdb.DuckDBPyConnection, group_column: str, group_alias: str
+) -> list[dict[str, Any]]:
+    """Coverage and next-day prevalence by TTD band and one grouping column."""
+    return _dict_rows(
+        connection,
+        f"""
+        SELECT
+            split,
+            {group_column} AS {group_alias},
+            ttd_band AS band,
+            count(*) AS rows,
+            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
+            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
+            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
+            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
+            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
+            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, {group_column}, ttd_band
+        ORDER BY split, {group_column}, ttd_band
+        """,
+    )
+
+
 def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     headroom = connection.execute(
         """
@@ -933,46 +959,8 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         ORDER BY split, ttd_band
         """,
     )
-    label_era = _dict_rows(
-        connection,
-        """
-        SELECT
-            split,
-            observation_era AS era,
-            ttd_band AS band,
-            count(*) AS rows,
-            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
-            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
-            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
-            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
-            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
-            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
-        FROM sampled
-        WHERE split IS NOT NULL
-        GROUP BY split, observation_era, ttd_band
-        ORDER BY split, observation_era, ttd_band
-        """,
-    )
-    label_week = _dict_rows(
-        connection,
-        """
-        SELECT
-            split,
-            observation_week AS week,
-            ttd_band AS band,
-            count(*) AS rows,
-            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
-            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
-            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
-            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
-            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
-            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
-        FROM sampled
-        WHERE split IS NOT NULL
-        GROUP BY split, observation_week, ttd_band
-        ORDER BY split, observation_week, ttd_band
-        """,
-    )
+    label_era = _label_window_profile(connection, "observation_era", "era")
+    label_week = _label_window_profile(connection, "observation_week", "week")
     a29 = _dict_rows(
         connection,
         """
@@ -1072,6 +1060,19 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             FROM series_obs
             GROUP BY series_key
         ),
+        new_series AS MATERIALIZED (
+            SELECT
+                o.series_key,
+                o.route_id,
+                o.departure_date,
+                o.observed_at AS first_obs,
+                o.train_number,
+                o.service_class,
+                o.departure_planned
+            FROM series_obs o
+            JOIN series_info i USING (series_key)
+            WHERE o.observed_at = i.first_obs
+        ),
         eligible AS (
             SELECT *
             FROM series_info
@@ -1103,43 +1104,39 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 n.*,
                 CASE
                     WHEN EXISTS (
-                        SELECT 1 FROM series_obs o JOIN series_info oi USING (series_key)
-                        WHERE o.route_id = n.route_id
-                          AND o.departure_date = n.departure_date
-                          AND o.observed_at = n.next_s
-                          AND oi.first_obs = n.next_s
-                          AND o.train_number IS NOT DISTINCT FROM n.train_number
-                          AND o.service_class = n.service_class
-                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 900
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.service_class = n.service_class
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 900
                     ) THEN 'same_train'
                     WHEN EXISTS (
-                        SELECT 1 FROM series_obs o JOIN series_info oi USING (series_key)
-                        WHERE o.route_id = n.route_id
-                          AND o.departure_date = n.departure_date
-                          AND o.observed_at = n.next_s
-                          AND oi.first_obs = n.next_s
-                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 3600
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
                     ) THEN 'other_train'
                     ELSE 'none'
                 END AS successor,
                 CASE
                     WHEN EXISTS (
-                        SELECT 1 FROM series_obs o JOIN series_info oi USING (series_key)
-                        WHERE o.route_id = n.route_id
-                          AND o.departure_date = n.departure_date
-                          AND o.observed_at = n.next_s
-                          AND oi.first_obs = n.next_s
-                          AND o.train_number IS NOT DISTINCT FROM n.train_number
-                          AND o.service_class = n.service_class
-                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 3600
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.service_class = n.service_class
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
                     ) THEN 'same_train'
                     WHEN EXISTS (
-                        SELECT 1 FROM series_obs o JOIN series_info oi USING (series_key)
-                        WHERE o.route_id = n.route_id
-                          AND o.departure_date = n.departure_date
-                          AND o.observed_at = n.next_s
-                          AND oi.first_obs = n.next_s
-                          AND abs(date_diff('second', o.departure_planned, n.departure_planned)) <= 3600
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
                     ) THEN 'other_train'
                     ELSE 'none'
                 END AS successor_60,

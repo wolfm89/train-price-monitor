@@ -160,7 +160,7 @@ def _report(
             _fmt(item["median_gap_h"], 1),
         ]
         for item in stats.profile.get("coverage_r24", [])
-        if evaluation.test_evaluated or item["split"] != "test"
+        if item["band"] in {"1-3d", "3-5d", "5-7d"} and (evaluation.test_evaluated or item["split"] != "test")
     ]
     label_items = [
         item for item in stats.profile.get("label", []) if evaluation.test_evaluated or item["split"] != "test"
@@ -519,10 +519,10 @@ def _report(
             "TTD band",
             "rows",
             "coverage 20-28",
-            "priced 20-28",
+            "priced share 20-28",
             "next-day 20-28",
             "coverage 22-26",
-            "priced 22-26",
+            "priced share 22-26",
             "next-day 22-26",
         ],
         label_era_rows,
@@ -534,10 +534,10 @@ def _report(
             "TTD band",
             "rows",
             "coverage 20-28",
-            "priced 20-28",
+            "priced share 20-28",
             "next-day 20-28",
             "coverage 22-26",
-            "priced 22-26",
+            "priced share 22-26",
             "next-day 22-26",
         ],
         label_week_rows,
@@ -662,7 +662,6 @@ def _report(
     journey_share = _p(journey.get("share"))
     journey_share_at_risk = _p(journey.get("share_at_risk"))
     journey_none = sum(item["journeys"] for item in journey.get("groups", []) if item["successor"] == "none")
-    journey_none_60 = sum(item["journeys"] for item in journey.get("groups", []) if item["successor_60"] == "none")
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -681,7 +680,8 @@ def _report(
         )
     split_caveat = (
         "The test split is a future-departure cohort, not a future-era holdout. "
-        "The report shows era composition; do not read the test metric as era generalization."
+        "The report shows era composition for the evaluated splits; test rows are omitted unless "
+        "`--evaluate-test`."
     )
     split = config["splits"]
     split_line = (
@@ -721,8 +721,8 @@ def _report(
         )
         if evaluation.test_all is not None
         else (
-            "- Test was not evaluated; model metrics are validation-calibrate only. "
-            "Test cohort diagnostics above are descriptive."
+            "- Test was not evaluated; model metrics are validation-calibrate only and no test-cohort "
+            "diagnostics are printed."
         )
     )
     headroom_headers = [
@@ -803,12 +803,15 @@ def _report(
 
 `coverage` is the share of rows with a scrape in the window. `crossed back` is the share whose
 within-day maximum breached but the 20-24 h point did not. `dearer`/`cheaper`/`unchanged` use a
-+/-0.5 % band around the current fare and cover only rows with a 23-36 h reference; `priced` is the
-denominator for the next-day rate. Test-split rows appear only with `--evaluate-test`.
++/-0.5 % band around the current fare and cover only rows with a 23-36 h reference. In the main
+table `priced` is a count and the denominator for the next-day rate; the era and week tables show
+priced shares. Test-split rows appear only with `--evaluate-test`.
 
 By observation era:
 
 {label_era_table}
+
+In a validation-only run the test split is omitted, so the era table is dense-only.
 
 By observation week:
 
@@ -840,8 +843,8 @@ Single future scrape lag:
 - At risk (last observation more than 24 h before departure): **{journey_at_risk:,}**
 - Disappeared while the route-day was still scraped: **{journey_disappeared:,}** of all journeys
   ({journey_share}); {journey_share_at_risk} of at-risk
-- Successor `none`: **{journey_none:,}** under the 15-minute rule (**{journey_none_60:,}** under
-  the 60-minute rule; no new series started at the next route-day scrape within that window)
+- Successor `none`: **{journey_none:,}** (no new series started at the next route-day scrape
+  within 60 minutes; the count is invariant to the 15/60-minute same-train rule)
 - `same train` requires a new series (`first_obs`) at the next scrape with the same class and train
   number and a planned departure within 15 minutes; the 60-minute rule is the A31 comparison and
   counts departures shifted by 15-60 minutes that the 15-minute rule classifies as `other train`
@@ -858,8 +861,9 @@ Highest weekly unlabelled shares:
 
 ### Within-24 h coverage (R24)
 
-R24 requires the last scrape within {config["report"]["r24_max_tail_hours"]} h of `t + 24 h`
-and no gap above {config["report"]["r24_max_gap_hours"]} h.
+R24 is defined only for 24 h-7 d. It requires the last scrape within
+{config["report"]["r24_max_tail_hours"]} h of `t + 24 h` and no gap above
+{config["report"]["r24_max_gap_hours"]} h; later bands are omitted.
 
 {r24_table}
 
@@ -940,14 +944,14 @@ Reliability by headroom, TTD band and era:
 
 {reliability_table}
 
-### Decision value (diagnostic on the current label)
+### Decision value (20-24 h check, diagnostic on the current label)
 
 {decision_table}
 
 Positive saving means the alert policy costs less than the baseline; negative means it costs
-more. `%` columns divide summed euros by summed fares; the conditional saving is a mean of
-per-alert ratios and is not comparable with them. `cost of waiting` is the unconditional cost of
-always waiting one day.
+more. `%` columns divide summed euros by summed fares; the conditional saving is the mean euro
+saving over alerted rows and is not a ratio. `cost of waiting` is the unconditional cost of always
+waiting one day. This diagnostic uses the 20-24 h check, inside the 24 h maximum.
 
 {decision_summary}
 
