@@ -144,7 +144,7 @@ v2-only and mixed-schema input.
   and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
   journey disappearance is corpus-level and includes test departures. `profile.json` and
   `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
-- **Journey identity (L12).** The series key follows the itinerary (route, first train, class,
+- **Journey identity.** The series key follows the itinerary (route, first train, class,
   15-minute departure and arrival buckets, and the exact transfer count). When a series stops
   appearing, the chain links it to
   the next series with the same route, class and first-train number, a planned departure within
@@ -159,7 +159,13 @@ v2-only and mixed-schema input.
 - The link decision is causal. A series that is absent at a route-day scrape and has a matching
   successor there continues into the successor; if the old itinerary later returns, the return is
   a new incarnation of the same series key (`#r` suffix). No link depends on observations after
-  the scrape that decides it. `split_series` in the chain audit counts the incarnations.
+  the scrape that decides it. `split_series` counts base series split into at least one later
+  incarnation; the current sample has 782 split base series and 785 later incarnations.
+- Split detection currently matches a base series on the successor side. A successor that is
+  itself a later incarnation is linked by the chain but does not trigger an earlier split; this is
+  a recall gap, not a future-data leak. Do not describe the map as complete for that corner.
+- The v2 handover audit matches the first incarnation of each v1 series; later incarnations are
+  not separate counterpart rows. Do not read its unmatched count as a link-precision measure.
 - The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
   their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
   starts a new series. `price_rank_route_day` ranks every priced journey in

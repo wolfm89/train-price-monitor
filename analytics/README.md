@@ -405,7 +405,9 @@ are one-to-one and maximum-cardinality; the matcher prefers the closest departur
 pattern may use the second-closest candidate. An arrival change therefore keeps the journey; a
 different train or a shift above 15 minutes starts a new chain. The decision is causal: if the old
 itinerary later returns it becomes a new incarnation (`#r` suffix), so no link uses a later
-observation. `--strict-chains` drops ambiguous candidates; it is a sensitivity run, not the
+observation. A split is detected only when the successor is a base series at that scrape; a
+successor that is itself a later incarnation is matched by the chain but does not trigger an
+earlier split. `--strict-chains` drops ambiguous candidates; it is a sensitivity run, not the
 default.
 
 One population is used for training, selection, calibration, threshold and evaluation: every
@@ -414,7 +416,7 @@ not a population.
 
 The report and `metrics.json` carry the evaluation diagnostics: eligibility and censoring, the
 route-day check grid (`check_at`, `check_lag_h`), the within-24 h diagnostic on R24-covered rows,
-A18 bin collisions, A19 history depth, A24 missing-at-check, A26 scrape 10-16 h ahead, the
+bin collisions, history depth, missing-at-check shares, the scrape 10-16 h ahead profile, the
 climatology baseline, per-headroom x TTD metrics, strata, clustered intervals, calibration
 slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The decision-value
 diagnostic uses the 20-24 h check, inside the 24 h maximum. Each run also writes

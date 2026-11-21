@@ -495,7 +495,7 @@ def build_chain_map(
     )
     connection.execute(
         f"""
-        CREATE OR REPLACE TEMP TABLE {prefix}_row_map AS
+        CREATE OR REPLACE TEMP TABLE {map_table}_rows AS
         SELECT
             r.base_series_key AS series_key,
             r.observed_at,
@@ -512,8 +512,12 @@ def build_chain_map(
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE {map_table} AS
-        SELECT r.series_key, m.chain_id, i.chain_departure_date, i.chain_first_obs,
-               s.first_obs AS series_first_obs
+        SELECT DISTINCT
+            r.series_key,
+            m.chain_id,
+            i.chain_departure_date,
+            i.chain_first_obs,
+            s.first_obs AS series_first_obs
         FROM {prefix}_obs_rekeyed r
         JOIN {prefix}_map_base m USING (series_key)
         JOIN {prefix}_chain_info i USING (chain_id)
@@ -521,7 +525,6 @@ def build_chain_map(
         WHERE r.incarnation_rank = 0
         """
     )
-    connection.execute(f"CREATE OR REPLACE TEMP TABLE {map_table}_rows AS SELECT * FROM {prefix}_row_map")
     _phase("chain maps", phase_started)
     sizes: dict[str, int] = {}
     for chain_id in mapping.values():

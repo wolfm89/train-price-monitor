@@ -33,6 +33,24 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
+def _gated_dataset_payload(stats: DatasetStats, evaluation_on_test: bool) -> dict[str, Any]:
+    """Mirror the dataset in ``metrics.json`` with test rows removed from a validation-only run.
+
+    ``profile.json`` and ``dataset_manifest.json`` keep the descriptive test aggregates; the
+    machine-readable metrics payload follows the same gating as the report.
+    """
+    payload = stats.to_dict()
+    if evaluation_on_test:
+        return payload
+    payload["splits"] = [item for item in payload.get("splits", []) if item.get("split") != "test"]
+    profile = payload.get("profile")
+    if isinstance(profile, dict):
+        for key, value in list(profile.items()):
+            if isinstance(value, list):
+                profile[key] = [item for item in value if not (isinstance(item, dict) and item.get("split") == "test")]
+    return payload
+
+
 def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
     warning_items = list(stats.warnings)
     positives = float(evaluation.metrics.get("positive_rate") or 0.0)
@@ -44,7 +62,7 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
             f"{evaluation.calibration_prevalence:.3f} vs {positives:.3f}"
         )
     if not numpy.isfinite(evaluation.train_prevalence):
-        warning_items.append("no training rows match the evaluated tier; BSS vs train is unavailable")
+        warning_items.append("no training rows match the evaluation population; BSS vs train is unavailable")
     elif abs(positives - evaluation.train_prevalence) > 0.02:
         warning_items.append(
             f"prevalence shift between train and evaluation: {evaluation.train_prevalence:.3f} vs {positives:.3f}"
@@ -154,6 +172,11 @@ def _report(
             _p(item.get("within_24h_r24_rate")),
         ]
         for item in stats.profile.get("coverage", [])
+        if evaluation.evaluation_on_test or item["split"] != "test"
+    ]
+    early_window_rows = [
+        [item["split"], item["rows"], item["eligible"], _share(item.get("eligible"), item["rows"])]
+        for item in stats.profile.get("early_window", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
     ]
     era_rows = [
@@ -598,6 +621,7 @@ def _report(
         ]
         for name, metrics in (("model", model_metrics), ("climatology", clim_metrics))
     ]
+    early_window_table = _table(["split", "24-48 h rows", "eligible", "eligible share"], early_window_rows)
     cohort_table = _table(
         [
             "split",
@@ -974,6 +998,15 @@ def _report(
     ttd_line = (
         f"- TTD domain: {config['label']['min_hours_to_departure']}-{config['label']['max_hours_to_departure']} hours"
     )
+    label_line = (
+        f"- Label: `{config['label']['estimand']}`; the chain fare at the route-day check closest to "
+        f"t+{config['label']['horizon_hours']} h in {config['label']['check_window_hours'][0]}-"
+        f"{config['label']['check_window_hours'][1]} h, compared in integer cents. Censored rows are not scored."
+    )
+    population_line = (
+        f"- Evaluation population: `{evaluation.evaluation_tier}` "
+        f"({evaluation.evaluation_tier_rows:,} rows); calibration rows: {evaluation.calibration_rows:,}"
+    )
     brier_ci = evaluation.bootstrap.get("brier", [])
     logloss_ci = evaluation.bootstrap.get("log_loss", [])
     brier_line = f"- Brier: **{_fmt(evaluation.metrics.get('brier'))}** " + (
@@ -994,7 +1027,7 @@ def _report(
     )
     metrics_all_line = (
         "- One population: training, calibration, threshold and evaluation use every eligible row "
-        "with a known next-day check fare; there is no tier sensitivity table."
+        "with a known next-day check fare; the evidence tier is a diagnostic table only."
     )
     headroom_headers = [
         "headroom %",
@@ -1040,9 +1073,9 @@ def _report(
         "- Dataset counts use the configured route-day sample; the chain, duplicate and "
         "scrape-cadence sections state their own pre-resampling or full-corpus scope. Bootstrap "
         "intervals resample departure dates within the sample.\n"
-        "- The before/after and default -> strict comparisons are unpaired. The observed Brier "
-        "differences are within refit noise at this sample size; the default chain mode is kept by "
-        "rule, not by the metric.\n"
+        "- The before/after comparison against PR 3 is unpaired and the label changed: the next-day "
+        "point label is a different estimand from the within-24 h maximum, so the lower Brier is not "
+        "a model improvement.\n"
         "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
         "uses the pooled calibrator, so earlier per-headroom numbers are not like-for-like. "
         "The near-zero gap and slope near 1 follow from cross-fitting by route-day on the same "
@@ -1064,6 +1097,8 @@ def _report(
 {split_line}
 {sample_line}
 {ttd_line}
+{label_line}
+{population_line}
 {provenance_lines}
 - {split_caveat}
 
@@ -1090,6 +1125,11 @@ snapshot, before departure. The label is the chain's fare at the check closest t
 missing chain at that scrape censors the row (`not_listed`) rather than becoming a negative. The
 R24 columns are defined only for 24 h-7 d and use the separate within-24 h maximum diagnostic.
 
+The 24-48 h end of the domain has lower eligibility because the next-day check must still be before
+departure:
+
+{early_window_table}
+
 ### Observation-era composition
 
 {_table(["split", "era", "rows"], era_rows)}
@@ -1105,7 +1145,8 @@ R24 columns are defined only for 24 h-7 d and use the separate within-24 h maxim
 `eligible` counts rows with a check scrape; `labelled` counts eligible rows whose chain has a fare
 at that scrape; `censored` is `eligible - labelled`. `median/p10/p90 check lag` is the offset from
 `t + 24 h`. `within-24 h (R24)` is the separate within-day maximum diagnostic on R24-covered
-24 h-7 d rows. `next-day 20-24` and `next-day 22-26` are the legacy window sensitivities.
+24 h-7 d rows. `next-day 20-24` and `next-day 22-26` are separate window diagnostics; the 20-24 h point is the
+active crossed-back and decision-value check.
 `crossed back` is the share of R24-covered rows whose within-day maximum breached but the 20-24 h
 point did not. `dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover
 only rows with a backward 23-36 h reference.
@@ -1118,11 +1159,15 @@ By observation week:
 
 {label_week_table}
 
+A week with a 0 % eligible share is a scrape outage (for example 2026-W29); its rows are
+`no_check`, not negatives.
+
 ### Resampling collisions
 
 First-in-bin selection keeps the earliest observation in each chain x bin. The collision table
 still counts how many bins hold more than one observation, so the rule change is separable from
-the duplicate-key audit.
+the duplicate-key audit. Counts are pre-resampling and include all TTD bands, so they are larger
+than the Dataset table.
 
 {a18_table}
 
@@ -1201,8 +1246,8 @@ as the predecessor's last observation and are deliberately not chained.
 Links are decided causally: a series that is absent at a route-day scrape and has a matching
 successor there continues into that successor. If the old itinerary later returns, it becomes a
 new incarnation of the same series key (`#r` suffix), so no link depends on observations after the
-scrape that decides it. This run has {chain.get("links", 0):,} links and {chain.get("split_series", 0):,}
-series split into later incarnations.
+scrape that decides it. This run has {chain.get("links", 0):,} links and
+{chain.get("split_series", 0):,} base series split into later incarnations.
 
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and
 include test departures. They are not the 24 h-30 d model domain.
@@ -1249,9 +1294,9 @@ Highest weekly unlabelled shares:
 
 R24 is defined only for 24 h-7 d. It requires the last scrape within
 {config["report"]["r24_max_tail_hours"]} h of `t + 24 h` and no gap above
-{config["report"]["r24_max_gap_hours"]} h; later bands are omitted. `coverage known` counts rows
-with a scrape in the 24 h window; `R24 covered` averages over all rows in the band, so rows with no
-scrape count as not covered.
+{config["report"]["r24_max_gap_hours"]} h. The 7-30 d coverage figure is no longer printed; this
+table covers the 1-7 d bands only. `coverage known` counts rows with a scrape in the 24 h window;
+`R24 covered` averages over all rows in the band, so rows with no scrape count as not covered.
 
 {r24_table}
 
@@ -1283,7 +1328,7 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 - Recall at threshold: {_fmt(evaluation.metrics.get("recall_at_threshold"))}
 - Headroom monotonic (shipped pooled calibrator): {evaluation.metrics.get("headroom_monotonic")}
 - Headroom monotonic (raw scores): {evaluation.metrics.get("headroom_monotonic_raw")}
-- Evaluation tier: `{evaluation.evaluation_tier}` ({evaluation.evaluation_tier_rows} rows)
+- Evaluation population: `{evaluation.evaluation_tier}` ({evaluation.evaluation_tier_rows} rows)
 - Precision floor met on evaluation: {evaluation.metrics.get("precision_floor_met_on_evaluation")}
 {metrics_all_line}
 
@@ -1411,7 +1456,7 @@ def write_report(
         "run_id": stats.run_id,
         "runner": runner,
         "config": config,
-        "dataset": stats.to_dict(),
+        "dataset": _gated_dataset_payload(stats, evaluation.evaluation_on_test),
         "feature_spec": {"calendar_set": spec.calendar_set, "features": list(spec.names)},
         "evaluation": evaluation.to_dict(),
         "evaluation_on_test": evaluation.evaluation_on_test,

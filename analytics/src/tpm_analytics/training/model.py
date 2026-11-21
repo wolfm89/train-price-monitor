@@ -595,6 +595,7 @@ class Evaluation:
     metrics_all: dict[str, Any] | None
     evaluation_tier: str
     evaluation_tier_rows: int
+    calibration_rows: int
     evaluation_split: str
     evaluation_on_test: bool
     calibration_prevalence: float
@@ -650,6 +651,7 @@ class Evaluation:
             "metrics_all": self.metrics_all,
             "evaluation_tier": self.evaluation_tier,
             "evaluation_tier_rows": self.evaluation_tier_rows,
+            "calibration_rows": self.calibration_rows,
             "evaluation_on_test": self.evaluation_on_test,
             "calibration_prevalence": self.calibration_prevalence,
             "train_prevalence": self.train_prevalence,
@@ -1070,10 +1072,6 @@ def _canonical(data: TabularData) -> TabularData:
     return data.subset(order)
 
 
-def _select(values: Array, mask: Array | None) -> Array:
-    return values[mask] if mask is not None else values
-
-
 def _fit_candidates(
     train: TabularData,
     validation_select: TabularData,
@@ -1124,12 +1122,7 @@ def _fit_final_calibration(
     validation_calibrate: TabularData,
     config: TrainingConfig,
 ) -> tuple[TabularData, ScoreCalibrator, str, bool, dict[str, Array], float, bool]:
-    evidence = validation_calibrate.future_observations >= 2
-    cal_data = (
-        validation_calibrate.subset(evidence)
-        if int(evidence.sum()) >= config.report.min_tier_rows
-        else validation_calibrate
-    )
+    cal_data = validation_calibrate
     raw_cal = model.predict(cal_data)
     method_scores: dict[str, dict[str, float | None]] = {}
     oof_predictions: dict[str, Array] = {}
@@ -1192,7 +1185,6 @@ def _headroom_diagnostics(
     config: TrainingConfig,
     bands_eval: Array,
     bands_train: Array,
-    eval_mask: Array | None,
     threshold: float,
     evaluate_test: bool,
 ) -> tuple[
@@ -1209,7 +1201,6 @@ def _headroom_diagnostics(
     raw_by_headroom: list[Array] = []
     folds_by_headroom: list[Array] = []
     y_by_headroom: list[Array] = []
-    select = (lambda values: _select(values, eval_mask)) if not evaluate_test else (lambda values: values)
     for value in config.label.headroom_pct:
         y_headroom = breach(eval_rows.price_cents, eval_rows.check_price_cents, value)
         y_cal_headroom = breach(cal_data.price_cents, cal_data.check_price_cents, value)
@@ -1224,9 +1215,9 @@ def _headroom_diagnostics(
             config,
             evaluate_test,
         )
-        probabilities = select(calibrated)
-        raw_headroom = select(raw_apply)
-        folds_eval = select(folds)
+        probabilities = calibrated
+        raw_headroom = raw_apply
+        folds_eval = folds
         clim_raw_headroom = climatology.predict(cal_data, headroom=value)
         clim_apply = climatology.predict(eval_rows, headroom=value) if evaluate_test else clim_raw_headroom
         clim_calibrated, _, _ = _calibrated_scores(
@@ -1238,7 +1229,7 @@ def _headroom_diagnostics(
             config,
             evaluate_test,
         )
-        clim_headroom = select(clim_calibrated)
+        clim_headroom = clim_calibrated
         item = _metrics(y_headroom, probabilities)
         item["headroom_pct"] = value
         item["mean_probability"] = float(np.mean(probabilities))
@@ -1420,8 +1411,8 @@ def train_and_evaluate(
     metrics_all = None
     # One population: every eligible snapshot with a known next-day check fare. The old
     # two-or-more-scrape tier is a diagnostic stratum only.
+    evaluation_tier = "all_labelled_rows"
     eval_rows = eval_data
-    evaluation_tier = "all_eligible_rows"
     train_eval = train
     raw_eval_source = model.predict(eval_data)
     calibrated_eval = calibrator.predict(raw_eval_source) if evaluate_test else oof_predictions[calibration_method]
@@ -1467,7 +1458,6 @@ def train_and_evaluate(
             config,
             bands_eval,
             bands_train,
-            None,
             threshold,
             evaluate_test,
         )
@@ -1592,6 +1582,7 @@ def train_and_evaluate(
         metrics_all=metrics_all,
         evaluation_tier=evaluation_tier,
         evaluation_tier_rows=len(eval_rows),
+        calibration_rows=len(cal_data),
         evaluation_split=evaluation_split,
         evaluation_on_test=evaluate_test,
         calibration_prevalence=float(np.mean(cal_data.y)),

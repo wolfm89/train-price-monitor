@@ -73,6 +73,8 @@ class LabelConfig:
             raise ConfigError("label.check_window_hours must be a positive, increasing pair")
         if start < self.horizon_hours - 4 or end > self.horizon_hours + 4:
             raise ConfigError("label.check_window_hours must stay within 20-28 h of the snapshot")
+        if not start <= self.horizon_hours <= end:
+            raise ConfigError("label.check_window_hours must contain the horizon")
         if self.min_hours_to_departure < self.horizon_hours:
             raise ConfigError("label.min_hours_to_departure must be at least the horizon")
         if self.max_hours_to_departure <= self.min_hours_to_departure:
@@ -164,7 +166,6 @@ class ReportConfig:
     min_split_positives: int
     min_band_positives: int
     min_headroom_positives: int
-    min_tier_rows: int = 100
     r24_max_tail_hours: int = 4
     r24_max_gap_hours: int = 6
 
@@ -187,8 +188,6 @@ class ReportConfig:
             raise ConfigError("report.min_band_positives must be non-negative")
         if self.min_headroom_positives < 0:
             raise ConfigError("report.min_headroom_positives must be non-negative")
-        if self.min_tier_rows < 1:
-            raise ConfigError("report.min_tier_rows must be positive")
         if self.r24_max_tail_hours < 0 or self.r24_max_gap_hours < 0:
             raise ConfigError("report R24 thresholds must be non-negative")
 
@@ -356,7 +355,6 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             min_split_positives=_int(report_raw, "min_split_positives", minimum=0),
             min_band_positives=_int(report_raw, "min_band_positives", minimum=0),
             min_headroom_positives=_int(report_raw, "min_headroom_positives", minimum=0),
-            min_tier_rows=_int(report_raw, "min_tier_rows", minimum=1, default=100),
             r24_max_tail_hours=_int(report_raw, "r24_max_tail_hours", minimum=0, default=4),
             r24_max_gap_hours=_int(report_raw, "r24_max_gap_hours", minimum=0, default=6),
         ),

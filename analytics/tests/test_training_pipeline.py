@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
+from tpm_analytics.training.chains import build_chain_map
 from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
 from tpm_analytics.training.dataset import (
@@ -29,10 +30,11 @@ from tpm_analytics.training.dataset import (
 )
 from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
-from tpm_analytics.training.labels import breach, cents
+from tpm_analytics.training.labels import breach, breach_sql, cents
 from tpm_analytics.training.model import (
     Evaluation,
     FittedModel,
+    ModelError,
     TabularData,
     _bootstrap,
     _bootstrap_metrics,
@@ -942,6 +944,82 @@ def test_chain_rejects_null_train_numbers(tmp_path: Path) -> None:
     ]
     stats, _ = _build_chain_dataset(tmp_path, rows)
     assert stats.profile["chain"]["links"] == 0
+    assert stats.profile["chain"]["split_series"] == 0
+
+
+def test_same_scrape_rekey_does_not_split_the_series(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 3, 20, 0), departure=departure, route="overlap", train="ICE-O", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="overlap", train="ICE-O", fare=82.0),
+        _row(observed_at=datetime(2026, 7, 5, 10, 0), departure=departure, route="overlap", train="ICE-O", fare=84.0),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="overlap",
+            train="ICE-O",
+            fare=99.0,
+        ),
+    ]
+    stats, _ = _build_chain_dataset(tmp_path, rows)
+    assert stats.profile["chain"]["split_series"] == 0
+    assert stats.profile["chain"]["overlap_candidates"] >= 1
+    assert stats.profile["chain"]["links"] == 0
+
+
+def test_chain_map_is_series_level_and_row_map_is_unique() -> None:
+    connection = duckdb.connect()
+    try:
+        connection.execute(
+            """
+            CREATE TABLE base (
+                series_key TEXT, route_id TEXT, departure_date DATE, train_number TEXT,
+                service_class INTEGER, departure_planned TIMESTAMP, observed_at TIMESTAMP,
+                price_eur DOUBLE, load_factor_ordinal INTEGER, arrival_planned TIMESTAMP,
+                transfers_actual INTEGER
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO base VALUES
+                ('p', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-05 20:00:00',
+                 80.0, 2, TIMESTAMP '2026-07-09 00:00:00', 0),
+                ('p', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-06 20:00:00',
+                 82.0, 2, TIMESTAMP '2026-07-09 00:00:00', 0),
+                ('p', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-07 12:00:00',
+                 85.0, 2, TIMESTAMP '2026-07-09 00:00:00', 0),
+                ('s', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-07 10:00:00',
+                 99.0, 2, TIMESTAMP '2026-07-09 00:00:16', 0),
+                ('s', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-07 12:00:00',
+                 98.0, 2, TIMESTAMP '2026-07-09 00:00:16', 0)
+            """
+        )
+        connection.execute("CREATE TABLE grid AS SELECT DISTINCT route_id, departure_date, observed_at FROM base")
+        stats = build_chain_map(
+            connection,
+            base_view="base",
+            grid_view="grid",
+            prefix="probe",
+            map_table="probe_map",
+        )
+        assert stats.base_series == 2
+        assert stats.split_series == 1
+        assert connection.execute("SELECT count(*) FROM probe_map").fetchone() == (2,)
+        assert connection.execute("SELECT count(*) FROM probe_map_rows").fetchone() == (5,)
+        duplicates = connection.execute(
+            "SELECT count(*) FROM (SELECT series_key, observed_at FROM probe_map_rows "
+            "GROUP BY 1, 2 HAVING count(*) > 1)"
+        ).fetchone()
+        assert duplicates == (0,)
+    finally:
+        connection.close()
 
 
 def test_chain_does_not_cross_departure_date(tmp_path: Path) -> None:
@@ -1087,6 +1165,7 @@ def test_chain_rejects_different_train_and_large_shift(tmp_path: Path) -> None:
         before = next(index for index in route_rows if str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00")
         assert predictions["future_max_fare_24h"][before] is None
         assert stats.profile["chain"]["links"] == 0
+        assert stats.profile["chain"]["split_series"] == 0
 
 
 def test_chain_matching_prioritises_cardinality_over_closest_candidate(tmp_path: Path) -> None:
@@ -1393,7 +1472,6 @@ def test_evaluate_test_uses_one_population(tmp_path: Path) -> None:
     _write_silver(source, rows)
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_tier_rows"] = 1
     raw["report"]["min_eligible_rows"] = 0
     raw["report"]["min_split_positives"] = 0
     raw["report"]["min_band_positives"] = 0
@@ -1416,8 +1494,13 @@ def test_evaluate_test_uses_one_population(tmp_path: Path) -> None:
     metrics = json.loads((out / "metrics.json").read_text())
     assert metrics["evaluation"]["evaluation_on_test"] is True
     assert metrics["evaluation"]["metrics_all"] is None
-    assert metrics["evaluation"]["evaluation_tier"] == "all_eligible_rows"
+    assert metrics["evaluation"]["evaluation_tier"] == "all_labelled_rows"
     assert metrics["evaluation"]["evaluation_tier_rows"] >= 1
+    calibration_split = next(item for item in metrics["dataset"]["splits"] if item["split"] == "validation_calibrate")
+    test_split = next(item for item in metrics["dataset"]["splits"] if item["split"] == "test")
+    assert metrics["evaluation"]["calibration_rows"] == calibration_split["labelled"]
+    assert metrics["evaluation"]["evaluation_tier_rows"] == test_split["labelled"]
+    assert any(item["split"] == "test" for item in metrics["dataset"]["splits"])
     assert (out / "predictions" / "test.parquet").is_file()
 
 
@@ -1425,6 +1508,177 @@ def test_integer_cent_label_counts_an_exact_limit_as_reached() -> None:
     assert breach(np.array([10_000]), np.array([10_100]), np.array([1])).tolist() == [1]
     assert breach(np.array([10_000]), np.array([10_099]), np.array([1])).tolist() == [0]
     assert cents(np.array([100.0, 101.01, np.nan])).tolist() == [10_000, 10_101, -1]
+
+
+def test_a29_fixed_five_percent_uses_fixed_five(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    snapshot = datetime(2026, 7, 3, 10, 0)
+    rows = [
+        _row(observed_at=snapshot, departure=departure, route="a29", train="ICE-A29", fare=100.0),
+        _row(
+            observed_at=snapshot + timedelta(hours=4),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=100.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=8),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=12),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=16),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=106.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=20),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=24),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+    ]
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 8, 10, 0),
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"a29-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "a29.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="a29", build_id="a29", manifest_sha256=None),
+            config,
+            tmp_path / "a29-run",
+            run_id="a29",
+        )
+    finally:
+        connection.close()
+    a29 = [item for item in stats.profile["a29"] if item["split"] == "train" and item["band"] == "1-3d"]
+    assert len(a29) == 1
+    assert a29[0]["rows"] >= 1
+    assert a29[0]["within_day_rate"] == pytest.approx(1.0)
+    assert a29[0]["next_day_rate"] == pytest.approx(0.0)
+    assert a29[0]["crossed_back_rate"] == pytest.approx(1.0)
+
+
+def test_dataset_label_counts_an_exact_limit_as_reached(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    snapshot = datetime(2026, 7, 3, 10, 0)
+    rows: list[dict[str, object]] = []
+    for index in range(50):
+        rows.append(
+            _row(
+                observed_at=snapshot,
+                departure=departure,
+                route="exact-limit",
+                train=f"ICE-E{index}",
+                fare=90.0,
+            )
+        )
+        rows.append(
+            _row(
+                observed_at=snapshot + timedelta(hours=24),
+                departure=departure,
+                route="exact-limit",
+                train=f"ICE-E{index}",
+                fare=99.0,
+            )
+        )
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 8, 10, 0),
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"exact-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "exact.parquet"
+    _write_silver(source, rows)
+    config = load_config(_config(tmp_path))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="exact", build_id="exact", manifest_sha256=None),
+            config,
+            tmp_path / "exact-run",
+            run_id="exact",
+        )
+        labelled = connection.execute(
+            "SELECT headroom_pct, breached_next_day, count(*) FROM read_parquet(?) "
+            "WHERE route_id = 'exact-limit' AND snapshot_at = TIMESTAMP '2026-07-03 10:00:00' "
+            "GROUP BY 1, 2 ORDER BY 1, 2",
+            [str(tmp_path / "exact-run" / "dataset" / "train.parquet")],
+        ).fetchall()
+    finally:
+        connection.close()
+    by_headroom: dict[int, dict[int, int]] = {}
+    for headroom, label, count in labelled:
+        by_headroom.setdefault(int(headroom), {})[int(label)] = int(count)
+    assert by_headroom[10].get(1, 0) > 0  # 99.00 exactly equals 90.00 * 1.10 in cents
+    assert by_headroom[10].get(0, 0) == 0
+    assert by_headroom[20].get(0, 0) > 0
+    assert by_headroom[30].get(0, 0) > 0
+
+
+def test_breach_sql_counts_an_exact_limit_as_reached() -> None:
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            f"SELECT {breach_sql('9900', '9000', '10')}, {breach_sql('9899', '9000', '10')}"
+        ).fetchone()
+        assert row is not None
+        exact, below = row
+    finally:
+        connection.close()
+    assert exact is True
+    assert below is False
 
 
 def test_next_day_label_and_censoring(tmp_path: Path) -> None:
@@ -1468,12 +1722,14 @@ def test_next_day_label_and_censoring(tmp_path: Path) -> None:
     assert str(predictions["label_window_end"][labelled[0]]) == "2026-07-04 10:00:00"
     assert predictions["eligible"][censored[0]] is True
     assert predictions["label_observed"][censored[0]] is False
+    assert predictions["breached_next_day"][censored[0]] is None
     assert predictions["censor_reason"][censored[0]] == "not_listed"
     assert str(predictions["label_window_end"][censored[0]]) == "2026-07-04 10:00:00"
     nocheck = by_route["nocheck"][0]
     assert predictions["eligible"][nocheck] is False
     assert predictions["label_observed"][nocheck] is False
     assert predictions["censor_reason"][nocheck] == "no_check"
+    assert predictions["breached_next_day"][nocheck] is None
     assert predictions["fare_lost"][nocheck] is False
 
 
@@ -1502,10 +1758,10 @@ def test_chain_links_causally_and_splits_a_later_return(tmp_path: Path) -> None:
     ]
     stats, out = _build_chain_dataset(tmp_path, rows)
     predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    causal_rows = [index for index, route in enumerate(predictions["route_id"]) if route == "causal"]
+    assert len(causal_rows) == 5  # five snapshots, with no join fan-out
     by_time = {
-        (str(predictions["snapshot_at"][index]), float(predictions["price_eur"][index])): index
-        for index, route in enumerate(predictions["route_id"])
-        if route == "causal"
+        (str(predictions["snapshot_at"][index]), float(predictions["price_eur"][index])): index for index in causal_rows
     }
     assert (
         predictions["chain_id"][by_time[("2026-07-06 20:00:00", 82.0)]]
@@ -1636,6 +1892,22 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
                 train="ICE-LATE",
                 fare=90.0,
             ),
+            _row(observed_at=snapshot, departure=departure, route="atearly", train="ICE-20", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=20),
+                departure=departure,
+                route="atearly",
+                train="ICE-20",
+                fare=90.0,
+            ),
+            _row(observed_at=snapshot, departure=departure, route="atlate", train="ICE-28", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=28),
+                departure=departure,
+                route="atlate",
+                train="ICE-28",
+                fare=90.0,
+            ),
             _row(observed_at=snapshot, departure=departure, route="tooearly", train="ICE-EARLY", fare=80.0),
             _row(
                 observed_at=snapshot + timedelta(hours=19),
@@ -1726,6 +1998,12 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
         assert row[2] is None
         assert row[3] is None
         assert row[4] is None
+    atearly = by_route["atearly"]
+    assert str(atearly[1]) == "2026-07-04 07:00:00"
+    assert atearly[4] == pytest.approx(90.0)
+    atlate = by_route["atlate"]
+    assert str(atlate[1]) == "2026-07-04 15:00:00"
+    assert atlate[4] == pytest.approx(90.0)
 
 
 def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
@@ -2044,6 +2322,18 @@ def test_train_evaluate_is_permutation_invariant(tmp_path: Path) -> None:
     assert first_digest == second_digest
 
 
+def test_load_split_rejects_a_corrupted_label(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    source = out / "dataset" / "train.parquet"
+    broken = tmp_path / "broken.parquet"
+    table = pq.read_table(source)
+    payload = table.to_pydict()
+    payload["breached_next_day"][0] = 1 - payload["breached_next_day"][0]
+    pq.write_table(pa.table(payload), broken)
+    with pytest.raises(ModelError, match="disagree"):
+        load_split(broken, feature_spec("full"))
+
+
 def test_calibrator_outputs_are_bounded() -> None:
     rng = np.random.default_rng(5)
     raw = rng.random(1000)
@@ -2160,7 +2450,7 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
 
 
 def test_config_rejects_out_of_range_check_windows(tmp_path: Path) -> None:
-    for window in ([19, 28], [20, 29], [20], [20, "28"]):
+    for window in ([19, 28], [20, 29], [20, 21], [20], [20, "28"]):
         raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
         raw["label"]["check_window_hours"] = window
         path = tmp_path / f"window-{window}.json"
@@ -2388,8 +2678,9 @@ def _evaluation(
             "headroom_monotonic": True,
         },
         metrics_all=None,
-        evaluation_tier="all_eligible_rows",
+        evaluation_tier="all_labelled_rows",
         evaluation_tier_rows=1_000,
+        calibration_rows=1_000,
         evaluation_split="test" if evaluation_on_test else "validation_calibrate",
         evaluation_on_test=evaluation_on_test,
         calibration_prevalence=calibration_prevalence,
@@ -2844,6 +3135,30 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert "model.joblib" in manifest_json["artifact_sha256"]
     assert "column_roles.json" in manifest_json["artifact_sha256"]
     assert manifest_json["runtime"]["wall_seconds"] > 0
+    assert manifest_json["git_sha"]
+    assert manifest_json["git_sha_end"]
+    assert isinstance(manifest_json["git_dirty"], bool)
+    assert all(item["split"] != "test" for item in metrics["dataset"]["splits"])
+    for key in (
+        "headroom",
+        "coverage",
+        "cohort",
+        "early_window",
+        "ttd",
+        "label",
+        "label_era",
+        "label_week",
+        "a18",
+        "a19",
+        "a24",
+        "a26",
+        "a29",
+        "tier",
+        "unlabelled",
+        "coverage_r24",
+        "era",
+    ):
+        assert all(item.get("split") != "test" for item in metrics["dataset"]["profile"].get(key, []))
     assert manifest_json["runtime"]["peak_rss_kb"] > 0
     predictions_schema = pq.read_schema(run_out / "predictions" / "validation_calibrate.parquet")
     assert pa.types.is_timestamp(predictions_schema.field("snapshot_at").type)

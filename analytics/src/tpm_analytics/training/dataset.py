@@ -339,12 +339,18 @@ def _create_views(
     phase_started = _phase("chain map", phase_started)
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW base_chained AS
+        CREATE OR REPLACE TEMP TABLE base_chained AS
         SELECT b.*, m.chain_id, m.chain_departure_date
         FROM base_sampled b
         JOIN chain_map_rows m USING (series_key, observed_at)
         """
     )
+    base_rows = _scalar(connection, "SELECT count(*) FROM base_sampled")
+    chained_rows = _scalar(connection, "SELECT count(*) FROM base_chained")
+    if chained_rows != base_rows:
+        raise DatasetError(
+            f"chain row map changed the panel row count: {base_rows} sampled rows, {chained_rows} chained rows"
+        )
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE scrape_grid_all AS
@@ -974,6 +980,19 @@ def _profile(
         ORDER BY split
         """
     ).fetchall()
+    early_window = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            count(*) AS rows,
+            count(*) FILTER (WHERE eligible) AS eligible
+        FROM sampled
+        WHERE split IS NOT NULL AND hours_to_departure BETWEEN 24 AND 48
+        GROUP BY split
+        ORDER BY split
+        """,
+    )
     cohort = _dict_rows(
         connection,
         """
@@ -1060,15 +1079,21 @@ def _profile(
             split,
             ttd_band AS band,
             count(*) AS rows,
-            avg(CASE WHEN future_max_fare_24h_cents >= price_cents * 105 THEN 1.0 ELSE 0.0 END) AS within_day_rate,
-            avg(breached_next_day) AS next_day_rate,
-            avg(breached_at_check_2024) AS next_day_2024_rate,
-            avg(crossed_and_came_back) AS crossed_back_rate
+            avg(CASE WHEN future_max_fare_24h_cents * 100 >= price_cents * 105
+                THEN 1.0 ELSE 0.0 END) AS within_day_rate,
+            avg(CASE WHEN check_price_cents * 100 >= price_cents * 105
+                THEN 1.0 ELSE 0.0 END) AS next_day_rate,
+            avg(CASE WHEN check_price_2024_cents * 100 >= price_cents * 105
+                THEN 1.0 ELSE 0.0 END) AS next_day_2024_rate,
+            avg(CASE WHEN future_max_fare_24h_cents * 100 >= price_cents * 105
+                      AND NOT (check_price_2024_cents * 100 >= price_cents * 105)
+                THEN 1.0 ELSE 0.0 END) AS crossed_back_rate
         FROM sampled
         WHERE split IS NOT NULL
           AND label_observed
           AND r24_covered
           AND future_max_fare_24h_cents IS NOT NULL
+          AND check_price_2024_cents IS NOT NULL
         GROUP BY split, ttd_band
         ORDER BY split, ttd_band
         """,
@@ -1412,6 +1437,7 @@ def _profile(
             for row in coverage
         ],
         "cohort": cohort,
+        "early_window": early_window,
         "ttd": [
             {
                 "split": str(row[0]),
@@ -1535,6 +1561,8 @@ def build_dataset(
     strict_chains: bool = False,
 ) -> DatasetStats:
     """Build the panel, profile it and write the Parquet splits."""
+    # Provenance is the checkout state when the build starts, not when it happens to finish.
+    git_sha, git_dirty = _git_state()
     started = time.perf_counter()
     out_dir = out_dir.resolve()
     dataset_dir = out_dir / "dataset"
@@ -1602,8 +1630,10 @@ def build_dataset(
     source_inventory = _source_inventory(connection, source)
     if not source_inventory:
         warnings.append("source inventory is empty; the scanned file set is not localisable")
+    git_sha_end, git_dirty_end = _git_state()
+    if (git_sha_end, git_dirty_end) != (git_sha, git_dirty):
+        warnings.append("git state changed during the run; the manifest keeps the start state")
     stats = replace(stats, warnings=tuple(warnings))
-    git_sha, git_dirty = _git_state()
 
     # Digest before writing: a failed gate or digest query must not leave plausible Parquet files.
     digests = {split: _content_digest(connection, split, columns) for split in split_names} if write_splits else {}
@@ -1639,6 +1669,8 @@ def build_dataset(
         "dataset_peak_rss_kb": _peak_rss_kb(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
+        "git_sha_end": git_sha_end,
+        "git_dirty_end": git_dirty_end,
         "uv_lock_sha256": _lock_sha256(),
         "cli_argv": list(cli_argv or ()),
         "threads": threads,
