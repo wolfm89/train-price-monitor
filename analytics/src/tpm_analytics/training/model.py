@@ -593,6 +593,7 @@ class Evaluation:
     paired: dict[str, Any] = field(default_factory=dict)
     bootstrap_clusters: int = 0
     prediction_series: Array | None = field(default=None, repr=False, compare=False)
+    prediction_chain: Array | None = field(default=None, repr=False, compare=False)
     prediction_snapshot_at: Array | None = field(default=None, repr=False, compare=False)
     prediction_route_day: Array | None = field(default=None, repr=False, compare=False)
     prediction_headroom: Array | None = field(default=None, repr=False, compare=False)
@@ -1606,6 +1607,10 @@ def train_and_evaluate(
         paired=paired,
         bootstrap_clusters=len(np.unique(groups)),
         prediction_series=np.tile(eval_rows.series, len(config.label.headroom_pct)),
+        prediction_chain=np.tile(
+            eval_rows.chain if eval_rows.chain is not None else eval_rows.series,
+            len(config.label.headroom_pct),
+        ),
         prediction_snapshot_at=np.tile(eval_rows.snapshot_at, len(config.label.headroom_pct)),
         prediction_route_day=np.tile(eval_rows.route_day, len(config.label.headroom_pct)),
         prediction_headroom=prediction_headroom,
@@ -1635,6 +1640,7 @@ def write_evaluation_artifacts(
     """Persist the calibrated model and per-headroom predictions as local artifacts."""
     required = (
         evaluation.prediction_series,
+        evaluation.prediction_chain,
         evaluation.prediction_snapshot_at,
         evaluation.prediction_route_day,
         evaluation.prediction_headroom,
@@ -1645,6 +1651,7 @@ def write_evaluation_artifacts(
     if any(value is None for value in required):
         raise ModelError("evaluation has no prediction arrays to persist")
     series = evaluation.prediction_series
+    chains = evaluation.prediction_chain
     snapshots = evaluation.prediction_snapshot_at
     route_days = evaluation.prediction_route_day
     headrooms = evaluation.prediction_headroom
@@ -1659,6 +1666,7 @@ def write_evaluation_artifacts(
     labels = evaluation.prediction_y
     if (
         series is None
+        or chains is None
         or snapshots is None
         or route_days is None
         or headrooms is None
@@ -1678,6 +1686,7 @@ def write_evaluation_artifacts(
     table = pa.table(
         {
             "series_key": series,
+            "chain_id": chains,
             "snapshot_at": pa.array(np.asarray(snapshots, dtype="datetime64[us]")),
             "route_day": route_days,
             "headroom_pct": headrooms,

@@ -133,11 +133,17 @@ v2-only and mixed-schema input.
   appearing, the chain links it to
   the next series with the same route, class and first-train number, a planned departure within
   15 minutes and its first observation at the next route-day scrape. Links are one-to-one; the
-  closest departure wins. The chain id, not `series_key`, is the identity for the label window,
-  the history features and the split assignment. An arrival change therefore continues the
-  journey; a different train or a departure shift above 15 minutes does not. `--strict-chains`
-  drops every candidate whose predecessor or successor has more than one candidate and is the
-  sensitivity run, not the default.
+  matcher maximises the number of links and prefers the closest departure, but a crossing pattern
+  may use a predecessor's second-closest candidate to keep the matching maximum. The chain id, not
+  `series_key`, is the identity for the label window, the history features and the split assignment.
+  An arrival change therefore continues the journey; a different train or a departure shift above
+  15 minutes does not. `--strict-chains` drops every candidate whose predecessor or successor has
+  more than one candidate; it is the sensitivity run, not the default, and its Brier difference is
+  within refit noise.
+- The link decision uses the predecessor's full observation history: it links only if the series
+  never returns after the gap. On the 5 % sample 858 of 6,407 links (about 12 % of offline+online
+  link events) would differ under an online rule. PR 4 decides links causally at the check; until
+  then, successor features before a returning predecessor are not strictly point-in-time.
 - The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
   their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
   starts a new series. `price_rank_route_day` ranks every priced journey in
@@ -148,9 +154,9 @@ v2-only and mixed-schema input.
   DST rule directly because DuckDB's ICU timezone functions need `pytz` in the Python client.
 - `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
   next-day coverage/prevalence),
-  `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the label diagnostics are
-  audit columns, not model features. They may use future scrapes only for evaluation, never inside
-  the feature matrix.
+  `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the check/label diagnostics
+  are label columns, not model features. They may use future scrapes only for evaluation, never
+  inside the feature matrix.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
   `model.candidates` unless a future plan changes that decision.
 - `predictions/<split>.parquet` and `model.joblib` are local artifacts. Never load or trust a model

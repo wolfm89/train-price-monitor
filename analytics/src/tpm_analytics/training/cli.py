@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import resource
 import shutil
 import sys
 import tempfile
@@ -96,8 +97,14 @@ def _ablation(
     return results
 
 
+def _peak_rss_kb() -> int:
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform != "darwin" else value // 1024
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    run_started = time.perf_counter()
     work_dir: Path | None = None
     logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO))
     try:
@@ -171,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         ablation = _ablation(full_splits, config, primary_set, evaluation) if args.ablation else None
         training_model.write_evaluation_artifacts(work_dir, evaluation, fitted, calibrator, spec, config)
+        runtime = {
+            "wall_seconds": round(time.perf_counter() - run_started, 3),
+            "peak_rss_kb": _peak_rss_kb(),
+        }
         write_report(
             work_dir,
             stats,
@@ -180,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             runner="local",
             ablation=ablation,
             build_config=build_config.to_dict(),
+            runtime=runtime,
         )
         os.replace(work_dir, out_dir)
         summary = {
@@ -196,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             "brier": evaluation.metrics["brier"],
             "log_loss": evaluation.metrics["log_loss"],
             "ablation": ablation,
+            **runtime,
         }
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))
         return 0

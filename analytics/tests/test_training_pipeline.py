@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import duckdb
 import numpy as np
@@ -24,6 +24,7 @@ from tpm_analytics.training.dataset import (
     SplitStats,
     _final_columns,
     _git_state,
+    _source_inventory,
     build_dataset,
 )
 from tpm_analytics.training.features import feature_spec
@@ -65,7 +66,13 @@ SPLITS = {
 
 
 def _row(
-    *, observed_at: datetime, departure: datetime, route: str, train: str, fare: float, **overrides: object
+    *,
+    observed_at: datetime,
+    departure: datetime,
+    route: str,
+    train: str | None,
+    fare: float,
+    **overrides: object,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "observed_at": observed_at,
@@ -695,12 +702,12 @@ def test_v2_overlap_audit_splits_merges_and_missing_counterpart(tmp_path: Path) 
 def test_berlin_week_handles_dst_boundaries() -> None:
     connection = duckdb.connect()
     try:
-        spring = connection.execute(f"SELECT {berlin_week_sql("TIMESTAMP '2026-03-29 00:30:00'")}").fetchone()
-        autumn = connection.execute(f"SELECT {berlin_week_sql("TIMESTAMP '2026-10-25 00:30:00'")}").fetchone()
+        spring = connection.execute(f"SELECT {berlin_week_sql("TIMESTAMP '2026-03-29 22:30:00'")}").fetchone()
+        autumn = connection.execute(f"SELECT {berlin_week_sql("TIMESTAMP '2026-10-25 22:30:00'")}").fetchone()
     finally:
         connection.close()
     assert spring is not None
-    assert spring[0] == "2026-W13"
+    assert spring[0] == "2026-W14"
     assert autumn is not None
     assert autumn[0] == "2026-W43"
 
@@ -709,8 +716,8 @@ def test_chain_follows_arrival_change(tmp_path: Path) -> None:
     stats, out = _build_chain_dataset(tmp_path, _chain_fixture())
     assert stats.profile["chain"]["links"] >= 1
     assert stats.profile["chain"]["chains"] >= 1
-    assert stats.profile["duplicates"]["duplicate_groups"] >= 1
-    assert stats.profile["duplicates"]["extra_duplicate_rows"] >= 1
+    assert stats.profile["duplicates"]["duplicate_groups"] == 1
+    assert stats.profile["duplicates"]["extra_duplicate_rows"] == 1
     assert stats.profile["scrape_gap"]
     assert stats.profile["chain_v2"] is None
     predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
@@ -723,6 +730,189 @@ def test_chain_follows_arrival_change(tmp_path: Path) -> None:
     assert predictions["future_max_fare_24h"][before] == pytest.approx(99.0)
     assert predictions["future_observations"][before] == 1
     assert predictions["history_depth_h"][after] == pytest.approx(38.0)
+
+
+def test_overlap_candidates_excludes_self_pairs(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 3, 20, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4),
+            route="overlap-count",
+            train="ICE-OC",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 20, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4),
+            route="overlap-count",
+            train="ICE-OC",
+            fare=81.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 20, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="overlap-count",
+            train="ICE-OC",
+            fare=90.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="overlap-count",
+            train="ICE-OC",
+            fare=91.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 20, 0),
+            departure=departure,
+            route="overlap-self",
+            train="ICE-OS",
+            fare=80.0,
+        ),
+    ]
+    stats, _ = _build_chain_dataset(tmp_path, rows)
+    assert stats.profile["chain"]["overlap_candidates"] == 1
+
+
+def test_scrape_gap_audit_includes_departures_after_test_end(tmp_path: Path) -> None:
+    departure = datetime(2026, 9, 20, 10, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 9, 1, 10, 0),
+            departure=departure,
+            route="gap",
+            train="ICE-GAP",
+            fare=80.0,
+            observation_era="sparse",
+        ),
+        _row(
+            observed_at=datetime(2026, 9, 10, 10, 0),
+            departure=departure,
+            route="gap",
+            train="ICE-GAP",
+            fare=82.0,
+            observation_era="sparse",
+        ),
+    ]
+    stats, _ = _build_chain_dataset(tmp_path, rows)
+    gap = [item for item in stats.profile["scrape_gap"] if item["era"] == "sparse" and item["band"] == "7-30d"]
+    assert len(gap) == 1
+    assert gap[0]["scrapes"] == 2
+    assert gap[0]["median_gap_h"] == pytest.approx(216.0)
+    assert gap[0]["without_24h_share"] == pytest.approx(1.0)
+
+
+def test_chain_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
+    base_rows = _chain_fixture()
+    _, base_out = _build_chain_dataset(tmp_path / "base", base_rows)
+    extra = _row(
+        observed_at=datetime(2026, 7, 5, 18, 0),
+        departure=datetime(2026, 7, 6, 20, 0),
+        arrival_planned=datetime(2026, 7, 6, 20, 0) + timedelta(hours=4, minutes=16),
+        route="chain",
+        train="ICE-CHAIN",
+        fare=120.0,
+    )
+    _, mutated_out = _build_chain_dataset(tmp_path / "mutated", [*base_rows, extra])
+
+    def _row_at(out: Path) -> dict[str, object]:
+        predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+        index = next(
+            index
+            for index, route in enumerate(predictions["route_id"])
+            if route == "chain" and str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00"
+        )
+        return {name: predictions[name][index] for name in predictions}
+
+    base = _row_at(base_out)
+    mutated = _row_at(mutated_out)
+    feature_names = (
+        "price_vs_series_min",
+        "price_vs_series_median",
+        "price_min_7d",
+        "price_max_7d",
+        "price_drawdown_7d",
+        "price_runup_7d",
+        "history_depth_h",
+        "price_change_24h",
+        "price_jumps_24h",
+        "load_factor_change_24h",
+    )
+    for name in feature_names:
+        left = base[name]
+        right = mutated[name]
+        if left is None or right is None:
+            assert left is None
+            assert right is None
+        else:
+            assert float(cast(Any, left)) == pytest.approx(float(cast(Any, right)))
+    assert base["future_max_fare_24h"] == pytest.approx(99.0)
+    assert mutated["future_max_fare_24h"] == pytest.approx(120.0)
+
+
+def test_chain_rejects_null_train_numbers(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 3, 20, 0), departure=departure, route="null-train", train=None, fare=80.0),
+        _row(observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="null-train", train=None, fare=81.0),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="null-train",
+            train=None,
+            fare=90.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 22, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="null-train",
+            train=None,
+            fare=91.0,
+        ),
+    ]
+    stats, _ = _build_chain_dataset(tmp_path, rows)
+    assert stats.profile["chain"]["links"] == 0
+
+
+def test_chain_does_not_cross_departure_date(tmp_path: Path) -> None:
+    first = datetime(2026, 7, 5, 23, 55)
+    second = datetime(2026, 7, 6, 0, 5)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 4, 10, 0), departure=first, route="midnight", train="ICE-MID", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 5, 10, 0), departure=first, route="midnight", train="ICE-MID", fare=81.0),
+        _row(observed_at=datetime(2026, 7, 5, 22, 0), departure=first, route="midnight", train="ICE-FILL", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 5, 22, 0), departure=second, route="midnight", train="ICE-MID", fare=90.0),
+    ]
+    stats, _ = _build_chain_dataset(tmp_path, rows)
+    assert stats.profile["chain"]["links"] == 0
+
+
+def test_s3_source_inventory_shape() -> None:
+    class FakeCursor:
+        def fetchall(self) -> list[tuple[str, int]]:
+            return [("s3://bucket/build/file.parquet", 42)]
+
+    class FakeConnection:
+        def execute(self, sql: str) -> FakeCursor:
+            return FakeCursor()
+
+    inventory = _source_inventory(
+        cast(Any, FakeConnection()),
+        SourceSpec(
+            glob="s3://bucket/build/**/*.parquet",
+            label="s3://bucket/_latest.json",
+            build_id=None,
+            manifest_sha256=None,
+        ),
+    )
+    assert inventory == [{"path": "s3://bucket/build/file.parquet", "rows": 42}]
 
 
 def test_chain_rejects_different_train_and_large_shift(tmp_path: Path) -> None:
@@ -739,10 +929,10 @@ def test_chain_rejects_different_train_and_large_shift(tmp_path: Path) -> None:
         assert stats.profile["chain"]["links"] == 0
 
 
-def test_chain_matching_is_maximum_cardinality(tmp_path: Path) -> None:
-    departure = datetime(2026, 7, 6, 20, 0)
-    later = datetime(2026, 7, 6, 20, 10)
-    earlier = datetime(2026, 7, 6, 19, 45)
+def test_chain_matching_prioritises_cardinality_over_closest_candidate(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 7, 20, 0)
+    later = datetime(2026, 7, 7, 20, 10)
+    earlier = datetime(2026, 7, 7, 19, 45)
     rows = [
         _row(observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="match", train="ICE-MATCH", fare=80.0),
         _row(observed_at=datetime(2026, 7, 5, 10, 0), departure=departure, route="match", train="ICE-MATCH", fare=81.0),
@@ -779,12 +969,31 @@ def test_chain_matching_is_maximum_cardinality(tmp_path: Path) -> None:
             fare=91.0,
         ),
     ]
-    stats, _ = _build_chain_dataset(tmp_path, rows)
+    stats, out = _build_chain_dataset(tmp_path, rows)
     chain = stats.profile["chain"]
     assert chain["candidate_links"] == 3
     assert chain["links"] == 2
     assert chain["chains"] == 2
     assert chain["unused_candidates"] == 1
+    # The crossing case is the documented exception to "closest first": P1 gives up S1 for S2 so
+    # that P2 can keep S1 and the matching stays maximum.
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    by_key = {
+        (
+            str(predictions["snapshot_at"][index]),
+            float(predictions["price_eur"][index]),
+            str(predictions["departure_planned"][index]),
+        ): predictions["chain_id"][index]
+        for index in range(len(predictions["route_id"]))
+        if predictions["route_id"][index] == "match"
+    }
+    p1 = by_key[("2026-07-04 20:00:00", 80.0, "2026-07-07 20:00:00")]
+    p2 = by_key[("2026-07-04 20:00:00", 80.0, "2026-07-07 20:10:00")]
+    s1 = by_key[("2026-07-05 22:00:00", 90.0, "2026-07-07 20:00:00")]
+    s2 = by_key[("2026-07-05 22:00:00", 91.0, "2026-07-07 19:45:00")]
+    assert p1 == s2
+    assert p2 == s1
+    assert p1 != p2
 
 
 def test_resample_keeps_one_row_per_chain_bin(tmp_path: Path) -> None:
@@ -2228,6 +2437,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert profile_json["profile"]["label_era"]
     assert profile_json["profile"]["label_week"]
     assert all("successor_60" in group for group in profile_json["profile"]["journey"]["groups"])
+    assert "end_of_observation_at_risk" in profile_json["profile"]["journey"]
 
     run_out = tmp_path / "run"
     assert (
@@ -2263,6 +2473,7 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert "Known limitations" in report_text
     assert "Prevalence:" in report_text
     assert "average precision" in report_text
+    assert "| split | rows | series | chains |" in report_text
     manifest_json = json.loads((run_out / "manifest.json").read_text())
     assert manifest_json["evaluation_on_test"] is False
     assert "test" not in manifest_json["model"]
@@ -2288,14 +2499,19 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert "evaluation_config" in manifest_json
     assert "model.joblib" in manifest_json["artifact_sha256"]
     assert "column_roles.json" in manifest_json["artifact_sha256"]
+    assert manifest_json["runtime"]["wall_seconds"] > 0
+    assert manifest_json["runtime"]["peak_rss_kb"] > 0
     predictions_schema = pq.read_schema(run_out / "predictions" / "validation_calibrate.parquet")
     assert pa.types.is_timestamp(predictions_schema.field("snapshot_at").type)
     assert pa.types.is_date32(predictions_schema.field("departure_date").type)
+    assert "chain_id" in predictions_schema.names
     predictions = pq.read_table(run_out / "predictions" / "validation_calibrate.parquet").to_pydict()
     assert len(predictions["label"]) == 5 * metrics["evaluation"]["evaluation_tier_rows"]
     assert set(predictions["calibration_mode"]) == {"oof"}
     assert min(predictions["calibration_fold"]) >= 0
-    assert {"raw_score_pooled", "assigned_headroom", "calibrated_score_pooled", "ttd_band"} <= set(predictions)
+    assert {"raw_score_pooled", "assigned_headroom", "calibrated_score_pooled", "ttd_band", "chain_id"} <= set(
+        predictions
+    )
     connection = duckdb.connect()
     try:
         mismatch_row = connection.execute(

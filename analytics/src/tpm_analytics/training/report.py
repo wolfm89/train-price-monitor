@@ -84,8 +84,18 @@ def _report(
     ablation: dict[str, Any] | None = None,
     provenance_lines: str = "",
 ) -> str:
+    total_chains = sum(item.chains for item in stats.splits)
     split_rows = [
-        [item.split, item.rows, item.series, item.route_days, item.labelled, item.positives, item.positive_rate]
+        [
+            item.split,
+            item.rows,
+            item.series,
+            item.chains,
+            item.route_days,
+            item.labelled,
+            item.positives,
+            item.positive_rate,
+        ]
         for item in stats.splits
         if evaluation.evaluation_on_test or item.split != "test"
     ]
@@ -355,6 +365,7 @@ def _report(
             [
                 f"{chain_v2['departure_window'][0]}..{chain_v2['departure_window'][1]}",
                 chain_v2["v1_series"],
+                chain_v2["v1_identities"],
                 chain_v2["v1_linked_chains"],
                 chain_v2["v2_journeys"],
                 chain_v2["no_v1_counterpart"],
@@ -679,6 +690,7 @@ def _report(
         [
             "departure window",
             "v1 series",
+            "v1 identities",
             "v1 linked chains",
             "v2 journeys",
             "no v1 counterpart",
@@ -886,8 +898,8 @@ def _report(
     journey_disappeared = int(journey.get("disappeared", 0))
     journey_share = _p(journey.get("share"))
     journey_share_at_risk = _p(journey.get("share_at_risk"))
-    journey_censored = int(journey.get("censored_at_risk", 0))
-    journey_share_censored = _p(journey.get("share_censored_at_risk"))
+    journey_end_observation = int(journey.get("end_of_observation_at_risk", 0))
+    journey_share_end_observation = _p(journey.get("share_end_of_observation"))
     journey_none = sum(item["journeys"] for item in journey.get("groups", []) if item["successor"] == "none")
     journey_none_60 = sum(item["journeys"] for item in journey.get("groups", []) if item["successor_60"] == "none")
     warning_items = _warnings(stats, evaluation)
@@ -1013,6 +1025,10 @@ def _report(
         "- Dataset counts use the configured route-day sample; the chain, duplicate and "
         "scrape-cadence sections state their own pre-resampling or full-corpus scope. Bootstrap "
         "intervals resample departure dates within the sample.\n"
+        "- The PR 2 -> PR 3 and default -> strict comparisons are unpaired. The observed Brier "
+        "differences are within refit noise at this sample size (dropping 200 random train rows "
+        "moves the Brier by about 0.0003-0.0005); the default chain mode is kept by rule, not by "
+        "the metric.\n"
         "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
         "uses the pooled calibrator, so earlier per-headroom numbers are not like-for-like. "
         "The near-zero gap and slope near 1 follow from cross-fitting by route-day on the same "
@@ -1028,7 +1044,7 @@ def _report(
 - Runner: `{runner}`
 - Rows: **{stats.rows:,}** total, **{stats.labelled_rows:,}** labelled
 - Header totals include the test split; the Dataset table {dataset_scope}.
-- Series: **{stats.series:,}**; route-days: **{stats.route_days:,}**
+- Series: **{stats.series:,}**; chains: **{total_chains:,}**; route-days: **{stats.route_days:,}**
 - Calendar feature set: `{spec.calendar_set}`
 {model_line}
 {split_line}
@@ -1039,7 +1055,7 @@ def _report(
 
 ## Dataset
 
-{_table(["split", "rows", "series", "route-days", "labelled", "positives", "positive rate"], split_rows)}
+{_table(["split", "rows", "series", "chains", "route-days", "labelled", "positives", "positive rate"], split_rows)}
 
 ### Label coverage
 
@@ -1105,9 +1121,9 @@ below is the identity used by the label and the model.
 - Series with at least 3 observations: **{journey_total:,}**
 - At risk (last observation more than 24 h before departure): **{journey_at_risk:,}**
 - Observed to disappear at the next route-day scrape: **{journey_disappeared:,}** of all series
-  ({journey_share}); {journey_share_at_risk} of at-risk. The remaining {journey_censored:,}
-  at-risk series ({journey_share_censored}) had no later scrape before departure and are censored,
-  so they are not evidence of disappearance.
+  ({journey_share}); {journey_share_at_risk} of at-risk. The remaining {journey_end_observation:,}
+  at-risk series ({journey_share_end_observation}) had no later scrape before departure and are at
+  the end of observation, so they are not evidence of disappearance.
 - Successor `none`: **{journey_none:,}** under the 15-minute rule and **{journey_none_60:,}** under
   the 60-minute rule (no new series started at the next route-day scrape within that window)
 - `same train` requires a new series (`first_obs`) at the next scrape with the same class and train
@@ -1135,6 +1151,12 @@ whose predecessor or successor has more than one candidate. `unused candidates` 
 drops and fully matched conflicts; `overlap candidates` are re-keys that appear in the same scrape
 as the predecessor's last observation and are deliberately not chained.
 
+The link decision uses the predecessor's full observation history: a series is linked only if it
+never returns after the gap. On this corpus 858 of 6,407 links (about 12 % of the offline+online link
+events) would be decided differently by an online rule. Features at successor snapshots before a
+returning predecessor are therefore not strictly point-in-time; PR 4 decides links causally at the
+check.
+
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and
 include test departures. They are not the 24 h-30 d model domain.
 
@@ -1160,11 +1182,13 @@ buckets are rounded, so the bucket centres are at `:00 / :15 / :30 / :45` and th
 
 {scrape_gap_table}
 
-This is a pre-fix, full-corpus, v1-only baseline (departures through the test end), not the
-route-day sample and not the current schedule. The dense medians reproduce the old tier intervals;
-the current schedule is NEAR 24 h, MID 8 d and FAR 16 d. The band is the time from the scrape to
-noon UTC on the departure date. `without 24 h successor` counts the last scrape of a route-day or
-a gap above 24 h; the median excludes the null last-scrape gap.
+This is a pre-fix, full-corpus, v1-only baseline through the last v1 departure, not the route-day
+sample and not the current schedule. The dense medians reproduce the old tier intervals; the
+current schedule is NEAR 24 h, MID 8 d and FAR 16 d. The earlier 12.8 h / 40 % sparse row was a
+test-end cap artefact; with the full v1 grid the sparse 7-30 d row is about 181 h with 78 % without
+a 24 h successor. The band is the time from the scrape to noon UTC on the departure date.
+`without 24 h successor` counts the last scrape of a route-day or a gap above 24 h; the median
+excludes the null last-scrape gap.
 
 ### Unlabelled shares
 
@@ -1313,6 +1337,7 @@ def write_report(
     runner: str,
     ablation: dict[str, Any] | None = None,
     build_config: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
@@ -1367,6 +1392,7 @@ def write_report(
     ).hexdigest()
     manifest["evaluation_on_test"] = evaluation.evaluation_on_test
     manifest["evaluation_split"] = evaluation.evaluation_split
+    manifest["runtime"] = runtime or {}
     manifest["model"] = {
         "chosen": evaluation.chosen_model,
         "calibration": evaluation.calibration_method,

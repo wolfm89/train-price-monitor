@@ -159,11 +159,13 @@ def v2_chain_audit(
     """Compare v1 chains with v2 ``journey_id`` sequences on the true overlap cohort.
 
     The v2 id is stable across planned-time shifts and does not distinguish service class, so the
-    comparison is per ``(journey_id, service_class)``. The split/merge rates are a handover
-    diagnostic: the v2 id hashes the full vehicle itinerary, while the v1 series key includes
-    arrival and transfers, so some splits and merges are itinerary granularity rather than identity
-    errors. The breakdown separates parallel from sequential splits and same-itinerary from
-    different-itinerary merges.
+    comparison is per ``(journey_id, service_class)``. This is a **handover diagnostic**, not a
+    link-precision check: v1 and v2 never share a scrape, so it cannot show whether a link is
+    correct. The v2 id hashes the full vehicle itinerary, while the v1 series key includes arrival
+    and transfers, so some splits and merges are itinerary granularity rather than identity errors.
+    The breakdown separates parallel from sequential splits and same-itinerary from
+    different-itinerary merges; a v2-internal ``journey_id`` precision/recall audit is scheduled for
+    PR 4/7 once several weeks of v2 data exist.
     """
     bounds = _overlap_bounds(connection, source_sql)
     if bounds is None:
@@ -250,7 +252,9 @@ def v2_chain_audit(
           ON s.route_id = v.route_id
          AND s.departure_date = v.departure_date
          AND s.service_class = v.service_class
-         AND s.train_number IS NOT DISTINCT FROM v.train_number
+         AND s.train_number IS NOT NULL
+         AND v.train_number IS NOT NULL
+         AND s.train_number = v.train_number
          AND s.last_obs < v.first_obs
         """
     )
@@ -268,7 +272,9 @@ def v2_chain_audit(
           ON s.route_id = v.route_id
          AND s.departure_date = v.departure_date
          AND s.service_class = v.service_class
-         AND s.train_number IS NOT DISTINCT FROM v.train_number
+         AND s.train_number IS NOT NULL
+         AND v.train_number IS NOT NULL
+         AND s.train_number = v.train_number
          AND abs(date_diff('second', s.last_departure, v.departure_planned)) <= {LINK_TOLERANCE_SECONDS}
          AND s.last_obs < v.first_obs
         JOIN v2audit_map m USING (series_key)

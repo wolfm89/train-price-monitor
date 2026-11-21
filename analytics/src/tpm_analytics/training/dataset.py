@@ -13,7 +13,9 @@ import glob
 import hashlib
 import json
 import platform
+import resource
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
@@ -46,6 +48,7 @@ class SplitStats:
     labelled: int
     positives: int
     positive_rate: float
+    chains: int = 0
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,12 @@ def _dict_rows(connection: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str
     cursor = connection.execute(sql)
     columns = [item[0] for item in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
+def _peak_rss_kb() -> int:
+    """Return the process peak RSS in KiB (Linux/macOS units normalised to KiB)."""
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform != "darwin" else value // 1024
 
 
 def _git_state() -> tuple[str | None, bool | None]:
@@ -325,8 +334,7 @@ def _create_views(
             observed_at,
             min(observation_era) AS observation_era
         FROM {source_sql}
-        WHERE departure_date <= DATE '{config.splits.test_end.isoformat()}'
-          AND observed_at < departure_planned
+        WHERE observed_at < departure_planned
           AND schema_version = 1
         GROUP BY route_id, departure_date, observed_at
         """
@@ -872,6 +880,7 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
             split,
             count(*) AS rows,
             count(DISTINCT series_key) AS series,
+            count(DISTINCT chain_id) AS chains,
             count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) AS route_days,
             sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
             sum(CASE WHEN label_observed THEN breached_in_24h ELSE 0 END) AS positives,
@@ -887,10 +896,11 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
             split=str(row[0]),
             rows=int(row[1]),
             series=int(row[2]),
-            route_days=int(row[3]),
-            labelled=int(row[4]),
-            positives=int(row[5]),
-            positive_rate=0.0 if row[6] is None else float(row[6]),
+            chains=int(row[3]),
+            route_days=int(row[4]),
+            labelled=int(row[5]),
+            positives=int(row[6]),
+            positive_rate=0.0 if row[7] is None else float(row[7]),
         )
         for row in rows
     )
@@ -1337,10 +1347,10 @@ def _profile(
             "at_risk": at_risk,
             "disappeared": disappeared,
             "at_risk_with_next_scrape": disappeared,
-            "censored_at_risk": max(0, at_risk - disappeared),
+            "end_of_observation_at_risk": max(0, at_risk - disappeared),
             "share": 0.0 if total_journeys == 0 else disappeared / total_journeys,
             "share_at_risk": 0.0 if at_risk == 0 else disappeared / at_risk,
-            "share_censored_at_risk": 0.0 if at_risk == 0 else max(0, at_risk - disappeared) / at_risk,
+            "share_end_of_observation": 0.0 if at_risk == 0 else max(0, at_risk - disappeared) / at_risk,
             "groups": [
                 {
                     "band": str(row[3]),
@@ -1491,6 +1501,7 @@ def build_dataset(
         "source": source.label,
         "source_rows": source_rows,
         "source_inventory": source_inventory,
+        "peak_rss_kb": _peak_rss_kb(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "uv_lock_sha256": _lock_sha256(),

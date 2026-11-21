@@ -7,8 +7,14 @@ appearing to the series with the same route, class and first-train number whose 
 is within 15 minutes and whose first observation is the next route-day scrape.
 
 Links are one-to-one. The matcher maximises the number of links and tries the closest departure
-first; equal distances fall back to the series keys for a deterministic result. The chain id is the
-lexicographically smallest series key in the component.
+first; in a crossing pattern it may give a predecessor its second-closest candidate to keep the
+matching maximum. Equal distances fall back to the series keys for a deterministic result. The chain
+id is the lexicographically smallest series key in the component.
+
+The link decision uses the predecessor's full observation history: a series is linked only if it
+never returns after the gap. That is future information for an online rule; the review measured 858
+of 6,407 links (about 12 % of offline+online link events) that an online rule would decide
+differently. PR 4 decides links causally at the check.
 """
 
 from __future__ import annotations
@@ -249,7 +255,8 @@ def build_chain_map(
          AND ns.departure_date = n.departure_date
          AND ns.first_obs = n.next_s
          AND ns.service_class IS NOT DISTINCT FROM n.service_class
-         AND ns.train_number IS NOT DISTINCT FROM n.train_number
+         AND ns.train_number IS NOT NULL
+         AND ns.train_number = n.train_number
          AND abs(date_diff('second', ns.first_departure, n.last_departure)) <= {LINK_TOLERANCE_SECONDS}
         """
     )
@@ -298,7 +305,9 @@ def build_chain_map(
           ON ns.route_id = n.route_id
          AND ns.departure_date = n.departure_date
          AND ns.service_class IS NOT DISTINCT FROM n.service_class
-         AND ns.train_number IS NOT DISTINCT FROM n.train_number
+         AND ns.train_number IS NOT NULL
+         AND ns.train_number = n.train_number
+         AND ns.series_key <> n.series_key
          AND ns.first_obs = n.last_obs
          AND abs(date_diff('second', ns.first_departure, n.last_departure)) <= {LINK_TOLERANCE_SECONDS}
         """,

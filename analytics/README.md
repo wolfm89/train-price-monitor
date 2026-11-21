@@ -393,9 +393,15 @@ future-**departure** cohort, not a future-era holdout. Since the journey-identit
 history features follow the **journey chain**, not the itinerary-keyed series: a series that stops
 appearing is linked to the next series with the same route, class and first-train number, a planned
 departure within 15 minutes and its first observation at the next route-day scrape. Links are
-one-to-one and the closest departure wins. An arrival change therefore keeps the journey; a
+one-to-one and maximum-cardinality; the matcher prefers the closest departure but a crossing
+pattern may use the second-closest candidate. An arrival change therefore keeps the journey; a
 different train or a shift above 15 minutes starts a new chain. `--strict-chains` drops ambiguous
-candidates and is the sensitivity run, not the default.
+candidates; it is a sensitivity run, not the default, and its metric difference is within refit
+noise.
+
+The link decision uses the predecessor's full observation history: a series is linked only if it
+does not return after the gap. On the 5 % sample 858 of 6,407 links (about 12 % of offline+online
+link events) would differ under an online rule. PR 4 decides links causally at the check.
 
 The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
 (`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
