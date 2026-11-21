@@ -12,9 +12,9 @@ matching maximum. Equal distances fall back to the series keys for a determinist
 id is the lexicographically smallest series key in the component.
 
 The link decision uses the predecessor's full observation history: a series is linked only if it
-never returns after the gap. That is future information for an online rule; the review measured 858
-of 6,407 links (about 12 % of offline+online link events) that an online rule would decide
-differently. PR 4 decides links causally at the check.
+never returns after the gap. That is future information for an online rule; the 5 % review build
+measured 858 additional successor series that an online rule would link (about 12 % of all link
+events). A later training stage decides links causally at the check.
 """
 
 from __future__ import annotations
@@ -123,7 +123,11 @@ def _match_candidates(
     connection: duckdb.DuckDBPyConnection,
     prefix: str,
 ) -> list[tuple[str, str]]:
-    """Return a maximum-cardinality one-to-one matching, closest departure first."""
+    """Return a maximum-cardinality one-to-one matching, closest departure first.
+
+    A crossing pattern may give a predecessor its second-closest candidate to keep the matching
+    maximum; that is the documented exception to the closest-first preference.
+    """
     rows = connection.execute(
         f"""
         SELECT predecessor, successor, departure_delta_s

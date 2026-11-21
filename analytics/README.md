@@ -400,8 +400,9 @@ candidates; it is a sensitivity run, not the default, and its metric difference 
 noise.
 
 The link decision uses the predecessor's full observation history: a series is linked only if it
-does not return after the gap. On the 5 % sample 858 of 6,407 links (about 12 % of offline+online
-link events) would differ under an online rule. PR 4 decides links causally at the check.
+does not return after the gap. The 5 % review build measured 858 additional successor series that
+an online rule would link (about 12 % of all link events). A later training stage decides links
+causally at the check.
 
 The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
 (`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance

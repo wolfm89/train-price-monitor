@@ -141,9 +141,10 @@ v2-only and mixed-schema input.
   more than one candidate; it is the sensitivity run, not the default, and its Brier difference is
   within refit noise.
 - The link decision uses the predecessor's full observation history: it links only if the series
-  never returns after the gap. On the 5 % sample 858 of 6,407 links (about 12 % of offline+online
-  link events) would differ under an online rule. PR 4 decides links causally at the check; until
-  then, successor features before a returning predecessor are not strictly point-in-time.
+  never returns after the gap. The 5 % review build measured 858 additional successor series that
+  an online rule would link (about 12 % of all link events). A later training stage decides links
+  causally at the check; until then, successor features before a returning predecessor are not
+  strictly point-in-time.
 - The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
   their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
   starts a new series. `price_rank_route_day` ranks every priced journey in

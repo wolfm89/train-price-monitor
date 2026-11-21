@@ -807,30 +807,17 @@ def test_scrape_gap_audit_includes_departures_after_test_end(tmp_path: Path) -> 
     assert gap[0]["without_24h_share"] == pytest.approx(1.0)
 
 
-def test_chain_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
-    base_rows = _chain_fixture()
-    _, base_out = _build_chain_dataset(tmp_path / "base", base_rows)
-    extra = _row(
-        observed_at=datetime(2026, 7, 5, 18, 0),
-        departure=datetime(2026, 7, 6, 20, 0),
-        arrival_planned=datetime(2026, 7, 6, 20, 0) + timedelta(hours=4, minutes=16),
-        route="chain",
-        train="ICE-CHAIN",
-        fare=120.0,
+def _chain_snapshot(out: Path) -> dict[str, object]:
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    index = next(
+        index
+        for index, route in enumerate(predictions["route_id"])
+        if route == "chain" and str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00"
     )
-    _, mutated_out = _build_chain_dataset(tmp_path / "mutated", [*base_rows, extra])
+    return {name: predictions[name][index] for name in predictions}
 
-    def _row_at(out: Path) -> dict[str, object]:
-        predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
-        index = next(
-            index
-            for index, route in enumerate(predictions["route_id"])
-            if route == "chain" and str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00"
-        )
-        return {name: predictions[name][index] for name in predictions}
 
-    base = _row_at(base_out)
-    mutated = _row_at(mutated_out)
+def _assert_chain_features_equal(base: dict[str, object], mutated: dict[str, object]) -> None:
     feature_names = (
         "price_vs_series_min",
         "price_vs_series_median",
@@ -851,8 +838,75 @@ def test_chain_future_mutation_changes_label_not_features(tmp_path: Path) -> Non
             assert right is None
         else:
             assert float(cast(Any, left)) == pytest.approx(float(cast(Any, right)))
+
+
+def test_chain_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
+    base_rows = _chain_fixture()
+    _, base_out = _build_chain_dataset(tmp_path / "base", base_rows)
+    high = _row(
+        observed_at=datetime(2026, 7, 5, 18, 0),
+        departure=datetime(2026, 7, 6, 20, 0),
+        arrival_planned=datetime(2026, 7, 6, 20, 0) + timedelta(hours=4, minutes=16),
+        route="chain",
+        train="ICE-CHAIN",
+        fare=120.0,
+    )
+    low = _row(
+        observed_at=datetime(2026, 7, 5, 18, 0),
+        departure=datetime(2026, 7, 6, 20, 0),
+        arrival_planned=datetime(2026, 7, 6, 20, 0) + timedelta(hours=4, minutes=16),
+        route="chain",
+        train="ICE-CHAIN",
+        fare=10.0,
+    )
+    _, high_out = _build_chain_dataset(tmp_path / "high", [*base_rows, high])
+    _, low_out = _build_chain_dataset(tmp_path / "low", [*base_rows, low])
+
+    base = _chain_snapshot(base_out)
+    _assert_chain_features_equal(base, _chain_snapshot(high_out))
+    _assert_chain_features_equal(base, _chain_snapshot(low_out))
+    # Absolute values catch look-ahead in min-type features: the low future fare must not change
+    # the predecessor's min/7-day minimum, and the high future fare must not change its maximum.
+    assert base["price_vs_series_min"] == pytest.approx(2.0)
+    assert base["price_min_7d"] == pytest.approx(80.0)
+    assert base["price_max_7d"] == pytest.approx(82.0)
+    assert base["price_vs_series_median"] == pytest.approx(82.0 / 81.0)
     assert base["future_max_fare_24h"] == pytest.approx(99.0)
-    assert mutated["future_max_fare_24h"] == pytest.approx(120.0)
+    assert _chain_snapshot(high_out)["future_max_fare_24h"] == pytest.approx(120.0)
+    assert _chain_snapshot(low_out)["future_max_fare_24h"] == pytest.approx(99.0)
+
+
+def test_chain_link_created_after_snapshot_keeps_features(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    base_rows = [
+        _row(observed_at=datetime(2026, 7, 3, 20, 0), departure=departure, route="chain", train="ICE-CHAIN", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="chain", train="ICE-CHAIN", fare=82.0),
+    ]
+    successor = [
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="chain",
+            train="ICE-CHAIN",
+            fare=99.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 22, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="chain",
+            train="ICE-CHAIN",
+            fare=70.0,
+        ),
+    ]
+    _, base_out = _build_chain_dataset(tmp_path / "link-base", base_rows)
+    _, mutated_out = _build_chain_dataset(tmp_path / "link-mutated", [*base_rows, *successor])
+    base = _chain_snapshot(base_out)
+    mutated = _chain_snapshot(mutated_out)
+    _assert_chain_features_equal(base, mutated)
+    assert base["future_max_fare_24h"] is None
+    assert mutated["future_max_fare_24h"] == pytest.approx(99.0)
 
 
 def test_chain_rejects_null_train_numbers(tmp_path: Path) -> None:

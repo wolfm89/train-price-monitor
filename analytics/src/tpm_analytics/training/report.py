@@ -1030,9 +1030,8 @@ def _report(
         "scrape-cadence sections state their own pre-resampling or full-corpus scope. Bootstrap "
         "intervals resample departure dates within the sample.\n"
         "- The before/after and default -> strict comparisons are unpaired. The observed Brier "
-        "differences are within refit noise at this sample size (dropping 200 random train rows "
-        "moves the Brier by about 0.0003-0.0005); the default chain mode is kept by rule, not by "
-        "the metric.\n"
+        "differences are within refit noise at this sample size; the default chain mode is kept by "
+        "rule, not by the metric.\n"
         "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
         "uses the pooled calibrator, so earlier per-headroom numbers are not like-for-like. "
         "The near-zero gap and slope near 1 follow from cross-fitting by route-day on the same "
@@ -1157,10 +1156,10 @@ drops and fully matched conflicts; `overlap candidates` are re-keys that appear 
 as the predecessor's last observation and are deliberately not chained.
 
 The link decision uses the predecessor's full observation history: a series is linked only if it
-never returns after the gap. On this corpus 858 of 6,407 links (about 12 % of the offline+online link
-events) would be decided differently by an online rule. Features at successor snapshots before a
-returning predecessor are therefore not strictly point-in-time; the next training stage decides
-links causally at the check.
+never returns after the gap. The 5 % review build measured 858 additional successor series that an
+online rule would link (about 12 % of all link events); this run has {chain.get("links", 0):,}
+links. Features at successor snapshots before a returning predecessor are therefore not strictly
+point-in-time; the next training stage decides links causally at the check.
 
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and
 include test departures. They are not the 24 h-30 d model domain.
@@ -1189,9 +1188,9 @@ buckets are rounded, so the bucket centres are at `:00 / :15 / :30 / :45` and th
 
 This is a pre-fix, full-corpus, v1-only baseline through the last v1 departure, not the route-day
 sample and not the current schedule. The dense medians reproduce the old tier intervals; the
-current schedule is NEAR 24 h, MID 8 d and FAR 16 d. The earlier 12.8 h / 40 % sparse row was a
-test-end cap artefact; with the full v1 grid the sparse 7-30 d row is about 181 h with 78 % without
-a 24 h successor. The band is the time from the scrape to noon UTC on the departure date.
+current schedule is NEAR 24 h, MID 8 d and FAR 16 d. With the full v1 grid the sparse 7-30 d row
+is about 181 h with 78 % without a 24 h successor. The band is the time from the scrape to noon UTC
+on the departure date.
 `without 24 h successor` counts the last scrape of a route-day or a gap above 24 h; the median
 excludes the null last-scrape gap.
 

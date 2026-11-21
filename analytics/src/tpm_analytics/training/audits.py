@@ -165,7 +165,7 @@ def v2_chain_audit(
     and transfers, so some splits and merges are itinerary granularity rather than identity errors.
     The breakdown separates parallel from sequential splits and same-itinerary from
     different-itinerary merges; a v2-internal ``journey_id`` precision/recall audit is scheduled for
-    PR 4/7 once several weeks of v2 data exist.
+    a later training stage once several weeks of v2 data exist.
     """
     bounds = _overlap_bounds(connection, source_sql)
     if bounds is None:
