@@ -21,6 +21,7 @@ import duckdb
 
 from tpm_analytics import calendar
 from tpm_analytics.silver._duck import read_parquet, sql_string
+from tpm_analytics.training.bands import JOURNEY_BANDS, ttd_band_case
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import AUDIT_COLUMNS, feature_spec
 from tpm_analytics.training.sources import SourceSpec
@@ -80,6 +81,12 @@ def _source_count(connection: duckdb.DuckDBPyConnection, source_sql: str) -> int
     return _scalar(connection, f"SELECT count(*) FROM {source_sql}")
 
 
+def _dict_rows(connection: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str, Any]]:
+    cursor = connection.execute(sql)
+    columns = [item[0] for item in cursor.description or []]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
 def _git_state() -> tuple[str | None, bool]:
     """Return the checkout's HEAD and dirty flag.
 
@@ -104,7 +111,7 @@ def _lock_sha256() -> str | None:
 
 
 def _package_versions() -> dict[str, str | None]:
-    names = ("numpy", "scikit-learn", "scipy", "pyarrow")
+    names = ("numpy", "scikit-learn", "scipy", "pyarrow", "joblib")
     result: dict[str, str | None] = {"python": platform.python_version(), "duckdb": duckdb.__version__}
     for name in names:
         try:
@@ -112,6 +119,19 @@ def _package_versions() -> dict[str, str | None]:
         except PackageNotFoundError:
             result[name.replace("-", "_")] = None
     return result
+
+
+def _duckdb_settings(connection: duckdb.DuckDBPyConnection) -> dict[str, str | None]:
+    """Record the effective DuckDB limits so an out-of-memory build is diagnosable."""
+    settings: dict[str, str | None] = {}
+    for name in ("memory_limit", "max_temp_directory_size", "threads"):
+        try:
+            row = connection.execute(f"SELECT current_setting('{name}')").fetchone()
+        except duckdb.Error:
+            settings[name] = None
+        else:
+            settings[name] = None if row is None else str(row[0])
+    return settings
 
 
 def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: tuple[str, ...]) -> dict[str, Any]:
@@ -202,15 +222,21 @@ def _create_views(
     )
     v2_rows = _scalar(
         connection,
-        "SELECT count(*) FROM base_all WHERE ("
-        f"departure_date <= DATE '{splits.train_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}' "
-        f"AND DATE '{splits.validation_select_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}' "
-        f"AND DATE '{splits.validation_calibrate_end.isoformat()}' "
-        f"OR departure_date BETWEEN DATE '{splits.test_start.isoformat()}' "
-        f"AND DATE '{splits.test_end.isoformat()}') "
-        "AND (schema_version != 1 OR journey_id IS NOT NULL)",
+        f"""
+        SELECT count(*) FROM {source_sql}
+        WHERE fare_lowest_eur IS NOT NULL
+          AND observed_at < departure_planned
+          AND (
+            departure_date <= DATE '{splits.train_end.isoformat()}'
+            OR departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
+                AND DATE '{splits.validation_select_end.isoformat()}'
+            OR departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}'
+                AND DATE '{splits.validation_calibrate_end.isoformat()}'
+            OR departure_date BETWEEN DATE '{splits.test_start.isoformat()}'
+                AND DATE '{splits.test_end.isoformat()}'
+          )
+          AND (schema_version != 1 OR journey_id IS NOT NULL)
+        """,
     )
     if v2_rows:
         raise DatasetError(f"{v2_rows} v2 rows fall inside the baseline splits; this baseline is v1-only")
@@ -232,6 +258,23 @@ def _create_views(
             "SELECT b.* FROM base_all b JOIN selected_route_days s "
             "USING (route_id, departure_date)"
         )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW scrape_grid AS
+        SELECT DISTINCT route_id, departure_date, observed_at
+        FROM base_sampled
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW scrape_grid_all AS
+        SELECT DISTINCT route_id, departure_date, observed_at
+        FROM {source_sql}
+        WHERE departure_date <= DATE '{config.splits.test_end.isoformat()}'
+          AND observed_at < departure_planned
+          AND schema_version = 1
+        """
+    )
     connection.execute(
         """
         CREATE OR REPLACE TEMP VIEW cross_section AS
@@ -361,7 +404,7 @@ def _create_views(
     )
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW snapshot AS
+        CREATE OR REPLACE TEMP TABLE snapshot AS
         SELECT
             r.* EXCLUDE (rn),
             f.future_max_fare_24h,
@@ -373,13 +416,198 @@ def _create_views(
         WHERE r.rn = 1
         """
     )
+    # One superset join against the route-day scrape grid; every check window is a filtered pick
+    # from these candidates, so the grid is joined once instead of four times (R2-1).
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_candidates AS
+        SELECT
+            n.series_key,
+            n.snapshot_at,
+            g.observed_at AS check_at,
+            abs(date_diff('microsecond', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_us
+        FROM snapshot n
+        JOIN scrape_grid g
+          ON g.route_id = n.route_id
+         AND g.departure_date = n.departure_date
+        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
+                                AND n.snapshot_at + INTERVAL 28 HOUR
+          AND g.observed_at < n.departure_planned
+        """
+    )
+    # The 20-24 h point stays the crossed-back diagnostic. The lower bound is already 20 h.
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_points AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
+            ) AS rn
+            FROM check_candidates
+            WHERE check_at <= snapshot_at + INTERVAL 24 HOUR
+        )
+        WHERE rn = 1
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_points_narrow AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
+            ) AS rn
+            FROM check_candidates
+            WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
+                               AND snapshot_at + INTERVAL 24 HOUR
+        )
+        WHERE rn = 1
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_points_2028 AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
+            ) AS rn
+            FROM check_candidates
+        )
+        WHERE rn = 1
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_points_2226 AS
+        SELECT
+            series_key,
+            snapshot_at,
+            check_at,
+            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+        FROM (
+            SELECT *, row_number() OVER (
+                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
+            ) AS rn
+            FROM check_candidates
+            WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
+                               AND snapshot_at + INTERVAL 26 HOUR
+        )
+        WHERE rn = 1
+        """
+    )
+    # Price each distinct (series, check) once; the four windows share most check points.
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE check_prices AS
+        SELECT d.series_key, d.observed_at AS check_at, d.price_eur
+        FROM dedup d
+        JOIN (
+            SELECT series_key, check_at FROM check_points
+            UNION
+            SELECT series_key, check_at FROM check_points_narrow
+            UNION
+            SELECT series_key, check_at FROM check_points_2028
+            UNION
+            SELECT series_key, check_at FROM check_points_2226
+        ) p
+          ON p.series_key = d.series_key
+         AND p.check_at = d.observed_at
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW coverage_events AS
+        SELECT
+            n.series_key,
+            n.snapshot_at,
+            g.observed_at AS s,
+            lag(g.observed_at, 1, n.snapshot_at) OVER (
+                PARTITION BY n.series_key, n.snapshot_at ORDER BY g.observed_at
+            ) AS previous_s
+        FROM snapshot n
+        JOIN scrape_grid g
+          ON g.route_id = n.route_id
+         AND g.departure_date = n.departure_date
+        WHERE g.observed_at > n.snapshot_at
+          AND g.observed_at <= n.snapshot_at + INTERVAL 24 HOUR
+          AND g.observed_at < n.departure_planned
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW coverage_stats AS
+        SELECT
+            series_key,
+            snapshot_at,
+            date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR) / 3600.0 AS cov_tail_h,
+            greatest(
+                max(date_diff('second', previous_s, s)),
+                date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR)
+            ) / 3600.0 AS cov_max_gap_h
+        FROM coverage_events
+        GROUP BY series_key, snapshot_at
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW snapshot_diag AS
+        SELECT
+            n.*,
+            c.check_at,
+            c.check_lag_h,
+            cn.check_at AS check_at_narrow,
+            cn.check_lag_h AS check_lag_narrow_h,
+            c28.check_at AS check_at_2028,
+            c28.check_lag_h AS check_lag_2028_h,
+            c26.check_at AS check_at_2226,
+            c26.check_lag_h AS check_lag_2226_h,
+            d.price_eur AS check_price_eur,
+            dn.price_eur AS check_price_narrow_eur,
+            d28.price_eur AS check_price_2028_eur,
+            d26.price_eur AS check_price_2226_eur,
+            cv.cov_tail_h,
+            cv.cov_max_gap_h,
+            CASE
+                WHEN hours_to_departure BETWEEN 24 AND 168 THEN coalesce(
+                    cv.cov_tail_h <= {config.report.r24_max_tail_hours}
+                    AND cv.cov_max_gap_h <= {config.report.r24_max_gap_hours},
+                    FALSE
+                )
+                ELSE NULL
+            END AS r24_covered
+        FROM snapshot n
+        LEFT JOIN check_points c USING (series_key, snapshot_at)
+        LEFT JOIN check_points_narrow cn USING (series_key, snapshot_at)
+        LEFT JOIN check_points_2028 c28 USING (series_key, snapshot_at)
+        LEFT JOIN check_points_2226 c26 USING (series_key, snapshot_at)
+        LEFT JOIN check_prices d ON d.series_key = n.series_key AND d.check_at = c.check_at
+        LEFT JOIN check_prices dn ON dn.series_key = n.series_key AND dn.check_at = cn.check_at
+        LEFT JOIN check_prices d28 ON d28.series_key = n.series_key AND d28.check_at = c28.check_at
+        LEFT JOIN check_prices d26 ON d26.series_key = n.series_key AND d26.check_at = c26.check_at
+        LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
+        """
+    )
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW labelled AS
         SELECT
             *,
             {bucket_expr} AS bucket
-        FROM snapshot
+        FROM snapshot_diag
         """
     )
     connection.execute(
@@ -394,6 +622,29 @@ def _create_views(
                 WHEN future_max_fare_24h >= price_eur * (1 + ({headroom_expr}) / 100.0)
                 THEN 1 ELSE 0
             END AS breached_in_24h,
+            CASE
+                WHEN check_price_eur IS NULL OR price_eur IS NULL THEN NULL
+                WHEN check_price_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS breached_at_check,
+            CASE
+                WHEN check_price_narrow_eur IS NULL OR price_eur IS NULL THEN NULL
+                WHEN check_price_narrow_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS breached_at_check_narrow,
+            CASE
+                WHEN check_price_2028_eur IS NULL OR price_eur IS NULL THEN NULL
+                WHEN check_price_2028_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS breached_at_check_2028,
+            CASE
+                WHEN check_price_2226_eur IS NULL OR price_eur IS NULL THEN NULL
+                WHEN check_price_2226_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS breached_at_check_2226,
+            CASE
+                WHEN future_max_fare_24h IS NULL OR check_price_eur IS NULL THEN NULL
+                WHEN future_max_fare_24h >= price_eur * (1 + ({headroom_expr}) / 100.0)
+                 AND check_price_eur < price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+            END AS crossed_and_came_back,
+            {ttd_band_case("hours_to_departure")} AS ttd_band,
+            strftime(observed_at, '%G-W%V') AS observation_week,
             CASE
                 WHEN departure_date <= DATE '{splits.train_end.isoformat()}' THEN 'train'
                 WHEN departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
@@ -429,15 +680,17 @@ def _create_views(
             r.price_min_7d,
             r.price_max_7d,
             r.history_depth_h,
-            sum(
-                CASE
-                    WHEN p.prev_price IS NOT NULL
-                     AND abs(p.price_eur - p.prev_price) / nullif(p.prev_price, 0) > 0.05
-                    THEN 1 ELSE 0
-                END
-            ) OVER (
-                PARTITION BY p.series_key ORDER BY epoch(p.observed_at) / 3600.0
-                RANGE BETWEEN 24 PRECEDING AND CURRENT ROW
+            CAST(
+                sum(
+                    CASE
+                        WHEN p.prev_price IS NOT NULL
+                         AND abs(p.price_eur - p.prev_price) / nullif(p.prev_price, 0) > 0.05
+                        THEN 1 ELSE 0
+                    END
+                ) OVER (
+                    PARTITION BY p.series_key ORDER BY epoch(p.observed_at) / 3600.0
+                    RANGE BETWEEN 24 PRECEDING AND CURRENT ROW
+                ) AS DOUBLE
             ) AS price_jumps_24h
         FROM features_base p
         JOIN raw_features r USING (series_key, observed_at)
@@ -558,6 +811,32 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
     )
 
 
+def _label_window_profile(
+    connection: duckdb.DuckDBPyConnection, group_column: str, group_alias: str
+) -> list[dict[str, Any]]:
+    """Coverage and next-day prevalence by TTD band and one grouping column."""
+    return _dict_rows(
+        connection,
+        f"""
+        SELECT
+            split,
+            {group_column} AS {group_alias},
+            ttd_band AS band,
+            count(*) AS rows,
+            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
+            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
+            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
+            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
+            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
+            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, {group_column}, ttd_band
+        ORDER BY split, {group_column}, ttd_band
+        """,
+    )
+
+
 def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     headroom = connection.execute(
         """
@@ -589,13 +868,305 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             split,
             avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
             avg(CASE WHEN future_observations = 1 THEN 1 ELSE 0 END) AS one_observation_share,
-            avg(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus_share
+            avg(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus_share,
+            avg(r24_covered::INT) AS r24_share
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split
         ORDER BY split
         """
     ).fetchall()
+    cohort = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            count(*) AS rows,
+            sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
+            sum(CASE WHEN check_at IS NOT NULL THEN 1 ELSE 0 END) AS check_eligible,
+            sum(CASE WHEN check_at IS NOT NULL AND check_price_eur IS NOT NULL THEN 1 ELSE 0 END) AS check_priced,
+            sum(CASE WHEN check_at IS NOT NULL AND check_price_eur IS NULL THEN 1 ELSE 0 END) AS check_censored,
+            sum(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus,
+            avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
+            avg(CASE WHEN label_observed THEN breached_in_24h END) AS prevalence,
+            avg(CASE WHEN label_observed AND future_observations >= 2 THEN breached_in_24h END) AS two_plus_prevalence,
+            avg(CASE WHEN check_at IS NOT NULL THEN breached_at_check END) AS check_prevalence
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split
+        ORDER BY split
+        """,
+    )
+    ttd = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            count(*) AS rows,
+            sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
+            avg(CASE WHEN label_observed THEN breached_in_24h END) AS positive_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """
+    ).fetchall()
+    label = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            count(*) AS rows,
+            count(*) FILTER (WHERE label_observed) AS labelled,
+            count(*) FILTER (WHERE check_at IS NOT NULL) AS check_eligible,
+            count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NOT NULL) AS check_priced,
+            count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NULL) AS check_censored,
+            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
+            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
+            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
+            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
+            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
+            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate,
+            count(*) FILTER (WHERE future_observations = 1) AS one_observations,
+            count(*) FILTER (WHERE future_observations >= 2) AS two_plus,
+            avg(breached_in_24h) FILTER (WHERE label_observed) AS within_day_rate,
+            avg(breached_in_24h) FILTER (
+                WHERE label_observed AND check_price_eur IS NOT NULL
+            ) AS priced_within_day_rate,
+            avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations = 1) AS one_prevalence,
+            avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations >= 2) AS two_plus_prevalence,
+            median(future_span_h) FILTER (WHERE future_observations = 1) AS median_single_lag_h,
+            quantile_cont(future_span_h, 0.1) FILTER (WHERE future_observations = 1) AS p10_single_lag_h,
+            quantile_cont(future_span_h, 0.9) FILTER (WHERE future_observations = 1) AS p90_single_lag_h,
+            avg(breached_at_check) FILTER (WHERE breached_at_check IS NOT NULL) AS next_day_rate,
+            avg(breached_at_check_narrow) FILTER (WHERE breached_at_check_narrow IS NOT NULL) AS narrow_rate,
+            avg(crossed_and_came_back) FILTER (WHERE crossed_and_came_back IS NOT NULL) AS crossed_back_rate,
+            avg(breached_in_24h) FILTER (
+                WHERE label_observed AND check_at IS NOT NULL AND check_price_eur IS NULL
+            ) AS censored_within_day_rate,
+            count(*) FILTER (WHERE price_change_24h > 0.005 * price_eur) AS dearer,
+            count(*) FILTER (WHERE price_change_24h < -0.005 * price_eur) AS cheaper,
+            count(*) FILTER (WHERE check_price_2028_eur > price_eur * 1.005) AS forward_dearer,
+            count(*) FILTER (WHERE check_price_2028_eur < price_eur * 0.995) AS forward_cheaper,
+            count(*) FILTER (
+                WHERE price_change_24h IS NOT NULL
+                  AND abs(price_change_24h) <= 0.005 * price_eur
+            ) AS unchanged
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """,
+    )
+    label_era = _label_window_profile(connection, "observation_era", "era")
+    label_week = _label_window_profile(connection, "observation_week", "week")
+    a29 = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            count(*) AS rows,
+            avg(CASE WHEN future_max_fare_24h >= price_eur * 1.05 THEN 1.0 ELSE 0.0 END) AS within_day_rate,
+            avg(CASE WHEN check_price_eur >= price_eur * 1.05 THEN 1.0 ELSE 0.0 END) AS next_day_rate,
+            avg(
+                CASE
+                    WHEN future_max_fare_24h >= price_eur * 1.05
+                     AND check_price_eur < price_eur * 1.05 THEN 1.0 ELSE 0.0
+                END
+            ) AS crossed_back_rate
+        FROM sampled
+        WHERE split IS NOT NULL AND label_observed AND check_price_eur IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """,
+    )
+    unlabelled = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            observation_era,
+            observation_week,
+            count(*) AS rows,
+            avg(CASE WHEN label_observed THEN 0.0 ELSE 1.0 END) AS unlabelled_share
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band, observation_era, observation_week
+        ORDER BY split, ttd_band, observation_era, observation_week
+        """
+    ).fetchall()
+    coverage_r24 = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            count(*) AS rows,
+            count(cov_tail_h) AS eligible,
+            avg(r24_covered::INT) AS covered_share,
+            avg(cov_tail_h) AS mean_tail_h,
+            avg(cov_max_gap_h) AS mean_gap_h,
+            median(cov_max_gap_h) AS median_gap_h
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """
+    ).fetchall()
+    max_row = connection.execute("SELECT max(departure_date) FROM sampled").fetchone()
+    if max_row is None or max_row[0] is None:
+        raise DatasetError("no panel rows for journey diagnostics")
+    max_departure = str(max_row[0])
+    two_plus_week = connection.execute(
+        """
+        SELECT
+            split,
+            ttd_band,
+            observation_week,
+            count(*) AS rows,
+            avg(CASE WHEN future_observations >= 2 THEN 1.0 ELSE 0.0 END) AS two_plus_share
+        FROM sampled
+        WHERE split IS NOT NULL AND ttd_band = '14-30d'
+        GROUP BY split, ttd_band, observation_week
+        ORDER BY split, observation_week
+        """
+    ).fetchall()
+    journey_row = connection.execute(
+        f"""
+        WITH series_obs AS (
+            SELECT DISTINCT
+                series_key,
+                route_id,
+                departure_date,
+                observed_at,
+                train_number,
+                departure_planned,
+                service_class
+            FROM base_sampled
+            WHERE departure_date <= DATE '{max_departure}'
+        ),
+        series_info AS (
+            SELECT
+                series_key,
+                min(route_id) AS route_id,
+                min(departure_date) AS departure_date,
+                min(train_number) AS train_number,
+                min(departure_planned) AS departure_planned,
+                min(service_class) AS service_class,
+                min(observed_at) AS first_obs,
+                max(observed_at) AS last_obs,
+                count(*) AS observations
+            FROM series_obs
+            GROUP BY series_key
+        ),
+        new_series AS MATERIALIZED (
+            SELECT
+                o.series_key,
+                o.route_id,
+                o.departure_date,
+                o.observed_at AS first_obs,
+                o.train_number,
+                o.service_class,
+                o.departure_planned
+            FROM series_obs o
+            JOIN series_info i USING (series_key)
+            WHERE o.observed_at = i.first_obs
+        ),
+        eligible AS (
+            SELECT *
+            FROM series_info
+            WHERE observations >= 3
+        ),
+        next_scrape AS (
+            SELECT
+                s.*,
+                min(g.observed_at) AS next_s
+            FROM eligible s
+            JOIN scrape_grid_all g
+              ON g.route_id = s.route_id
+             AND g.departure_date = s.departure_date
+             AND g.observed_at > s.last_obs
+             AND g.observed_at < s.departure_planned
+            WHERE s.last_obs <= s.departure_planned - INTERVAL 24 HOUR
+            GROUP BY
+                s.series_key,
+                s.route_id,
+                s.departure_date,
+                s.train_number,
+                s.departure_planned,
+                s.service_class,
+                s.first_obs,
+                s.last_obs,
+                s.observations
+        ),
+        classified AS (
+            SELECT
+                n.*,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.service_class = n.service_class
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 900
+                    ) THEN 'same_train'
+                    WHEN EXISTS (
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
+                    ) THEN 'other_train'
+                    ELSE 'none'
+                END AS successor,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND ns.train_number IS NOT DISTINCT FROM n.train_number
+                          AND ns.service_class = n.service_class
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
+                    ) THEN 'same_train'
+                    WHEN EXISTS (
+                        SELECT 1 FROM new_series ns
+                        WHERE ns.route_id = n.route_id
+                          AND ns.departure_date = n.departure_date
+                          AND ns.first_obs = n.next_s
+                          AND abs(date_diff('second', ns.departure_planned, n.departure_planned)) <= 3600
+                    ) THEN 'other_train'
+                    ELSE 'none'
+                END AS successor_60,
+                {ttd_band_case("date_diff('second', last_obs, departure_planned) / 3600.0", JOURNEY_BANDS)} AS ttd_band,
+                strftime(last_obs, '%G-W%V') AS observation_week
+            FROM next_scrape n
+        )
+        SELECT
+            (SELECT count(*) FROM eligible) AS total_journeys,
+            (
+                SELECT count(*) FROM eligible
+                WHERE last_obs <= departure_planned - INTERVAL 24 HOUR
+            ) AS at_risk,
+            count(*) AS disappeared,
+            ttd_band,
+            observation_week,
+            successor,
+            successor_60,
+            count(*) AS journeys
+        FROM classified
+        GROUP BY GROUPING SETS ((ttd_band, observation_week, successor, successor_60), ())
+        ORDER BY GROUPING(ttd_band), ttd_band, observation_week, successor, successor_60
+        """
+    ).fetchall()
+    journey_totals = next((row for row in journey_row if row[3] is None), None)
+    journey_groups = [row for row in journey_row if row[3] is not None]
+    total_journeys = int(journey_totals[0]) if journey_totals else 0
+    at_risk = int(journey_totals[1]) if journey_totals else 0
+    disappeared = sum(int(row[2]) for row in journey_groups)
     return {
         "headroom": [
             {
@@ -615,9 +1186,76 @@ def _profile(connection: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 "labelled_share": float(row[1] or 0.0),
                 "one_observation_share": float(row[2] or 0.0),
                 "two_plus_share": float(row[3] or 0.0),
+                "r24_share": None if row[4] is None else float(row[4]),
             }
             for row in coverage
         ],
+        "cohort": cohort,
+        "ttd": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "rows": int(row[2]),
+                "labelled": int(row[3]),
+                "positive_rate": None if row[4] is None else float(row[4]),
+            }
+            for row in ttd
+        ],
+        "label": label,
+        "label_era": label_era,
+        "label_week": label_week,
+        "a29": a29,
+        "unlabelled": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "era": str(row[2]),
+                "week": str(row[3]),
+                "rows": int(row[4]),
+                "unlabelled_share": float(row[5] or 0.0),
+            }
+            for row in unlabelled
+        ],
+        "coverage_r24": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "rows": int(row[2]),
+                "eligible": int(row[3]),
+                "covered_share": None if row[4] is None else float(row[4]),
+                "mean_tail_h": None if row[5] is None else round(float(row[5]), 6),
+                "mean_gap_h": None if row[6] is None else round(float(row[6]), 6),
+                "median_gap_h": None if row[7] is None else round(float(row[7]), 6),
+            }
+            for row in coverage_r24
+        ],
+        "two_plus_week": [
+            {
+                "split": str(row[0]),
+                "band": str(row[1]),
+                "week": str(row[2]),
+                "rows": int(row[3]),
+                "two_plus_share": float(row[4] or 0.0),
+            }
+            for row in two_plus_week
+        ],
+        "journey": {
+            "total_journeys": total_journeys,
+            "at_risk": at_risk,
+            "disappeared": disappeared,
+            "share": 0.0 if total_journeys == 0 else disappeared / total_journeys,
+            "share_at_risk": 0.0 if at_risk == 0 else disappeared / at_risk,
+            "groups": [
+                {
+                    "band": str(row[3]),
+                    "week": str(row[4]),
+                    "successor": str(row[5]),
+                    "successor_60": str(row[6]),
+                    "journeys": int(row[7]),
+                }
+                for row in journey_groups
+            ],
+        },
     }
 
 
@@ -743,6 +1381,7 @@ def build_dataset(
         "uv_lock_sha256": _lock_sha256(),
         "cli_argv": list(cli_argv or ()),
         "threads": threads,
+        "duckdb_settings": _duckdb_settings(connection),
         "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
         "silver_build_id": source.build_id,
         "silver_manifest_sha256": source.manifest_sha256,

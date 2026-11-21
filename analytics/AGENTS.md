@@ -25,8 +25,14 @@ mise run //analytics:train -- --source .data/silver/<build>
 mise run //analytics:train:ablation -- --source .data/silver/<build>
 ```
 
-The `train` group adds numpy, scikit-learn and scipy only. CI installs it for the analytics job and the
-manual pre-commit `ty` hook; `uv export --no-dev` must keep it out of the Lambda image.
+The `train` group adds numpy, scikit-learn, scipy, joblib and pyarrow. CI installs it for the
+analytics job and the manual pre-commit `ty` hook; `uv export --no-dev` must keep it out of the
+Lambda image.
+
+The training CLI defaults to DuckDB `memory_limit=6GB` and `max_temp_size=20GB`; override them with
+`TRAIN_DUCKDB_MEMORY_LIMIT` and `TRAIN_DUCKDB_MAX_TEMP_SIZE`. Both effective values are recorded in
+`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for the 5 %
+route-day sample; raise it for the 10/25/50 % learning-curve runs.
 
 S3 credentials are frozen into a temporary DuckDB secret for the run. IAM Identity Center role
 sessions default to one hour; for a long scan, download the silver build to `analytics/.data/` and
@@ -119,7 +125,24 @@ v2-only and mixed-schema input.
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
-  and `--ablation` report validation only.
+  and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
+  journey disappearance is corpus-level and includes test departures. `profile.json` and
+  `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
+- `check_at` (20-24 h for crossed-back and the decision-value diagnostic; 20-28 h and 22-26 h for
+  next-day coverage/prevalence),
+  `check_lag_h`, `cov_tail_h`, `cov_max_gap_h`, `check_price_eur` and the label diagnostics are
+  audit columns, not model features. They may use future scrapes only for evaluation, never inside
+  the feature matrix.
+- The climatology score is a baseline, not a selectable production candidate. Keep it out of
+  `model.candidates` unless a future plan changes that decision.
+- `predictions/<split>.parquet` and `model.joblib` are local artifacts. Never load or trust a model
+  file you did not produce; they are not uploaded. Verify `model.joblib` against
+  `manifest.json.artifact_sha256` before loading; the hash proves integrity, not authenticity,
+  because the expected value ships in the same directory.
+- In predictions, `raw_score` is the model score at that row's headroom, `raw_score_pooled` is the
+  assigned-headroom score used to fit the calibrator, and `calibration_mode`/`calibration_fold`
+  say whether `calibrated_score` is out-of-fold (`oof`) or a full refit (`full`). Do not fit a new
+  calibrator to `raw_score` and expect the stored calibrated score.
 - A clean rerun must match the per-split content digests in `dataset_manifest.json`. Do not remove
   the total `ORDER BY` in the Parquet writer.
 

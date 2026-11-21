@@ -7,14 +7,19 @@ selection slice or the test set.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import itertools
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import joblib
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from scipy.special import expit
@@ -35,6 +40,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
+from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, band_labels, ttd_band
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
 
@@ -56,6 +62,10 @@ class TabularData:
     future_observations: Array
     headroom: Array
     departure_date: Array
+    snapshot_at: Array
+    observation_era: Array
+    observation_week: Array
+    check_price: Array
 
     def __len__(self) -> int:
         return len(self.y)
@@ -71,6 +81,10 @@ class TabularData:
             future_observations=self.future_observations[indices],
             headroom=self.headroom[indices],
             departure_date=self.departure_date[indices],
+            snapshot_at=self.snapshot_at[indices],
+            observation_era=self.observation_era[indices],
+            observation_week=self.observation_week[indices],
+            check_price=self.check_price[indices],
         )
 
     def select(self, names: tuple[str, ...]) -> TabularData:
@@ -84,6 +98,10 @@ class TabularData:
             future_observations=self.future_observations,
             headroom=self.headroom,
             departure_date=self.departure_date,
+            snapshot_at=self.snapshot_at,
+            observation_era=self.observation_era,
+            observation_week=self.observation_week,
+            check_price=self.check_price,
         )
 
 
@@ -138,6 +156,9 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             "headroom_pct",
             "departure_date",
             "snapshot_at",
+            "observation_era",
+            "strftime(snapshot_at, '%G-W%V') AS observation_week",
+            "check_price_eur",
             "bin_regime",
             "bin_index",
         )
@@ -175,6 +196,10 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=np.asarray(rows["headroom_pct"], dtype=np.int16),
         departure_date=np.asarray(rows["departure_date"], dtype=str),
+        snapshot_at=np.asarray(rows["snapshot_at"], dtype=str),
+        observation_era=_categorical(rows["observation_era"]),
+        observation_week=_categorical(rows["observation_week"]),
+        check_price=_filled64(rows["check_price_eur"], np.nan),
     )
 
 
@@ -353,6 +378,75 @@ def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: Train
     return FittedModel(name=name, estimator=estimator, encoder=encoder, spec=spec)
 
 
+@dataclass(frozen=True)
+class ClimatologyModel:
+    """Smoothed train prevalence by TTD band, headroom and service class."""
+
+    cells: dict[tuple[str, int, str], float]
+    band_headroom: dict[tuple[str, int], float]
+    headroom: dict[int, float]
+    global_rate: float
+
+    def predict(self, data: TabularData, headroom: int | None = None) -> Array:
+        hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
+        bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
+        heads = data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16)
+        classes = np.asarray(data.features["service_class"], dtype=str)
+        values = np.empty(len(data), dtype=np.float64)
+        for index, (band, head, service_class) in enumerate(zip(bands, heads, classes, strict=True)):
+            key = (band, int(head), str(service_class))
+            values[index] = self.cells.get(
+                key,
+                self.band_headroom.get(
+                    (band, int(head)),
+                    self.headroom.get(int(head), self.global_rate),
+                ),
+            )
+        return values
+
+
+def fit_climatology(data: TabularData, *, strength: float = 50.0) -> ClimatologyModel:
+    """Fit a hierarchical prevalence baseline with a Beta-style prior on thin cells."""
+    hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
+    bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
+    heads = np.asarray(data.headroom, dtype=np.int64)
+    classes = np.asarray(data.features["service_class"], dtype=str)
+    global_count = len(data)
+    global_positives = int(np.sum(data.y))
+    global_rate = (global_positives + 1.0) / (global_count + 2.0)
+    head_counts: dict[int, list[int]] = {}
+    band_counts: dict[tuple[str, int], list[int]] = {}
+    cell_counts: dict[tuple[str, int, str], list[int]] = {}
+    for band, head, service_class, target in zip(bands, heads, classes, data.y, strict=True):
+        head_counts.setdefault(int(head), [0, 0])
+        head_counts[int(head)][0] += 1
+        head_counts[int(head)][1] += int(target)
+        band_counts.setdefault((band, int(head)), [0, 0])
+        band_counts[(band, int(head))][0] += 1
+        band_counts[(band, int(head))][1] += int(target)
+        cell_counts.setdefault((band, int(head), str(service_class)), [0, 0])
+        cell_counts[(band, int(head), str(service_class))][0] += 1
+        cell_counts[(band, int(head), str(service_class))][1] += int(target)
+    head_rate = {
+        head: (positive + strength * global_rate) / (count + strength)
+        for head, (count, positive) in head_counts.items()
+    }
+    band_rate = {
+        key: (positive + strength * head_rate.get(key[1], global_rate)) / (count + strength)
+        for key, (count, positive) in band_counts.items()
+    }
+    cell_rate = {
+        key: (positive + strength * band_rate.get((key[0], key[1]), global_rate)) / (count + strength)
+        for key, (count, positive) in cell_counts.items()
+    }
+    return ClimatologyModel(
+        cells=cell_rate,
+        band_headroom=band_rate,
+        headroom=head_rate,
+        global_rate=global_rate,
+    )
+
+
 class ScoreCalibrator:
     """A calibrator over raw probabilities, fitted on a held-out slice."""
 
@@ -363,6 +457,8 @@ class ScoreCalibrator:
 
     def predict(self, raw: Array) -> Array:
         clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+        if self.method == "constant":
+            return np.full(len(clipped), float(self.model), dtype=np.float64)
         if self.method == "temperature":
             if self.temperature is None:
                 raise ModelError("temperature calibrator has no fitted temperature")
@@ -377,6 +473,8 @@ class ScoreCalibrator:
 
 def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
     clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+    if len(np.unique(y)) < 2:
+        return ScoreCalibrator("constant", float(np.mean(y)))
     positives = int(np.sum(y))
     if method == "isotonic" and positives < min_positives:
         method = "sigmoid"
@@ -420,14 +518,22 @@ def _metrics(y: Array, probabilities: Array) -> dict[str, float | None]:
     }
 
 
-def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: TrainingConfig) -> Array:
+def _cross_fitted_with_folds(
+    raw: Array,
+    y: Array,
+    groups: Array,
+    method: str,
+    config: TrainingConfig,
+) -> tuple[Array, Array]:
+    """Fit the calibrator out-of-fold and return predictions plus fold ids."""
     unique = np.unique(groups)
     folds = min(config.calibration.folds, len(unique))
     if folds < 2:
         raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
     splitter = GroupKFold(n_splits=folds)
     predicted = np.full(len(raw), np.nan, dtype=np.float64)
-    for fit_idx, predict_idx in splitter.split(raw, y, groups):
+    fold_ids = np.full(len(raw), -1, dtype=np.int16)
+    for fold, (fit_idx, predict_idx) in enumerate(splitter.split(raw, y, groups)):
         calibrator = fit_calibrator(
             raw[fit_idx],
             y[fit_idx],
@@ -435,9 +541,14 @@ def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: Trai
             min_positives=config.calibration.min_positives,
         )
         predicted[predict_idx] = calibrator.predict(raw[predict_idx])
+        fold_ids[predict_idx] = fold
     if np.isnan(predicted).any():
         raise ModelError("cross-fitted calibration left rows without a prediction")
-    return predicted
+    return predicted, fold_ids
+
+
+def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: TrainingConfig) -> Array:
+    return _cross_fitted_with_folds(raw, y, groups, method, config)[0]
 
 
 @dataclass(frozen=True)
@@ -456,19 +567,51 @@ class Evaluation:
     calibration_prevalence: float
     train_prevalence: float
     dropped_features: tuple[str, ...]
-    calibration: tuple[Array, Array, Array]
     headroom: tuple[dict[str, Any], ...]
     importance: tuple[dict[str, Any], ...]
     bootstrap: dict[str, list[float]]
     split_sizes: dict[str, int]
+    calibration: tuple[Array, Array, Array] = field(compare=False)
+    calibration_constant: bool = False
+    candidate_train: dict[str, dict[str, float | None]] = field(default_factory=dict)
+    candidate_calibration_method: str = ""
+    headroom_ttd: tuple[dict[str, Any], ...] = ()
+    strata: tuple[dict[str, Any], ...] = ()
+    strata_compare: tuple[dict[str, Any], ...] = ()
+    calibration_stats: dict[str, float | None] = field(default_factory=dict)
+    calibration_groups: tuple[dict[str, Any], ...] = ()
+    climatology: dict[str, Any] = field(default_factory=dict)
+    decision_value: tuple[dict[str, Any], ...] = ()
+    decision_value_pooled: tuple[dict[str, Any], ...] = ()
+    intervals: dict[str, list[float]] = field(default_factory=dict)
+    paired: dict[str, Any] = field(default_factory=dict)
+    bootstrap_clusters: int = 0
+    prediction_series: Array | None = field(default=None, repr=False, compare=False)
+    prediction_snapshot_at: Array | None = field(default=None, repr=False, compare=False)
+    prediction_route_day: Array | None = field(default=None, repr=False, compare=False)
+    prediction_headroom: Array | None = field(default=None, repr=False, compare=False)
+    prediction_raw: Array | None = field(default=None, repr=False, compare=False)
+    prediction_raw_pooled: Array | None = field(default=None, repr=False, compare=False)
+    prediction_calibration_fold: Array | None = field(default=None, repr=False, compare=False)
+    prediction_calibration_mode: str = field(default="", repr=False, compare=False)
+    prediction_calibrated: Array | None = field(default=None, repr=False, compare=False)
+    prediction_y: Array | None = field(default=None, repr=False, compare=False)
+    prediction_assigned_headroom: Array | None = field(default=None, repr=False, compare=False)
+    prediction_calibrated_pooled: Array | None = field(default=None, repr=False, compare=False)
+    prediction_departure_date: Array | None = field(default=None, repr=False, compare=False)
+    prediction_ttd_band: Array | None = field(default=None, repr=False, compare=False)
+    prediction_split: str = field(default="", repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "chosen_model": self.chosen_model,
             "calibration_method": self.calibration_method,
+            "calibration_constant": self.calibration_constant,
             "threshold": self.threshold,
             "threshold_precision_floor_met": self.threshold_precision_floor_met,
             "candidates": self.candidates,
+            "candidate_train": self.candidate_train,
+            "candidate_calibration_method": self.candidate_calibration_method,
             "metrics": {"split": self.evaluation_split, "values": self.test},
             "test_all": self.test_all,
             "test_tier": self.test_tier,
@@ -486,10 +629,24 @@ class Evaluation:
             "importance": list(self.importance),
             "bootstrap": self.bootstrap,
             "split_sizes": self.split_sizes,
+            "headroom_ttd": list(self.headroom_ttd),
+            "strata": list(self.strata),
+            "strata_compare": list(self.strata_compare),
+            "calibration_stats": self.calibration_stats,
+            "calibration_groups": list(self.calibration_groups),
+            "climatology": self.climatology,
+            "decision_value": list(self.decision_value),
+            "decision_value_pooled": list(self.decision_value_pooled),
+            "intervals": self.intervals,
+            "paired": self.paired,
+            "bootstrap_clusters": self.bootstrap_clusters,
         }
 
 
 def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, bool]:
+    classes = np.unique(y)
+    if len(classes) < 2:
+        return (0.0, True) if classes[0] == 1 else (0.5, False)
     precision, recall, thresholds = precision_recall_curve(y, probabilities)
     eligible = np.where(precision[:-1] >= floor)[0]
     if len(eligible):
@@ -532,34 +689,6 @@ def _calibration_curve(y: Array, probabilities: Array, bins: int) -> tuple[Array
     )
 
 
-def _cross_fitted_apply(
-    raw_fit: Array,
-    y_fit: Array,
-    groups: Array,
-    raw_apply: Array,
-    method: str,
-    config: TrainingConfig,
-) -> Array:
-    """Fit the pooled calibrator out-of-fold, then apply it to a different raw score array."""
-    unique = np.unique(groups)
-    folds = min(config.calibration.folds, len(unique))
-    if folds < 2:
-        raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
-    splitter = GroupKFold(n_splits=folds)
-    predicted = np.full(len(raw_apply), np.nan, dtype=np.float64)
-    for fit_idx, predict_idx in splitter.split(raw_fit, y_fit, groups):
-        calibrator = fit_calibrator(
-            raw_fit[fit_idx],
-            y_fit[fit_idx],
-            method,
-            min_positives=config.calibration.min_positives,
-        )
-        predicted[predict_idx] = calibrator.predict(raw_apply[predict_idx])
-    if np.isnan(predicted).any():
-        raise ModelError("cross-fitted calibration left rows without a prediction")
-    return predicted
-
-
 def _permutation_importance(
     model: FittedModel,
     calibrator: ScoreCalibrator,
@@ -592,6 +721,10 @@ def _permutation_importance(
                 future_observations=data.future_observations,
                 headroom=data.headroom,
                 departure_date=data.departure_date,
+                snapshot_at=data.snapshot_at,
+                observation_era=data.observation_era,
+                observation_week=data.observation_week,
+                check_price=data.check_price,
             )
             probabilities = np.clip(calibrator.predict(model.predict(shuffled)), 1e-9, 1.0 - 1e-9)
             increases.append(float(brier_score_loss(data.y, probabilities)) - baseline)
@@ -606,6 +739,8 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
     O(clusters x replicates) and gives the same weighted Brier/log-loss.
     """
     unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2:
+        return {}
     clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
     brier_sum = np.bincount(inverse, weights=(clipped - y) ** 2, minlength=len(unique))
     logloss_sum = np.bincount(
@@ -628,50 +763,306 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
     }
 
 
-def train_and_evaluate(
-    splits: dict[str, TabularData],
+def _ttd_array(data: TabularData) -> Array:
+    hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
+    return np.asarray([ttd_band(float(value)) for value in hours], dtype=str)
+
+
+def _calibration_stats(y: Array, probabilities: Array, bins: int) -> dict[str, float | None]:
+    """Return logistic calibration slope/intercept and expected calibration error."""
+    clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
+    slope: float | None = None
+    intercept: float | None = None
+    if len(np.unique(y)) == 2 and len(np.unique(clipped)) > 1:
+        logits = np.log(clipped / (1.0 - clipped))
+        if float(np.std(logits)) > 1e-12:
+            model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+            model.fit(logits.reshape(-1, 1), y)
+            slope = float(model.coef_[0][0])
+            intercept = float(model.intercept_[0])
+    predicted, observed, counts = _calibration_curve(y, clipped, bins)
+    total = float(counts.sum())
+    ece = float(np.sum(counts / total * np.abs(predicted - observed))) if total > 0 else None
+    return {"slope": slope, "intercept": intercept, "ece": ece}
+
+
+def _bootstrap_metrics(
+    y: Array,
+    probabilities: Array,
+    groups: Array,
+    replicates: int,
+    seed: int,
+    threshold: float,
+) -> dict[str, list[float]]:
+    """Cluster bootstrap for the headline metrics that cannot use sufficient statistics."""
+    unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2 or len(y) < 2:
+        return {}
+    clusters = [np.flatnonzero(inverse == index) for index in range(len(unique))]
+    rng = np.random.default_rng(seed)
+    collected: dict[str, list[float]] = {
+        key: [] for key in ("brier", "log_loss", "bss", "roc_auc", "average_precision", "precision", "recall")
+    }
+    for _ in range(replicates):
+        sampled = rng.integers(0, len(unique), size=len(unique))
+        indices = np.concatenate([clusters[index] for index in sampled])
+        yy = y[indices]
+        pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
+        both = len(np.unique(yy)) == 2
+        brier = float(brier_score_loss(yy, pp))
+        base = float(np.mean(yy))
+        collected["brier"].append(brier)
+        collected["log_loss"].append(float(log_loss(yy, pp, labels=[0, 1])))
+        collected["bss"].append(1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan)
+        collected["roc_auc"].append(float(roc_auc_score(yy, pp)) if both else np.nan)
+        collected["average_precision"].append(float(average_precision_score(yy, pp)) if both else np.nan)
+        decisions = _decision_metrics(yy, pp, threshold)
+        collected["precision"].append(decisions["precision_at_threshold"])
+        collected["recall"].append(decisions["recall_at_threshold"])
+    result: dict[str, list[float]] = {}
+    for key, values in collected.items():
+        if key in {"brier", "log_loss"}:
+            continue
+        array = np.asarray(values, dtype=np.float64)
+        array = array[np.isfinite(array)]
+        result[key] = [float(np.percentile(array, 2.5)), float(np.percentile(array, 97.5))] if len(array) else []
+    return result
+
+
+def _bootstrap_paired(
+    y: Array,
+    model_probabilities: Array,
+    baseline_probabilities: Array,
+    groups: Array,
+    replicates: int,
+    seed: int,
+) -> list[float]:
+    """Cluster bootstrap of the Brier difference (model minus baseline)."""
+    unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2:
+        return []
+    difference = (np.clip(model_probabilities, 1e-9, 1.0 - 1e-9) - y) ** 2 - (
+        np.clip(baseline_probabilities, 1e-9, 1.0 - 1e-9) - y
+    ) ** 2
+    sums = np.bincount(inverse, weights=difference, minlength=len(unique))
+    counts = np.bincount(inverse, minlength=len(unique))
+    rng = np.random.default_rng(seed)
+    values = []
+    for _ in range(replicates):
+        sampled = rng.integers(0, len(unique), size=len(unique))
+        values.append(float(sums[sampled].sum() / counts[sampled].sum()))
+    return [float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))]
+
+
+def _cluster_mean_ci(values: Array, groups: Array, replicates: int, seed: int) -> list[float]:
+    unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2 or len(values) == 0:
+        return []
+    sums = np.bincount(inverse, weights=values, minlength=len(unique))
+    counts = np.bincount(inverse, minlength=len(unique))
+    rng = np.random.default_rng(seed)
+    means = []
+    for _ in range(replicates):
+        sampled = rng.integers(0, len(unique), size=len(unique))
+        total = counts[sampled].sum()
+        means.append(float(sums[sampled].sum() / total) if total else np.nan)
+    array = np.asarray(means, dtype=np.float64)
+    array = array[np.isfinite(array)]
+    return [float(np.percentile(array, 2.5)), float(np.percentile(array, 97.5))] if len(array) else []
+
+
+def _stratum_metrics(y: Array, probabilities: Array, train_y: Array, threshold: float) -> dict[str, float | None]:
+    metrics = _metrics(y, probabilities)
+    train_rate = float(np.mean(train_y)) if len(train_y) else float("nan")
+    metrics["bss_train"] = _bss_train(metrics["brier"], y, train_rate) if np.isfinite(train_rate) else None
+    decisions = _decision_metrics(y, probabilities, threshold)
+    metrics["precision_at_threshold"] = decisions["precision_at_threshold"]
+    metrics["recall_at_threshold"] = decisions["recall_at_threshold"]
+    metrics["mean_probability"] = float(np.mean(probabilities))
+    metrics["calibration_gap"] = float(np.mean(probabilities) - np.mean(y))
+    return metrics
+
+
+def _strata_rows(
+    data: TabularData,
+    probabilities: Array,
+    train_data: TabularData,
+    threshold: float,
+) -> list[dict[str, Any]]:
+    """Metrics by TTD band, era, observation week and service class."""
+    dimensions = {
+        "ttd_band": _ttd_array(data),
+        "era": np.asarray(data.observation_era, dtype=str),
+        "week": np.asarray(data.observation_week, dtype=str),
+        "service_class": np.asarray(data.features["service_class"], dtype=str),
+        "evidence_tier": np.where(data.future_observations >= 2, "two_plus", "one"),
+    }
+    train_dimensions = {
+        "ttd_band": _ttd_array(train_data),
+        "era": np.asarray(train_data.observation_era, dtype=str),
+        "week": np.asarray(train_data.observation_week, dtype=str),
+        "service_class": np.asarray(train_data.features["service_class"], dtype=str),
+        "evidence_tier": np.where(train_data.future_observations >= 2, "two_plus", "one"),
+    }
+    rows: list[dict[str, Any]] = []
+    for dimension, values in dimensions.items():
+        for value in sorted(set(values.tolist())):
+            mask = values == value
+            if int(mask.sum()) < 20:
+                continue
+            train_mask = train_dimensions[dimension] == value
+            train_y = train_data.y[train_mask]
+            item = _stratum_metrics(data.y[mask], probabilities[mask], train_y, threshold)
+            rows.append(
+                {
+                    "dimension": dimension,
+                    "value": str(value),
+                    "rows": int(mask.sum()),
+                    "train_rows": int(train_mask.sum()),
+                    **item,
+                }
+            )
+    return rows
+
+
+def _decision_row(
+    *,
+    band: str,
+    headroom_pct: int | None,
+    price: Array,
+    saving: Array,
+    alert: Array,
+    groups: Array,
+    replicates: int,
+    seed: int,
+) -> dict[str, Any]:
+    """One decision-value row for an alert mask and a set of check prices."""
+    saving_vs_wait = np.where(alert, saving, 0.0)
+    saving_vs_book = -np.where(alert, 0.0, saving)
+    row: dict[str, Any] = {
+        "band": band,
+        "rows": len(price),
+        "alert_rows": int(alert.sum()),
+        "alert_share": float(alert.mean()),
+        "saving_vs_always_wait_eur": float(np.mean(saving_vs_wait)),
+        "random_alert_saving_vs_wait_eur": float(alert.mean() * np.mean(saving)),
+        "lift_vs_random_eur": float(np.mean(saving_vs_wait) - alert.mean() * np.mean(saving)),
+        "saving_vs_always_wait_pct": float(np.sum(saving_vs_wait) / np.sum(price)),
+        "saving_vs_always_book_eur": float(np.mean(saving_vs_book)),
+        "saving_vs_always_book_pct": float(np.sum(saving_vs_book) / np.sum(price)),
+        "conditional_saving_when_alert_eur": float(np.mean(saving[alert])) if alert.any() else None,
+        "cost_of_waiting_eur": float(np.mean(saving)),
+        "cost_of_waiting_pct": float(np.sum(saving) / np.sum(price)),
+        "ci_saving_vs_wait_eur": _cluster_mean_ci(saving_vs_wait, groups, replicates, seed),
+        "ci_saving_vs_book_eur": _cluster_mean_ci(saving_vs_book, groups, replicates, seed + 1),
+    }
+    if headroom_pct is not None:
+        row["headroom_pct"] = int(headroom_pct)
+    return row
+
+
+def _decision_value_rows(
+    data: TabularData,
+    headroom_values: tuple[int, ...],
+    probabilities: list[Array],
+    bands: Array,
+    threshold: float,
+    replicates: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Diagnostic value of alerting now versus booking now or at the next check."""
+    rows: list[dict[str, Any]] = []
+    for headroom, probabilities_at_headroom in zip(headroom_values, probabilities, strict=True):
+        for band in band_labels():
+            mask = (bands == band) & np.isfinite(data.check_price) & np.isfinite(data.price) & (data.price > 0)
+            if int(mask.sum()) < 20:
+                continue
+            alert = probabilities_at_headroom[mask] >= threshold
+            rows.append(
+                _decision_row(
+                    band=band,
+                    headroom_pct=headroom,
+                    price=data.price[mask],
+                    saving=data.check_price[mask] - data.price[mask],
+                    alert=alert,
+                    groups=data.departure_date[mask],
+                    replicates=replicates,
+                    seed=seed,
+                )
+            )
+    return rows
+
+
+def _pooled_decision_value_rows(
+    data: TabularData,
+    probabilities: Array,
+    bands: Array,
+    threshold: float,
+    replicates: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Decision value of the shipped pooled calibrator, one row per TTD band."""
+    rows: list[dict[str, Any]] = []
+    for band in band_labels():
+        mask = (bands == band) & np.isfinite(data.check_price) & np.isfinite(data.price) & (data.price > 0)
+        if int(mask.sum()) < 20:
+            continue
+        alert = probabilities[mask] >= threshold
+        rows.append(
+            _decision_row(
+                band=band,
+                headroom_pct=None,
+                price=data.price[mask],
+                saving=data.check_price[mask] - data.price[mask],
+                alert=alert,
+                groups=data.departure_date[mask],
+                replicates=replicates,
+                seed=seed,
+            )
+        )
+    return rows
+
+
+def _canonical(data: TabularData) -> TabularData:
+    order = np.lexsort(
+        (
+            np.asarray(data.snapshot_at, dtype=str),
+            np.asarray(data.series, dtype=str),
+        )
+    )
+    return data.subset(order)
+
+
+def _select(values: Array, mask: Array | None) -> Array:
+    return values[mask] if mask is not None else values
+
+
+def _fit_candidates(
+    train: TabularData,
+    validation_select: TabularData,
     spec: FeatureSpec,
     config: TrainingConfig,
-    *,
-    evaluate_test: bool = False,
-) -> tuple[Evaluation, dict[str, FittedModel], ScoreCalibrator]:
-    """Fit the candidate models and evaluate the configured cohort.
-
-    ``train`` fits the candidates; ``validation_select`` compares and selects them;
-    ``validation_calibrate`` fits the final calibrator and supplies the default evaluation rows.
-    ``test`` is read only when ``evaluate_test`` is true, and is then the reported split. The
-    returned tuple holds the evaluation payload, all fitted candidates and the calibrator that
-    belongs to the selected model.
-    """
-    train = splits["train"]
-    validation_select = splits["validation_select"]
-    validation_calibrate = splits["validation_calibrate"]
-    test = splits["test"]
-    series_sets = {name: set(data.series.tolist()) for name, data in splits.items()}
-    names = list(series_sets)
-    for index, left in enumerate(names):
-        for right in names[index + 1 :]:
-            overlap = series_sets[left] & series_sets[right]
-            if overlap:
-                raise ModelError(f"series crosses splits {left}/{right}: {next(iter(overlap))}")
+) -> tuple[dict[str, FittedModel], dict[str, dict[str, float | None]], dict[str, dict[str, float | None]]]:
     candidates: dict[str, FittedModel] = {}
-    candidate_metrics: dict[str, dict[str, float | None]] = {}
+    metrics: dict[str, dict[str, float | None]] = {}
+    train_metrics: dict[str, dict[str, float | None]] = {}
+    calibration_method = next(iter(config.calibration.methods))
     for name in config.model.candidates:
         model = fit_candidate(name, train, spec, config)
         candidates[name] = model
+        train_metrics[name] = _metrics(train.y, model.predict(train))
         raw = model.predict(validation_select)
         if name == "base_rate":
-            candidate_metrics[name] = _metrics(validation_select.y, raw)
+            metrics[name] = _metrics(validation_select.y, raw)
         else:
-            calibrated = _cross_fitted(
-                raw,
+            metrics[name] = _metrics(
                 validation_select.y,
-                validation_select.route_day,
-                next(iter(config.calibration.methods)),
-                config,
+                _cross_fitted(raw, validation_select.y, validation_select.route_day, calibration_method, config),
             )
-            candidate_metrics[name] = _metrics(validation_select.y, calibrated)
+    return candidates, metrics, train_metrics
 
+
+def _choose_candidate(candidate_metrics: dict[str, dict[str, float | None]]) -> str:
     logistic = candidate_metrics.get("logistic")
     best = min(candidate_metrics, key=lambda name: _metric_value(candidate_metrics[name]["brier"]))
     chosen = best
@@ -688,52 +1079,309 @@ def train_and_evaluate(
         and _metric_value(logistic["brier"]) > _metric_value(candidate_metrics["base_rate"]["brier"]) - 0.001
     ):
         chosen = "base_rate"
+    return chosen
 
-    model = candidates[chosen]
-    cal_evidence = validation_calibrate.future_observations >= 2
-    cal_data = validation_calibrate.subset(cal_evidence) if int(cal_evidence.sum()) >= 100 else validation_calibrate
+
+def _fit_final_calibration(
+    model: FittedModel,
+    validation_calibrate: TabularData,
+    config: TrainingConfig,
+) -> tuple[TabularData, ScoreCalibrator, str, bool, dict[str, Array], float, bool]:
+    evidence = validation_calibrate.future_observations >= 2
+    cal_data = (
+        validation_calibrate.subset(evidence)
+        if int(evidence.sum()) >= config.report.min_tier_rows
+        else validation_calibrate
+    )
     raw_cal = model.predict(cal_data)
     method_scores: dict[str, dict[str, float | None]] = {}
     oof_predictions: dict[str, Array] = {}
     for method in config.calibration.methods:
-        oof = _cross_fitted(
-            raw_cal,
-            cal_data.y,
-            cal_data.route_day,
-            method,
-            config,
-        )
-        oof_predictions[method] = oof
-        method_scores[method] = _metrics(cal_data.y, oof)
-    requested_method = min(method_scores, key=lambda name: float(method_scores[name]["brier"] or 1.0))
+        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
+        method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
+    requested = min(method_scores, key=lambda name: float(method_scores[name]["brier"] or 1.0))
     calibrator = fit_calibrator(
         raw_cal,
         cal_data.y,
-        requested_method,
+        requested,
         min_positives=config.calibration.min_positives,
     )
-    calibration_method = calibrator.method
-    if calibration_method not in oof_predictions:
-        oof_predictions[calibration_method] = _cross_fitted(
-            raw_cal,
-            cal_data.y,
-            cal_data.route_day,
-            calibration_method,
-            config,
-        )
+    # Preserve the requested method only for the single-class constant calibrator; otherwise
+    # record the effective method (for example an isotonic-to-sigmoid fallback) and use its
+    # matching out-of-fold predictions.
+    calibration_constant = calibrator.method == "constant"
+    method = requested if calibration_constant else calibrator.method
+    if method not in oof_predictions:
+        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
     threshold, threshold_met = _threshold(
         cal_data.y,
-        oof_predictions[calibration_method],
+        oof_predictions[method],
         config.report.threshold_precision_floor,
     )
+    return cal_data, calibrator, method, calibration_constant, oof_predictions, threshold, threshold_met
+
+
+def _calibrated_scores(
+    fit_raw: Array,
+    fit_y: Array,
+    groups: Array,
+    apply_raw: Array,
+    method: str,
+    config: TrainingConfig,
+    evaluate_test: bool,
+) -> tuple[Array, Array, str]:
+    """Return calibrated scores, fold ids and the calibration mode for one population."""
+    if evaluate_test:
+        calibrator = fit_calibrator(
+            fit_raw,
+            fit_y,
+            method,
+            min_positives=config.calibration.min_positives,
+        )
+        return calibrator.predict(apply_raw), np.full(len(apply_raw), -1, dtype=np.int16), "full"
+    predicted, folds = _cross_fitted_with_folds(fit_raw, fit_y, groups, method, config)
+    if len(apply_raw) != len(predicted):
+        raise ModelError("out-of-fold calibration applied to a different population")
+    return predicted, folds, "oof"
+
+
+def _headroom_diagnostics(
+    eval_rows: TabularData,
+    cal_data: TabularData,
+    train_eval: TabularData,
+    model: FittedModel,
+    climatology: ClimatologyModel,
+    calibration_method: str,
+    config: TrainingConfig,
+    bands_eval: Array,
+    bands_train: Array,
+    eval_mask: Array | None,
+    threshold: float,
+    evaluate_test: bool,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[Array],
+    list[Array],
+    list[Array],
+    list[Array],
+]:
+    headroom: list[dict[str, Any]] = []
+    headroom_ttd: list[dict[str, Any]] = []
+    probabilities_by_headroom: list[Array] = []
+    raw_by_headroom: list[Array] = []
+    folds_by_headroom: list[Array] = []
+    y_by_headroom: list[Array] = []
+    select = (lambda values: _select(values, eval_mask)) if not evaluate_test else (lambda values: values)
+    for value in config.label.headroom_pct:
+        y_headroom = (eval_rows.future_max >= eval_rows.price * (1.0 + value / 100.0)).astype(np.int8)
+        y_cal_headroom = (cal_data.future_max >= cal_data.price * (1.0 + value / 100.0)).astype(np.int8)
+        raw_cal_headroom = model.predict(cal_data, headroom=value)
+        raw_apply = model.predict(eval_rows, headroom=value) if evaluate_test else raw_cal_headroom
+        calibrated, folds, _ = _calibrated_scores(
+            raw_cal_headroom,
+            y_cal_headroom,
+            cal_data.route_day,
+            raw_apply,
+            calibration_method,
+            config,
+            evaluate_test,
+        )
+        probabilities = select(calibrated)
+        raw_headroom = select(raw_apply)
+        folds_eval = select(folds)
+        clim_raw_headroom = climatology.predict(cal_data, headroom=value)
+        clim_apply = climatology.predict(eval_rows, headroom=value) if evaluate_test else clim_raw_headroom
+        clim_calibrated, _, _ = _calibrated_scores(
+            clim_raw_headroom,
+            y_cal_headroom,
+            cal_data.route_day,
+            clim_apply,
+            calibration_method,
+            config,
+            evaluate_test,
+        )
+        clim_headroom = select(clim_calibrated)
+        item = _metrics(y_headroom, probabilities)
+        item["headroom_pct"] = value
+        item["mean_probability"] = float(np.mean(probabilities))
+        item["calibration_gap"] = float(np.mean(probabilities) - np.mean(y_headroom))
+        decisions = _decision_metrics(y_headroom, probabilities, threshold)
+        item["precision_at_threshold"] = decisions["precision_at_threshold"]
+        item["recall_at_threshold"] = decisions["recall_at_threshold"]
+        train_headroom = train_eval.y[train_eval.headroom == value]
+        item["train_rows"] = len(train_headroom)
+        item["bss_train"] = (
+            _bss_train(item["brier"], y_headroom, float(np.mean(train_headroom))) if len(train_headroom) else None
+        )
+        clim_reference = float(np.mean((y_headroom - clim_headroom) ** 2))
+        item["bss_climatology"] = (
+            1.0 - item["brier"] / clim_reference if item["brier"] is not None and clim_reference > 0 else None
+        )
+        calibration = _calibration_stats(y_headroom, probabilities, config.report.calibration_bins)
+        item["calibration_slope"] = calibration["slope"]
+        item["calibration_intercept"] = calibration["intercept"]
+        item["ece"] = calibration["ece"]
+        probabilities_by_headroom.append(probabilities)
+        raw_by_headroom.append(raw_headroom)
+        folds_by_headroom.append(folds_eval)
+        y_by_headroom.append(y_headroom)
+        headroom.append(item)
+        for band in band_labels():
+            mask = bands_eval == band
+            if int(mask.sum()) < 20:
+                continue
+            band_metrics: dict[str, Any] = dict(_metrics(y_headroom[mask], probabilities[mask]))
+            train_mask = (bands_train == band) & (train_eval.headroom == value)
+            band_metrics["train_rows"] = int(train_mask.sum())
+            band_metrics["bss_train"] = (
+                _bss_train(band_metrics["brier"], y_headroom[mask], float(np.mean(train_eval.y[train_mask])))
+                if int(train_mask.sum())
+                else None
+            )
+            clim_band_reference = float(np.mean((y_headroom[mask] - clim_headroom[mask]) ** 2))
+            band_metrics["bss_climatology"] = (
+                1.0 - band_metrics["brier"] / clim_band_reference
+                if band_metrics["brier"] is not None and clim_band_reference > 0
+                else None
+            )
+            band_metrics["roc_auc_raw"] = (
+                float(roc_auc_score(y_headroom[mask], raw_headroom[mask]))
+                if len(np.unique(y_headroom[mask])) == 2
+                else None
+            )
+            band_bootstrap = _bootstrap(
+                y_headroom[mask],
+                probabilities[mask],
+                eval_rows.departure_date[mask],
+                config.report.metric_bootstrap_replicates,
+                config.seed + value,
+            )
+            band_metrics["brier_ci"] = band_bootstrap.get("brier", [])
+            band_metrics["headroom_pct"] = value
+            band_metrics["ttd_band"] = band
+            headroom_ttd.append(band_metrics)
+    return headroom, headroom_ttd, probabilities_by_headroom, raw_by_headroom, folds_by_headroom, y_by_headroom
+
+
+def _calibration_groups(
+    eval_rows: TabularData,
+    headroom_probabilities: list[Array],
+    y_headroom_arrays: list[Array],
+    bands_eval: Array,
+    config: TrainingConfig,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for value_index, value in enumerate(config.label.headroom_pct):
+        for band in band_labels():
+            for era in sorted(set(np.asarray(eval_rows.observation_era, dtype=str).tolist())):
+                mask = (bands_eval == band) & (np.asarray(eval_rows.observation_era, dtype=str) == era)
+                if int(mask.sum()) < 20:
+                    continue
+                predicted, observed, counts = _calibration_curve(
+                    y_headroom_arrays[value_index][mask],
+                    headroom_probabilities[value_index][mask],
+                    config.report.calibration_bins,
+                )
+                stats = _calibration_stats(
+                    y_headroom_arrays[value_index][mask],
+                    headroom_probabilities[value_index][mask],
+                    config.report.calibration_bins,
+                )
+                rows.append(
+                    {
+                        "headroom_pct": value,
+                        "ttd_band": band,
+                        "era": era,
+                        "rows": int(mask.sum()),
+                        "prob_pred": [float(item) for item in predicted],
+                        "prob_true": [float(item) for item in observed],
+                        "counts": [int(item) for item in counts],
+                        **stats,
+                    }
+                )
+    return rows
+
+
+def _strata_comparison(
+    strata: list[dict[str, Any]],
+    cal_data: TabularData,
+    oof_predictions: Array,
+    train_eval: TabularData,
+    threshold: float,
+) -> list[dict[str, Any]]:
+    validation = {
+        (item["dimension"], item["value"]): item
+        for item in _strata_rows(cal_data, oof_predictions, train_eval, threshold)
+    }
+    test = {(item["dimension"], item["value"]): item for item in strata}
+    rows: list[dict[str, Any]] = []
+    for key, test_item in test.items():
+        validation_item = validation.get(key)
+        if validation_item is None:
+            continue
+        rows.append(
+            {
+                "dimension": key[0],
+                "value": key[1],
+                "validation_rows": validation_item["rows"],
+                "test_rows": test_item["rows"],
+                "validation_brier": validation_item["brier"],
+                "test_brier": test_item["brier"],
+                "validation_bss": validation_item["bss"],
+                "test_bss": test_item["bss"],
+            }
+        )
+    return rows
+
+
+def train_and_evaluate(
+    splits: dict[str, TabularData],
+    spec: FeatureSpec,
+    config: TrainingConfig,
+    *,
+    evaluate_test: bool = False,
+) -> tuple[Evaluation, dict[str, FittedModel], ScoreCalibrator]:
+    """Fit the candidate models and evaluate the configured cohort.
+
+    ``train`` fits the candidates; ``validation_select`` compares and selects them;
+    ``validation_calibrate`` fits the final calibrator and supplies the default evaluation rows.
+    ``test`` is read only when ``evaluate_test`` is true, and is then the reported split. The
+    returned tuple holds the evaluation payload, all fitted candidates and the calibrator that
+    belongs to the selected model.
+    """
+    splits = {name: _canonical(data) for name, data in splits.items()}
+    train = splits["train"]
+    validation_select = splits["validation_select"]
+    validation_calibrate = splits["validation_calibrate"]
+    test = splits["test"]
+    series_sets = {name: set(data.series.tolist()) for name, data in splits.items()}
+    names = list(series_sets)
+    for index, left in enumerate(names):
+        for right in names[index + 1 :]:
+            overlap = series_sets[left] & series_sets[right]
+            if overlap:
+                raise ModelError(f"series crosses splits {left}/{right}: {next(iter(overlap))}")
+
+    candidates, candidate_metrics, candidate_train_metrics = _fit_candidates(train, validation_select, spec, config)
+    chosen = _choose_candidate(candidate_metrics)
+    model = candidates[chosen]
+    (
+        cal_data,
+        calibrator,
+        calibration_method,
+        calibration_constant,
+        oof_predictions,
+        threshold,
+        threshold_met,
+    ) = _fit_final_calibration(model, validation_calibrate, config)
 
     eval_data = test if evaluate_test else cal_data
     evaluation_split = "test" if evaluate_test else "validation_calibrate"
     test_all = None
     if evaluate_test:
-        raw_cal_all = model.predict(validation_calibrate)
         all_calibrator = fit_calibrator(
-            raw_cal_all,
+            model.predict(validation_calibrate),
             validation_calibrate.y,
             calibration_method,
             min_positives=config.calibration.min_positives,
@@ -741,24 +1389,24 @@ def train_and_evaluate(
         test_all = _metrics(test.y, all_calibrator.predict(model.predict(test)))
 
     evidence = eval_data.future_observations >= 2
-    evidence_rows = int(evidence.sum())
-    if evidence_rows >= 100:
+    if int(evidence.sum()) >= config.report.min_tier_rows:
         eval_rows = eval_data.subset(evidence)
         test_tier = "two_plus_observations"
+        eval_mask: Array | None = evidence
     else:
         eval_rows = eval_data
         test_tier = "all_labelled_rows"
-    test_tier_rows = len(eval_rows)
+        eval_mask = None
     train_eval = train.subset(train.future_observations >= 2) if test_tier == "two_plus_observations" else train
-    calibrated_eval = (
-        calibrator.predict(model.predict(eval_rows))
-        if evaluate_test
-        else (
-            oof_predictions[calibration_method][evidence]
-            if len(eval_rows) != len(cal_data)
-            else oof_predictions[calibration_method]
-        )
+    raw_eval_source = model.predict(eval_data)
+    calibrated_eval = _select(
+        calibrator.predict(raw_eval_source) if evaluate_test else oof_predictions[calibration_method],
+        eval_mask,
     )
+    raw_pooled_eval = _select(raw_eval_source, eval_mask)
+    bands_eval = _ttd_array(eval_rows)
+    bands_train = _ttd_array(train_eval)
+
     test_metrics = _metrics(eval_rows.y, calibrated_eval)
     train_rate = _train_prevalence(train, test_tier)
     test_metrics["bss_train"] = _bss_train(test_metrics["brier"], eval_rows.y, train_rate)
@@ -768,39 +1416,65 @@ def train_and_evaluate(
         _metric_value(test_metrics["precision_at_threshold"], 0.0) >= config.report.threshold_precision_floor
     )
 
-    headroom = []
-    headroom_probabilities: list[Array] = []
-    for value in config.label.headroom_pct:
-        y_headroom = (eval_rows.future_max >= eval_rows.price * (1.0 + value / 100.0)).astype(np.int8)
-        if evaluate_test:
-            probabilities = calibrator.predict(model.predict(eval_rows, headroom=value))
-        else:
-            oof_headroom = _cross_fitted_apply(
-                model.predict(cal_data),
-                cal_data.y,
-                cal_data.route_day,
-                model.predict(cal_data, headroom=value),
-                calibration_method,
-                config,
-            )
-            probabilities = oof_headroom[evidence] if len(eval_rows) != len(cal_data) else oof_headroom
-        item = _metrics(y_headroom, probabilities)
-        item["headroom_pct"] = value
-        item["mean_probability"] = float(np.mean(probabilities))
-        item["calibration_gap"] = float(np.mean(probabilities) - np.mean(y_headroom))
-        decisions = _decision_metrics(y_headroom, probabilities, threshold)
-        item["precision_at_threshold"] = decisions["precision_at_threshold"]
-        item["recall_at_threshold"] = decisions["recall_at_threshold"]
-        train_headroom = train_eval.y[train_eval.headroom == value]
-        train_rate_h = float(np.mean(train_headroom)) if len(train_headroom) else train_rate
-        item["bss_train"] = _bss_train(item["brier"], y_headroom, train_rate_h)
-        headroom_probabilities.append(probabilities)
-        headroom.append(item)
+    climatology = fit_climatology(train)
+    clim_raw_cal = climatology.predict(cal_data)
+    clim_calibrated, _, _ = _calibrated_scores(
+        clim_raw_cal,
+        cal_data.y,
+        cal_data.route_day,
+        climatology.predict(eval_data),
+        calibration_method,
+        config,
+        evaluate_test,
+    )
+    clim_eval = _select(clim_calibrated, eval_mask)
+    climatology_metrics: dict[str, Any] = dict(_metrics(eval_rows.y, clim_eval))
+    climatology_metrics["bss_train"] = _bss_train(climatology_metrics["brier"], eval_rows.y, train_rate)
+    climatology_metrics["method"] = calibration_method
+    clim_reference = float(np.mean((eval_rows.y - clim_eval) ** 2))
+    test_metrics["bss_climatology"] = (
+        1.0 - _metric_value(test_metrics["brier"]) / clim_reference if clim_reference > 0 else None
+    )
 
+    headroom, headroom_ttd, headroom_probabilities, raw_headroom_probabilities, fold_assignments, y_headroom_arrays = (
+        _headroom_diagnostics(
+            eval_rows,
+            cal_data,
+            train_eval,
+            model,
+            climatology,
+            calibration_method,
+            config,
+            bands_eval,
+            bands_train,
+            eval_mask,
+            threshold,
+            evaluate_test,
+        )
+    )
+    shipped_headroom = [
+        calibrator.predict(model.predict(eval_rows, headroom=value)) for value in config.label.headroom_pct
+    ]
     test_metrics["headroom_monotonic"] = bool(
-        all(np.all(left >= right) for left, right in itertools.pairwise(headroom_probabilities))
+        all(np.all(left >= right) for left, right in itertools.pairwise(shipped_headroom))
+    )
+    test_metrics["headroom_monotonic_raw"] = bool(
+        all(np.all(left >= right) for left, right in itertools.pairwise(raw_headroom_probabilities))
+    )
+    diagnostic_stack = np.vstack(headroom_probabilities)
+    test_metrics["headroom_diagnostic_nonmonotone_share"] = float(
+        np.mean(np.any(np.diff(diagnostic_stack, axis=0) > 0, axis=0))
     )
     prob_pred, prob_true, counts = _calibration_curve(eval_rows.y, calibrated_eval, config.report.calibration_bins)
+    calibration_stats = _calibration_stats(eval_rows.y, calibrated_eval, config.report.calibration_bins)
+    calibration_groups = _calibration_groups(
+        eval_rows,
+        headroom_probabilities,
+        y_headroom_arrays,
+        bands_eval,
+        config,
+    )
+
     groups = eval_rows.departure_date if config.report.bootstrap_cluster == "departure_date" else eval_rows.route_day
     bootstrap = _bootstrap(
         eval_rows.y,
@@ -809,17 +1483,100 @@ def train_and_evaluate(
         config.report.bootstrap_replicates,
         config.seed,
     )
+    intervals = _bootstrap_metrics(
+        eval_rows.y,
+        calibrated_eval,
+        groups,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 1,
+        threshold,
+    )
+    paired: dict[str, Any] = {
+        "vs_climatology_brier_point": float(
+            np.mean((np.clip(calibrated_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+            - np.mean((np.clip(clim_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+        ),
+        "vs_climatology_brier": _bootstrap_paired(
+            eval_rows.y,
+            calibrated_eval,
+            clim_eval,
+            groups,
+            config.report.metric_bootstrap_replicates,
+            config.seed + 2,
+        ),
+    }
+    if "logistic" in candidates:
+        logistic_raw_cal = candidates["logistic"].predict(cal_data)
+        logistic_calibrated, _, _ = _calibrated_scores(
+            logistic_raw_cal,
+            cal_data.y,
+            cal_data.route_day,
+            candidates["logistic"].predict(eval_data),
+            calibration_method,
+            config,
+            evaluate_test,
+        )
+        logistic_eval = _select(logistic_calibrated, eval_mask)
+        paired["vs_logistic_brier_point"] = float(
+            np.mean((np.clip(calibrated_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+            - np.mean((np.clip(logistic_eval, 1e-9, 1.0 - 1e-9) - eval_rows.y) ** 2)
+        )
+        paired["vs_logistic_brier"] = _bootstrap_paired(
+            eval_rows.y,
+            calibrated_eval,
+            logistic_eval,
+            groups,
+            config.report.metric_bootstrap_replicates,
+            config.seed + 3,
+        )
+    else:
+        paired["vs_logistic_brier_point"] = None
+        paired["vs_logistic_brier"] = []
+
+    strata = _strata_rows(eval_rows, calibrated_eval, train_eval, threshold)
+    if evaluate_test:
+        if test_tier == "two_plus_observations":
+            compare_mask = cal_data.future_observations >= 2
+            compare_data = cal_data.subset(compare_mask)
+            compare_oof = oof_predictions[calibration_method][compare_mask]
+        else:
+            compare_data = cal_data
+            compare_oof = oof_predictions[calibration_method]
+        strata_compare = _strata_comparison(strata, compare_data, compare_oof, train_eval, threshold)
+    else:
+        strata_compare = []
+    decision_value = _decision_value_rows(
+        eval_rows,
+        config.label.headroom_pct,
+        headroom_probabilities,
+        bands_eval,
+        threshold,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 4,
+    )
+    decision_value_pooled = _pooled_decision_value_rows(
+        eval_rows,
+        calibrated_eval,
+        bands_eval,
+        threshold,
+        config.report.metric_bootstrap_replicates,
+        config.seed + 5,
+    )
     importance = _permutation_importance(model, calibrator, validation_select, spec, seed=config.seed)
+    prediction_headroom = np.repeat(np.asarray(config.label.headroom_pct, dtype=np.int16), len(eval_rows))
     evaluation = Evaluation(
         chosen_model=chosen,
         calibration_method=calibration_method,
+        calibration_constant=calibration_constant,
         threshold=threshold,
         threshold_precision_floor_met=threshold_met,
         candidates=candidate_metrics,
+        candidate_train=candidate_train_metrics,
+        candidate_calibration_method=next(iter(config.calibration.methods)),
         test=test_metrics,
         test_all=test_all,
         test_tier=test_tier,
-        test_tier_rows=test_tier_rows,
+        test_tier_rows=len(eval_rows),
         evaluation_split=evaluation_split,
         test_evaluated=evaluate_test,
         calibration_prevalence=float(np.mean(cal_data.y)),
@@ -830,5 +1587,139 @@ def train_and_evaluate(
         importance=importance,
         bootstrap=bootstrap,
         split_sizes={name: len(data) for name, data in splits.items()},
+        headroom_ttd=tuple(headroom_ttd),
+        strata=tuple(strata),
+        strata_compare=tuple(strata_compare),
+        calibration_stats=calibration_stats,
+        calibration_groups=tuple(calibration_groups),
+        climatology=climatology_metrics,
+        decision_value=tuple(decision_value),
+        decision_value_pooled=tuple(decision_value_pooled),
+        intervals=intervals,
+        paired=paired,
+        bootstrap_clusters=len(np.unique(groups)),
+        prediction_series=np.tile(eval_rows.series, len(config.label.headroom_pct)),
+        prediction_snapshot_at=np.tile(eval_rows.snapshot_at, len(config.label.headroom_pct)),
+        prediction_route_day=np.tile(eval_rows.route_day, len(config.label.headroom_pct)),
+        prediction_headroom=prediction_headroom,
+        prediction_raw=np.concatenate(raw_headroom_probabilities),
+        prediction_raw_pooled=np.tile(raw_pooled_eval, len(config.label.headroom_pct)),
+        prediction_calibration_fold=np.concatenate(fold_assignments),
+        prediction_calibration_mode="full" if evaluate_test else "oof",
+        prediction_calibrated=np.concatenate(headroom_probabilities),
+        prediction_assigned_headroom=np.tile(eval_rows.headroom, len(config.label.headroom_pct)),
+        prediction_calibrated_pooled=np.tile(calibrated_eval, len(config.label.headroom_pct)),
+        prediction_departure_date=np.tile(eval_rows.departure_date, len(config.label.headroom_pct)),
+        prediction_ttd_band=np.tile(bands_eval, len(config.label.headroom_pct)),
+        prediction_y=np.concatenate(y_headroom_arrays),
+        prediction_split=evaluation_split,
     )
     return evaluation, candidates, calibrator
+
+
+def write_evaluation_artifacts(
+    out_dir: Path,
+    evaluation: Evaluation,
+    fitted: dict[str, FittedModel],
+    calibrator: ScoreCalibrator,
+    spec: FeatureSpec,
+    config: TrainingConfig,
+) -> None:
+    """Persist the calibrated model and per-headroom predictions as local artifacts."""
+    required = (
+        evaluation.prediction_series,
+        evaluation.prediction_snapshot_at,
+        evaluation.prediction_route_day,
+        evaluation.prediction_headroom,
+        evaluation.prediction_raw,
+        evaluation.prediction_calibrated,
+        evaluation.prediction_y,
+    )
+    if any(value is None for value in required):
+        raise ModelError("evaluation has no prediction arrays to persist")
+    series = evaluation.prediction_series
+    snapshots = evaluation.prediction_snapshot_at
+    route_days = evaluation.prediction_route_day
+    headrooms = evaluation.prediction_headroom
+    raw_scores = evaluation.prediction_raw
+    raw_pooled = evaluation.prediction_raw_pooled
+    calibration_folds = evaluation.prediction_calibration_fold
+    calibrated_scores = evaluation.prediction_calibrated
+    assigned_headroom = evaluation.prediction_assigned_headroom
+    calibrated_pooled = evaluation.prediction_calibrated_pooled
+    departure_date = evaluation.prediction_departure_date
+    ttd_band = evaluation.prediction_ttd_band
+    labels = evaluation.prediction_y
+    if (
+        series is None
+        or snapshots is None
+        or route_days is None
+        or headrooms is None
+        or raw_scores is None
+        or raw_pooled is None
+        or calibration_folds is None
+        or calibrated_scores is None
+        or assigned_headroom is None
+        or calibrated_pooled is None
+        or departure_date is None
+        or ttd_band is None
+        or labels is None
+    ):
+        raise ModelError("evaluation has no prediction arrays to persist")
+    predictions_dir = out_dir / "predictions"
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    table = pa.table(
+        {
+            "series_key": series,
+            "snapshot_at": pa.array(np.asarray(snapshots, dtype="datetime64[us]")),
+            "route_day": route_days,
+            "headroom_pct": headrooms,
+            "raw_score": raw_scores,
+            "raw_score_pooled": raw_pooled,
+            "calibration_fold": calibration_folds,
+            "calibration_mode": [evaluation.prediction_calibration_mode] * len(labels),
+            "calibrated_score": calibrated_scores,
+            "assigned_headroom": assigned_headroom,
+            "calibrated_score_pooled": calibrated_pooled,
+            "departure_date": pa.array(np.asarray(departure_date, dtype="datetime64[D]")).cast(pa.date32()),
+            "ttd_band": ttd_band,
+            "label": labels,
+            "split": [evaluation.prediction_split] * len(labels),
+        }
+    )
+    pq.write_table(table, predictions_dir / f"{evaluation.prediction_split}.parquet", compression="zstd")
+    dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
+    joblib.dump(
+        {
+            "git_sha": dataset_manifest.get("git_sha"),
+            "git_dirty": dataset_manifest.get("git_dirty"),
+            "silver_build_id": dataset_manifest.get("silver_build_id"),
+            "run_id": dataset_manifest.get("run_id"),
+            "config_sha256": dataset_manifest.get("config_sha256"),
+            "model": fitted[evaluation.chosen_model],
+            "calibrator": calibrator,
+            "feature_spec": list(spec.names),
+            "calendar_set": spec.calendar_set,
+            "chosen_model": evaluation.chosen_model,
+            "calibration_method": evaluation.calibration_method,
+            "calibration_constant": evaluation.calibration_constant,
+            "calibration_mode": evaluation.prediction_calibration_mode,
+            "threshold": evaluation.threshold,
+            "threshold_precision_floor_met": evaluation.threshold_precision_floor_met,
+            "dropped_features": list(evaluation.dropped_features),
+            "config": {key: value for key, value in config.to_dict().items() if key != "source"},
+            "joblib_version": joblib.__version__,
+        },
+        out_dir / "model.joblib",
+    )
+
+
+def load_model(path: Path, expected_sha256: str) -> dict[str, Any]:
+    """Load a model artifact only after its manifest hash matches."""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected_sha256:
+        raise ModelError(f"model artifact hash mismatch: {digest} != {expected_sha256}")
+    payload = joblib.load(path)
+    if not isinstance(payload, dict):
+        raise ModelError("model artifact is not a dictionary")
+    return payload
