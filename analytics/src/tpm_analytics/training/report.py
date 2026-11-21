@@ -1073,7 +1073,7 @@ def _report(
         "- Dataset counts use the configured route-day sample; the chain, duplicate and "
         "scrape-cadence sections state their own pre-resampling or full-corpus scope. Bootstrap "
         "intervals resample departure dates within the sample.\n"
-        "- The before/after comparison against PR 3 is unpaired and the label changed: the next-day "
+        "- The before/after comparison against the earlier within-24 h label is unpaired: the next-day "
         "point label is a different estimand from the within-24 h maximum, so the lower Brier is not "
         "a model improvement.\n"
         "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
@@ -1328,7 +1328,7 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 - Recall at threshold: {_fmt(evaluation.metrics.get("recall_at_threshold"))}
 - Headroom monotonic (shipped pooled calibrator): {evaluation.metrics.get("headroom_monotonic")}
 - Headroom monotonic (raw scores): {evaluation.metrics.get("headroom_monotonic_raw")}
-- Evaluation population: `{evaluation.evaluation_tier}` ({evaluation.evaluation_tier_rows} rows)
+- Evaluation population: `{evaluation.evaluation_tier}` ({evaluation.evaluation_tier_rows:,} rows)
 - Precision floor met on evaluation: {evaluation.metrics.get("precision_floor_met_on_evaluation")}
 {metrics_all_line}
 
