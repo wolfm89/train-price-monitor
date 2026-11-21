@@ -53,6 +53,13 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
         warning_items.append("calibrated breach probability is not monotone across headroom")
     if evaluation.calibration_constant:
         warning_items.append("calibration labels are single-class; the shipped calibrator is constant")
+    chain = stats.profile.get("chain", {})
+    if chain.get("ambiguous_predecessors") or chain.get("ambiguous_successors"):
+        warning_items.append(
+            "ambiguous chain candidates: "
+            f"{chain.get('ambiguous_predecessors', 0)} predecessors / "
+            f"{chain.get('ambiguous_successors', 0)} successors; run --strict-chains"
+        )
     for split in stats.splits:
         if not evaluation.evaluation_on_test and split.split == "test":
             continue
@@ -1083,8 +1090,8 @@ v2 rows and is omitted for a v1-only source.
 `duplicate share` counts rows in a same-scrape `(series_key, observed_at)` group, including the
 first one. `dependent cross-sections` are route-day x class x scrape cross-sections that reach the
 three-peer threshold before dedup and fall below it after. `price_rank_route_day` counts every
-journey in the scrape before resampling; the 15-minute series buckets are floored, so their edges
-sit 7.5 minutes from the bucket midpoint (`:07:30`, `:22:30`, `:37:30`, `:52:30`).
+journey in the scrape before resampling; the 15-minute series buckets are floored, so the bucket
+midpoint sits at `:07:30` and a departure shift of up to 7.5 minutes stays in the same bucket.
 
 ### Route-day scrape cadence (A3)
 

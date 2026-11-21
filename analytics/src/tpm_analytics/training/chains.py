@@ -163,7 +163,7 @@ def build_chain_map(
             min(departure_planned) AS departure_planned,
             min(observed_at) AS first_obs,
             max(observed_at) AS last_obs,
-            count(*) AS observations
+            count(DISTINCT observed_at) AS observations
         FROM {base_view}
         GROUP BY series_key
         """
