@@ -377,6 +377,10 @@ mise run //analytics:train:ablation -- --source .data/silver/<build>
 `_latest.json` pointer; S3 needs `DUCKDB_EXTENSION_DIR` and the httpfs extension
 (`mise run //analytics:httpfs`). The default config is `config/training.json`.
 
+The training CLI defaults to a 6 GB DuckDB memory limit and 20 GB of temp spill space; both are
+recorded in `dataset_manifest.json`. The temp default is sized for the 5 % route-day sample and
+must be raised for the 10/25/50 % learning-curve runs.
+
 Runs are validation-only by default; `--evaluate-test` scores the test split once, and `--ablation`
 stays validation-only while comparing the four calendar sets. Two clean builds write
 order-independent digests to `dataset_manifest.json` and must match. The report shows label
@@ -386,6 +390,16 @@ provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 The label is the maximum over scraped observations in the next 24 hours (often one scrape about
 13 hours ahead). The domain is `24 h <= hours_to_departure <= 30 d`; the test split is a
 future-**departure** cohort, not a future-era holdout.
+
+The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
+(`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
+diagnostics, the climatology baseline, per-headroom x TTD metrics, strata, clustered intervals,
+calibration slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The next-day diagnostic is
+reported for both the 20-28 h and 22-26 h windows; the 20-24 h check is kept for the "crossed and
+came back" comparison and the decision-value diagnostic (the table states this). Each run also writes
+`predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
+produce. Test-split label and model diagnostics are gated by `--evaluate-test`; journey
+disappearance is a corpus-level diagnostic that includes test departures.
 
 ## Semantics the transform encodes
 

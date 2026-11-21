@@ -26,6 +26,8 @@ def _fmt(value: Any, digits: int = 4) -> str:
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> str:
+    if any(len(row) != len(headers) for row in rows):
+        raise ValueError("table row width does not match the header width")
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
     lines.extend("| " + " | ".join(_fmt(cell) for cell in row) + " |" for row in rows)
     return "\n".join(lines)
@@ -49,7 +51,11 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
         )
     if not evaluation.test.get("headroom_monotonic"):
         warning_items.append("calibrated breach probability is not monotone across headroom")
+    if evaluation.calibration_constant:
+        warning_items.append("calibration labels are single-class; the shipped calibrator is constant")
     for split in stats.splits:
+        if not evaluation.test_evaluated and split.split == "test":
+            continue
         share = split.labelled / split.rows if split.rows else 0.0
         if share < 0.9:
             warning_items.append(f"{split.split} has only {share:.1%} labelled rows")
@@ -70,10 +76,15 @@ def _report(
     split_rows = [
         [item.split, item.rows, item.series, item.route_days, item.labelled, item.positives, item.positive_rate]
         for item in stats.splits
+        if evaluation.test_evaluated or item.split != "test"
     ]
     candidate_rows = [
         [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
         for name, metrics in evaluation.candidates.items()
+    ]
+    candidate_train_rows = [
+        [name, *[metrics.get(key) for key in ("brier", "log_loss", "roc_auc", "average_precision", "positive_rate")]]
+        for name, metrics in evaluation.candidate_train.items()
     ]
     headroom_rows = [
         [
@@ -100,8 +111,617 @@ def _report(
     coverage_rows = [
         [item["split"], item["labelled_share"], item["one_observation_share"], item["two_plus_share"]]
         for item in stats.profile.get("coverage", [])
+        if evaluation.test_evaluated or item["split"] != "test"
     ]
-    era_rows = [[item["split"], item["observation_era"], item["rows"]] for item in stats.profile.get("era", [])]
+    era_rows = [
+        [item["split"], item["observation_era"], item["rows"]]
+        for item in stats.profile.get("era", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+
+    def _p(value: Any) -> str:
+        return "—" if value is None else f"{float(value):.1%}"
+
+    def _share(numerator: Any, denominator: Any) -> str:
+        if numerator is None or not denominator:
+            return "—"
+        return _p(float(numerator) / float(denominator))
+
+    def _ci(values: Any, digits: int = 2) -> str:
+        if not isinstance(values, list) or len(values) != 2:
+            return "—"
+        return f"{_fmt(values[0], digits)}..{_fmt(values[1], digits)}"
+
+    cohort_rows = [
+        [
+            item["split"],
+            item["rows"],
+            item["labelled"],
+            _share(item.get("two_plus"), item["rows"]),
+            item["check_eligible"],
+            item.get("check_priced", "—"),
+            item.get("check_censored", "—"),
+            item["two_plus"],
+            _p(item["labelled_share"]),
+            _p(item["prevalence"]),
+            _p(item.get("two_plus_prevalence")),
+            _p(item["check_prevalence"]),
+        ]
+        for item in stats.profile.get("cohort", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    r24_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["rows"],
+            item["eligible"],
+            _p(item["covered_share"]),
+            _fmt(item["mean_tail_h"], 1),
+            _fmt(item["mean_gap_h"], 1),
+            _fmt(item["median_gap_h"], 1),
+        ]
+        for item in stats.profile.get("coverage_r24", [])
+        if item["band"] in {"1-3d", "3-5d", "5-7d"} and (evaluation.test_evaluated or item["split"] != "test")
+    ]
+    label_items = [
+        item for item in stats.profile.get("label", []) if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    label_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["rows"],
+            item["labelled"],
+            _share(item.get("two_plus"), item["rows"]),
+            item["check_eligible"],
+            _share(item["check_eligible"], item["rows"]),
+            item.get("check_priced", "—"),
+            item.get("check_censored", "—"),
+            item.get("check_eligible_2028", "—"),
+            _share(item.get("check_eligible_2028"), item["rows"]),
+            item.get("check_priced_2028", "—"),
+            _p(item.get("next_day_2028_rate")),
+            item.get("check_eligible_2226", "—"),
+            _share(item.get("check_eligible_2226"), item["rows"]),
+            item.get("check_priced_2226", "—"),
+            _p(item.get("next_day_2226_rate")),
+            _p(item["within_day_rate"]),
+            _p(item.get("priced_within_day_rate")),
+            _p(item["next_day_rate"]),
+            _p(item["narrow_rate"]),
+            _p(item["crossed_back_rate"]),
+            _p(item.get("censored_within_day_rate")),
+            item["dearer"],
+            item["cheaper"],
+            item["unchanged"],
+        ]
+        for item in label_items
+    ]
+    label_era_rows = [
+        [
+            item["split"],
+            item["era"],
+            item["band"],
+            item["rows"],
+            _share(item.get("check_eligible_2028"), item["rows"]),
+            _share(item.get("check_priced_2028"), item["rows"]),
+            _p(item.get("next_day_2028_rate")),
+            _share(item.get("check_eligible_2226"), item["rows"]),
+            _share(item.get("check_priced_2226"), item["rows"]),
+            _p(item.get("next_day_2226_rate")),
+        ]
+        for item in stats.profile.get("label_era", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    label_week_rows = [
+        [
+            item["split"],
+            item["week"],
+            item["band"],
+            item["rows"],
+            _share(item.get("check_eligible_2028"), item["rows"]),
+            _share(item.get("check_priced_2028"), item["rows"]),
+            _p(item.get("next_day_2028_rate")),
+            _share(item.get("check_eligible_2226"), item["rows"]),
+            _share(item.get("check_priced_2226"), item["rows"]),
+            _p(item.get("next_day_2226_rate")),
+        ]
+        for item in stats.profile.get("label_week", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    forward_rows = [
+        [
+            item["split"],
+            item["band"],
+            item.get("forward_dearer", 0),
+            item.get("forward_cheaper", 0),
+            max(0, item.get("check_priced_2028", 0) - item.get("forward_dearer", 0) - item.get("forward_cheaper", 0)),
+        ]
+        for item in label_items
+    ]
+    a29_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["rows"],
+            _p(item["within_day_rate"]),
+            _p(item["next_day_rate"]),
+            _p(item["crossed_back_rate"]),
+        ]
+        for item in stats.profile.get("a29", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    tier_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["one_observations"],
+            _p(item["one_prevalence"]),
+            item["two_plus"],
+            _p(item["two_plus_prevalence"]),
+        ]
+        for item in label_items
+    ]
+    lag_rows = [
+        [
+            item["split"],
+            item["band"],
+            _fmt(item["median_single_lag_h"], 1),
+            _fmt(item["p10_single_lag_h"], 1),
+            _fmt(item["p90_single_lag_h"], 1),
+        ]
+        for item in label_items
+    ]
+    two_plus_week_rows = [
+        [item["split"], item["week"], item["rows"], _p(item["two_plus_share"])]
+        for item in stats.profile.get("two_plus_week", [])
+        if evaluation.test_evaluated or item["split"] != "test"
+    ]
+    journey = stats.profile.get("journey", {})
+    journey_groups: dict[tuple[str, str, str], int] = {}
+    journey_60_groups: dict[tuple[str, str, str], int] = {}
+    for item in journey.get("groups", []):
+        key = (item["band"], "15 min", item["successor"])
+        journey_groups[key] = journey_groups.get(key, 0) + item["journeys"]
+        key_60 = (item["band"], "60 min", item["successor_60"])
+        journey_60_groups[key_60] = journey_60_groups.get(key_60, 0) + item["journeys"]
+    journey_rows = []
+    for band in sorted({key[0] for key in journey_groups}):
+        for rule in ("15 min", "60 min"):
+            groups = journey_60_groups if rule == "60 min" else journey_groups
+            total = sum(groups.get((band, rule, successor), 0) for successor in ("same_train", "other_train", "none"))
+            journey_rows.append(
+                [
+                    band,
+                    rule,
+                    _share(groups.get((band, rule, "same_train"), 0), total),
+                    _share(groups.get((band, rule, "other_train"), 0), total),
+                    _share(groups.get((band, rule, "none"), 0), total),
+                    total,
+                ]
+            )
+    journey_week_groups: dict[str, dict[str, int]] = {}
+    for item in journey.get("groups", []):
+        bucket = journey_week_groups.setdefault(
+            item["week"], {"total": 0, "same_train": 0, "other_train": 0, "none": 0}
+        )
+        bucket["total"] += item["journeys"]
+        bucket[item["successor_60"]] += item["journeys"]
+    journey_week_rows = [
+        [week, counts["total"], counts["same_train"], counts["other_train"], counts["none"]]
+        for week, counts in sorted(journey_week_groups.items())
+    ]
+    unlabelled_agg: dict[tuple[str, str, str], list[float]] = {}
+    for item in stats.profile.get("unlabelled", []):
+        if not evaluation.test_evaluated and item["split"] == "test":
+            continue
+        key = (item["split"], item["band"], item["era"])
+        bucket = unlabelled_agg.setdefault(key, [0.0, 0.0])
+        bucket[0] += item["rows"]
+        bucket[1] += item["rows"] * item["unlabelled_share"]
+    unlabelled_rows = [
+        [split, band, era, int(rows), _p(share / rows if rows else None)]
+        for (split, band, era), (rows, share) in sorted(unlabelled_agg.items())
+    ]
+    weekly_agg: dict[tuple[str, str], list[float]] = {}
+    for item in stats.profile.get("unlabelled", []):
+        if not evaluation.test_evaluated and item["split"] == "test":
+            continue
+        key = (item["split"], item["week"])
+        bucket = weekly_agg.setdefault(key, [0.0, 0.0])
+        bucket[0] += item["rows"]
+        bucket[1] += item["rows"] * item["unlabelled_share"]
+    weekly_rows = sorted(
+        (
+            [split, week, int(rows), share / rows if rows else 0.0]
+            for (split, week), (rows, share) in weekly_agg.items()
+        ),
+        key=lambda row: float(row[3]),
+        reverse=True,
+    )[:12]
+    weekly_rows = [[row[0], row[1], row[2], _p(row[3])] for row in weekly_rows]
+    headroom_ttd_rows = [
+        [
+            item["ttd_band"],
+            item["headroom_pct"],
+            item.get("train_rows"),
+            item.get("positive_rate"),
+            _fmt(item.get("brier")),
+            _ci(item.get("brier_ci"), 4),
+            _fmt(item.get("log_loss")),
+            _fmt(item.get("bss")),
+            _fmt(item.get("bss_train")),
+            _fmt(item.get("bss_climatology")),
+            _fmt(item.get("roc_auc")),
+            _fmt(item.get("average_precision")),
+            _fmt(item.get("roc_auc_raw")),
+        ]
+        for item in evaluation.headroom_ttd
+    ]
+    strata_rows = [
+        [
+            item["dimension"],
+            item["value"],
+            item["rows"],
+            item.get("train_rows"),
+            _p(item.get("positive_rate")),
+            _fmt(item.get("brier")),
+            _fmt(item.get("bss")),
+            _fmt(item.get("bss_train")),
+            _fmt(item.get("roc_auc")),
+            _fmt(item.get("average_precision")),
+            _fmt(item.get("calibration_gap"), 4),
+        ]
+        for item in evaluation.strata
+    ]
+    strata_compare_rows = [
+        [
+            item["dimension"],
+            item["value"],
+            item["validation_rows"],
+            item["test_rows"],
+            _fmt(item["validation_brier"]),
+            _fmt(item["test_brier"]),
+            _fmt(item["validation_bss"]),
+            _fmt(item["test_bss"]),
+        ]
+        for item in evaluation.strata_compare
+    ]
+    headroom_cal_rows = [
+        [
+            item["headroom_pct"],
+            _fmt(item.get("calibration_slope"), 3),
+            _fmt(item.get("calibration_intercept"), 3),
+            _fmt(item.get("ece"), 4),
+        ]
+        for item in evaluation.headroom
+    ]
+    calibration_group_rows = [
+        [
+            item["headroom_pct"],
+            item["ttd_band"],
+            item["era"],
+            item["rows"],
+            _fmt(item.get("slope"), 3),
+            _fmt(item.get("intercept"), 3),
+            _fmt(item.get("ece"), 4),
+        ]
+        for item in evaluation.calibration_groups
+    ]
+    reliability_rows = [
+        [group["headroom_pct"], group["ttd_band"], group["era"], _fmt(pred), _fmt(obs), count]
+        for group in evaluation.calibration_groups
+        for pred, obs, count in zip(group["prob_pred"], group["prob_true"], group["counts"], strict=True)
+    ]
+    decision_rows = [
+        [
+            item["band"],
+            item["headroom_pct"],
+            item["rows"],
+            item["alert_rows"],
+            _p(item["alert_share"]),
+            _fmt(item["saving_vs_always_wait_eur"], 2),
+            _fmt(item["lift_vs_random_eur"], 2),
+            _p(item["saving_vs_always_wait_pct"]),
+            _fmt(item["saving_vs_always_book_eur"], 2),
+            _p(item["saving_vs_always_book_pct"]),
+            _fmt(item["conditional_saving_when_alert_eur"], 2),
+            _fmt(item["cost_of_waiting_eur"], 2),
+            _ci(item["ci_saving_vs_wait_eur"], 3),
+            _ci(item["ci_saving_vs_book_eur"], 3),
+        ]
+        for item in evaluation.decision_value
+    ]
+    interval_labels = {
+        "brier": "Brier",
+        "log_loss": "log loss",
+        "bss": "BSS",
+        "roc_auc": "ROC-AUC",
+        "average_precision": "average precision",
+        "precision": "precision",
+        "recall": "recall",
+    }
+    interval_values = dict(evaluation.intervals)
+    interval_values["brier"] = evaluation.bootstrap.get("brier", interval_values.get("brier", []))
+    interval_values["log_loss"] = evaluation.bootstrap.get("log_loss", interval_values.get("log_loss", []))
+    interval_rows = [
+        [interval_labels.get(key, key), _fmt(values[0]), _fmt(values[1])]
+        for key, values in interval_values.items()
+        if len(values) == 2
+    ]
+    paired_rows = []
+    for name, label in (("vs_climatology", "model - climatology"), ("vs_logistic", "model - logistic")):
+        point = evaluation.paired.get(f"{name}_brier_point")
+        interval = evaluation.paired.get(f"{name}_brier", [])
+        paired_rows.append(
+            [
+                label,
+                _fmt(point),
+                _fmt(interval[0]) if len(interval) == 2 else "—",
+                _fmt(interval[1]) if len(interval) == 2 else "—",
+            ]
+        )
+    model_metrics = evaluation.test
+    clim_metrics = evaluation.climatology
+    clim_rows = [
+        [
+            name,
+            _fmt(metrics.get("brier")),
+            _fmt(metrics.get("bss")),
+            _fmt(metrics.get("bss_train")),
+            _fmt(metrics.get("roc_auc")),
+            _fmt(metrics.get("average_precision")),
+        ]
+        for name, metrics in (("model", model_metrics), ("climatology", clim_metrics))
+    ]
+    cohort_table = _table(
+        [
+            "split",
+            "rows",
+            "labelled",
+            "two-plus share",
+            "check eligible",
+            "check priced",
+            "check censored",
+            "two-plus",
+            "labelled share",
+            "prevalence",
+            "two-plus prevalence",
+            "check prevalence",
+        ],
+        cohort_rows,
+    )
+    label_table = _table(
+        [
+            "split",
+            "TTD band",
+            "rows",
+            "labelled",
+            "two-plus share",
+            "eligible 20-24",
+            "coverage 20-24",
+            "priced 20-24",
+            "censored 20-24",
+            "eligible 20-28",
+            "coverage 20-28",
+            "priced 20-28",
+            "next-day 20-28",
+            "eligible 22-26",
+            "coverage 22-26",
+            "priced 22-26",
+            "next-day 22-26",
+            "within-day all",
+            "within-day priced",
+            "next-day 20-24",
+            "22-24 h point",
+            "crossed back",
+            "censored within-day",
+            "dearer",
+            "cheaper",
+            "unchanged",
+        ],
+        label_rows,
+    )
+    label_era_table = _table(
+        [
+            "split",
+            "era",
+            "TTD band",
+            "rows",
+            "coverage 20-28",
+            "priced share 20-28",
+            "next-day 20-28",
+            "coverage 22-26",
+            "priced share 22-26",
+            "next-day 22-26",
+        ],
+        label_era_rows,
+    )
+    label_week_table = _table(
+        [
+            "split",
+            "week",
+            "TTD band",
+            "rows",
+            "coverage 20-28",
+            "priced share 20-28",
+            "next-day 20-28",
+            "coverage 22-26",
+            "priced share 22-26",
+            "next-day 22-26",
+        ],
+        label_week_rows,
+    )
+    a29_table = _table(["split", "TTD band", "rows", "within-day 5%", "next-day 5%", "crossed back 5%"], a29_rows)
+    forward_table = _table(["split", "TTD band", "forward dearer", "forward cheaper", "unchanged"], forward_rows)
+    tier_table = _table(
+        ["split", "TTD band", "one future scrape", "one prevalence", "two or more", "two-plus prevalence"], tier_rows
+    )
+    lag_table = _table(["split", "TTD band", "median single lag h", "p10 h", "p90 h"], lag_rows)
+    two_plus_week_table = _table(["split", "week", "rows", "two-plus share"], two_plus_week_rows)
+    journey_table = _table(["TTD band", "rule", "same train", "other train", "none", "journeys"], journey_rows)
+    journey_week_table = _table(["week", "journeys", "same train (60 min)", "other train", "none"], journey_week_rows)
+    unlabelled_table = _table(["split", "TTD band", "era", "rows", "unlabelled"], unlabelled_rows)
+    weekly_table = _table(["split", "week", "rows", "unlabelled"], weekly_rows)
+    r24_table = _table(
+        [
+            "split",
+            "TTD band",
+            "rows",
+            "coverage known",
+            "R24 covered",
+            "mean tail h",
+            "mean max gap h",
+            "median gap h",
+        ],
+        r24_rows,
+    )
+    clim_table = _table(["score", "Brier", "BSS slice", "BSS train", "ROC-AUC", "average precision"], clim_rows)
+    interval_table = _table(["metric", "2.5 %", "97.5 %"], interval_rows)
+    paired_table = _table(["comparison", "Brier difference", "2.5 %", "97.5 %"], paired_rows)
+    headroom_ttd_table = _table(
+        [
+            "TTD band",
+            "headroom %",
+            "train rows",
+            "positive rate",
+            "Brier",
+            "Brier 95% CI",
+            "log loss",
+            "BSS slice",
+            "BSS train",
+            "BSS clim",
+            "ROC-AUC",
+            "avg precision",
+            "ROC-AUC raw",
+        ],
+        headroom_ttd_rows,
+    )
+    strata_table = _table(
+        [
+            "dimension",
+            "value",
+            "rows",
+            "train rows",
+            "prevalence",
+            "Brier",
+            "BSS",
+            "BSS train",
+            "ROC-AUC",
+            "avg precision",
+            "calibration gap",
+        ],
+        strata_rows,
+    )
+    strata_compare_table = (
+        _table(
+            [
+                "dimension",
+                "value",
+                "validation rows",
+                "test rows",
+                "validation Brier",
+                "test Brier",
+                "validation BSS",
+                "test BSS",
+            ],
+            strata_compare_rows,
+        )
+        if strata_compare_rows
+        else "- Test was not evaluated; no like-for-like table."
+    )
+    headroom_cal_table = _table(["headroom %", "slope", "intercept", "ECE"], headroom_cal_rows)
+    calibration_group_table = _table(
+        ["headroom %", "TTD band", "era", "rows", "slope", "intercept", "ECE"], calibration_group_rows
+    )
+    reliability_table = _table(["headroom %", "TTD band", "era", "predicted", "observed", "count"], reliability_rows)
+    decision_table = _table(
+        [
+            "TTD band",
+            "headroom %",
+            "rows",
+            "alerts",
+            "alert share",
+            "saving vs wait €",
+            "lift vs random €",
+            "saving vs wait %",
+            "saving vs book €",
+            "saving vs book %",
+            "conditional € / alert",
+            "cost of waiting €",
+            "95% CI vs wait",
+            "95% CI vs book",
+        ],
+        decision_rows,
+    )
+    pooled_decision_rows = [
+        [
+            item["band"],
+            item["rows"],
+            item["alert_rows"],
+            _p(item["alert_share"]),
+            _fmt(item["saving_vs_always_wait_eur"], 2),
+            _fmt(item["lift_vs_random_eur"], 2),
+            _fmt(item["saving_vs_always_book_eur"], 2),
+            _ci(item["ci_saving_vs_wait_eur"], 3),
+            _ci(item["ci_saving_vs_book_eur"], 3),
+        ]
+        for item in evaluation.decision_value_pooled
+    ]
+    pooled_decision_table = _table(
+        [
+            "TTD band",
+            "rows",
+            "alerts",
+            "alert share",
+            "saving vs wait €",
+            "lift vs random €",
+            "saving vs book €",
+            "95% CI vs wait",
+            "95% CI vs book",
+        ],
+        pooled_decision_rows,
+    )
+    book_cis = [
+        item["ci_saving_vs_book_eur"] for item in evaluation.decision_value if item.get("ci_saving_vs_book_eur")
+    ]
+    book_worse = sum(1 for interval in book_cis if interval[1] < 0.0)
+    book_better = sum(1 for interval in book_cis if interval[0] > 0.0)
+    wait_better = sum(
+        1
+        for item in evaluation.decision_value
+        if item.get("ci_saving_vs_wait_eur") and item["ci_saving_vs_wait_eur"][0] > 0.0
+    )
+    percell_lifts = [item["lift_vs_random_eur"] for item in evaluation.decision_value]
+    lift_positive = sum(1 for value in percell_lifts if value > 0.0)
+    decision_summary = (
+        f"Under per-headroom diagnostic calibration, the alert policy is significantly more expensive "
+        f"than always booking now in {book_worse} of {len(book_cis)} band x headroom cells and "
+        f"significantly cheaper in {book_better}; against always waiting it is significantly cheaper "
+        f"in {wait_better} cells. The lift over a random alert policy at the same alert share is "
+        f"positive in {lift_positive} of {len(percell_lifts)} cells."
+    )
+    pooled_book = [item["ci_saving_vs_book_eur"] for item in evaluation.decision_value_pooled]
+    pooled_wait = [item["ci_saving_vs_wait_eur"] for item in evaluation.decision_value_pooled]
+    pooled_book_worse = sum(1 for interval in pooled_book if interval and interval[1] < 0.0)
+    pooled_book_better = sum(1 for interval in pooled_book if interval and interval[0] > 0.0)
+    pooled_wait_better = sum(1 for interval in pooled_wait if interval and interval[0] > 0.0)
+    pooled_lifts = [item["lift_vs_random_eur"] for item in evaluation.decision_value_pooled]
+    pooled_lift_positive = sum(1 for value in pooled_lifts if value > 0.0)
+    pooled_decision_summary = (
+        f"With the shipped pooled calibrator, the policy is significantly more expensive than always "
+        f"booking now in {pooled_book_worse} of {len(pooled_book)} bands and significantly cheaper in "
+        f"{pooled_book_better}; against always waiting it is significantly cheaper in "
+        f"{pooled_wait_better} bands. The lift over a random alert policy at the same alert share is "
+        f"positive in {pooled_lift_positive} of {len(pooled_lifts)} bands."
+    )
+    journey_total = int(journey.get("total_journeys", 0))
+    journey_at_risk = int(journey.get("at_risk", 0))
+    journey_disappeared = int(journey.get("disappeared", 0))
+    journey_share = _p(journey.get("share"))
+    journey_share_at_risk = _p(journey.get("share_at_risk"))
+    journey_none = sum(item["journeys"] for item in journey.get("groups", []) if item["successor"] == "none")
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
     ablation_section = ""
@@ -118,9 +738,23 @@ def _report(
         ablation_section = "\n## Calendar ablation\n\n" + _table(
             ["feature set", "validation Brier", "validation log loss", "validation ROC-AUC"], rows
         )
+    dataset_scope = (
+        "includes it because `--evaluate-test` was used"
+        if evaluation.test_evaluated
+        else "omits it in this validation-only run"
+    )
+    sample = config["sample"]
+    resample = config["resample"]
+    sample_line = (
+        f"- Sample: {float(sample['sample_rate']):.1%} of route-days (seed {sample['seed']}); resampled "
+        f"at {resample['inner_bin_hours']} h inside {resample['outer_threshold_hours']} h and "
+        f"{resample['outer_bin_hours']} h outside. Counts are sample counts; bootstrap CIs are "
+        "conditional on the sampled route-days."
+    )
     split_caveat = (
         "The test split is a future-departure cohort, not a future-era holdout. "
-        "The report shows era composition; do not read the test metric as era generalization."
+        "The report shows era composition for the evaluated splits; test rows are omitted unless "
+        "`--evaluate-test`."
     )
     split = config["splits"]
     split_line = (
@@ -129,25 +763,33 @@ def _report(
         f"validation-calibrate {split['validation_calibrate_start']}..{split['validation_calibrate_end']}; "
         f"test {split['test_start']}..{split['test_end']}"
     )
+    calibration_label = evaluation.calibration_method + (
+        " (constant; single-class calibration labels)" if evaluation.calibration_constant else ""
+    )
     model_line = (
-        f"- Model: `{evaluation.chosen_model}`; calibration: `{evaluation.calibration_method}`; "
+        f"- Model: `{evaluation.chosen_model}`; calibration: `{calibration_label}`; "
         f"threshold: {evaluation.threshold:.4f}; precision floor met on validation-calibrate: "
         f"{'yes' if evaluation.threshold_precision_floor_met else 'no (F1 fallback)'}"
     )
     ttd_line = (
         f"- TTD domain: {config['label']['min_hours_to_departure']}-{config['label']['max_hours_to_departure']} hours"
     )
-    brier_line = (
-        f"- Brier: **{_fmt(evaluation.test.get('brier'))}** (grouped bootstrap 95% CI "
-        f"{_fmt(evaluation.bootstrap['brier'][0])}-{_fmt(evaluation.bootstrap['brier'][1])})"
+    brier_ci = evaluation.bootstrap.get("brier", [])
+    logloss_ci = evaluation.bootstrap.get("log_loss", [])
+    brier_line = f"- Brier: **{_fmt(evaluation.test.get('brier'))}** " + (
+        f"(grouped bootstrap 95% CI {_fmt(brier_ci[0])}-{_fmt(brier_ci[1])})"
+        if len(brier_ci) == 2
+        else "(no 95% CI; fewer than two departure-date clusters)"
     )
-    logloss_line = (
-        f"- Log loss: **{_fmt(evaluation.test.get('log_loss'))}** (95% CI "
-        f"{_fmt(evaluation.bootstrap['log_loss'][0])}-{_fmt(evaluation.bootstrap['log_loss'][1])})"
+    logloss_line = f"- Log loss: **{_fmt(evaluation.test.get('log_loss'))}** " + (
+        f"(95% CI {_fmt(logloss_ci[0])}-{_fmt(logloss_ci[1])})"
+        if len(logloss_ci) == 2
+        else "(no 95% CI; fewer than two departure-date clusters)"
     )
     bss_line = (
         f"- Brier skill score vs the slice base rate: {_fmt(evaluation.test.get('bss'))}\n"
         f"- Brier skill score vs the **train** base rate: {_fmt(evaluation.test.get('bss_train'))}\n"
+        f"- Brier skill score vs climatology: {_fmt(evaluation.test.get('bss_climatology'))}\n"
         f"- Train prevalence of the evaluated subset: {_fmt(evaluation.train_prevalence)}"
     )
     test_all_line = (
@@ -158,7 +800,10 @@ def _report(
             f"The headline uses {evaluation.test_tier.replace('_', ' ')}."
         )
         if evaluation.test_all is not None
-        else "- Test was not evaluated; this report shows validation-calibrate only."
+        else (
+            "- Test was not evaluated; model metrics are validation-calibrate only and no test label "
+            "or model diagnostics are printed."
+        )
     )
     headroom_headers = [
         "headroom %",
@@ -173,10 +818,7 @@ def _report(
         "precision",
         "recall",
     ]
-    risk_bands = (
-        "Risk bands: `< 0.15` low, `0.15-0.35` watch, `>= 0.35` high. "
-        "The threshold is a reporting choice, not a product decision."
-    )
+    risk_bands = "The threshold is a reporting choice, not a product decision."
     eval_label = "Test" if evaluation.test_evaluated else "Validation-calibrate"
     threshold_caveat = (
         "- Validation precision and recall use the same validation-calibrate rows that selected the "
@@ -193,10 +835,18 @@ def _report(
         "set; the September departure cohort has been evaluated before this run.\n"
         "- These are development figures, not a production estimate. The product's hourly refresher "
         "and 7-30 d booking window are not fully represented.\n"
-        "- Pooled metrics include headroom identification; per-headroom rows are the primary view.\n"
+        "- Pooled metrics include headroom identification; per-headroom rows are the diagnostic view.\n"
         f"{threshold_caveat}"
         "- The headline uses the two-or-more-scrape tier while the model comparison table uses all "
         "validation-select rows.\n"
+        "- Test-split label and model diagnostics are gated by `--evaluate-test`; journey "
+        "disappearance is a corpus-level diagnostic that includes test departures.\n"
+        "- Counts are from the configured route-day sample, not the full silver corpus; bootstrap "
+        "intervals resample departure dates within that sample.\n"
+        "- Per-headroom metrics use a per-headroom out-of-fold recalibration; the shipped model "
+        "uses the pooled calibrator, so PR 1 and PR 2 per-headroom numbers are not like-for-like. "
+        "The near-zero gap and slope near 1 follow from cross-fitting by route-day on the same "
+        "evaluation rows.\n"
         "- No model serving contract, no real user limits, and no season outside the current corpus."
     )
     return f"""# Baseline training report
@@ -207,10 +857,12 @@ def _report(
 
 - Runner: `{runner}`
 - Rows: **{stats.rows:,}** total, **{stats.labelled_rows:,}** labelled
+- Header totals include the test split; the Dataset table {dataset_scope}.
 - Series: **{stats.series:,}**; route-days: **{stats.route_days:,}**
 - Calendar feature set: `{spec.calendar_set}`
 {model_line}
 {split_line}
+{sample_line}
 {ttd_line}
 {provenance_lines}
 - {split_caveat}
@@ -227,10 +879,106 @@ def _report(
 
 {_table(["split", "era", "rows"], era_rows)}
 
+### Cohort and eligibility
+
+{cohort_table}
+
+### Label and check-window diagnostics
+
+{label_table}
+
+`coverage` is the share of rows with a scrape in the window. `crossed back` is the share whose
+within-day maximum breached but the 20-24 h point did not. `dearer`/`cheaper`/`unchanged` use a
++/-0.5 % band around the current fare and cover only rows with a backward 23-36 h reference. In the main
+table `priced` is a count and the denominator for the next-day rate; the era and week tables show
+priced shares. Test-split rows appear in the label, era and week tables only with
+`--evaluate-test`; journey disappearance is corpus-level and includes test departures. The 20-24 h
+bound is inclusive, so a few 20-28 h picks a few milliseconds after `t + 24 h` are excluded from the
+20-24 h point.
+
+By observation era:
+
+{label_era_table}
+
+In a validation-only run the test split is omitted, so the era table is dense-only.
+
+By observation week:
+
+{label_week_table}
+
+A29-like fixed 5 % comparison:
+
+{a29_table}
+
+Forward day-over-day direction (20-28 h check, +/-0.5 %):
+
+{forward_table}
+
+Prevalence by evidence tier:
+
+{tier_table}
+
+Single future scrape lag:
+
+{lag_table}
+
+14-30 d snapshots with two or more future scrapes, by observation week:
+
+{two_plus_week_table}
+
+### Journey disappearance
+
+- Journeys with at least 3 observations: **{journey_total:,}**
+- At risk (last observation more than 24 h before departure): **{journey_at_risk:,}**
+- Disappeared while the route-day was still scraped: **{journey_disappeared:,}** of all journeys
+  ({journey_share}); {journey_share_at_risk} of at-risk
+- Successor `none`: **{journey_none:,}** (no new series started at the next route-day scrape
+  within 60 minutes; the count is invariant to the 15/60-minute same-train rule)
+- `same train` requires a new series (`first_obs`) at the next scrape with the same class and train
+  number and a planned departure within 15 minutes; the 60-minute rule is the A31 comparison and
+  counts departures shifted by 15-60 minutes that the 15-minute rule classifies as `other train`
+- This section is corpus-level and includes test-split departures; it is not gated by
+  `--evaluate-test`.
+
+{journey_table}
+
+By observation week (60-minute rule):
+
+{journey_week_table}
+
+### Unlabelled shares
+
+{unlabelled_table}
+
+Highest weekly unlabelled shares:
+
+{weekly_table}
+
+### Within-24 h coverage (R24)
+
+R24 is defined only for 24 h-7 d. It requires the last scrape within
+{config["report"]["r24_max_tail_hours"]} h of `t + 24 h` and no gap above
+{config["report"]["r24_max_gap_hours"]} h; later bands are omitted. `coverage known` counts rows
+with a scrape in the 24 h window; `R24 covered` averages over all rows in the band, so rows with no
+scrape count as not covered.
+
+{r24_table}
+
 ## Model comparison (cross-fitted validation-select)
 
 {_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_rows)}
+
+Candidate calibration method: `{evaluation.candidate_calibration_method}`; the final model uses
+`{calibration_label}`.
+
+### Train-split diagnostics (in-sample)
+
+{_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_train_rows)}
 {ablation_section}
+
+### Climatology baseline
+
+{clim_table}
 
 ## {eval_label} metrics
 
@@ -241,20 +989,86 @@ def _report(
 - Prevalence: {_fmt(evaluation.test.get("positive_rate"))}
 - Precision at threshold: {_fmt(evaluation.test.get("precision_at_threshold"))}
 - Recall at threshold: {_fmt(evaluation.test.get("recall_at_threshold"))}
-- Headroom monotonic: {evaluation.test.get("headroom_monotonic")}
+- Headroom monotonic (shipped pooled calibrator): {evaluation.test.get("headroom_monotonic")}
+- Headroom monotonic (raw scores): {evaluation.test.get("headroom_monotonic_raw")}
 - Evaluation tier: `{evaluation.test_tier}` ({evaluation.test_tier_rows} rows)
 - Precision floor met on evaluation: {evaluation.test.get("precision_floor_met_on_evaluation")}
 {test_all_line}
 
 {risk_bands}
 
+### Bootstrap intervals and paired Brier differences
+
+{_table(["cluster count"], [[evaluation.bootstrap_clusters]])}
+
+{interval_table}
+
+{paired_table}
+
+Negative Brier differences mean the model is better than the baseline.
+
 ## Per-headroom evaluation metrics
 
+Per-headroom rows use a separate out-of-fold calibration fitted on that headroom's labels; the
+shipped model uses the pooled calibrator. These are diagnostic and are not directly comparable with
+the PR 1 pooled-calibrator table. The near-zero calibration gap and slope near 1 follow from
+cross-fitting by route-day on the same evaluation rows: same-date shocks appear in both the fit and
+predict folds. The diagnostic probabilities rise with headroom on
+{_p(evaluation.test.get("headroom_diagnostic_nonmonotone_share"))} of rows; the shipped pooled
+calibrator is monotone: {evaluation.test.get("headroom_monotonic")}.
+
 {_table(headroom_headers, headroom_rows)}
+
+### Per-headroom x TTD band
+
+{headroom_ttd_table}
+
+### Strata
+
+{strata_table}
+
+### Like-for-like validation vs test (only with --evaluate-test)
+
+{strata_compare_table}
+
+### Calibration statistics
+
+{headroom_cal_table}
+
+Per-headroom x TTD band x era:
+
+{calibration_group_table}
+
+Reliability by headroom, TTD band and era:
+
+{reliability_table}
+
+### Decision value (per-headroom diagnostic calibration, 20-24 h check)
+
+{decision_table}
+
+Positive saving means the alert policy costs less than the baseline; negative means it costs
+more. `%` columns divide summed euros by summed fares; the conditional saving is the mean euro
+saving over alerted rows and is not a ratio. `cost of waiting` is the unconditional cost of always
+waiting one day. `lift vs random` subtracts the expected saving of a random alert policy with the
+same alert share (`alert share x cost of waiting`) from the model's saving versus waiting. This table
+uses per-headroom out-of-fold calibration and is diagnostic; the shipped model uses the pooled
+calibrator. It uses the 20-24 h check, inside the 24 h maximum.
+
+{decision_summary}
+
+Shipped pooled policy (one row per TTD band):
+
+{pooled_decision_table}
+
+{pooled_decision_summary}
 
 ## Calibration
 
 {_table(["predicted", "observed", "count"], cal_rows)}
+
+The intercept is the joint Cox intercept from the slope/intercept fit, not calibration-in-the-large;
+ECE uses equal-mass bins.
 
 ## Permutation importance (validation-select sample)
 
@@ -319,9 +1133,10 @@ def write_report(
         ):
             writer.writerow([float(prob), float(true), int(count)])
     manifest = dict(dataset_manifest)
+    manifest.pop("config_sha256", None)
     manifest["build_config"] = build_config or config
     manifest["build_config_sha256"] = dataset_manifest.get("config_sha256")
-    manifest["config"] = config
+    manifest["evaluation_config"] = config
     manifest["evaluation_config_sha256"] = hashlib.sha256(
         json.dumps(config, sort_keys=True, default=str).encode()
     ).hexdigest()
@@ -337,6 +1152,8 @@ def write_report(
         "ablation": ablation,
         "runner": runner,
         "dropped_features": list(evaluation.dropped_features),
+        "predictions": f"predictions/{evaluation.prediction_split}.parquet",
+        "model_file": "model.joblib",
         "package_versions": {
             "python": platform.python_version(),
             "numpy": numpy.__version__,
@@ -353,7 +1170,14 @@ def write_report(
         "report.md",
         "metrics.json",
         "calibration.csv",
+        f"predictions/{evaluation.prediction_split}.parquet",
+        "model.joblib",
     ]
+    manifest["artifact_sha256"] = {
+        relative: hashlib.sha256((out_dir / relative).read_bytes()).hexdigest()
+        for relative in manifest["artifacts"]
+        if (out_dir / relative).is_file()
+    }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )

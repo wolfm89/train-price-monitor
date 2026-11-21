@@ -352,7 +352,9 @@ dev = [
     { name = "ty" },
 ]
 train = [
+    { name = "joblib" },
     { name = "numpy" },
+    { name = "pyarrow" },
     { name = "scikit-learn" },
     { name = "scipy" },
 ]
@@ -372,7 +374,9 @@ dev = [
     { name = "ty", specifier = "==0.0.104" },
 ]
 train = [
+    { name = "joblib", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.5.5" },
+    { name = "pyarrow", specifier = "==26.0.1" },
     { name = "scikit-learn", specifier = "==1.9.1" },
     { name = "scipy", specifier = "==1.18.1" },
 ]

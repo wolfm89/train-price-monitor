@@ -8,12 +8,14 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import pyarrow
 
 from tpm_analytics.silver._duck import connect
 from tpm_analytics.training import model as training_model
@@ -91,6 +93,7 @@ def _ablation(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    work_dir: Path | None = None
     logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO))
     try:
         config = load_config(args.config)
@@ -116,8 +119,10 @@ def main(argv: list[str] | None = None) -> int:
         out_dir = out_dir.resolve()
         if out_dir.exists() and any(out_dir.iterdir()):
             raise FileExistsError(f"{out_dir} is not empty; use a new --run-id or --out")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        temp_dir = out_dir / ".duckdb-tmp"
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        work_dir = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.", suffix=".tmp", dir=out_dir.parent))
+        os.chmod(work_dir, 0o755)
+        temp_dir = work_dir / ".duckdb-tmp"
         configured_extensions = os.environ.get("DUCKDB_EXTENSION_DIR")
         if configured_extensions is None and Path(".duckdb-extensions").is_dir():
             configured_extensions = str(Path(".duckdb-extensions").resolve())
@@ -127,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             temp_directory=temp_dir,
             threads=threads,
             memory_limit=os.environ.get("TRAIN_DUCKDB_MEMORY_LIMIT", "6GB"),
-            max_temp_size=os.environ.get("TRAIN_DUCKDB_MAX_TEMP_SIZE", "8GB"),
+            max_temp_size=os.environ.get("TRAIN_DUCKDB_MAX_TEMP_SIZE", "20GB"),
             extensions=extensions,
             secret=source.s3_secret,
         )
@@ -136,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
                 connection,
                 source,
                 build_config,
-                out_dir,
+                work_dir,
                 run_id=run_id,
                 write_splits=not args.profile,
                 cli_argv=tuple(sys.argv),
@@ -146,20 +151,22 @@ def main(argv: list[str] | None = None) -> int:
             connection.close()
             shutil.rmtree(temp_dir, ignore_errors=True)
         if args.profile:
+            os.replace(work_dir, out_dir)
             print(json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str))
             return 0
         spec = feature_spec(primary_set)
-        full_splits = _load_splits(out_dir, feature_spec(build_set))
+        full_splits = _load_splits(work_dir, feature_spec(build_set))
         splits = {name: data.select(spec.names) for name, data in full_splits.items()}
-        evaluation, _, _ = training_model.train_and_evaluate(
+        evaluation, fitted, calibrator = training_model.train_and_evaluate(
             splits,
             spec,
             config,
             evaluate_test=args.evaluate_test and not args.ablation,
         )
         ablation = _ablation(full_splits, config, primary_set, evaluation) if args.ablation else None
+        training_model.write_evaluation_artifacts(work_dir, evaluation, fitted, calibrator, spec, config)
         write_report(
-            out_dir,
+            work_dir,
             stats,
             evaluation,
             spec,
@@ -168,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             ablation=ablation,
             build_config=build_config.to_dict(),
         )
+        os.replace(work_dir, out_dir)
         summary = {
             "run_id": run_id,
             "out": str(out_dir),
@@ -177,13 +185,17 @@ def main(argv: list[str] | None = None) -> int:
             "calibration": evaluation.calibration_method,
             "evaluation_split": evaluation.evaluation_split,
             "test_evaluated": evaluation.test_evaluated,
+            "predictions": f"predictions/{evaluation.prediction_split}.parquet",
+            "model_file": "model.joblib",
             "brier": evaluation.test["brier"],
             "log_loss": evaluation.test["log_loss"],
             "ablation": ablation,
         }
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))
         return 0
-    except (OSError, RuntimeError, ValueError, duckdb.Error) as error:
+    except (OSError, RuntimeError, ValueError, duckdb.Error, pyarrow.ArrowException) as error:
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
         print(f"error: {error}", file=sys.stderr)
         return 2
 

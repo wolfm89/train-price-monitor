@@ -146,15 +146,21 @@ class CalibrationConfig:
 @dataclass(frozen=True)
 class ReportConfig:
     bootstrap_replicates: int
+    metric_bootstrap_replicates: int
     bootstrap_cluster: str
     threshold_precision_floor: float
     calibration_bins: int
     min_label_coverage: float
     min_headroom_positives: int
+    min_tier_rows: int = 100
+    r24_max_tail_hours: int = 4
+    r24_max_gap_hours: int = 6
 
     def validate(self) -> None:
         if not 1 <= self.bootstrap_replicates <= 5000:
             raise ConfigError("report.bootstrap_replicates must be between 1 and 5000")
+        if not 1 <= self.metric_bootstrap_replicates <= 2000:
+            raise ConfigError("report.metric_bootstrap_replicates must be between 1 and 2000")
         if self.bootstrap_cluster not in {"departure_date", "route_day"}:
             raise ConfigError("report.bootstrap_cluster must be departure_date or route_day")
         if not 0 <= self.threshold_precision_floor <= 1:
@@ -165,6 +171,10 @@ class ReportConfig:
             raise ConfigError("report.min_label_coverage must be in [0, 1]")
         if self.min_headroom_positives < 0:
             raise ConfigError("report.min_headroom_positives must be non-negative")
+        if self.min_tier_rows < 1:
+            raise ConfigError("report.min_tier_rows must be positive")
+        if self.r24_max_tail_hours < 0 or self.r24_max_gap_hours < 0:
+            raise ConfigError("report R24 thresholds must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -214,7 +224,9 @@ def _date(raw: dict[str, Any], key: str) -> date:
         raise ConfigError(f"splits.{key} is not a valid ISO date") from error
 
 
-def _int(raw: dict[str, Any], key: str, *, minimum: int | None = None) -> int:
+def _int(raw: dict[str, Any], key: str, *, minimum: int | None = None, default: int | None = None) -> int:
+    if key not in raw and default is not None:
+        return default
     value = raw.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{key} must be an integer")
@@ -311,11 +323,15 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
         ),
         report=ReportConfig(
             bootstrap_replicates=_int(report_raw, "bootstrap_replicates", minimum=1),
+            metric_bootstrap_replicates=_int(report_raw, "metric_bootstrap_replicates", minimum=1, default=400),
             bootstrap_cluster=_str(report_raw, "bootstrap_cluster"),
             threshold_precision_floor=_float(report_raw, "threshold_precision_floor"),
             calibration_bins=_int(report_raw, "calibration_bins", minimum=2),
             min_label_coverage=_float(report_raw, "min_label_coverage"),
             min_headroom_positives=_int(report_raw, "min_headroom_positives", minimum=0),
+            min_tier_rows=_int(report_raw, "min_tier_rows", minimum=1, default=100),
+            r24_max_tail_hours=_int(report_raw, "r24_max_tail_hours", minimum=0, default=4),
+            r24_max_gap_hours=_int(report_raw, "r24_max_gap_hours", minimum=0, default=6),
         ),
     )
     config.validate()
