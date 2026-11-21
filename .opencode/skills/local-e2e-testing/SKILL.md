@@ -282,7 +282,7 @@ If the servers were already running before this session (checked in Step 2), lea
 
 - `backend/.env` must exist with `TPM_SQS_QUEUE_URL`, `PROFILE_IMAGE_BUCKET_NAME`, `AWS_PROFILE` (`mise run env:local`)
 - `frontend/.env` must exist with Cognito pool IDs and `REACT_APP_AWS_REGION`
-- `frontend/.env.development` must set `REACT_APP_GRAPHQL_ENDPOINT=http://localhost:4000/`
+- the dev server proxies `/graphql` to `VITE_DEV_BACKEND_URL` (default `http://127.0.0.1:4000`); no `.env.development` is needed
 - AWS credentials must be valid for the profile in `backend/.env` (DynamoDB reads/writes happen against live AWS)
 - Root `.env` contains `TEST_USER_EMAIL` and `TEST_USER_PASSWORD` — real Cognito credentials for the test account; `source .env` before starting
 

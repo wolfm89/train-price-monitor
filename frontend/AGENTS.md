@@ -20,11 +20,11 @@ From the repository root: `mise run //frontend:dev` and `mise run //frontend:tes
 
 ## Environment
 
-The app reads `REACT_APP_GRAPHQL_ENDPOINT`, `REACT_APP_COGNITO_USER_POOL_ID`,
-`REACT_APP_COGNITO_CLIENT_ID` and `REACT_APP_COGNITO_IDENTITY_POOL_ID` at build/dev time.
-`mise run env:local` writes the ignored `frontend/.env` and `frontend/.env.development`; Vite also
-accepts the unprefixed `COGNITO_*` names. Without those values the app cannot sign in. The canonical
-variable list is [docs/configuration.md](../docs/configuration.md#frontend-build).
+Production builds read `REACT_APP_GRAPHQL_ENDPOINT` and `REACT_APP_COGNITO_*`; in dev the client
+calls `/graphql` on its own origin and the dev server proxies it to `VITE_DEV_BACKEND_URL` (default
+`http://127.0.0.1:4000`). `mise run env:local` writes the ignored `frontend/.env`; Vite also accepts
+the unprefixed `COGNITO_*` names. Without those values the app cannot sign in. The canonical variable
+list is [docs/configuration.md](../docs/configuration.md#frontend-build).
 
 ## What to know
 

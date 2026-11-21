@@ -30,9 +30,6 @@ tasks:
       REACT_APP_AWS_REGION=$AWS_REGION
       EOL
 
-      # Append local GraphQL endpoint to frontend/.env.development
-      echo "REACT_APP_GRAPHQL_ENDPOINT=http://localhost:4000/" >> frontend/.env.development
-
       gp sync-done env-setup
       npm --prefix infrastructure/ install
     env:

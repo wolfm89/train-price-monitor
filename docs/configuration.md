@@ -72,12 +72,14 @@ backend; the poller has no fallback key. See [architecture.md](architecture.md#d
 
 ## Frontend build
 
-| Variable                             | Scope    | Default / deployed                                 | Set by           | Purpose                                             |
-| ------------------------------------ | -------- | -------------------------------------------------- | ---------------- | --------------------------------------------------- |
-| `REACT_APP_GRAPHQL_ENDPOINT`         | Frontend | local `http://localhost:4000/`; production API URL | `env:local` / CI | API Gateway base URL; the client appends `graphql`. |
-| `REACT_APP_COGNITO_USER_POOL_ID`     | Frontend | —                                                  | CI / `env:local` | Cognito user pool ID.                               |
-| `REACT_APP_COGNITO_CLIENT_ID`        | Frontend | —                                                  | CI / `env:local` | Cognito app client ID.                              |
-| `REACT_APP_COGNITO_IDENTITY_POOL_ID` | Frontend | —                                                  | CI / `env:local` | Cognito identity pool ID.                           |
+| Variable                                 | Scope    | Default / deployed      | Set by           | Purpose                                                                                             |
+| ---------------------------------------- | -------- | ----------------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
+| `REACT_APP_GRAPHQL_ENDPOINT`             | Frontend | production API URL      | CI               | API Gateway base URL for production builds; the client appends `graphql`. Dev uses the proxy below. |
+| `VITE_DEV_BACKEND_URL`                   | Dev only | `http://127.0.0.1:4000` | Compose / shell  | Target of the dev server's `/graphql` proxy. Compose sets `http://backend:4000`.                    |
+| `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` | Dev only | —                       | shell            | Extra hostnames for the dev server (comma separated); `localhost`/IPs are always allowed.           |
+| `REACT_APP_COGNITO_USER_POOL_ID`         | Frontend | —                       | CI / `env:local` | Cognito user pool ID.                                                                               |
+| `REACT_APP_COGNITO_CLIENT_ID`            | Frontend | —                       | CI / `env:local` | Cognito app client ID.                                                                              |
+| `REACT_APP_COGNITO_IDENTITY_POOL_ID`     | Frontend | —                       | CI / `env:local` | Cognito identity pool ID.                                                                           |
 
 Vite accepts the unprefixed `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` and
 `COGNITO_IDENTITY_POOL_ID` names in local `.env` files and maps them to the build-time

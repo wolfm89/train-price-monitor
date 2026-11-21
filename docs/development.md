@@ -27,7 +27,7 @@ mise run env:local
 ```
 
 The script verifies `sts:GetCallerIdentity`, reads the prefixed CloudFormation outputs and writes
-the ignored `backend/.env`, `frontend/.env` and `frontend/.env.development`. It needs
+the ignored `backend/.env` and `frontend/.env`. It needs
 `cloudformation:DescribeStacks` and `cognito-idp:ListUserPoolClients`. Set `STACK_NAME` if the stack
 is not `InfrastructureStack`. See [deployment.md](deployment.md#outputs-and-local-environment).
 
@@ -37,7 +37,7 @@ Do not commit `.env` files. The canonical variable reference is [configuration.m
 
 | Workflow           | Command                                                       | What is local                                                                                                                                                                                               |
 | ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Frontend only      | `mise run //frontend:dev`                                     | Vite on port 3000; API calls go to the endpoint in `.env.development`.                                                                                                                                      |
+| Frontend only      | `mise run //frontend:dev`                                     | Vite on port 3000; API calls are same-origin and proxied to `VITE_DEV_BACKEND_URL` (default `http://127.0.0.1:4000`).                                                                                       |
 | Backend + frontend | `mise run //backend:dev` in one terminal, frontend in another | GraphQL on port 4000; S3/SQS/Cognito are the deployed resources from `env:local`.                                                                                                                           |
 | Docker Compose     | `mise run dev:docker`                                         | Frontend, backend and a Floci container. It reads `AWS_PROFILE`, `PROFILE_IMAGE_BUCKET_NAME` and `TPM_SQS_QUEUE_URL` from the shell or repo-root `.env`, not `backend/.env`, and publishes ports 3000/4000. |
 | Scraper on Floci   | see [scraper/README.md](../scraper/README.md)                 | Local DynamoDB/S3 and the scraper tasks.                                                                                                                                                                    |
@@ -65,8 +65,10 @@ npm install
 npm run dev          # Vite on http://localhost:3000
 ```
 
-The app reads `REACT_APP_GRAPHQL_ENDPOINT` and `REACT_APP_COGNITO_*` as Vite defines. The dev server
-accepts the unprefixed `COGNITO_*` names too; CI supplies the `REACT_APP_*` values.
+Production builds read `REACT_APP_GRAPHQL_ENDPOINT` and `REACT_APP_COGNITO_*` as Vite defines; in
+dev the client always calls `/graphql` and the dev server proxies it to `VITE_DEV_BACKEND_URL`, so
+the endpoint is not used there. The dev server accepts the unprefixed `COGNITO_*` names too; CI
+supplies the `REACT_APP_*` values.
 
 ## Checks
 

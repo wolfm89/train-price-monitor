@@ -106,7 +106,8 @@ CloudFormation output keys are generated logical IDs with a hash suffix, for exa
   `COGNITO_USER_POOL_ID`.
 - `frontend/.env`: Cognito user/identity pool and client IDs plus `AWS_REGION` (the current app does
   not read `AWS_REGION`; it is kept in the generated file for local tooling).
-- `frontend/.env.development`: `REACT_APP_GRAPHQL_ENDPOINT=http://localhost:4000/`.
+  The dev server needs no `.env.development`: it proxies `/graphql` to
+  `VITE_DEV_BACKEND_URL` (default `http://127.0.0.1:4000`).
 
 Set `STACK_NAME` if the stack is not named `InfrastructureStack`. The script verifies the AWS
 identity with `sts:GetCallerIdentity` and needs `cloudformation:DescribeStacks` and

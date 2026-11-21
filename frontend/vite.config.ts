@@ -1,8 +1,12 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, '', '');
+  // The proxy runs in Vite's process, not the browser. Compose starts the dev
+  // server in a container where the backend is a separate service, so the
+  // target is overridable there; laptop and Coder use the loopback default.
+  const devBackendUrl = env.VITE_DEV_BACKEND_URL || 'http://127.0.0.1:4000';
   // Cognito values are provided by CI as REACT_APP_* secrets and by the
   // locally generated frontend/.env (scripts/generate-local-env.sh) as
   // unprefixed COGNITO_* names. Support both so builds work in either place.
@@ -17,13 +21,12 @@ export default defineConfig(({ mode }) => {
       // Coder's app proxy requires the session cookie, and a CORS preflight
       // never carries one, so the browser cannot reach the backend app
       // cross-origin. Proxy GraphQL through this dev server instead: the
-      // request is same-origin and Vite talks to the backend on loopback.
-      // `localhost`/IP hosts stay allowed, so running the dev server on a
-      // laptop is unaffected.
+      // request is same-origin and Vite talks to the backend.
+      // `localhost`/IP hosts stay allowed, and other Coder deployments can add
+      // their suffix through __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS.
       allowedHosts: ['.coder.local.home'],
       proxy: {
-        '/graphql': 'http://127.0.0.1:4000',
-        '/health': 'http://127.0.0.1:4000',
+        '/graphql': devBackendUrl,
       },
     },
     build: {
@@ -60,10 +63,11 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       global: 'globalThis',
-      // Dev always talks to the local proxy (same origin); production keeps the
-      // configured endpoint. This makes `mise run env:local` rewrites harmless.
+      // Dev always talks to the local proxy (same origin); builds keep the
+      // configured endpoint. `command`, not `mode`, so a build with a custom
+      // mode still bakes the real API URL.
       'process.env.REACT_APP_GRAPHQL_ENDPOINT': JSON.stringify(
-        mode === 'development' ? '/' : env.REACT_APP_GRAPHQL_ENDPOINT
+        command === 'serve' ? '/' : env.REACT_APP_GRAPHQL_ENDPOINT
       ),
       'process.env.REACT_APP_COGNITO_USER_POOL_ID': JSON.stringify(cognitoUserPoolId),
       'process.env.REACT_APP_COGNITO_IDENTITY_POOL_ID': JSON.stringify(cognitoIdentityPoolId),
