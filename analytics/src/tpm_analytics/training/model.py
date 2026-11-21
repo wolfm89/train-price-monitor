@@ -572,6 +572,7 @@ class Evaluation:
     bootstrap: dict[str, list[float]]
     split_sizes: dict[str, int]
     calibration: tuple[Array, Array, Array] = field(compare=False)
+    calibration_constant: bool = False
     candidate_train: dict[str, dict[str, float | None]] = field(default_factory=dict)
     candidate_calibration_method: str = ""
     headroom_ttd: tuple[dict[str, Any], ...] = ()
@@ -605,6 +606,7 @@ class Evaluation:
         return {
             "chosen_model": self.chosen_model,
             "calibration_method": self.calibration_method,
+            "calibration_constant": self.calibration_constant,
             "threshold": self.threshold,
             "threshold_precision_floor_met": self.threshold_precision_floor_met,
             "candidates": self.candidates,
@@ -642,6 +644,9 @@ class Evaluation:
 
 
 def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, bool]:
+    classes = np.unique(y)
+    if len(classes) < 2:
+        return (0.0, True) if classes[0] == 1 else (0.5, False)
     precision, recall, thresholds = precision_recall_curve(y, probabilities)
     eligible = np.where(precision[:-1] >= floor)[0]
     if len(eligible):
@@ -734,6 +739,8 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
     O(clusters x replicates) and gives the same weighted Brier/log-loss.
     """
     unique, inverse = np.unique(groups, return_inverse=True)
+    if len(unique) < 2:
+        return {}
     clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
     brier_sum = np.bincount(inverse, weights=(clipped - y) ** 2, minlength=len(unique))
     logloss_sum = np.bincount(
@@ -1079,7 +1086,7 @@ def _fit_final_calibration(
     model: FittedModel,
     validation_calibrate: TabularData,
     config: TrainingConfig,
-) -> tuple[TabularData, ScoreCalibrator, str, dict[str, Array], float, bool]:
+) -> tuple[TabularData, ScoreCalibrator, str, bool, dict[str, Array], float, bool]:
     evidence = validation_calibrate.future_observations >= 2
     cal_data = (
         validation_calibrate.subset(evidence)
@@ -1099,15 +1106,17 @@ def _fit_final_calibration(
         requested,
         min_positives=config.calibration.min_positives,
     )
-    method = calibrator.method
-    if method not in oof_predictions:
-        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
+    # Preserve the requested method for downstream refits. A single-class calibration set
+    # returns a constant calibrator; that must not be passed as the method for a mixed-label
+    # headroom or all-labelled test refit.
+    calibration_constant = calibrator.method == "constant"
+    method = requested
     threshold, threshold_met = _threshold(
         cal_data.y,
         oof_predictions[method],
         config.report.threshold_precision_floor,
     )
-    return cal_data, calibrator, method, oof_predictions, threshold, threshold_met
+    return cal_data, calibrator, method, calibration_constant, oof_predictions, threshold, threshold_met
 
 
 def _calibrated_scores(
@@ -1355,9 +1364,15 @@ def train_and_evaluate(
     candidates, candidate_metrics, candidate_train_metrics = _fit_candidates(train, validation_select, spec, config)
     chosen = _choose_candidate(candidate_metrics)
     model = candidates[chosen]
-    cal_data, calibrator, calibration_method, oof_predictions, threshold, threshold_met = _fit_final_calibration(
-        model, validation_calibrate, config
-    )
+    (
+        cal_data,
+        calibrator,
+        calibration_method,
+        calibration_constant,
+        oof_predictions,
+        threshold,
+        threshold_met,
+    ) = _fit_final_calibration(model, validation_calibrate, config)
 
     eval_data = test if evaluate_test else cal_data
     evaluation_split = "test" if evaluate_test else "validation_calibrate"
@@ -1550,6 +1565,7 @@ def train_and_evaluate(
     evaluation = Evaluation(
         chosen_model=chosen,
         calibration_method=calibration_method,
+        calibration_constant=calibration_constant,
         threshold=threshold,
         threshold_precision_floor_met=threshold_met,
         candidates=candidate_metrics,
@@ -1684,6 +1700,7 @@ def write_evaluation_artifacts(
             "calendar_set": spec.calendar_set,
             "chosen_model": evaluation.chosen_model,
             "calibration_method": evaluation.calibration_method,
+            "calibration_constant": evaluation.calibration_constant,
             "calibration_mode": evaluation.prediction_calibration_mode,
             "threshold": evaluation.threshold,
             "threshold_precision_floor_met": evaluation.threshold_precision_floor_met,

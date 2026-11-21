@@ -51,6 +51,8 @@ def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
         )
     if not evaluation.test.get("headroom_monotonic"):
         warning_items.append("calibrated breach probability is not monotone across headroom")
+    if evaluation.calibration_constant:
+        warning_items.append("calibration labels are single-class; the shipped calibrator is constant")
     for split in stats.splits:
         if not evaluation.test_evaluated and split.split == "test":
             continue
@@ -761,21 +763,28 @@ def _report(
         f"validation-calibrate {split['validation_calibrate_start']}..{split['validation_calibrate_end']}; "
         f"test {split['test_start']}..{split['test_end']}"
     )
+    calibration_label = evaluation.calibration_method + (
+        " (constant; single-class calibration labels)" if evaluation.calibration_constant else ""
+    )
     model_line = (
-        f"- Model: `{evaluation.chosen_model}`; calibration: `{evaluation.calibration_method}`; "
+        f"- Model: `{evaluation.chosen_model}`; calibration: `{calibration_label}`; "
         f"threshold: {evaluation.threshold:.4f}; precision floor met on validation-calibrate: "
         f"{'yes' if evaluation.threshold_precision_floor_met else 'no (F1 fallback)'}"
     )
     ttd_line = (
         f"- TTD domain: {config['label']['min_hours_to_departure']}-{config['label']['max_hours_to_departure']} hours"
     )
-    brier_line = (
-        f"- Brier: **{_fmt(evaluation.test.get('brier'))}** (grouped bootstrap 95% CI "
-        f"{_fmt(evaluation.bootstrap['brier'][0])}-{_fmt(evaluation.bootstrap['brier'][1])})"
+    brier_ci = evaluation.bootstrap.get("brier", [])
+    logloss_ci = evaluation.bootstrap.get("log_loss", [])
+    brier_line = f"- Brier: **{_fmt(evaluation.test.get('brier'))}** " + (
+        f"(grouped bootstrap 95% CI {_fmt(brier_ci[0])}-{_fmt(brier_ci[1])})"
+        if len(brier_ci) == 2
+        else "(no 95% CI; fewer than two departure-date clusters)"
     )
-    logloss_line = (
-        f"- Log loss: **{_fmt(evaluation.test.get('log_loss'))}** (95% CI "
-        f"{_fmt(evaluation.bootstrap['log_loss'][0])}-{_fmt(evaluation.bootstrap['log_loss'][1])})"
+    logloss_line = f"- Log loss: **{_fmt(evaluation.test.get('log_loss'))}** " + (
+        f"(95% CI {_fmt(logloss_ci[0])}-{_fmt(logloss_ci[1])})"
+        if len(logloss_ci) == 2
+        else "(no 95% CI; fewer than two departure-date clusters)"
     )
     bss_line = (
         f"- Brier skill score vs the slice base rate: {_fmt(evaluation.test.get('bss'))}\n"
@@ -960,7 +969,7 @@ scrape count as not covered.
 {_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_rows)}
 
 Candidate calibration method: `{evaluation.candidate_calibration_method}`; the final model uses
-`{evaluation.calibration_method}`.
+`{calibration_label}`.
 
 ### Train-split diagnostics (in-sample)
 

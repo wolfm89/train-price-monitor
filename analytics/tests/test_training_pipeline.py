@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import numpy as np
@@ -21,7 +22,9 @@ from tpm_analytics.training.dataset import DatasetError, DatasetStats, SplitStat
 from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.model import (
     Evaluation,
+    FittedModel,
     TabularData,
+    _bootstrap,
     _bootstrap_metrics,
     _bootstrap_paired,
     _bss_train,
@@ -29,6 +32,7 @@ from tpm_analytics.training.model import (
     _calibration_stats,
     _cluster_mean_ci,
     _decision_value_rows,
+    _fit_final_calibration,
     _pooled_decision_value_rows,
     _strata_rows,
     _train_prevalence,
@@ -1668,6 +1672,7 @@ def test_bootstrap_helpers_produce_bounded_intervals() -> None:
     assert constant == pytest.approx([5.0, 5.0])
     identical = _bootstrap_paired(y, probabilities, probabilities, groups, 20, 10)
     assert identical == pytest.approx([0.0, 0.0])
+    assert _bootstrap(y, probabilities, np.full(len(y), "only"), 20, 11) == {}
 
 
 def test_cli_failure_leaves_no_output_or_temp(tmp_path: Path) -> None:
@@ -1694,6 +1699,47 @@ def test_cli_failure_leaves_no_output_or_temp(tmp_path: Path) -> None:
     assert not out.exists()
     assert (tmp_path / "nested").is_dir()
     assert not list(tmp_path.glob(".failed-run.*.tmp"))
+
+
+def test_single_class_calibration_preserves_requested_method() -> None:
+    size = 20
+    data = TabularData(
+        features={},
+        y=np.zeros(size, dtype=np.int8),
+        series=np.array([f"s{index}" for index in range(size)], dtype=object),
+        route_day=np.arange(size, dtype=np.int64),
+        price=np.full(size, 100.0),
+        future_max=np.where(np.arange(size) % 2 == 0, 135.0, 100.0),
+        future_observations=np.full(size, 2, dtype=np.int16),
+        headroom=np.full(size, 1, dtype=np.int16),
+        departure_date=np.array([f"2026-07-{index % 5 + 1:02d}" for index in range(size)], dtype=object),
+        snapshot_at=np.array([f"2026-06-{index + 1:02d}T10:00:00" for index in range(size)], dtype=object),
+        observation_era=np.full(size, "dense", dtype=object),
+        observation_week=np.full(size, "2026-W27", dtype=object),
+        check_price=np.full(size, np.nan),
+    )
+
+    class FakeModel:
+        def predict(self, rows: TabularData, headroom: int | None = None) -> np.ndarray:
+            return np.linspace(0.1, 0.9, len(rows))
+
+    config = load_config(DEFAULT_CONFIG_PATH)
+    cal_data, calibrator, method, constant, _, _, _ = _fit_final_calibration(
+        cast(FittedModel, FakeModel()), data, config
+    )
+    assert method in config.calibration.methods
+    assert constant is True
+    assert calibrator.method == "constant"
+    y_mixed = (data.future_max >= data.price * 1.3).astype(np.int8)
+    assert y_mixed.min() == 0
+    assert y_mixed.max() == 1
+    mixed = fit_calibrator(
+        FakeModel().predict(cal_data),
+        y_mixed,
+        method,
+        min_positives=config.calibration.min_positives,
+    )
+    assert mixed.method != "constant"
 
 
 def test_calibration_stats_are_reported() -> None:
