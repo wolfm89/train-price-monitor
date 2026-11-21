@@ -713,12 +713,15 @@ def _report(
     chain_v2_section = (
         "The v2 handover audit compares the v1 chains with the v2 `journey_id` sequence, per "
         "`(journey_id, service_class)` because the v2 id does not distinguish service class. "
-        "`no v1 counterpart` counts sequences whose departure has no earlier v1 series at all; "
-        "the unmatched share uses only the overlap. A v2 sequence that matches several chains is "
-        "a split; a chain matched by several v2 sequences is a merge. The v2 id hashes the full "
-        "vehicle itinerary while the v1 series key includes arrival and transfers, so part of the "
-        "split/merge rate is itinerary granularity; the parallel/sequential and same/different "
-        "itinerary columns show how much.\n\n" + chain_v2_table
+        "v1 and v2 never share a scrape, so this is a **handover diagnostic, not a link-precision "
+        "check**; the sequential splits are possible missed links. A v2-internal `journey_id` "
+        "precision/recall audit is scheduled for PR 4/7. `no v1 counterpart` counts sequences "
+        "whose departure has no earlier v1 series at all; the unmatched share uses only the "
+        "overlap. A v2 sequence that matches several chains is a split; a chain matched by several "
+        "v2 sequences is a merge. The v2 id hashes the full vehicle itinerary while the v1 series "
+        "key includes arrival and transfers, so part of the split/merge rate is itinerary "
+        "granularity; the parallel/sequential and same/different itinerary columns show how "
+        "much.\n\n" + chain_v2_table
         if chain_v2
         else "No v2 rows are present in the source; the v2 handover audit is omitted."
     )
@@ -1142,8 +1145,9 @@ By observation week (60-minute rule):
 
 A chain links a series that stops appearing to the next series with the same route, class and
 first-train number, a planned departure within 15 minutes and its first observation at the next
-route-day scrape. Links are one-to-one; the matcher maximises the number of links and tries the
-closest departure first. `link rate` is links divided by series that have a next route-day scrape
+route-day scrape. Links are one-to-one; the matcher maximises the number of links and prefers
+the closest departure, but a crossing pattern may use a predecessor's second-closest candidate to
+keep the matching maximum. `link rate` is links divided by series that have a next route-day scrape
 before departure; `series link rate` divides by all series. The chain id is used for the label
 window, the history features and the split assignment. `linked chains` counts components with at
 least two series; `identities` also counts singleton series. `strict` builds drop every candidate
