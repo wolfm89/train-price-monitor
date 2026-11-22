@@ -120,21 +120,34 @@ def _peak_rss_kb() -> int:
     return value if sys.platform != "darwin" else value // 1024
 
 
-def _git_state() -> tuple[str | None, bool | None]:
-    """Return the checkout's HEAD and dirty flag.
+def _git_state(root: Path | None = None) -> tuple[str | None, bool | None, tuple[str, ...]]:
+    """Return the checkout's HEAD, dirty flag and untracked paths outside ``analytics/``.
 
-    ``git status`` runs from the analytics directory, so a change in any module marks the run dirty.
-    The flag is conservative: a clean flag means the whole checkout matches HEAD, and a
-    false-positive dirty flag is preferred over claiming provenance the run cannot prove.
-    Unknown git state (a wheel outside a checkout) is returned as ``(None, None)``.
+    Tracked changes anywhere in the checkout, and untracked files under ``analytics/``, make the
+    run dirty. Untracked files elsewhere (for example a user's scratch document) are recorded in
+    the manifest as ``git_untracked`` but do not make the run dirty, so provenance never requires
+    moving someone else's files. Unknown git state returns ``(None, None, ())``.
     """
-    root = Path(__file__).resolve().parents[3]
+    root = root or Path(__file__).resolve().parents[3]
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
-        return sha or None, dirty
+        tracked = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root, text=True
+        ).strip()
+        untracked = tuple(
+            path
+            for path in subprocess.check_output(
+                ["git", "ls-files", "--others", "--exclude-standard"], cwd=root, text=True
+            ).splitlines()
+            if path and not path.startswith("analytics/")
+        )
+        analytics_untracked = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", "analytics"], cwd=root, text=True
+        ).strip()
+        dirty = bool(tracked) or bool(analytics_untracked)
+        return sha or None, dirty, untracked
     except OSError, subprocess.CalledProcessError:
-        return None, None
+        return None, None, ()
 
 
 def _lock_sha256() -> str | None:
@@ -1185,6 +1198,51 @@ def _profile(
         ORDER BY split, ttd_band, observation_era
         """,
     )
+    censored_band = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
+            count(*) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_observed,
+            avg(breached_within_24h) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_within_day_rate,
+            avg(breached_within_24h) FILTER (
+                WHERE label_observed AND breached_within_24h IS NOT NULL
+            ) AS labelled_within_day_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """,
+    )
+    censored_outcome = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            observation_week AS week,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
+            count(*) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_observed,
+            avg(breached_within_24h) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_within_day_rate,
+            avg(breached_within_24h) FILTER (
+                WHERE label_observed AND breached_within_24h IS NOT NULL
+            ) AS labelled_within_day_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band, observation_week
+        ORDER BY split, ttd_band, observation_week
+        """,
+    )
     a26 = _dict_rows(
         connection,
         """
@@ -1456,6 +1514,8 @@ def _profile(
         "a18": a18,
         "a19": a19,
         "a24": a24,
+        "censored_band": censored_band,
+        "censored_outcome": censored_outcome,
         "a26": a26,
         "a29": a29,
         "tier": tier,
@@ -1562,7 +1622,7 @@ def build_dataset(
 ) -> DatasetStats:
     """Build the panel, profile it and write the Parquet splits."""
     # Provenance is the checkout state when the build starts, not when it happens to finish.
-    git_sha, git_dirty = _git_state()
+    git_sha, git_dirty, git_untracked = _git_state()
     started = time.perf_counter()
     out_dir = out_dir.resolve()
     dataset_dir = out_dir / "dataset"
@@ -1630,7 +1690,7 @@ def build_dataset(
     source_inventory = _source_inventory(connection, source)
     if not source_inventory:
         warnings.append("source inventory is empty; the scanned file set is not localisable")
-    git_sha_end, git_dirty_end = _git_state()
+    git_sha_end, git_dirty_end, git_untracked_end = _git_state()
     if (git_sha_end, git_dirty_end) != (git_sha, git_dirty):
         warnings.append("git state changed during the run; the manifest keeps the start state")
     stats = replace(stats, warnings=tuple(warnings))
@@ -1669,8 +1729,10 @@ def build_dataset(
         "dataset_peak_rss_kb": _peak_rss_kb(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
+        "git_untracked": list(git_untracked),
         "git_sha_end": git_sha_end,
         "git_dirty_end": git_dirty_end,
+        "git_untracked_end": list(git_untracked_end),
         "uv_lock_sha256": _lock_sha256(),
         "cli_argv": list(cli_argv or ()),
         "threads": threads,

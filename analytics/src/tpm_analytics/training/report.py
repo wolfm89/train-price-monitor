@@ -316,6 +316,18 @@ def _report(
         for item in stats.profile.get("a24", [])
         if evaluation.evaluation_on_test or item["split"] != "test"
     ]
+    censored_band_rows = [
+        [
+            item["split"],
+            item["band"],
+            item["not_listed"],
+            item["censored_observed"],
+            _p(item.get("censored_within_day_rate")),
+            _p(item.get("labelled_within_day_rate")),
+        ]
+        for item in stats.profile.get("censored_band", [])
+        if item.get("not_listed") and (evaluation.evaluation_on_test or item["split"] != "test")
+    ]
     a26_rows = [
         [
             item["split"],
@@ -676,7 +688,10 @@ def _report(
         ["split", "week", "TTD band", "rows", "eligible share", "labelled share", "prevalence"],
         label_week_rows,
     )
-    a29_table = _table(["split", "TTD band", "rows", "within-day 5%", "next-day 5%", "crossed back 5%"], a29_rows)
+    a29_table = _table(
+        ["split", "TTD band", "rows", "within-day 5%", "next-day 5% (20-28 h)", "crossed back 5% (20-24 h)"],
+        a29_rows,
+    )
     journey_table = _table(["TTD band", "rule", "same train", "other train", "none", "journeys"], journey_rows)
     journey_week_table = _table(["week", "journeys", "same train (60 min)", "other train", "none"], journey_week_rows)
     chain_table = _table(
@@ -799,6 +814,10 @@ def _report(
             "miss-all share",
         ],
         a24_rows,
+    )
+    censored_band_table = _table(
+        ["split", "TTD band", "not listed", "observed within-24 h", "censored within-day", "labelled within-day"],
+        censored_band_rows,
     )
     a26_table = _table(
         ["split", "TTD band", "era", "rows", "scrape 10-16 h ahead", "share"],
@@ -1060,9 +1079,11 @@ def _report(
     known_limitations = (
         "## Known limitations\n\n"
         "- The label is the chain's fare at one route-day check 20-28 h after the snapshot. "
-        "Eligibility depends on the route-day scrape grid, not on the journey's own fare, so "
-        "positives and negatives are treated alike; journeys missing at the check are censored, "
-        "not scored as negatives.\n"
+        "Eligibility depends on the route-day scrape grid, not on the journey's own fare; `no_check` "
+        "rows are unrelated to the fare. `not_listed` censoring is not neutral: the within-24 h "
+        "breach rate before vanishing is higher than for labelled rows (typically 0.16-0.17 versus "
+        "0.06-0.09 in the bands with enough censored rows), so the next-day prevalence is probably "
+        "understated by about 0.1-0.3 points.\n"
         "- The 7-30 d next-day coverage remains sparse on the current v1 schedule; the paired "
         "next-day scraper is a separate plan and is not part of this run.\n"
         "- Test snapshots overlap validation-calibrate weeks unless the run used a later forward "
@@ -1156,7 +1177,9 @@ at that scrape; `censored` is `eligible - labelled`. `median/p10/p90 check lag` 
 active crossed-back and decision-value check.
 `crossed back` is the share of R24-covered rows whose within-day maximum breached but the 20-24 h
 point did not. `dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover
-only rows with a backward 23-36 h reference.
+only rows with a backward 23-36 h reference. When several chain rows share the check scrape, the
+canonical row is the highest fare (then load factor, then deterministic keys); about 0.07 % of
+labelled rows are affected.
 
 By observation era:
 
@@ -1195,6 +1218,14 @@ window. The shares use all R24-covered rows in the band and era.
 
 {a24_table}
 
+### Censoring diagnostic
+
+`not_listed` is not neutral: before a chain vanishes at the check, its within-24 h breach rate can
+be higher than the labelled rate. The table shows both rates by band; weekly detail is in
+`profile.json` under `censored_outcome`.
+
+{censored_band_table}
+
 ### Scrape 10-16 h ahead
 
 The share of snapshots with a route-day scrape 10-16 h later, by band and era. It is the
@@ -1203,6 +1234,9 @@ operational check on the next-day label's near-term coverage.
 {a26_table}
 
 ### Within-24 h diagnostic (fixed 5 %)
+
+`next-day` uses the 20-28 h check; `crossed back` uses the 20-24 h point so it stays inside the
+within-24 h maximum.
 
 {a29_table}
 
@@ -1253,7 +1287,8 @@ as the predecessor's last observation and are deliberately not chained.
 Links are decided causally: a series that is absent at a route-day scrape and has a matching
 successor there continues into that successor. If the old itinerary later returns, it becomes a
 new incarnation of the same series key (`#r` suffix), so no link depends on observations after the
-scrape that decides it. This run has {chain.get("links", 0):,} links and
+scrape that decides it. Split detection iterates to a fixed point, so a returning successor can
+also close the predecessor's gap. This run has {chain.get("links", 0):,} links and
 {chain.get("split_series", 0):,} base series split into later incarnations.
 
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and

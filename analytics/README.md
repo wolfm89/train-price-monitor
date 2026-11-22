@@ -405,10 +405,9 @@ are one-to-one and maximum-cardinality; the matcher prefers the closest departur
 pattern may use the second-closest candidate. An arrival change therefore keeps the journey; a
 different train or a shift above 15 minutes starts a new chain. The decision is causal: if the old
 itinerary later returns it becomes a new incarnation (`#r` suffix), so no link uses a later
-observation. A split is detected only when the successor is a base series at that scrape; a
-successor that is itself a later incarnation is matched by the chain but does not trigger an
-earlier split. `--strict-chains` drops ambiguous candidates; it is a sensitivity run, not the
-default.
+observation. Split detection iterates to a fixed point, so a successor that is itself a later
+incarnation can also close the predecessor's gap. `--strict-chains` drops ambiguous candidates;
+it is a sensitivity run, not the default.
 
 One population is used for training, selection, calibration, threshold and evaluation: every
 eligible row with a known next-day check fare. The future evidence tier is a diagnostic stratum,

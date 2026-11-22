@@ -968,6 +968,104 @@ def test_same_scrape_rekey_does_not_split_the_series(tmp_path: Path) -> None:
     assert stats.profile["chain"]["links"] == 0
 
 
+def _returning_successor_panel() -> list[tuple[object, ...]]:
+    departure = datetime(2026, 7, 10, 20, 0)
+    arrival = {
+        "s": datetime(2026, 7, 11, 0, 0),
+        "s2": datetime(2026, 7, 11, 0, 16),
+        "p": datetime(2026, 7, 11, 0, 30),
+    }
+    scrapes = {
+        "s": (4, 5, 7),
+        "s2": (6,),
+        "p": (5, 6, 8),
+    }
+    rows: list[tuple[object, ...]] = []
+    for series_key, days in scrapes.items():
+        for day in days:
+            rows.append(
+                (
+                    series_key,
+                    "r",
+                    departure.date(),
+                    "ICE-M",
+                    2,
+                    departure,
+                    datetime(2026, 7, day, 10, 0),
+                    80.0 if series_key == "p" else 90.0,
+                    2,
+                    arrival[series_key],
+                    0,
+                )
+            )
+    return rows
+
+
+def _build_probe_map(connection: duckdb.DuckDBPyConnection, rows: list[tuple[object, ...]], prefix: str) -> None:
+    connection.execute("DROP TABLE IF EXISTS base")
+    connection.execute(
+        """
+        CREATE TABLE base (
+            series_key TEXT, route_id TEXT, departure_date DATE, train_number TEXT,
+            service_class INTEGER, departure_planned TIMESTAMP, observed_at TIMESTAMP,
+            price_eur DOUBLE, load_factor_ordinal INTEGER, arrival_planned TIMESTAMP,
+            transfers_actual INTEGER
+        )
+        """
+    )
+    connection.executemany("INSERT INTO base VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    connection.execute("DROP TABLE IF EXISTS grid")
+    connection.execute("CREATE TABLE grid AS SELECT DISTINCT route_id, departure_date, observed_at FROM base")
+    build_chain_map(
+        connection,
+        base_view="base",
+        grid_view="grid",
+        prefix=prefix,
+        map_table=f"{prefix}_map",
+    )
+
+
+def test_returning_successor_chain_is_causal() -> None:
+    cutoff = datetime(2026, 7, 7, 10, 0)
+    full_rows = _returning_successor_panel()
+    cut_rows = [row for row in full_rows if cast(datetime, row[6]) <= cutoff]
+    connection = duckdb.connect()
+    try:
+        _build_probe_map(connection, full_rows, "full")
+        _build_probe_map(connection, cut_rows, "cut")
+        full = {
+            observed: chain
+            for series, observed, chain in connection.execute(
+                "SELECT series_key, observed_at, chain_id FROM full_map_rows "
+                "WHERE series_key = 'p' AND observed_at <= ? ORDER BY observed_at",
+                [cutoff],
+            ).fetchall()
+        }
+        cut = {
+            observed: chain
+            for series, observed, chain in connection.execute(
+                "SELECT series_key, observed_at, chain_id FROM cut_map_rows "
+                "WHERE series_key = 'p' AND observed_at <= ? ORDER BY observed_at",
+                [cutoff],
+            ).fetchall()
+        }
+        successor_chain = connection.execute(
+            "SELECT chain_id FROM full_map_rows WHERE series_key = 's' AND observed_at = ?",
+            [cutoff],
+        ).fetchone()
+        assert full == cut
+        assert successor_chain is not None
+        assert set(full.values()) == {successor_chain[0]}
+        split_series = connection.execute(
+            "SELECT count(*) FROM (SELECT base_series_key FROM full_obs_rekeyed "
+            "GROUP BY base_series_key HAVING count(DISTINCT incarnation_rank) > 1)"
+        ).fetchone()
+        assert split_series is not None
+        assert split_series[0] >= 2
+    finally:
+        connection.close()
+
+
 def test_split_requires_matching_train_and_departure(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 8, 20, 0)
     cases = (
@@ -1734,6 +1832,53 @@ def test_breach_sql_counts_an_exact_limit_as_reached() -> None:
     assert below is False
 
 
+def test_check_fare_comes_from_the_chain_successor(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 3, 20, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=80.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 10, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=81.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=82.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 12, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=85.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="chain-fare",
+            train="ICE-CF",
+            fare=99.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 12, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="chain-fare",
+            train="ICE-CF",
+            fare=98.0,
+        ),
+    ]
+    _, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    snapshot = [
+        index
+        for index, route in enumerate(predictions["route_id"])
+        if route == "chain-fare"
+        and str(predictions["snapshot_at"][index]) == "2026-07-04 10:00:00"
+        and predictions["price_eur"][index] == pytest.approx(81.0)
+    ]
+    assert snapshot
+    assert predictions["check_price_eur"][snapshot[0]] == pytest.approx(99.0)
+    assert predictions["label_observed"][snapshot[0]] is True
+    assert predictions["censor_reason"][snapshot[0]] is None
+
+
 def test_next_day_label_and_censoring(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 5, 10, 0)
     rows = [
@@ -1889,7 +2034,7 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
         )
         row = connection.execute(
             "SELECT check_at, check_lag_h, check_price_eur, cov_tail_h, cov_max_gap_h, r24_covered, "
-            "check_at_2024, check_at_2226, check_price_2024_eur, check_price_2226_eur "
+            "check_at_2024, check_at_2226, check_price_2024_eur, check_price_2226_eur, label_window_end "
             "FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00'",
             [str(tmp_path / "check-run" / "dataset" / "train.parquet")],
         ).fetchone()
@@ -1906,6 +2051,7 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     assert str(row[7]) == "2026-07-04 10:00:00"
     assert row[8] == pytest.approx(90.0)
     assert row[9] == pytest.approx(90.0)
+    assert str(row[10]) == "2026-07-04 10:00:00"  # check_at, not the nominal t+24 h (11:00)
 
 
 def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
@@ -2249,7 +2395,35 @@ def test_unknown_git_state_is_not_reported_as_clean(monkeypatch: pytest.MonkeyPa
         raise OSError("git is unavailable")
 
     monkeypatch.setattr(subprocess, "check_output", fail)
-    assert _git_state() == (None, None)
+    assert _git_state() == (None, None, ())
+
+
+def test_git_state_ignores_untracked_files_outside_analytics(tmp_path: Path) -> None:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "analytics").mkdir(parents=True)
+    (repo / "analytics" / "tracked.py").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "init"],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "docs").mkdir()
+    (repo / "docs" / "explainer.html").write_text("user work", encoding="utf-8")
+    sha, dirty, outside = _git_state(repo)
+    assert sha
+    assert dirty is False
+    assert outside == ("docs/explainer.html",)
+    (repo / "analytics" / "untracked.py").write_text("x", encoding="utf-8")
+    _, dirty, _ = _git_state(repo)
+    assert dirty is True
+    (repo / "analytics" / "untracked.py").unlink()
+    (repo / "analytics" / "tracked.py").write_text("changed", encoding="utf-8")
+    _, dirty, _ = _git_state(repo)
+    assert dirty is True
 
 
 def test_column_roles_and_source_inventory(tmp_path: Path) -> None:
@@ -2510,6 +2684,30 @@ def test_config_rejects_out_of_range_check_windows(tmp_path: Path) -> None:
         path.write_text(json.dumps(raw), encoding="utf-8")
         with pytest.raises(ConfigError):
             load_config(path)
+
+
+def test_band_positives_gate_raises(tmp_path: Path) -> None:
+    source = tmp_path / "gate.parquet"
+    _write_silver(source, _rows())
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_band_positives"] = 10**9
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        with pytest.raises(DatasetError, match="band"):
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(source), label="gate", build_id="gate", manifest_sha256=None),
+                load_config(config_path),
+                tmp_path / "gate-run",
+                run_id="gate",
+            )
+    finally:
+        connection.close()
 
 
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
@@ -3210,6 +3408,8 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         "a18",
         "a19",
         "a24",
+        "censored_band",
+        "censored_outcome",
         "a26",
         "a29",
         "tier",

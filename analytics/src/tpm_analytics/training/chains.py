@@ -303,9 +303,8 @@ def build_chain_map(
             s.departure_date,
             s.train_number,
             s.service_class,
-            s.last_departure,
             lead(o.observed_at) OVER (PARTITION BY o.series_key ORDER BY o.observed_at) AS next_obs,
-            CASE WHEN gp.next_s < s.last_departure THEN gp.next_s END AS next_s
+            CASE WHEN gp.next_s < o.departure_planned THEN gp.next_s END AS next_s
         FROM {prefix}_obs o
         JOIN {prefix}_base_series s USING (series_key)
         LEFT JOIN {prefix}_grid_points gp
@@ -317,65 +316,89 @@ def build_chain_map(
     phase_started = _phase("observations and gaps", phase_started)
     connection.execute(
         f"""
-        CREATE OR REPLACE TEMP TABLE {prefix}_split_points AS
-        SELECT DISTINCT g.series_key, g.observed_at AS gap_obs
-        FROM {prefix}_obs_gap g
-        JOIN {prefix}_base_series ns
-          ON ns.route_id = g.route_id
-         AND ns.departure_date = g.departure_date
-         AND ns.first_obs = g.next_s
-         AND ns.service_class IS NOT DISTINCT FROM g.service_class
-         AND ns.train_number IS NOT NULL
-         AND ns.train_number = g.train_number
-         AND abs(date_diff('second', ns.first_departure, g.departure_planned)) <= {LINK_TOLERANCE_SECONDS}
-        WHERE g.next_s IS NOT NULL
-          AND (g.next_obs IS NULL OR g.next_s < g.next_obs)
+        CREATE OR REPLACE TEMP TABLE {prefix}_split_points (
+            series_key VARCHAR,
+            gap_obs TIMESTAMP
+        )
         """
     )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP TABLE {prefix}_obs_rekeyed AS
-        SELECT
-            o.series_key AS base_series_key,
-            o.observed_at,
-            CASE
-                WHEN o.incarnation_rank = 0 THEN o.series_key
-                ELSE o.series_key || '#r' || CAST(o.incarnation_rank AS VARCHAR)
-            END AS series_key,
-            o.incarnation_rank
-        FROM (
+    # A split is decidable at the scrape where the successor first appears. Adding a split can
+    # create a new incarnation that is itself the successor of an earlier series, so iterate to a
+    # fixed point. The first pass sees only base series; later passes see returning incarnations.
+    for iteration in range(100):
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP TABLE {prefix}_obs_rekeyed AS
             SELECT
-                o.series_key,
+                o.series_key AS base_series_key,
                 o.observed_at,
-                count(sp.gap_obs) FILTER (WHERE sp.gap_obs < o.observed_at) AS incarnation_rank
-            FROM {prefix}_obs o
-            LEFT JOIN {prefix}_split_points sp ON sp.series_key = o.series_key
-            GROUP BY o.series_key, o.observed_at
-        ) o
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP TABLE {prefix}_series AS
-        SELECT
-            r.series_key,
-            min(c.route_id) AS route_id,
-            min(c.departure_date) AS departure_date,
-            min(c.train_number) AS train_number,
-            min(c.service_class) AS service_class,
-            min(c.departure_planned) AS departure_planned,
-            arg_min(c.departure_planned, r.observed_at) AS first_departure,
-            arg_max(c.departure_planned, r.observed_at) AS last_departure,
-            min(r.observed_at) AS first_obs,
-            max(r.observed_at) AS last_obs,
-            count(DISTINCT r.observed_at) AS observations
-        FROM {prefix}_obs_rekeyed r
-        JOIN {prefix}_canonical c
-          ON c.series_key = r.base_series_key
-         AND c.observed_at = r.observed_at
-        GROUP BY r.series_key
-        """
-    )
+                CASE
+                    WHEN o.incarnation_rank = 0 THEN o.series_key
+                    ELSE o.series_key || '#r' || CAST(o.incarnation_rank AS VARCHAR)
+                END AS series_key,
+                o.incarnation_rank
+            FROM (
+                SELECT
+                    o.series_key,
+                    o.observed_at,
+                    count(sp.gap_obs) FILTER (WHERE sp.gap_obs < o.observed_at) AS incarnation_rank
+                FROM {prefix}_obs o
+                LEFT JOIN {prefix}_split_points sp ON sp.series_key = o.series_key
+                GROUP BY o.series_key, o.observed_at
+            ) o
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP TABLE {prefix}_series AS
+            SELECT
+                r.series_key,
+                min(c.route_id) AS route_id,
+                min(c.departure_date) AS departure_date,
+                min(c.train_number) AS train_number,
+                min(c.service_class) AS service_class,
+                min(c.departure_planned) AS departure_planned,
+                arg_min(c.departure_planned, r.observed_at) AS first_departure,
+                arg_max(c.departure_planned, r.observed_at) AS last_departure,
+                min(r.observed_at) AS first_obs,
+                max(r.observed_at) AS last_obs,
+                count(DISTINCT r.observed_at) AS observations
+            FROM {prefix}_obs_rekeyed r
+            JOIN {prefix}_canonical c
+              ON c.series_key = r.base_series_key
+             AND c.observed_at = r.observed_at
+            GROUP BY r.series_key
+            """
+        )
+        before = _scalar(connection, f"SELECT count(*) FROM {prefix}_split_points")
+        connection.execute(
+            f"""
+            INSERT INTO {prefix}_split_points
+            SELECT DISTINCT g.series_key, g.observed_at
+            FROM {prefix}_obs_gap g
+            JOIN {prefix}_series ns
+              ON ns.route_id = g.route_id
+             AND ns.departure_date = g.departure_date
+             AND ns.first_obs = g.next_s
+             AND ns.service_class IS NOT DISTINCT FROM g.service_class
+             AND ns.train_number IS NOT NULL
+             AND ns.train_number = g.train_number
+             AND abs(date_diff('second', ns.first_departure, g.departure_planned)) <= {LINK_TOLERANCE_SECONDS}
+            WHERE g.next_s IS NOT NULL
+              AND (g.next_obs IS NULL OR g.next_s < g.next_obs)
+              AND NOT EXISTS (
+                  SELECT 1 FROM {prefix}_split_points sp
+                  WHERE sp.series_key = g.series_key AND sp.gap_obs = g.observed_at
+              )
+            """
+        )
+        after = _scalar(connection, f"SELECT count(*) FROM {prefix}_split_points")
+        if iteration % 10 == 0 or after == before:
+            _LOGGER.info("chain %s split iteration %d: %d -> %d", prefix, iteration, before, after)
+        if after == before:
+            break
+    else:
+        raise RuntimeError(f"{prefix} split points did not converge")
     phase_started = _phase("rekeyed series", phase_started)
     connection.execute(
         f"""

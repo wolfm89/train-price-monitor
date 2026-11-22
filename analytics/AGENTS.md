@@ -160,10 +160,10 @@ v2-only and mixed-schema input.
   successor there continues into the successor; if the old itinerary later returns, the return is
   a new incarnation of the same series key (`#r` suffix). No link depends on observations after
   the scrape that decides it. `split_series` counts base series split into at least one later
-  incarnation; the current sample has 782 split base series and 785 later incarnations.
-- Split detection currently matches a base series on the successor side. A successor that is
-  itself a later incarnation is linked by the chain but does not trigger an earlier split; this is
-  a recall gap, not a future-data leak. Do not describe the map as complete for that corner.
+  incarnation.
+- Split detection iterates to a fixed point: a successor that is itself a later incarnation can
+  also trigger the split of an earlier series. No link uses observations after the scrape that
+  decides it.
 - The v2 handover audit matches the first incarnation of each v1 series; later incarnations are
   not separate counterpart rows. Do not read its unmatched count as a link-precision measure.
 - The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and
@@ -192,6 +192,9 @@ v2-only and mixed-schema input.
   calibrator to `raw_score` and expect the stored calibrated score.
 - A clean rerun must match the per-split content digests in `dataset_manifest.json`. Do not remove
   the total `ORDER BY` in the Parquet writer.
+- `git_dirty` covers tracked changes anywhere in the checkout and untracked files under
+  `analytics/`. Untracked files elsewhere are recorded in `git_untracked` and do not make the run
+  dirty. Never move or delete a user's file to get a clean flag.
 
 Update `README.md` for schema, quality or runbook changes and
 [docs/configuration.md](../docs/configuration.md) for new environment variables.
