@@ -390,6 +390,10 @@ development folds, written to `recipe.json`, and refitted on each evaluation fol
 selection. Evaluation and sparse-era folds are scored only with `--evaluate-test`; development
 folds are always reported. The static splits remain available through
 `config/training-static.json`; their digests and metrics must match the PR 4 reference exactly.
+A series may span a cutoff because labels are purged and every feature is past-only. Long backtests
+can resume with `--cache-dir`: finished folds and the frozen recipe are checkpointed there, keyed
+by the config and recipe hashes, and the checkpoints keep report state rather than the training
+panels. Delete the cache directory to force a clean refit.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the

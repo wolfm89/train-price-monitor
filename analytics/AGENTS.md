@@ -117,7 +117,8 @@ v2-only and mixed-schema input.
   on development folds and refitted on evaluation folds without selection. Evaluation and
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
-  are past-only.
+  are past-only. `--cache-dir` resumes completed folds and the frozen recipe by config/recipe hash;
+  checkpoints hold report state only, never the train or calibration panels.
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
   `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
   (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.
