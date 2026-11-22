@@ -1082,6 +1082,47 @@ def test_returning_successor_chain_is_causal() -> None:
         connection.close()
 
 
+def test_chain_gap_stops_at_departure() -> None:
+    departure = datetime(2026, 7, 10, 20, 0)
+    rows = [
+        (
+            "p",
+            "r",
+            departure.date(),
+            "ICE-M",
+            2,
+            departure,
+            datetime(2026, 7, 8, 10, 0),
+            80.0,
+            2,
+            departure + timedelta(hours=4),
+            0,
+        ),
+        (
+            "s",
+            "r",
+            departure.date(),
+            "ICE-M",
+            2,
+            departure,
+            datetime(2026, 7, 10, 22, 0),
+            90.0,
+            2,
+            departure + timedelta(hours=4, minutes=16),
+            0,
+        ),
+    ]
+    connection = duckdb.connect()
+    try:
+        _build_probe_map(connection, cast(list[tuple[object, ...]], rows), "stop")
+        split_points = connection.execute("SELECT count(*) FROM stop_split_points").fetchone()
+        links = connection.execute("SELECT count(*) FROM stop_links").fetchone()
+        assert split_points == (0,)
+        assert links == (0,)
+    finally:
+        connection.close()
+
+
 def test_split_requires_matching_train_and_departure(tmp_path: Path) -> None:
     departure = datetime(2026, 7, 8, 20, 0)
     cases = (

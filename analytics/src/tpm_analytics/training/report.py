@@ -1092,7 +1092,8 @@ def _report(
         "rows are unrelated to the fare. `not_listed` censoring is not neutral: in the long-horizon "
         "bands (14-30 d and 7-14 d) the within-24 h breach rate before vanishing is higher than the "
         "labelled rate (see the censoring table), so the next-day prevalence is probably understated "
-        "by about 0.1-0.3 points.\n"
+        "by about 0.1-0.3 points. At 1-5 d the censored rate is lower (train 3-5 d 13.0 % vs "
+        "29.5 %), so prevalence there may be slightly overstated.\n"
         "- The 7-30 d next-day coverage remains sparse on the current v1 schedule; the paired "
         "next-day scraper is a separate plan and is not part of this run.\n"
         "- Test snapshots overlap validation-calibrate weeks unless the run used a later forward "
@@ -1186,9 +1187,9 @@ at that scrape; `censored` is `eligible - labelled`. `median/p10/p90 check lag` 
 active crossed-back and decision-value check.
 `crossed back` is the share of R24-covered rows whose within-day maximum breached but the 20-24 h
 point did not. `dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover
-only rows with a backward 23-36 h reference. When several chain rows share the check scrape, the
-later-starting series wins; price, load factor and deterministic keys break ties. About 0.07 % of
-labelled rows are affected.
+only rows with a backward 23-36 h reference. When several rows share the check scrape, same-key
+collisions take the highest fare; distinct-series collisions prefer the later-starting series, then
+price, load factor and deterministic keys. About 0.07 % of labelled rows are affected.
 
 By observation era:
 
