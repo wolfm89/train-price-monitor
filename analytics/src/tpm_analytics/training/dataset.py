@@ -128,7 +128,7 @@ def _git_state(root: Path | None = None) -> tuple[str | None, bool | None, tuple
     the manifest as ``git_untracked`` but do not make the run dirty, so provenance never requires
     moving someone else's files. Unknown git state returns ``(None, None, ())``.
     """
-    root = root or Path(__file__).resolve().parents[3]
+    root = root or Path(__file__).resolve().parents[4]
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         tracked = subprocess.check_output(
