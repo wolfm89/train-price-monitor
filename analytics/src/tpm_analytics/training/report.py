@@ -1298,7 +1298,8 @@ Links are decided causally: a series that is absent at a route-day scrape and ha
 successor there continues into that successor. If the old itinerary later returns, it becomes a
 new incarnation of the same series key (`#r` suffix), so no link depends on observations after the
 scrape that decides it. Split detection iterates to a fixed point, so a returning successor can
-also close the predecessor's gap. This run has {chain.get("links", 0):,} links and
+also close the predecessor's gap; a split is committed only when the matcher accepts the
+continuation. This run has {chain.get("links", 0):,} links and
 {chain.get("split_series", 0):,} base series split into later incarnations.
 
 This table and the duplicate table use the pre-resampling `base_sampled` panel (all TTD bands) and

@@ -162,8 +162,10 @@ v2-only and mixed-schema input.
   the scrape that decides it. `split_series` counts base series split into at least one later
   incarnation.
 - Split detection iterates to a fixed point: a successor that is itself a later incarnation can
-  also trigger the split of an earlier series. No link uses observations after the scrape that
-  decides it.
+  also trigger the split of an earlier series. A split is committed only for a continuation the
+  one-to-one matcher accepts; a candidate that loses a competing match, or is dropped by strict
+  mode, leaves the predecessor's return in its earlier incarnation. No link uses observations
+  after the scrape that decides it.
 - The v2 handover audit matches the first incarnation of each v1 series; later incarnations are
   not separate counterpart rows. Do not read its unmatched count as a link-precision measure.
 - The 15-minute series buckets are rounded, so their centres are at `:00 / :15 / :30 / :45` and

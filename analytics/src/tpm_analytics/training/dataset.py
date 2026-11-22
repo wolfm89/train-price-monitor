@@ -551,7 +551,7 @@ def _create_views(
     # One superset join against the route-day scrape grid; the check windows are filtered picks
     # from these candidates, so the grid is joined once instead of three times.
     connection.execute(
-        f"""
+        """
         CREATE OR REPLACE TEMP TABLE check_candidates AS
         SELECT
             n.series_key,
@@ -563,8 +563,8 @@ def _create_views(
         JOIN scrape_grid g
           ON g.route_id = n.route_id
          AND g.departure_date = n.departure_date
-        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL {label.check_window_hours[0]} HOUR
-                                AND n.snapshot_at + INTERVAL {label.check_window_hours[1]} HOUR
+        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
+                                AND n.snapshot_at + INTERVAL 28 HOUR
           AND g.observed_at < n.departure_planned
         """
     )
@@ -576,13 +576,6 @@ def _create_views(
         ("check_points_2024", 20, 24),
         ("check_points_2226", 22, 26),
     ):
-        window = (
-            ""
-            if (lower, upper) == (label.check_window_hours[0], label.check_window_hours[1])
-            else f"""
-            WHERE check_at BETWEEN snapshot_at + INTERVAL {lower} HOUR
-                               AND snapshot_at + INTERVAL {upper} HOUR"""
-        )
         connection.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {name} AS
@@ -596,7 +589,9 @@ def _create_views(
                 SELECT *, row_number() OVER (
                     PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
                 ) AS rn
-                FROM check_candidates{window}
+                FROM check_candidates
+                WHERE check_at BETWEEN snapshot_at + INTERVAL {lower} HOUR
+                                   AND snapshot_at + INTERVAL {upper} HOUR
             )
             WHERE rn = 1
             """
@@ -985,7 +980,7 @@ def _profile(
             avg(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible_share,
             avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
             avg(CASE WHEN eligible AND NOT label_observed THEN 1 ELSE 0 END) AS censor_share,
-            avg(CASE WHEN r24_covered THEN 1 ELSE 0 END) AS r24_share,
+            avg(r24_covered::INT) AS r24_share,
             avg(CASE WHEN r24_covered AND label_observed THEN breached_within_24h END) AS within_24h_r24_rate
         FROM sampled
         WHERE split IS NOT NULL
@@ -1063,7 +1058,9 @@ def _profile(
             avg(breached_within_24h) FILTER (WHERE label_observed AND r24_covered) AS within_24h_r24_rate,
             avg(breached_at_check_2024) FILTER (WHERE breached_at_check_2024 IS NOT NULL) AS next_day_2024_rate,
             avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate,
-            avg(crossed_and_came_back) FILTER (WHERE crossed_and_came_back IS NOT NULL) AS crossed_back_rate,
+            avg(crossed_and_came_back) FILTER (
+                WHERE crossed_and_came_back IS NOT NULL AND r24_covered
+            ) AS crossed_back_rate,
             count(*) FILTER (WHERE future_observations = 1) AS one_observations,
             count(*) FILTER (WHERE future_observations >= 2) AS two_plus,
             avg(breached_next_day) FILTER (WHERE label_observed AND future_observations = 1) AS one_prevalence,
@@ -1174,12 +1171,12 @@ def _profile(
                 s.snapshot_at,
                 s.check_at,
                 s.label_observed,
-                count(d.observed_at) FILTER (
-                    WHERE d.observed_at > s.snapshot_at
-                      AND d.observed_at <= s.snapshot_at + INTERVAL 24 HOUR
-                ) AS window_observations
+                count(d.observed_at) AS window_observations
             FROM sampled s
-            LEFT JOIN chain_dedup d ON d.chain_id = s.chain_id
+            LEFT JOIN chain_dedup d
+              ON d.chain_id = s.chain_id
+             AND d.observed_at > s.snapshot_at
+             AND d.observed_at <= s.snapshot_at + INTERVAL 24 HOUR
             WHERE s.split IS NOT NULL
               AND s.eligible
               AND s.r24_covered

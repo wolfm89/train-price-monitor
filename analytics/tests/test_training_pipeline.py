@@ -1001,7 +1001,13 @@ def _returning_successor_panel() -> list[tuple[object, ...]]:
     return rows
 
 
-def _build_probe_map(connection: duckdb.DuckDBPyConnection, rows: list[tuple[object, ...]], prefix: str) -> None:
+def _build_probe_map(
+    connection: duckdb.DuckDBPyConnection,
+    rows: list[tuple[object, ...]],
+    prefix: str,
+    *,
+    strict: bool = False,
+) -> Any:
     connection.execute("DROP TABLE IF EXISTS base")
     connection.execute(
         """
@@ -1016,12 +1022,13 @@ def _build_probe_map(connection: duckdb.DuckDBPyConnection, rows: list[tuple[obj
     connection.executemany("INSERT INTO base VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     connection.execute("DROP TABLE IF EXISTS grid")
     connection.execute("CREATE TABLE grid AS SELECT DISTINCT route_id, departure_date, observed_at FROM base")
-    build_chain_map(
+    return build_chain_map(
         connection,
         base_view="base",
         grid_view="grid",
         prefix=prefix,
         map_table=f"{prefix}_map",
+        strict=strict,
     )
 
 
@@ -1078,6 +1085,87 @@ def test_returning_successor_chain_is_causal() -> None:
         ).fetchone()
         assert split_series is not None
         assert split_series[0] >= 2
+    finally:
+        connection.close()
+
+
+def test_rejected_continuation_does_not_split_a_returning_predecessor() -> None:
+    departure = datetime(2026, 7, 10, 20, 0)
+    rows = [
+        (
+            "p1",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 6, 10, 0),
+            80.0,
+            2,
+            departure + timedelta(hours=4),
+            0,
+        ),
+        (
+            "p2",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 6, 10, 0),
+            81.0,
+            2,
+            departure + timedelta(hours=4, minutes=16),
+            0,
+        ),
+        (
+            "s",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 7, 10, 0),
+            90.0,
+            2,
+            departure + timedelta(hours=4, minutes=30),
+            0,
+        ),
+        (
+            "p1",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 8, 10, 0),
+            85.0,
+            2,
+            departure + timedelta(hours=4),
+            0,
+        ),
+        (
+            "p2",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 8, 10, 0),
+            86.0,
+            2,
+            departure + timedelta(hours=4, minutes=16),
+            0,
+        ),
+    ]
+    connection = duckdb.connect()
+    try:
+        matched = _build_probe_map(connection, cast(list[tuple[object, ...]], rows), "matched")
+        assert matched.split_series == 1
+        assert matched.links == 2  # one predecessor -> s, then s -> the winner's return
+        strict = _build_probe_map(connection, cast(list[tuple[object, ...]], rows), "strict", strict=True)
+        assert strict.split_series == 0
+        assert strict.links == 0
     finally:
         connection.close()
 
@@ -2109,6 +2197,131 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     assert row[8] == pytest.approx(90.0)
     assert row[9] == pytest.approx(90.0)
     assert str(row[10]) == "2026-07-04 10:00:00"  # check_at, not the nominal t+24 h (11:00)
+
+
+def test_r24_share_ignores_out_of_domain_rows(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    start = departure - timedelta(hours=48)
+    rows = [
+        _row(
+            observed_at=start + timedelta(hours=offset),
+            departure=departure,
+            route="r24",
+            train="ICE-R24",
+            fare=80.0 + offset / 10,
+        )
+        for offset in range(0, 25, 4)
+    ]
+    long_departure = datetime(2026, 7, 8, 10, 0)
+    rows.append(
+        _row(
+            observed_at=long_departure - timedelta(days=20),
+            departure=long_departure,
+            route="long",
+            train="ICE-LONG",
+            fare=80.0,
+        )
+    )
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"r24-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "r24.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="r24", build_id="r24", manifest_sha256=None),
+            config,
+            tmp_path / "r24-run",
+            run_id="r24",
+        )
+    finally:
+        connection.close()
+    train = next(item for item in stats.profile["coverage"] if item["split"] == "train")
+    # Two of the seven in-domain snapshots are R24-covered; the 14-30 d row is NULL and must
+    # not enter the denominator (the old CASE would have made it 2/8).
+    assert train["r24_share"] == pytest.approx(2 / 7)
+
+
+def test_narrow_primary_window_keeps_the_wider_diagnostics(tmp_path: Path) -> None:
+    snapshot = datetime(2026, 7, 3, 11, 0)
+    departure = snapshot + timedelta(hours=48)
+    rows = [
+        _row(observed_at=snapshot, departure=departure, route="narrow", train="ICE-N", fare=80.0),
+        _row(
+            observed_at=snapshot + timedelta(hours=21),
+            departure=departure,
+            route="narrow",
+            train="ICE-N",
+            fare=90.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=26),
+            departure=departure,
+            route="narrow",
+            train="ICE-N",
+            fare=95.0,
+        ),
+    ]
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 8, 10, 0),
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"narrow-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "narrow.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["label"]["check_window_hours"] = [22, 26]
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="narrow", build_id="narrow", manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "narrow-run",
+            run_id="narrow",
+        )
+        row = connection.execute(
+            "SELECT check_at, check_at_2024, check_at_2226 FROM read_parquet(?) "
+            "WHERE route_id = 'narrow' AND snapshot_at = ?",
+            [str(tmp_path / "narrow-run" / "dataset" / "train.parquet"), snapshot],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert str(row[0]) == "2026-07-04 13:00:00"  # primary 22-26 h
+    assert str(row[1]) == "2026-07-04 08:00:00"  # 20-24 h diagnostic keeps the 21 h scrape
+    assert str(row[2]) == "2026-07-04 13:00:00"  # 22-26 h diagnostic
 
 
 def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
