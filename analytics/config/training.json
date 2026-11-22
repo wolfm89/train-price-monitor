@@ -13,7 +13,9 @@
     "test_end": "2026-09-30"
   },
   "label": {
+    "estimand": "next_day_fare",
     "horizon_hours": 24,
+    "check_window_hours": [20, 28],
     "min_hours_to_departure": 24,
     "max_hours_to_departure": 720,
     "headroom_pct": [1, 5, 10, 20, 30]
@@ -49,10 +51,11 @@
     "bootstrap_cluster": "departure_date",
     "threshold_precision_floor": 0.7,
     "calibration_bins": 10,
-    "min_label_coverage": 0.8,
     "min_headroom_positives": 500,
-    "min_tier_rows": 100,
     "r24_max_tail_hours": 4,
-    "r24_max_gap_hours": 6
+    "r24_max_gap_hours": 6,
+    "min_eligible_rows": 1000,
+    "min_split_positives": 500,
+    "min_band_positives": 50
   }
 }

@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
+from tpm_analytics.training.chains import build_chain_map
 from tpm_analytics.training.cli import main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
 from tpm_analytics.training.dataset import (
@@ -29,9 +30,11 @@ from tpm_analytics.training.dataset import (
 )
 from tpm_analytics.training.features import feature_spec
 from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
+from tpm_analytics.training.labels import breach, breach_sql, cents
 from tpm_analytics.training.model import (
     Evaluation,
     FittedModel,
+    ModelError,
     TabularData,
     _bootstrap,
     _bootstrap_metrics,
@@ -166,6 +169,9 @@ def _config(tmp_path: Path) -> Path:
     raw["sample"]["sample_rate"] = 1.0
     raw["calendar"]["feature_set"] = "full"
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     path = tmp_path / "training.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     return path
@@ -212,9 +218,10 @@ def test_dataset_contract_and_null_handoff(tmp_path: Path) -> None:
     assert not np.isnan(data.features["price_rank_route_day"]).all()
     assert data.features["price_rank_missing"].sum() == 0
     assert set(np.unique(data.headroom)) <= {1, 5, 10, 20, 30}
-    expected = (data.future_max >= data.price * (1 + data.headroom / 100.0)).astype(np.int8)
+    expected = breach(data.price_cents, data.check_price_cents, data.headroom)
     assert np.array_equal(data.y, expected)
     assert (data.headroom == 1).any()
+    assert np.all(np.isfinite(data.check_price))
 
     connection = duckdb.connect()
     try:
@@ -495,7 +502,9 @@ def test_journey_successor_uses_new_series(tmp_path: Path) -> None:
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
     raw["calendar"]["feature_set"] = "none"
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     config = load_config(config_path)
     connection = duckdb.connect()
@@ -587,7 +596,9 @@ def _build_chain_dataset(
     _write_silver(source, _rows() + rows)
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -933,6 +944,377 @@ def test_chain_rejects_null_train_numbers(tmp_path: Path) -> None:
     ]
     stats, _ = _build_chain_dataset(tmp_path, rows)
     assert stats.profile["chain"]["links"] == 0
+    assert stats.profile["chain"]["split_series"] == 0
+
+
+def test_same_scrape_rekey_does_not_split_the_series(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 3, 20, 0), departure=departure, route="overlap", train="ICE-O", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="overlap", train="ICE-O", fare=82.0),
+        _row(observed_at=datetime(2026, 7, 5, 10, 0), departure=departure, route="overlap", train="ICE-O", fare=84.0),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="overlap",
+            train="ICE-O",
+            fare=99.0,
+        ),
+    ]
+    stats, _ = _build_chain_dataset(tmp_path, rows)
+    assert stats.profile["chain"]["split_series"] == 0
+    assert stats.profile["chain"]["overlap_candidates"] >= 1
+    assert stats.profile["chain"]["links"] == 0
+
+
+def _returning_successor_panel() -> list[tuple[object, ...]]:
+    departure = datetime(2026, 7, 10, 20, 0)
+    arrival = {
+        "s": datetime(2026, 7, 11, 0, 0),
+        "s2": datetime(2026, 7, 11, 0, 16),
+        "p": datetime(2026, 7, 11, 0, 30),
+    }
+    scrapes = {
+        "s": (4, 5, 7),
+        "s2": (6,),
+        "p": (5, 6, 8),
+    }
+    rows: list[tuple[object, ...]] = []
+    for series_key, days in scrapes.items():
+        for day in days:
+            rows.append(
+                (
+                    series_key,
+                    "r",
+                    departure.date(),
+                    "ICE-M",
+                    2,
+                    departure,
+                    datetime(2026, 7, day, 10, 0),
+                    80.0 if series_key == "p" else 90.0,
+                    2,
+                    arrival[series_key],
+                    0,
+                )
+            )
+    return rows
+
+
+def _build_probe_map(
+    connection: duckdb.DuckDBPyConnection,
+    rows: list[tuple[object, ...]],
+    prefix: str,
+    *,
+    strict: bool = False,
+) -> Any:
+    connection.execute("DROP TABLE IF EXISTS base")
+    connection.execute(
+        """
+        CREATE TABLE base (
+            series_key TEXT, route_id TEXT, departure_date DATE, train_number TEXT,
+            service_class INTEGER, departure_planned TIMESTAMP, observed_at TIMESTAMP,
+            price_eur DOUBLE, load_factor_ordinal INTEGER, arrival_planned TIMESTAMP,
+            transfers_actual INTEGER
+        )
+        """
+    )
+    connection.executemany("INSERT INTO base VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    connection.execute("DROP TABLE IF EXISTS grid")
+    connection.execute("CREATE TABLE grid AS SELECT DISTINCT route_id, departure_date, observed_at FROM base")
+    return build_chain_map(
+        connection,
+        base_view="base",
+        grid_view="grid",
+        prefix=prefix,
+        map_table=f"{prefix}_map",
+        strict=strict,
+    )
+
+
+def test_returning_successor_chain_is_causal() -> None:
+    cutoff = datetime(2026, 7, 7, 10, 0)
+    full_rows = _returning_successor_panel()
+    cut_rows = [row for row in full_rows if cast(datetime, row[6]) <= cutoff]
+    connection = duckdb.connect()
+    try:
+        _build_probe_map(connection, full_rows, "full")
+        _build_probe_map(connection, cut_rows, "cut")
+        full = {
+            observed: chain
+            for series, observed, chain in connection.execute(
+                "SELECT series_key, observed_at, chain_id FROM full_map_rows "
+                "WHERE series_key = 'p' AND observed_at <= ? ORDER BY observed_at",
+                [cutoff],
+            ).fetchall()
+        }
+        cut = {
+            observed: chain
+            for series, observed, chain in connection.execute(
+                "SELECT series_key, observed_at, chain_id FROM cut_map_rows "
+                "WHERE series_key = 'p' AND observed_at <= ? ORDER BY observed_at",
+                [cutoff],
+            ).fetchall()
+        }
+        successor_chain = connection.execute(
+            "SELECT chain_id FROM full_map_rows WHERE series_key = 's' AND observed_at = ?",
+            [cutoff],
+        ).fetchone()
+        full_links = set(
+            connection.execute(
+                "SELECT l.predecessor, l.successor FROM full_links l JOIN full_series s "
+                "ON s.series_key = l.successor WHERE s.first_obs <= ?",
+                [cutoff],
+            ).fetchall()
+        )
+        cut_links = set(
+            connection.execute(
+                "SELECT l.predecessor, l.successor FROM cut_links l JOIN cut_series s "
+                "ON s.series_key = l.successor WHERE s.first_obs <= ?",
+                [cutoff],
+            ).fetchall()
+        )
+        assert full == cut
+        assert full_links == cut_links
+        assert ("p", "s#r1") in full_links
+        assert successor_chain is not None
+        assert set(full.values()) == {successor_chain[0]}
+        split_series = connection.execute(
+            "SELECT count(*) FROM (SELECT base_series_key FROM full_obs_rekeyed "
+            "GROUP BY base_series_key HAVING count(DISTINCT incarnation_rank) > 1)"
+        ).fetchone()
+        assert split_series is not None
+        assert split_series[0] >= 2
+    finally:
+        connection.close()
+
+
+def test_rejected_continuation_does_not_split_a_returning_predecessor() -> None:
+    departure = datetime(2026, 7, 10, 20, 0)
+    rows = [
+        (
+            "p1",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 6, 10, 0),
+            80.0,
+            2,
+            departure + timedelta(hours=4),
+            0,
+        ),
+        (
+            "p2",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 6, 10, 0),
+            81.0,
+            2,
+            departure + timedelta(hours=4, minutes=16),
+            0,
+        ),
+        (
+            "s",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 7, 10, 0),
+            90.0,
+            2,
+            departure + timedelta(hours=4, minutes=30),
+            0,
+        ),
+        (
+            "p1",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 8, 10, 0),
+            85.0,
+            2,
+            departure + timedelta(hours=4),
+            0,
+        ),
+        (
+            "p2",
+            "r",
+            departure.date(),
+            "ICE-R",
+            2,
+            departure,
+            datetime(2026, 7, 8, 10, 0),
+            86.0,
+            2,
+            departure + timedelta(hours=4, minutes=16),
+            0,
+        ),
+    ]
+    connection = duckdb.connect()
+    try:
+        matched = _build_probe_map(connection, cast(list[tuple[object, ...]], rows), "matched")
+        assert matched.split_series == 1
+        assert matched.links == 2  # one predecessor -> s, then s -> the winner's return
+        strict = _build_probe_map(connection, cast(list[tuple[object, ...]], rows), "strict", strict=True)
+        assert strict.split_series == 0
+        assert strict.links == 0
+    finally:
+        connection.close()
+
+
+def test_chain_gap_stops_at_departure() -> None:
+    departure = datetime(2026, 7, 10, 20, 0)
+    rows = [
+        (
+            "p",
+            "r",
+            departure.date(),
+            "ICE-M",
+            2,
+            departure,
+            datetime(2026, 7, 8, 10, 0),
+            80.0,
+            2,
+            departure + timedelta(hours=4),
+            0,
+        ),
+        (
+            "s",
+            "r",
+            departure.date(),
+            "ICE-M",
+            2,
+            departure,
+            datetime(2026, 7, 10, 22, 0),
+            90.0,
+            2,
+            departure + timedelta(hours=4, minutes=16),
+            0,
+        ),
+    ]
+    connection = duckdb.connect()
+    try:
+        _build_probe_map(connection, cast(list[tuple[object, ...]], rows), "stop")
+        split_points = connection.execute("SELECT count(*) FROM stop_split_points").fetchone()
+        links = connection.execute("SELECT count(*) FROM stop_links").fetchone()
+        assert split_points == (0,)
+        assert links == (0,)
+    finally:
+        connection.close()
+
+
+def test_split_requires_matching_train_and_departure(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 8, 20, 0)
+    cases = (
+        ("different-train", "ICE-OTHER", departure),
+        ("shifted", "ICE-P", departure + timedelta(minutes=16)),
+    )
+    for name, successor_train, successor_departure in cases:
+        rows = [
+            _row(
+                observed_at=datetime(2026, 7, 5, 20, 0),
+                departure=departure,
+                route=name,
+                train="ICE-P",
+                fare=80.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 6, 20, 0),
+                departure=departure,
+                route=name,
+                train="ICE-P",
+                fare=82.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 7, 10, 0),
+                departure=successor_departure,
+                arrival_planned=successor_departure + timedelta(hours=4, minutes=16),
+                route=name,
+                train=successor_train,
+                fare=99.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 7, 12, 0),
+                departure=departure,
+                route=name,
+                train="ICE-P",
+                fare=85.0,
+            ),
+        ]
+        stats, out = _build_chain_dataset(tmp_path / name, rows)
+        assert stats.profile["chain"]["split_series"] == 0
+        predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+        by_time = {
+            str(predictions["snapshot_at"][index]): index
+            for index, route in enumerate(predictions["route_id"])
+            if route == name and predictions["price_eur"][index] in {82.0, 85.0}
+        }
+        assert (
+            predictions["chain_id"][by_time["2026-07-06 20:00:00"]]
+            == predictions["chain_id"][by_time["2026-07-07 12:00:00"]]
+        )
+
+
+def test_chain_map_is_series_level_and_row_map_is_unique() -> None:
+    connection = duckdb.connect()
+    try:
+        connection.execute(
+            """
+            CREATE TABLE base (
+                series_key TEXT, route_id TEXT, departure_date DATE, train_number TEXT,
+                service_class INTEGER, departure_planned TIMESTAMP, observed_at TIMESTAMP,
+                price_eur DOUBLE, load_factor_ordinal INTEGER, arrival_planned TIMESTAMP,
+                transfers_actual INTEGER
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO base VALUES
+                ('p', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-05 20:00:00',
+                 80.0, 2, TIMESTAMP '2026-07-09 00:00:00', 0),
+                ('p', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-06 20:00:00',
+                 82.0, 2, TIMESTAMP '2026-07-09 00:00:00', 0),
+                ('p', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-07 12:00:00',
+                 85.0, 2, TIMESTAMP '2026-07-09 00:00:00', 0),
+                ('s', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-07 10:00:00',
+                 99.0, 2, TIMESTAMP '2026-07-09 00:00:16', 0),
+                ('s', 'r', DATE '2026-07-08', 'ICE-M', 2,
+                 TIMESTAMP '2026-07-08 20:00:00', TIMESTAMP '2026-07-07 12:00:00',
+                 98.0, 2, TIMESTAMP '2026-07-09 00:00:16', 0)
+            """
+        )
+        connection.execute("CREATE TABLE grid AS SELECT DISTINCT route_id, departure_date, observed_at FROM base")
+        stats = build_chain_map(
+            connection,
+            base_view="base",
+            grid_view="grid",
+            prefix="probe",
+            map_table="probe_map",
+        )
+        assert stats.base_series == 2
+        assert stats.split_series == 1
+        assert connection.execute("SELECT count(*) FROM probe_map").fetchone() == (2,)
+        assert connection.execute("SELECT count(*) FROM probe_map_rows").fetchone() == (5,)
+        duplicates = connection.execute(
+            "SELECT count(*) FROM (SELECT series_key, observed_at FROM probe_map_rows "
+            "GROUP BY 1, 2 HAVING count(*) > 1)"
+        ).fetchone()
+        assert duplicates == (0,)
+    finally:
+        connection.close()
 
 
 def test_chain_does_not_cross_departure_date(tmp_path: Path) -> None:
@@ -1078,6 +1460,7 @@ def test_chain_rejects_different_train_and_large_shift(tmp_path: Path) -> None:
         before = next(index for index in route_rows if str(predictions["snapshot_at"][index]) == "2026-07-04 20:00:00")
         assert predictions["future_max_fare_24h"][before] is None
         assert stats.profile["chain"]["links"] == 0
+        assert stats.profile["chain"]["split_series"] == 0
 
 
 def test_chain_matching_prioritises_cardinality_over_closest_candidate(tmp_path: Path) -> None:
@@ -1178,7 +1561,7 @@ def test_resample_keeps_one_row_per_chain_bin(tmp_path: Path) -> None:
     indexes = [index for index, route in enumerate(predictions["route_id"]) if route == "matchbin"]
     in_bin = [index for index in indexes if predictions["bin_index"][index] == 31]
     assert len(in_bin) == 1
-    assert str(predictions["snapshot_at"][in_bin[0]]) == "2026-07-05 12:45:00"
+    assert str(predictions["snapshot_at"][in_bin[0]]) == "2026-07-05 12:30:00"
 
 
 def test_series_key_bucket_edges_round_to_the_half_minute() -> None:
@@ -1317,7 +1700,9 @@ def test_journey_next_scrape_stops_at_departure(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1337,7 +1722,7 @@ def test_journey_next_scrape_stops_at_departure(tmp_path: Path) -> None:
     assert journey["groups"] == []
 
 
-def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
+def test_evaluate_test_uses_one_population(tmp_path: Path) -> None:
     source = tmp_path / "mixed-tier.parquet"
     rows = _rows()
     rows.extend(
@@ -1382,8 +1767,9 @@ def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
     _write_silver(source, rows)
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_tier_rows"] = 1
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     out = tmp_path / "mixed-run"
     assert (
@@ -1402,10 +1788,334 @@ def test_evaluate_test_with_mixed_evidence_tier(tmp_path: Path) -> None:
     )
     metrics = json.loads((out / "metrics.json").read_text())
     assert metrics["evaluation"]["evaluation_on_test"] is True
-    assert metrics["evaluation"]["metrics_all"] is not None
-    assert metrics["evaluation"]["evaluation_tier"] == "two_plus_observations"
+    assert metrics["evaluation"]["metrics_all"] is None
+    assert metrics["evaluation"]["evaluation_tier"] == "all_labelled_rows"
     assert metrics["evaluation"]["evaluation_tier_rows"] >= 1
+    calibration_split = next(item for item in metrics["dataset"]["splits"] if item["split"] == "validation_calibrate")
+    test_split = next(item for item in metrics["dataset"]["splits"] if item["split"] == "test")
+    assert metrics["evaluation"]["calibration_rows"] == calibration_split["labelled"]
+    assert metrics["evaluation"]["evaluation_tier_rows"] == test_split["labelled"]
+    assert any(item["split"] == "test" for item in metrics["dataset"]["splits"])
+    assert "test" in metrics["evaluation"]["split_sizes"]
     assert (out / "predictions" / "test.parquet").is_file()
+
+
+def test_integer_cent_label_counts_an_exact_limit_as_reached() -> None:
+    assert breach(np.array([10_000]), np.array([10_100]), np.array([1])).tolist() == [1]
+    assert breach(np.array([10_000]), np.array([10_099]), np.array([1])).tolist() == [0]
+    assert cents(np.array([100.0, 101.01, np.nan])).tolist() == [10_000, 10_101, -1]
+
+
+def test_a29_fixed_five_percent_uses_fixed_five(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    snapshot = datetime(2026, 7, 3, 10, 0)
+    rows = [
+        _row(observed_at=snapshot, departure=departure, route="a29", train="ICE-A29", fare=100.0),
+        _row(
+            observed_at=snapshot + timedelta(hours=4),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=100.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=8),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=12),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=16),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=106.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=20),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=24),
+            departure=departure,
+            route="a29",
+            train="ICE-A29",
+            fare=104.0,
+        ),
+    ]
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 8, 10, 0),
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"a29-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "a29.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="a29", build_id="a29", manifest_sha256=None),
+            config,
+            tmp_path / "a29-run",
+            run_id="a29",
+        )
+    finally:
+        connection.close()
+    a29 = [item for item in stats.profile["a29"] if item["split"] == "train" and item["band"] == "1-3d"]
+    assert len(a29) == 1
+    assert a29[0]["rows"] >= 1
+    assert a29[0]["within_day_rate"] == pytest.approx(1.0)
+    assert a29[0]["next_day_rate"] == pytest.approx(0.0)
+    assert a29[0]["crossed_back_rate"] == pytest.approx(1.0)
+
+
+def test_dataset_label_counts_an_exact_limit_as_reached(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    snapshot = datetime(2026, 7, 3, 10, 0)
+    rows: list[dict[str, object]] = []
+    for index in range(50):
+        rows.append(
+            _row(
+                observed_at=snapshot,
+                departure=departure,
+                route="exact-limit",
+                train=f"ICE-E{index}",
+                fare=90.0,
+            )
+        )
+        rows.append(
+            _row(
+                observed_at=snapshot + timedelta(hours=24),
+                departure=departure,
+                route="exact-limit",
+                train=f"ICE-E{index}",
+                fare=99.0,
+            )
+        )
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 8, 10, 0),
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"exact-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "exact.parquet"
+    _write_silver(source, rows)
+    config = load_config(_config(tmp_path))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="exact", build_id="exact", manifest_sha256=None),
+            config,
+            tmp_path / "exact-run",
+            run_id="exact",
+        )
+        labelled = connection.execute(
+            "SELECT headroom_pct, breached_next_day, count(*) FROM read_parquet(?) "
+            "WHERE route_id = 'exact-limit' AND snapshot_at = TIMESTAMP '2026-07-03 10:00:00' "
+            "GROUP BY 1, 2 ORDER BY 1, 2",
+            [str(tmp_path / "exact-run" / "dataset" / "train.parquet")],
+        ).fetchall()
+    finally:
+        connection.close()
+    by_headroom: dict[int, dict[int, int]] = {}
+    for headroom, label, count in labelled:
+        by_headroom.setdefault(int(headroom), {})[int(label)] = int(count)
+    assert by_headroom[10].get(1, 0) > 0  # 99.00 exactly equals 90.00 * 1.10 in cents
+    assert by_headroom[10].get(0, 0) == 0
+    assert by_headroom[20].get(0, 0) > 0
+    assert by_headroom[30].get(0, 0) > 0
+
+
+def test_breach_sql_counts_an_exact_limit_as_reached() -> None:
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            f"SELECT {breach_sql('9900', '9000', '10')}, {breach_sql('9899', '9000', '10')}"
+        ).fetchone()
+        assert row is not None
+        exact, below = row
+    finally:
+        connection.close()
+    assert exact is True
+    assert below is False
+
+
+def test_check_fare_comes_from_the_chain_successor(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 6, 20, 0)
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 3, 20, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=80.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 10, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=81.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 4, 20, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=82.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 12, 0), departure=departure, route="chain-fare", train="ICE-CF", fare=85.0
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="chain-fare",
+            train="ICE-CF",
+            fare=99.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 5, 12, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="chain-fare",
+            train="ICE-CF",
+            fare=98.0,
+        ),
+    ]
+    _, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    snapshot = [
+        index
+        for index, route in enumerate(predictions["route_id"])
+        if route == "chain-fare"
+        and str(predictions["snapshot_at"][index]) == "2026-07-04 10:00:00"
+        and predictions["price_eur"][index] == pytest.approx(81.0)
+    ]
+    assert snapshot
+    assert predictions["check_price_eur"][snapshot[0]] == pytest.approx(99.0)
+    assert predictions["label_observed"][snapshot[0]] is True
+    assert predictions["censor_reason"][snapshot[0]] is None
+
+
+def test_next_day_label_and_censoring(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 3, 10, 0), departure=departure, route="censor", train="ICE-A", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 3, 10, 0), departure=departure, route="censor", train="ICE-B", fare=70.0),
+        _row(observed_at=datetime(2026, 7, 4, 10, 0), departure=departure, route="censor", train="ICE-B", fare=75.0),
+        _row(observed_at=datetime(2026, 7, 3, 10, 0), departure=departure, route="nocheck", train="ICE-C", fare=60.0),
+    ]
+    _, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    by_route = {}
+    for index, route in enumerate(predictions["route_id"]):
+        by_route.setdefault(route, []).append(index)
+    labelled = [
+        index
+        for index in by_route["censor"]
+        if predictions["price_eur"][index] == pytest.approx(70.0)
+        and str(predictions["snapshot_at"][index]) == "2026-07-03 10:00:00"
+    ]
+    censored = [
+        index
+        for index in by_route["censor"]
+        if predictions["price_eur"][index] == pytest.approx(80.0)
+        and str(predictions["snapshot_at"][index]) == "2026-07-03 10:00:00"
+    ]
+    assert labelled
+    assert censored
+    later_b = [
+        index
+        for index in by_route["censor"]
+        if predictions["price_eur"][index] == pytest.approx(75.0)
+        and str(predictions["snapshot_at"][index]) == "2026-07-04 10:00:00"
+    ]
+    assert later_b
+    assert predictions["eligible"][later_b[0]] is False
+    assert predictions["eligible"][labelled[0]] is True
+    assert predictions["label_observed"][labelled[0]] is True
+    assert predictions["check_price_eur"][labelled[0]] == pytest.approx(75.0)
+    assert str(predictions["label_window_end"][labelled[0]]) == "2026-07-04 10:00:00"
+    assert predictions["eligible"][censored[0]] is True
+    assert predictions["label_observed"][censored[0]] is False
+    assert predictions["breached_next_day"][censored[0]] is None
+    assert predictions["censor_reason"][censored[0]] == "not_listed"
+    assert str(predictions["label_window_end"][censored[0]]) == "2026-07-04 10:00:00"
+    nocheck = by_route["nocheck"][0]
+    assert predictions["eligible"][nocheck] is False
+    assert predictions["label_observed"][nocheck] is False
+    assert predictions["censor_reason"][nocheck] == "no_check"
+    assert predictions["breached_next_day"][nocheck] is None
+    assert predictions["fare_lost"][nocheck] is False
+
+
+def test_chain_links_causally_and_splits_a_later_return(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 8, 20, 0)
+    rows = [
+        _row(observed_at=datetime(2026, 7, 5, 20, 0), departure=departure, route="causal", train="ICE-C", fare=80.0),
+        _row(observed_at=datetime(2026, 7, 6, 20, 0), departure=departure, route="causal", train="ICE-C", fare=82.0),
+        _row(
+            observed_at=datetime(2026, 7, 7, 10, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="causal",
+            train="ICE-C",
+            fare=99.0,
+        ),
+        _row(observed_at=datetime(2026, 7, 7, 12, 0), departure=departure, route="causal", train="ICE-C", fare=85.0),
+        _row(
+            observed_at=datetime(2026, 7, 7, 12, 0),
+            departure=departure,
+            arrival_planned=departure + timedelta(hours=4, minutes=16),
+            route="causal",
+            train="ICE-C",
+            fare=98.0,
+        ),
+    ]
+    stats, out = _build_chain_dataset(tmp_path, rows)
+    predictions = pq.read_table(out / "dataset" / "train.parquet").to_pydict()
+    causal_rows = [index for index, route in enumerate(predictions["route_id"]) if route == "causal"]
+    assert len(causal_rows) == 5  # five snapshots, with no join fan-out
+    by_time = {
+        (str(predictions["snapshot_at"][index]), float(predictions["price_eur"][index])): index for index in causal_rows
+    }
+    assert (
+        predictions["chain_id"][by_time[("2026-07-06 20:00:00", 82.0)]]
+        == predictions["chain_id"][by_time[("2026-07-07 10:00:00", 99.0)]]
+    )
+    assert (
+        predictions["chain_id"][by_time[("2026-07-07 12:00:00", 85.0)]]
+        != predictions["chain_id"][by_time[("2026-07-06 20:00:00", 82.0)]]
+    )
+    assert stats.profile["chain"]["split_series"] >= 1
+    assert stats.profile["chain"]["links"] >= 1
 
 
 def test_check_grid_and_coverage(tmp_path: Path) -> None:
@@ -1453,7 +2163,9 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     config = load_config(config_path)
     connection = duckdb.connect()
@@ -1467,7 +2179,7 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
         )
         row = connection.execute(
             "SELECT check_at, check_lag_h, check_price_eur, cov_tail_h, cov_max_gap_h, r24_covered, "
-            "check_at_2028, check_at_2226, check_price_2028_eur, check_price_2226_eur "
+            "check_at_2024, check_at_2226, check_price_2024_eur, check_price_2226_eur, label_window_end "
             "FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00'",
             [str(tmp_path / "check-run" / "dataset" / "train.parquet")],
         ).fetchone()
@@ -1484,6 +2196,132 @@ def test_check_grid_and_coverage(tmp_path: Path) -> None:
     assert str(row[7]) == "2026-07-04 10:00:00"
     assert row[8] == pytest.approx(90.0)
     assert row[9] == pytest.approx(90.0)
+    assert str(row[10]) == "2026-07-04 10:00:00"  # check_at, not the nominal t+24 h (11:00)
+
+
+def test_r24_share_ignores_out_of_domain_rows(tmp_path: Path) -> None:
+    departure = datetime(2026, 7, 5, 10, 0)
+    start = departure - timedelta(hours=48)
+    rows = [
+        _row(
+            observed_at=start + timedelta(hours=offset),
+            departure=departure,
+            route="r24",
+            train="ICE-R24",
+            fare=80.0 + offset / 10,
+        )
+        for offset in range(0, 25, 4)
+    ]
+    long_departure = datetime(2026, 7, 8, 10, 0)
+    rows.append(
+        _row(
+            observed_at=long_departure - timedelta(days=20),
+            departure=long_departure,
+            route="long",
+            train="ICE-LONG",
+            fare=80.0,
+        )
+    )
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"r24-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "r24.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="r24", build_id="r24", manifest_sha256=None),
+            config,
+            tmp_path / "r24-run",
+            run_id="r24",
+        )
+    finally:
+        connection.close()
+    train = next(item for item in stats.profile["coverage"] if item["split"] == "train")
+    # Two of the seven in-domain snapshots are R24-covered; the 14-30 d row is NULL and must
+    # not enter the denominator (the old CASE would have made it 2/8).
+    assert train["r24_share"] == pytest.approx(2 / 7)
+
+
+def test_narrow_primary_window_keeps_the_wider_diagnostics(tmp_path: Path) -> None:
+    snapshot = datetime(2026, 7, 3, 11, 0)
+    departure = snapshot + timedelta(hours=48)
+    rows = [
+        _row(observed_at=snapshot, departure=departure, route="narrow", train="ICE-N", fare=80.0),
+        _row(
+            observed_at=snapshot + timedelta(hours=21),
+            departure=departure,
+            route="narrow",
+            train="ICE-N",
+            fare=90.0,
+        ),
+        _row(
+            observed_at=snapshot + timedelta(hours=26),
+            departure=departure,
+            route="narrow",
+            train="ICE-N",
+            fare=95.0,
+        ),
+    ]
+    for index, split_departure in enumerate(
+        (
+            datetime(2026, 7, 8, 10, 0),
+            datetime(2026, 7, 16, 10, 0),
+            datetime(2026, 7, 23, 10, 0),
+            datetime(2026, 7, 30, 10, 0),
+        )
+    ):
+        rows.append(
+            _row(
+                observed_at=split_departure - timedelta(days=4),
+                departure=split_departure,
+                route=f"narrow-filler-{index}",
+                train=f"ICE-F{index}",
+                fare=80.0,
+            )
+        )
+    source = tmp_path / "narrow.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["label"]["check_window_hours"] = [22, 26]
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="narrow", build_id="narrow", manifest_sha256=None),
+            load_config(config_path),
+            tmp_path / "narrow-run",
+            run_id="narrow",
+        )
+        row = connection.execute(
+            "SELECT check_at, check_at_2024, check_at_2226 FROM read_parquet(?) "
+            "WHERE route_id = 'narrow' AND snapshot_at = ?",
+            [str(tmp_path / "narrow-run" / "dataset" / "train.parquet"), snapshot],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert str(row[0]) == "2026-07-04 13:00:00"  # primary 22-26 h
+    assert str(row[1]) == "2026-07-04 08:00:00"  # 20-24 h diagnostic keeps the 21 h scrape
+    assert str(row[2]) == "2026-07-04 13:00:00"  # 22-26 h diagnostic
 
 
 def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
@@ -1523,6 +2361,38 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
                 train="ICE-LATE",
                 fare=90.0,
             ),
+            _row(observed_at=snapshot, departure=departure, route="atearly", train="ICE-20", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=20),
+                departure=departure,
+                route="atearly",
+                train="ICE-20",
+                fare=90.0,
+            ),
+            _row(observed_at=snapshot, departure=departure, route="atlate", train="ICE-28", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=28),
+                departure=departure,
+                route="atlate",
+                train="ICE-28",
+                fare=90.0,
+            ),
+            _row(observed_at=snapshot, departure=departure, route="tooearly", train="ICE-EARLY", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=19),
+                departure=departure,
+                route="tooearly",
+                train="ICE-EARLY",
+                fare=90.0,
+            ),
+            _row(observed_at=snapshot, departure=departure, route="toolate", train="ICE-LATE", fare=80.0),
+            _row(
+                observed_at=snapshot + timedelta(hours=29),
+                departure=departure,
+                route="toolate",
+                train="ICE-LATE",
+                fare=90.0,
+            ),
             _row(
                 observed_at=datetime(2026, 7, 15, 10, 0),
                 departure=datetime(2026, 7, 16, 10, 0),
@@ -1548,7 +2418,9 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1560,8 +2432,8 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
             run_id="windows",
         )
         rows = connection.execute(
-            "SELECT route_id, check_at, check_at_2028, check_at_2226, "
-            "check_price_2028_eur, check_price_2226_eur FROM read_parquet(?) "
+            "SELECT route_id, check_at, check_at_2024, check_at_2226, "
+            "check_price_eur, check_price_2024_eur, check_price_2226_eur FROM read_parquet(?) "
             "WHERE snapshot_at = TIMESTAMP '2026-07-03 11:00:00' ORDER BY route_id",
             [str(tmp_path / "windows-run" / "dataset" / "train.parquet")],
         ).fetchall()
@@ -1569,23 +2441,38 @@ def test_check_windows_distinguish_late_checks(tmp_path: Path) -> None:
         connection.close()
     by_route = {row[0]: row for row in rows}
     only25 = by_route["only25"]
-    assert only25[1] is None
-    assert str(only25[2]) == "2026-07-04 12:00:00"
+    assert str(only25[1]) == "2026-07-04 12:00:00"
+    assert only25[2] is None
     assert str(only25[3]) == "2026-07-04 12:00:00"
     assert only25[4] == pytest.approx(90.0)
-    assert only25[5] == pytest.approx(90.0)
+    assert only25[5] is None
+    assert only25[6] == pytest.approx(90.0)
     only265 = by_route["only265"]
-    assert only265[1] is None
-    assert str(only265[2]) == "2026-07-04 13:30:00"
+    assert str(only265[1]) == "2026-07-04 13:30:00"
+    assert only265[2] is None
     assert only265[3] is None
     assert only265[4] == pytest.approx(95.0)
     assert only265[5] is None
+    assert only265[6] is None
     after = by_route["after"]
     assert after[1] is None
     assert after[2] is None
     assert after[3] is None
     assert after[4] is None
     assert after[5] is None
+    assert after[6] is None
+    for route in ("tooearly", "toolate"):
+        row = by_route[route]
+        assert row[1] is None
+        assert row[2] is None
+        assert row[3] is None
+        assert row[4] is None
+    atearly = by_route["atearly"]
+    assert str(atearly[1]) == "2026-07-04 07:00:00"
+    assert atearly[4] == pytest.approx(90.0)
+    atlate = by_route["atlate"]
+    assert str(atlate[1]) == "2026-07-04 15:00:00"
+    assert atlate[4] == pytest.approx(90.0)
 
 
 def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
@@ -1636,7 +2523,9 @@ def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1648,16 +2537,15 @@ def test_check_grid_uses_microsecond_distance(tmp_path: Path) -> None:
             run_id="microseconds",
         )
         row = connection.execute(
-            "SELECT check_at, check_at_2028, check_price_2028_eur FROM read_parquet(?) "
+            "SELECT check_at, check_price_eur FROM read_parquet(?) "
             "WHERE route_id = 'subsecond' AND snapshot_at = TIMESTAMP '2026-07-03 10:00:00.900'",
             [str(tmp_path / "microseconds-run" / "dataset" / "train.parquet")],
         ).fetchone()
     finally:
         connection.close()
     assert row is not None
-    assert str(row[0]) == "2026-07-04 10:00:00.100000"
-    assert str(row[1]) == "2026-07-04 10:00:01"
-    assert row[2] == pytest.approx(96.0)
+    assert str(row[0]) == "2026-07-04 10:00:01"
+    assert row[1] == pytest.approx(96.0)
 
 
 def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
@@ -1707,7 +2595,9 @@ def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
     )
     config_path = _config(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["report"]["min_label_coverage"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path.write_text(json.dumps(raw))
     connection = duckdb.connect()
     try:
@@ -1719,8 +2609,7 @@ def test_check_grid_tie_prefers_earlier_scrape(tmp_path: Path) -> None:
             run_id="tie",
         )
         row = connection.execute(
-            "SELECT check_at_2028, check_price_2028_eur FROM read_parquet(?) "
-            "WHERE snapshot_at = TIMESTAMP '2026-07-03 14:00:00'",
+            "SELECT check_at, check_price_eur FROM read_parquet(?) WHERE snapshot_at = TIMESTAMP '2026-07-03 14:00:00'",
             [str(tmp_path / "tie-run" / "dataset" / "train.parquet")],
         ).fetchone()
     finally:
@@ -1776,7 +2665,40 @@ def test_unknown_git_state_is_not_reported_as_clean(monkeypatch: pytest.MonkeyPa
         raise OSError("git is unavailable")
 
     monkeypatch.setattr(subprocess, "check_output", fail)
-    assert _git_state() == (None, None)
+    assert _git_state() == (None, None, ())
+
+
+def test_git_state_ignores_untracked_files_outside_analytics(tmp_path: Path) -> None:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "analytics").mkdir(parents=True)
+    (repo / "docs").mkdir()
+    (repo / "analytics" / "tracked.py").write_text("x", encoding="utf-8")
+    (repo / "docs" / "tracked.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "init"],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "docs" / "explainer.html").write_text("user work", encoding="utf-8")
+    sha, dirty, outside = _git_state(repo)
+    assert sha
+    assert dirty is False
+    assert outside == ("docs/explainer.html",)
+    (repo / "analytics" / "untracked.py").write_text("x", encoding="utf-8")
+    _, dirty, _ = _git_state(repo)
+    assert dirty is True
+    (repo / "analytics" / "untracked.py").unlink()
+    (repo / "analytics" / "tracked.py").write_text("changed", encoding="utf-8")
+    _, dirty, _ = _git_state(repo)
+    assert dirty is True
+    (repo / "analytics" / "tracked.py").write_text("x", encoding="utf-8")
+    (repo / "docs" / "tracked.txt").write_text("changed", encoding="utf-8")
+    _, dirty, _ = _git_state(repo)
+    assert dirty is True
 
 
 def test_column_roles_and_source_inventory(tmp_path: Path) -> None:
@@ -1835,7 +2757,9 @@ def test_future_mutation_changes_label_not_features(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
-    raw["report"]["min_label_coverage"] = 0.0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path = tmp_path / "future.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -1900,6 +2824,18 @@ def test_train_evaluate_is_permutation_invariant(tmp_path: Path) -> None:
     assert first_digest == second_digest
 
 
+def test_load_split_rejects_a_corrupted_label(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    source = out / "dataset" / "train.parquet"
+    broken = tmp_path / "broken.parquet"
+    table = pq.read_table(source)
+    payload = table.to_pydict()
+    payload["breached_next_day"][0] = 1 - payload["breached_next_day"][0]
+    pq.write_table(pa.table(payload), broken)
+    with pytest.raises(ModelError, match="disagree"):
+        load_split(broken, feature_spec("full"))
+
+
 def test_calibrator_outputs_are_bounded() -> None:
     rng = np.random.default_rng(5)
     raw = rng.random(1000)
@@ -1943,7 +2879,9 @@ def test_empty_configured_split_fails_cleanly(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
-    raw["report"]["min_label_coverage"] = 0.0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path = tmp_path / "empty-split.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -1988,7 +2926,10 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
-    raw["report"]["min_label_coverage"] = 1.0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 1
     config_path = tmp_path / "coverage-gate.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -1996,18 +2937,52 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     out = tmp_path / "reusable-run"
     connection = duckdb.connect()
     try:
-        with pytest.raises(DatasetError, match="labelled rows"):
+        with pytest.raises(DatasetError, match="eligible rows"):
             build_dataset(connection, spec, config, out, run_id="reusable")
     finally:
         connection.close()
     assert not out.exists()
-    permissive = replace(config, report=replace(config.report, min_label_coverage=0.0))
+    permissive = replace(config, report=replace(config.report, min_eligible_rows=0))
     connection = duckdb.connect()
     try:
         build_dataset(connection, spec, permissive, out, run_id="reusable")
     finally:
         connection.close()
     assert (out / "dataset" / "train.parquet").is_file()
+
+
+def test_config_rejects_out_of_range_check_windows(tmp_path: Path) -> None:
+    for window in ([19, 28], [20, 29], [20, 21], [20], [20, "28"]):
+        raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+        raw["label"]["check_window_hours"] = window
+        path = tmp_path / f"window-{window}.json"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(ConfigError):
+            load_config(path)
+
+
+def test_band_positives_gate_raises(tmp_path: Path) -> None:
+    source = tmp_path / "gate.parquet"
+    _write_silver(source, _rows())
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_band_positives"] = 10**9
+    config_path.write_text(json.dumps(raw))
+    connection = duckdb.connect()
+    try:
+        with pytest.raises(DatasetError, match="band"):
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(source), label="gate", build_id="gate", manifest_sha256=None),
+                load_config(config_path),
+                tmp_path / "gate-run",
+                run_id="gate",
+            )
+    finally:
+        connection.close()
 
 
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
@@ -2045,6 +3020,13 @@ def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -
                     train=f"ICE{index}",
                     fare=110.0,
                 ),
+                _row(
+                    observed_at=departure - timedelta(hours=6),
+                    departure=departure,
+                    route=f"r{index}",
+                    train=f"ICE{index}",
+                    fare=120.0,
+                ),
             ]
         )
     _write_silver(source, rows)
@@ -2053,6 +3035,9 @@ def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path = tmp_path / "window.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -2069,7 +3054,8 @@ def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -
         connection.close()
     data = load_split(tmp_path / "window-run" / "dataset" / "train.parquet", feature_spec("none"))
     assert len(data) == 1
-    assert float(data.future_max[0]) == 110.0
+    assert float(data.check_price[0]) == 120.0
+    assert float(data.future_max[0]) == 120.0
 
 
 def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
@@ -2141,7 +3127,9 @@ def test_price_change_uses_raw_24h_reference(tmp_path: Path) -> None:
     raw["calendar"]["feature_set"] = "none"
     raw["sample"]["sample_rate"] = 1.0
     raw["report"]["min_headroom_positives"] = 0
-    raw["report"]["min_label_coverage"] = 0.0
+    raw["report"]["min_eligible_rows"] = 0
+    raw["report"]["min_split_positives"] = 0
+    raw["report"]["min_band_positives"] = 0
     config_path = tmp_path / "lag.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     config = load_config(config_path)
@@ -2216,8 +3204,9 @@ def _evaluation(
             "headroom_monotonic": True,
         },
         metrics_all=None,
-        evaluation_tier="two_plus_observations",
+        evaluation_tier="all_labelled_rows",
         evaluation_tier_rows=1_000,
+        calibration_rows=1_000,
         evaluation_split="test" if evaluation_on_test else "validation_calibrate",
         evaluation_on_test=evaluation_on_test,
         calibration_prevalence=calibration_prevalence,
@@ -2240,21 +3229,27 @@ def _stats() -> DatasetStats:
         route_days=10,
         splits=(
             SplitStats(
-                "train", rows=1_000, series=100, route_days=10, labelled=1_000, positives=240, positive_rate=0.24
+                "train",
+                rows=1_000,
+                series=100,
+                route_days=10,
+                eligible=1_000,
+                labelled=1_000,
+                positives=240,
+                positive_rate=0.24,
             ),
         ),
         duration_seconds=1.0,
     )
 
 
-def test_train_prevalence_matches_evaluated_tier() -> None:
+def test_train_prevalence_uses_one_population() -> None:
     train = _tabular(
         y=np.array([1, 0, 1, 0], dtype=np.int8),
         future_observations=np.array([1, 3, 3, 5], dtype=np.int16),
         headroom=np.array([1, 5, 10, 5], dtype=np.int32),
     )
-    assert _train_prevalence(train, "all_labelled_rows") == pytest.approx(0.5)
-    assert _train_prevalence(train, "two_plus_observations") == pytest.approx(1 / 3)
+    assert _train_prevalence(train) == pytest.approx(0.5)
 
 
 def test_bss_train_uses_matching_train_prevalence() -> None:
@@ -2585,7 +3580,10 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert profile_json["profile"]["cohort"]
     assert profile_json["profile"]["label"]
     assert profile_json["profile"]["journey"]["total_journeys"] >= 0
-    assert profile_json["profile"]["two_plus_week"] is not None
+    assert profile_json["profile"]["a18"]
+    assert profile_json["profile"]["a19"]
+    assert profile_json["profile"]["a26"]
+    assert "a24" in profile_json["profile"]
     assert profile_json["profile"]["label_era"]
     assert profile_json["profile"]["label_week"]
     assert all("successor_60" in group for group in profile_json["profile"]["journey"]["groups"])
@@ -2620,7 +3618,18 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
         }
     finally:
         connection.close()
-    assert {"check_at", "check_lag_h", "cov_tail_h", "cov_max_gap_h", "breached_at_check"} <= columns
+    assert {
+        "check_at",
+        "check_lag_h",
+        "cov_tail_h",
+        "cov_max_gap_h",
+        "breached_next_day",
+        "eligible",
+        "censor_reason",
+        "price_cents",
+        "check_price_cents",
+        "breached_within_24h",
+    } <= columns
     report_text = (run_out / "report.md").read_text()
     assert "Known limitations" in report_text
     assert "Prevalence:" in report_text
@@ -2652,6 +3661,38 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     assert "model.joblib" in manifest_json["artifact_sha256"]
     assert "column_roles.json" in manifest_json["artifact_sha256"]
     assert manifest_json["runtime"]["wall_seconds"] > 0
+    assert manifest_json["git_sha"]
+    assert manifest_json["git_sha_end"]
+    assert isinstance(manifest_json["git_dirty"], bool)
+    assert all(item["split"] != "test" for item in metrics["dataset"]["splits"])
+    splits = metrics["dataset"]["splits"]
+    assert metrics["dataset"]["rows"] == sum(item["rows"] for item in splits)
+    assert metrics["dataset"]["labelled_rows"] == sum(item["labelled"] for item in splits)
+    assert metrics["dataset"]["series"] == sum(item["series"] for item in splits)
+    assert metrics["dataset"]["route_days"] == sum(item["route_days"] for item in splits)
+    assert "test" not in metrics["evaluation"]["split_sizes"]
+    for key in (
+        "headroom",
+        "coverage",
+        "cohort",
+        "early_window",
+        "ttd",
+        "label",
+        "label_era",
+        "label_week",
+        "a18",
+        "a19",
+        "a24",
+        "censored_band",
+        "censored_outcome",
+        "a26",
+        "a29",
+        "tier",
+        "unlabelled",
+        "coverage_r24",
+        "era",
+    ):
+        assert all(item.get("split") != "test" for item in metrics["dataset"]["profile"].get(key, []))
     assert manifest_json["runtime"]["peak_rss_kb"] > 0
     predictions_schema = pq.read_schema(run_out / "predictions" / "validation_calibrate.parquet")
     assert pa.types.is_timestamp(predictions_schema.field("snapshot_at").type)
@@ -2667,9 +3708,8 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     connection = duckdb.connect()
     try:
         mismatch_row = connection.execute(
-            "SELECT count(*), count(*) FILTER (WHERE p.label != "
-            "CAST(d.future_max_fare_24h >= d.price_eur * 1.01 AS TINYINT)) "
-            "FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at) "
+            "SELECT count(*), count(*) FILTER (WHERE p.label != d.breached_next_day) "
+            "FROM read_parquet(?) p JOIN read_parquet(?) d USING (series_key, snapshot_at, headroom_pct) "
             "WHERE p.headroom_pct = 1",
             [
                 str(run_out / "predictions" / "validation_calibrate.parquet"),

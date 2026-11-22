@@ -12,6 +12,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import json
+import logging
 import platform
 import resource
 import subprocess
@@ -37,11 +38,22 @@ from tpm_analytics.training.identity import (
     berlin_week_sql,
     series_key_sql,
 )
+from tpm_analytics.training.labels import breach_sql, price_cents_sql
 from tpm_analytics.training.sources import SourceSpec
 
 
 class DatasetError(RuntimeError):
     """The dataset cannot be built from this source or configuration."""
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _phase(name: str, started: float) -> float:
+    """Log one build phase and return a new start timestamp."""
+    finished = time.perf_counter()
+    _LOGGER.info("%s: %.1f s", name, finished - started)
+    return finished
 
 
 @dataclass(frozen=True)
@@ -50,6 +62,7 @@ class SplitStats:
     rows: int
     series: int
     route_days: int
+    eligible: int
     labelled: int
     positives: int
     positive_rate: float
@@ -107,21 +120,34 @@ def _peak_rss_kb() -> int:
     return value if sys.platform != "darwin" else value // 1024
 
 
-def _git_state() -> tuple[str | None, bool | None]:
-    """Return the checkout's HEAD and dirty flag.
+def _git_state(root: Path | None = None) -> tuple[str | None, bool | None, tuple[str, ...]]:
+    """Return the checkout's HEAD, dirty flag and untracked paths outside ``analytics/``.
 
-    ``git status`` runs from the analytics directory, so a change in any module marks the run dirty.
-    The flag is conservative: a clean flag means the whole checkout matches HEAD, and a
-    false-positive dirty flag is preferred over claiming provenance the run cannot prove.
-    Unknown git state (a wheel outside a checkout) is returned as ``(None, None)``.
+    Tracked changes anywhere in the checkout, and untracked files under ``analytics/``, make the
+    run dirty. Untracked files elsewhere (for example a user's scratch document) are recorded in
+    the manifest as ``git_untracked`` but do not make the run dirty, so provenance never requires
+    moving someone else's files. Unknown git state returns ``(None, None, ())``.
     """
-    root = Path(__file__).resolve().parents[3]
+    root = root or Path(__file__).resolve().parents[4]
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
-        return sha or None, dirty
+        tracked = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root, text=True
+        ).strip()
+        untracked = tuple(
+            path
+            for path in subprocess.check_output(
+                ["git", "ls-files", "--others", "--exclude-standard"], cwd=root, text=True
+            ).splitlines()
+            if path and not path.startswith("analytics/")
+        )
+        analytics_untracked = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", "analytics"], cwd=root, text=True
+        ).strip()
+        dirty = bool(tracked) or bool(analytics_untracked)
+        return sha or None, dirty, untracked
     except OSError, subprocess.CalledProcessError:
-        return None, None
+        return None, None, ()
 
 
 def _lock_sha256() -> str | None:
@@ -314,6 +340,7 @@ def _create_views(
         FROM base_sampled
         """
     )
+    phase_started = time.perf_counter()
     chain_stats = build_chain_map(
         connection,
         base_view="base_sampled",
@@ -322,14 +349,21 @@ def _create_views(
         map_table="chain_map",
         strict=strict_chains,
     )
+    phase_started = _phase("chain map", phase_started)
     connection.execute(
         """
-        CREATE OR REPLACE TEMP VIEW base_chained AS
+        CREATE OR REPLACE TEMP TABLE base_chained AS
         SELECT b.*, m.chain_id, m.chain_departure_date
         FROM base_sampled b
-        JOIN chain_map m USING (series_key)
+        JOIN chain_map_rows m USING (series_key, observed_at)
         """
     )
+    base_rows = _scalar(connection, "SELECT count(*) FROM base_sampled")
+    chained_rows = _scalar(connection, "SELECT count(*) FROM base_chained")
+    if chained_rows != base_rows:
+        raise DatasetError(
+            f"chain row map changed the panel row count: {base_rows} sampled rows, {chained_rows} chained rows"
+        )
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE scrape_grid_all AS
@@ -344,6 +378,7 @@ def _create_views(
         GROUP BY route_id, departure_date, observed_at
         """
     )
+    phase_started = _phase("base chained", phase_started)
     connection.execute(
         """
         CREATE OR REPLACE TEMP VIEW cross_section AS
@@ -361,6 +396,7 @@ def _create_views(
         FROM base_chained
         """
     )
+    phase_started = _phase("cross section", phase_started)
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW dedup_candidates AS
@@ -394,12 +430,11 @@ def _create_views(
                 d.series_key,
                 row_number() OVER (
                     PARTITION BY c.chain_id, d.observed_at
-                    ORDER BY s.first_obs DESC, d.price_eur DESC,
+                    ORDER BY c.series_first_obs DESC, d.price_eur DESC,
                              d.load_factor_ordinal DESC NULLS LAST, d.series_key
                 ) AS chain_rank
             FROM dedup d
-            JOIN chain_map c USING (series_key)
-            JOIN chain_series s USING (series_key)
+            JOIN chain_map_rows c USING (series_key, observed_at)
         )
         WHERE chain_rank = 1
         """
@@ -411,6 +446,7 @@ def _create_views(
         FROM chain_dedup
         """
     )
+    phase_started = _phase("dedup and history", phase_started)
     connection.execute(
         """
         CREATE OR REPLACE TEMP VIEW raw_features AS
@@ -437,8 +473,9 @@ def _create_views(
         FROM chain_dedup
         """
     )
-    # Start the label window an epsilon after the snapshot so a row never contributes to its own
-    # label; duplicate timestamps are already collapsed by dedup, so any positive offset works.
+    phase_started = _phase("raw features", phase_started)
+    # Exact timestamp bounds: ``EXCLUDE CURRENT ROW`` starts the frame strictly after the snapshot
+    # without an epsilon. Duplicate timestamps are already collapsed by dedup.
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW future AS
@@ -448,21 +485,25 @@ def _create_views(
             max(price_eur) OVER (
                 PARTITION BY chain_id
                 ORDER BY epoch(observed_at) / 3600.0
-                RANGE BETWEEN 0.000001 FOLLOWING AND {label.horizon_hours} FOLLOWING
+                RANGE BETWEEN CURRENT ROW AND {label.horizon_hours} FOLLOWING
+                EXCLUDE CURRENT ROW
             ) AS future_max_fare_24h,
             count(*) OVER (
                 PARTITION BY chain_id
                 ORDER BY epoch(observed_at) / 3600.0
-                RANGE BETWEEN 0.000001 FOLLOWING AND {label.horizon_hours} FOLLOWING
+                RANGE BETWEEN CURRENT ROW AND {label.horizon_hours} FOLLOWING
+                EXCLUDE CURRENT ROW
             ) AS future_observations,
             max(observed_at) OVER (
                 PARTITION BY chain_id
                 ORDER BY epoch(observed_at) / 3600.0
-                RANGE BETWEEN 0.000001 FOLLOWING AND {label.horizon_hours} FOLLOWING
+                RANGE BETWEEN CURRENT ROW AND {label.horizon_hours} FOLLOWING
+                EXCLUDE CURRENT ROW
             ) AS future_last_observed_at
         FROM chain_dedup
         """
     )
+    phase_started = _phase("future window", phase_started)
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW resampled AS
@@ -486,9 +527,9 @@ def _create_views(
                             THEN floor(hours_to_departure / {resample.outer_bin_hours})
                         ELSE floor(hours_to_departure / {resample.inner_bin_hours})
                     END
-                ORDER BY observed_at DESC, price_eur DESC, load_factor_ordinal DESC NULLS LAST,
-                         train_number DESC, departure_planned DESC, arrival_planned DESC,
-                         transfers_actual DESC NULLS LAST
+                ORDER BY observed_at ASC, price_eur DESC, load_factor_ordinal DESC NULLS LAST,
+                         train_number, departure_planned, arrival_planned,
+                         transfers_actual NULLS LAST, series_key
             ) AS rn
         FROM cross_section
         """
@@ -500,15 +541,15 @@ def _create_views(
             r.* EXCLUDE (rn),
             f.future_max_fare_24h,
             f.future_observations,
-            f.future_last_observed_at,
-            (f.future_max_fare_24h IS NOT NULL) AS label_observed
+            f.future_last_observed_at
         FROM resampled r
         LEFT JOIN future f ON f.chain_id = r.chain_id AND f.observed_at = r.observed_at
         WHERE r.rn = 1
         """
     )
-    # One superset join against the route-day scrape grid; every check window is a filtered pick
-    # from these candidates, so the grid is joined once instead of four times (R2-1).
+    phase_started = _phase("resample and snapshot", phase_started)
+    # One superset join against the route-day scrape grid; the check windows are filtered picks
+    # from these candidates, so the grid is joined once instead of three times.
     connection.execute(
         """
         CREATE OR REPLACE TEMP TABLE check_candidates AS
@@ -527,85 +568,35 @@ def _create_views(
           AND g.observed_at < n.departure_planned
         """
     )
-    # The 20-24 h point stays the crossed-back diagnostic. The lower bound is already 20 h.
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE check_points AS
-        SELECT
-            series_key,
-            snapshot_at,
-            chain_id,
-            check_at,
-            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
-        FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
-            ) AS rn
-            FROM check_candidates
-            WHERE check_at <= snapshot_at + INTERVAL 24 HOUR
+    # The primary next-day check is the scrape closest to ``t + 24 h``; a tie goes to the earlier
+    # scrape. The 20-24 h point is the crossed-back and decision-value diagnostic; the 22-26 h
+    # point stays the PR 2 sensitivity diagnostic.
+    for name, lower, upper in (
+        ("check_points", label.check_window_hours[0], label.check_window_hours[1]),
+        ("check_points_2024", 20, 24),
+        ("check_points_2226", 22, 26),
+    ):
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP TABLE {name} AS
+            SELECT
+                series_key,
+                snapshot_at,
+                chain_id,
+                check_at,
+                date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+            FROM (
+                SELECT *, row_number() OVER (
+                    PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
+                ) AS rn
+                FROM check_candidates
+                WHERE check_at BETWEEN snapshot_at + INTERVAL {lower} HOUR
+                                   AND snapshot_at + INTERVAL {upper} HOUR
+            )
+            WHERE rn = 1
+            """
         )
-        WHERE rn = 1
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE check_points_narrow AS
-        SELECT
-            series_key,
-            snapshot_at,
-            chain_id,
-            check_at,
-            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
-        FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
-            ) AS rn
-            FROM check_candidates
-            WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
-                               AND snapshot_at + INTERVAL 24 HOUR
-        )
-        WHERE rn = 1
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE check_points_2028 AS
-        SELECT
-            series_key,
-            snapshot_at,
-            chain_id,
-            check_at,
-            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
-        FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
-            ) AS rn
-            FROM check_candidates
-        )
-        WHERE rn = 1
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE check_points_2226 AS
-        SELECT
-            series_key,
-            snapshot_at,
-            chain_id,
-            check_at,
-            date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
-        FROM (
-            SELECT *, row_number() OVER (
-                PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
-            ) AS rn
-            FROM check_candidates
-            WHERE check_at BETWEEN snapshot_at + INTERVAL 22 HOUR
-                               AND snapshot_at + INTERVAL 26 HOUR
-        )
-        WHERE rn = 1
-        """
-    )
-    # Price each distinct (series, check) once; the four windows share most check points.
+    # Price each distinct (chain, check) once; the three windows share most check points.
     connection.execute(
         """
         CREATE OR REPLACE TEMP TABLE check_prices AS
@@ -614,9 +605,7 @@ def _create_views(
         JOIN (
             SELECT chain_id, check_at FROM check_points
             UNION
-            SELECT chain_id, check_at FROM check_points_narrow
-            UNION
-            SELECT chain_id, check_at FROM check_points_2028
+            SELECT chain_id, check_at FROM check_points_2024
             UNION
             SELECT chain_id, check_at FROM check_points_2226
         ) p
@@ -624,6 +613,7 @@ def _create_views(
          AND p.check_at = d.observed_at
         """
     )
+    phase_started = _phase("check and label views", phase_started)
     connection.execute(
         """
         CREATE OR REPLACE TEMP VIEW coverage_events AS
@@ -665,15 +655,12 @@ def _create_views(
             n.*,
             c.check_at,
             c.check_lag_h,
-            cn.check_at AS check_at_narrow,
-            cn.check_lag_h AS check_lag_narrow_h,
-            c28.check_at AS check_at_2028,
-            c28.check_lag_h AS check_lag_2028_h,
+            c24.check_at AS check_at_2024,
+            c24.check_lag_h AS check_lag_2024_h,
             c26.check_at AS check_at_2226,
             c26.check_lag_h AS check_lag_2226_h,
             d.price_eur AS check_price_eur,
-            dn.price_eur AS check_price_narrow_eur,
-            d28.price_eur AS check_price_2028_eur,
+            d24.price_eur AS check_price_2024_eur,
             d26.price_eur AS check_price_2226_eur,
             cv.cov_tail_h,
             cv.cov_max_gap_h,
@@ -687,12 +674,10 @@ def _create_views(
             END AS r24_covered
         FROM snapshot n
         LEFT JOIN check_points c USING (series_key, snapshot_at)
-        LEFT JOIN check_points_narrow cn USING (series_key, snapshot_at)
-        LEFT JOIN check_points_2028 c28 USING (series_key, snapshot_at)
+        LEFT JOIN check_points_2024 c24 USING (series_key, snapshot_at)
         LEFT JOIN check_points_2226 c26 USING (series_key, snapshot_at)
         LEFT JOIN check_prices d ON d.chain_id = n.chain_id AND d.check_at = c.check_at
-        LEFT JOIN check_prices dn ON dn.chain_id = n.chain_id AND dn.check_at = cn.check_at
-        LEFT JOIN check_prices d28 ON d28.chain_id = n.chain_id AND d28.check_at = c28.check_at
+        LEFT JOIN check_prices d24 ON d24.chain_id = n.chain_id AND d24.check_at = c24.check_at
         LEFT JOIN check_prices d26 ON d26.chain_id = n.chain_id AND d26.check_at = c26.check_at
         LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
         """
@@ -708,36 +693,55 @@ def _create_views(
     )
     connection.execute(
         f"""
+        CREATE OR REPLACE TEMP VIEW priced AS
+        SELECT
+            *,
+            {price_cents_sql("price_eur")} AS price_cents,
+            {price_cents_sql("check_price_eur")} AS check_price_cents,
+            {price_cents_sql("check_price_2024_eur")} AS check_price_2024_cents,
+            {price_cents_sql("check_price_2226_eur")} AS check_price_2226_cents,
+            {price_cents_sql("future_max_fare_24h")} AS future_max_fare_24h_cents
+        FROM labelled
+        """
+    )
+    connection.execute(
+        f"""
         CREATE OR REPLACE TEMP VIEW split_rows AS
         SELECT
             * EXCLUDE (bucket),
             {headroom_expr} AS headroom_pct,
             price_eur * (1 + ({headroom_expr}) / 100.0) AS limit_eur,
+            price_cents,
+            check_price_cents,
             CASE
-                WHEN future_max_fare_24h IS NULL THEN NULL
-                WHEN future_max_fare_24h >= price_eur * (1 + ({headroom_expr}) / 100.0)
-                THEN 1 ELSE 0
-            END AS breached_in_24h,
+                WHEN check_price_cents IS NULL THEN NULL
+                ELSE CAST({breach_sql("check_price_cents", "price_cents", headroom_expr)} AS INTEGER)
+            END AS breached_next_day,
+            (check_at IS NOT NULL) AS eligible,
             CASE
-                WHEN check_price_eur IS NULL OR price_eur IS NULL THEN NULL
-                WHEN check_price_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
-            END AS breached_at_check,
+                WHEN check_at IS NULL THEN 'no_check'
+                WHEN check_price_cents IS NULL THEN 'not_listed'
+                ELSE NULL
+            END AS censor_reason,
+            CAST(FALSE AS BOOLEAN) AS fare_lost,
+            (check_at IS NOT NULL AND check_price_cents IS NOT NULL) AS label_observed,
             CASE
-                WHEN check_price_narrow_eur IS NULL OR price_eur IS NULL THEN NULL
-                WHEN check_price_narrow_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
-            END AS breached_at_check_narrow,
+                WHEN future_max_fare_24h_cents IS NULL THEN NULL
+                ELSE CAST({breach_sql("future_max_fare_24h_cents", "price_cents", headroom_expr)} AS INTEGER)
+            END AS breached_within_24h,
             CASE
-                WHEN check_price_2028_eur IS NULL OR price_eur IS NULL THEN NULL
-                WHEN check_price_2028_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
-            END AS breached_at_check_2028,
+                WHEN check_price_2024_cents IS NULL THEN NULL
+                ELSE CAST({breach_sql("check_price_2024_cents", "price_cents", headroom_expr)} AS INTEGER)
+            END AS breached_at_check_2024,
             CASE
-                WHEN check_price_2226_eur IS NULL OR price_eur IS NULL THEN NULL
-                WHEN check_price_2226_eur >= price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+                WHEN check_price_2226_cents IS NULL THEN NULL
+                ELSE CAST({breach_sql("check_price_2226_cents", "price_cents", headroom_expr)} AS INTEGER)
             END AS breached_at_check_2226,
             CASE
-                WHEN future_max_fare_24h IS NULL OR check_price_eur IS NULL THEN NULL
-                WHEN future_max_fare_24h >= price_eur * (1 + ({headroom_expr}) / 100.0)
-                 AND check_price_eur < price_eur * (1 + ({headroom_expr}) / 100.0) THEN 1 ELSE 0
+                WHEN future_max_fare_24h_cents IS NULL OR check_price_2024_cents IS NULL THEN NULL
+                WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", headroom_expr)}
+                 AND NOT {breach_sql("check_price_2024_cents", "price_cents", headroom_expr)}
+                THEN 1 ELSE 0
             END AS crossed_and_came_back,
             {ttd_band_case("hours_to_departure")} AS ttd_band,
             {berlin_week_sql("observed_at")} AS observation_week,
@@ -751,12 +755,13 @@ def _create_views(
                     AND DATE '{splits.test_end.isoformat()}' THEN 'test'
                 ELSE NULL
             END AS split,
-            observed_at + INTERVAL '{label.horizon_hours} HOUR' AS label_window_end,
+            check_at AS label_window_end,
             date_diff('second', observed_at, future_last_observed_at) / 3600.0 AS future_span_h,
             CAST(TRUE AS BOOLEAN) AS fare_available
-        FROM labelled
+        FROM priced
         """
     )
+    phase_started = _phase("label and split rows", phase_started)
     connection.execute(
         """
         CREATE OR REPLACE TEMP VIEW features_base AS
@@ -871,6 +876,7 @@ def _create_views(
         f"CREATE OR REPLACE TEMP TABLE sampled AS SELECT * FROM panel_calendar "
         f"WHERE hours_to_departure BETWEEN {label.min_hours_to_departure} AND {label.max_hours_to_departure}"
     )
+    _phase("features and sampled panel", phase_started)
     null_splits = _scalar(connection, "SELECT count(*) FROM sampled WHERE split IS NULL")
     if null_splits:
         raise DatasetError(f"{null_splits} rows fall between configured splits; make the split dates contiguous")
@@ -886,9 +892,10 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
             count(DISTINCT series_key) AS series,
             count(DISTINCT chain_id) AS chains,
             count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) AS route_days,
+            sum(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible,
             sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
-            sum(CASE WHEN label_observed THEN breached_in_24h ELSE 0 END) AS positives,
-            avg(CASE WHEN label_observed THEN breached_in_24h END) AS positive_rate
+            sum(CASE WHEN label_observed THEN breached_next_day ELSE 0 END) AS positives,
+            avg(CASE WHEN label_observed THEN breached_next_day END) AS positive_rate
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split
@@ -902,9 +909,10 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
             series=int(row[2]),
             chains=int(row[3]),
             route_days=int(row[4]),
-            labelled=int(row[5]),
-            positives=int(row[6]),
-            positive_rate=0.0 if row[7] is None else float(row[7]),
+            eligible=int(row[5]),
+            labelled=int(row[6]),
+            positives=int(row[7]),
+            positive_rate=0.0 if row[8] is None else float(row[8]),
         )
         for row in rows
     )
@@ -913,7 +921,7 @@ def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...
 def _label_window_profile(
     connection: duckdb.DuckDBPyConnection, group_column: str, group_alias: str
 ) -> list[dict[str, Any]]:
-    """Coverage and next-day prevalence by TTD band and one grouping column."""
+    """Eligibility, censoring and next-day prevalence by TTD band and one grouping column."""
     return _dict_rows(
         connection,
         f"""
@@ -922,12 +930,10 @@ def _label_window_profile(
             {group_column} AS {group_alias},
             ttd_band AS band,
             count(*) AS rows,
-            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
-            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
-            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
-            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
-            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
-            avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate
+            count(*) FILTER (WHERE eligible) AS eligible,
+            count(*) FILTER (WHERE label_observed) AS labelled,
+            count(*) FILTER (WHERE eligible AND NOT label_observed) AS censored,
+            avg(breached_next_day) FILTER (WHERE label_observed) AS prevalence
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split, {group_column}, ttd_band
@@ -940,6 +946,7 @@ def _profile(
     connection: duckdb.DuckDBPyConnection,
     chain_stats: ChainStats,
     source_sql: str,
+    config: TrainingConfig,
 ) -> dict[str, Any]:
     headroom = connection.execute(
         """
@@ -947,9 +954,10 @@ def _profile(
             split,
             headroom_pct,
             count(*) AS rows,
+            sum(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible,
             sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
-            sum(CASE WHEN label_observed THEN breached_in_24h ELSE 0 END) AS positives,
-            avg(CASE WHEN label_observed THEN breached_in_24h END) AS positive_rate
+            sum(CASE WHEN label_observed THEN breached_next_day ELSE 0 END) AS positives,
+            avg(CASE WHEN label_observed THEN breached_next_day END) AS positive_rate
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split, headroom_pct
@@ -969,31 +977,46 @@ def _profile(
         """
         SELECT
             split,
+            avg(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible_share,
             avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
-            avg(CASE WHEN future_observations = 1 THEN 1 ELSE 0 END) AS one_observation_share,
-            avg(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus_share,
-            avg(r24_covered::INT) AS r24_share
+            avg(CASE WHEN eligible AND NOT label_observed THEN 1 ELSE 0 END) AS censor_share,
+            avg(r24_covered::INT) AS r24_share,
+            avg(CASE WHEN r24_covered AND label_observed THEN breached_within_24h END) AS within_24h_r24_rate
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split
         ORDER BY split
         """
     ).fetchall()
+    early_window = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            count(*) AS rows,
+            count(*) FILTER (WHERE eligible) AS eligible
+        FROM sampled
+        WHERE split IS NOT NULL AND hours_to_departure BETWEEN 24 AND 48
+        GROUP BY split
+        ORDER BY split
+        """,
+    )
     cohort = _dict_rows(
         connection,
         """
         SELECT
             split,
             count(*) AS rows,
-            sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
-            sum(CASE WHEN check_at IS NOT NULL THEN 1 ELSE 0 END) AS check_eligible,
-            sum(CASE WHEN check_at IS NOT NULL AND check_price_eur IS NOT NULL THEN 1 ELSE 0 END) AS check_priced,
-            sum(CASE WHEN check_at IS NOT NULL AND check_price_eur IS NULL THEN 1 ELSE 0 END) AS check_censored,
-            sum(CASE WHEN future_observations >= 2 THEN 1 ELSE 0 END) AS two_plus,
+            count(*) FILTER (WHERE eligible) AS eligible,
+            count(*) FILTER (WHERE label_observed) AS labelled,
+            count(*) FILTER (WHERE eligible AND NOT label_observed) AS censored,
+            count(*) FILTER (WHERE censor_reason = 'no_check') AS no_check,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
+            count(*) FILTER (WHERE fare_lost) AS fare_lost,
+            avg(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible_share,
             avg(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled_share,
-            avg(CASE WHEN label_observed THEN breached_in_24h END) AS prevalence,
-            avg(CASE WHEN label_observed AND future_observations >= 2 THEN breached_in_24h END) AS two_plus_prevalence,
-            avg(CASE WHEN check_at IS NOT NULL THEN breached_at_check END) AS check_prevalence
+            avg(CASE WHEN label_observed THEN breached_next_day END) AS prevalence,
+            avg(CASE WHEN eligible AND NOT label_observed THEN 1 ELSE 0 END) AS censor_share
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split
@@ -1006,8 +1029,10 @@ def _profile(
             split,
             ttd_band,
             count(*) AS rows,
+            sum(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible,
             sum(CASE WHEN label_observed THEN 1 ELSE 0 END) AS labelled,
-            avg(CASE WHEN label_observed THEN breached_in_24h END) AS positive_rate
+            sum(CASE WHEN label_observed THEN breached_next_day ELSE 0 END) AS positives,
+            avg(CASE WHEN label_observed THEN breached_next_day END) AS positive_rate
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split, ttd_band
@@ -1021,37 +1046,30 @@ def _profile(
             split,
             ttd_band AS band,
             count(*) AS rows,
+            count(*) FILTER (WHERE eligible) AS eligible,
             count(*) FILTER (WHERE label_observed) AS labelled,
-            count(*) FILTER (WHERE check_at IS NOT NULL) AS check_eligible,
-            count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NOT NULL) AS check_priced,
-            count(*) FILTER (WHERE check_at IS NOT NULL AND check_price_eur IS NULL) AS check_censored,
-            count(*) FILTER (WHERE check_at_2028 IS NOT NULL) AS check_eligible_2028,
-            count(*) FILTER (WHERE check_price_2028_eur IS NOT NULL) AS check_priced_2028,
-            avg(breached_at_check_2028) FILTER (WHERE breached_at_check_2028 IS NOT NULL) AS next_day_2028_rate,
-            count(*) FILTER (WHERE check_at_2226 IS NOT NULL) AS check_eligible_2226,
-            count(*) FILTER (WHERE check_price_2226_eur IS NOT NULL) AS check_priced_2226,
+            count(*) FILTER (WHERE eligible AND NOT label_observed) AS censored,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
+            count(*) FILTER (WHERE fare_lost) AS fare_lost,
+            avg(breached_next_day) FILTER (WHERE label_observed) AS prevalence,
+            median(check_lag_h) FILTER (WHERE eligible) AS median_check_lag_h,
+            quantile_cont(check_lag_h, 0.1) FILTER (WHERE eligible) AS p10_check_lag_h,
+            quantile_cont(check_lag_h, 0.9) FILTER (WHERE eligible) AS p90_check_lag_h,
+            avg(breached_within_24h) FILTER (WHERE label_observed AND r24_covered) AS within_24h_r24_rate,
+            avg(breached_at_check_2024) FILTER (WHERE breached_at_check_2024 IS NOT NULL) AS next_day_2024_rate,
             avg(breached_at_check_2226) FILTER (WHERE breached_at_check_2226 IS NOT NULL) AS next_day_2226_rate,
+            avg(crossed_and_came_back) FILTER (
+                WHERE crossed_and_came_back IS NOT NULL AND r24_covered
+            ) AS crossed_back_rate,
             count(*) FILTER (WHERE future_observations = 1) AS one_observations,
             count(*) FILTER (WHERE future_observations >= 2) AS two_plus,
-            avg(breached_in_24h) FILTER (WHERE label_observed) AS within_day_rate,
-            avg(breached_in_24h) FILTER (
-                WHERE label_observed AND check_price_eur IS NOT NULL
-            ) AS priced_within_day_rate,
-            avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations = 1) AS one_prevalence,
-            avg(breached_in_24h) FILTER (WHERE label_observed AND future_observations >= 2) AS two_plus_prevalence,
+            avg(breached_next_day) FILTER (WHERE label_observed AND future_observations = 1) AS one_prevalence,
+            avg(breached_next_day) FILTER (WHERE label_observed AND future_observations >= 2) AS two_plus_prevalence,
             median(future_span_h) FILTER (WHERE future_observations = 1) AS median_single_lag_h,
             quantile_cont(future_span_h, 0.1) FILTER (WHERE future_observations = 1) AS p10_single_lag_h,
             quantile_cont(future_span_h, 0.9) FILTER (WHERE future_observations = 1) AS p90_single_lag_h,
-            avg(breached_at_check) FILTER (WHERE breached_at_check IS NOT NULL) AS next_day_rate,
-            avg(breached_at_check_narrow) FILTER (WHERE breached_at_check_narrow IS NOT NULL) AS narrow_rate,
-            avg(crossed_and_came_back) FILTER (WHERE crossed_and_came_back IS NOT NULL) AS crossed_back_rate,
-            avg(breached_in_24h) FILTER (
-                WHERE label_observed AND check_at IS NOT NULL AND check_price_eur IS NULL
-            ) AS censored_within_day_rate,
             count(*) FILTER (WHERE price_change_24h > 0.005 * price_eur) AS dearer,
             count(*) FILTER (WHERE price_change_24h < -0.005 * price_eur) AS cheaper,
-            count(*) FILTER (WHERE check_price_2028_eur > price_eur * 1.005) AS forward_dearer,
-            count(*) FILTER (WHERE check_price_2028_eur < price_eur * 0.995) AS forward_cheaper,
             count(*) FILTER (
                 WHERE price_change_24h IS NOT NULL
                   AND abs(price_change_24h) <= 0.005 * price_eur
@@ -1066,23 +1084,209 @@ def _profile(
     label_week = _label_window_profile(connection, "observation_week", "week")
     a29 = _dict_rows(
         connection,
-        """
+        f"""
         SELECT
             split,
             ttd_band AS band,
             count(*) AS rows,
-            avg(CASE WHEN future_max_fare_24h >= price_eur * 1.05 THEN 1.0 ELSE 0.0 END) AS within_day_rate,
-            avg(CASE WHEN check_price_eur >= price_eur * 1.05 THEN 1.0 ELSE 0.0 END) AS next_day_rate,
-            avg(
-                CASE
-                    WHEN future_max_fare_24h >= price_eur * 1.05
-                     AND check_price_eur < price_eur * 1.05 THEN 1.0 ELSE 0.0
-                END
-            ) AS crossed_back_rate
+            avg(CASE WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", "5")}
+                THEN 1.0 ELSE 0.0 END) AS within_day_rate,
+            avg(CASE WHEN {breach_sql("check_price_cents", "price_cents", "5")}
+                THEN 1.0 ELSE 0.0 END) AS next_day_rate,
+            avg(CASE WHEN {breach_sql("check_price_2024_cents", "price_cents", "5")}
+                THEN 1.0 ELSE 0.0 END) AS next_day_2024_rate,
+            avg(CASE WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", "5")}
+                      AND NOT {breach_sql("check_price_2024_cents", "price_cents", "5")}
+                THEN 1.0 ELSE 0.0 END) AS crossed_back_rate
         FROM sampled
-        WHERE split IS NOT NULL AND label_observed AND check_price_eur IS NOT NULL
+        WHERE split IS NOT NULL
+          AND label_observed
+          AND r24_covered
+          AND future_max_fare_24h_cents IS NOT NULL
+          AND check_price_2024_cents IS NOT NULL
         GROUP BY split, ttd_band
         ORDER BY split, ttd_band
+        """,
+    )
+    a18 = _dict_rows(
+        connection,
+        f"""
+        WITH split_rows AS (
+            SELECT
+                CASE
+                    WHEN chain_departure_date <= DATE '{config.splits.train_end.isoformat()}' THEN 'train'
+                    WHEN chain_departure_date BETWEEN DATE '{config.splits.validation_select_start.isoformat()}'
+                        AND DATE '{config.splits.validation_select_end.isoformat()}' THEN 'validation_select'
+                    WHEN chain_departure_date BETWEEN DATE '{config.splits.validation_calibrate_start.isoformat()}'
+                        AND DATE '{config.splits.validation_calibrate_end.isoformat()}' THEN 'validation_calibrate'
+                    WHEN chain_departure_date BETWEEN DATE '{config.splits.test_start.isoformat()}'
+                        AND DATE '{config.splits.test_end.isoformat()}' THEN 'test'
+                    ELSE NULL
+                END AS split,
+                bin_regime,
+                bin_index,
+                chain_id,
+                count(*) OVER (PARTITION BY chain_id, bin_regime, bin_index) AS bin_rows
+            FROM resampled
+        )
+        SELECT
+            split,
+            bin_regime,
+            count(*) AS rows,
+            count(*) FILTER (WHERE bin_rows > 1) AS collision_rows,
+            count(DISTINCT CASE WHEN bin_rows > 1
+                THEN chain_id || '|' || bin_regime || '|' || CAST(bin_index AS VARCHAR) END) AS collision_bins,
+            count(DISTINCT chain_id || '|' || bin_regime || '|' || CAST(bin_index AS VARCHAR)) AS bins
+        FROM split_rows
+        WHERE split IS NOT NULL
+        GROUP BY split, bin_regime
+        ORDER BY split, bin_regime
+        """,
+    )
+    a19 = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            count(*) AS rows,
+            count(*) FILTER (WHERE hours_to_departure BETWEEN 552 AND 720) AS rows_23_30d,
+            count(*) FILTER (WHERE hours_to_departure BETWEEN 552 AND 720 AND history_depth_h < 168)
+                AS rows_23_30d_short_history,
+            count(*) FILTER (WHERE history_depth_h > 720) AS rows_history_beyond_720
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split
+        ORDER BY split
+        """,
+    )
+    a24 = _dict_rows(
+        connection,
+        """
+        WITH covered AS (
+            SELECT
+                s.split,
+                s.ttd_band,
+                s.observation_era,
+                s.chain_id,
+                s.snapshot_at,
+                s.check_at,
+                s.label_observed,
+                count(d.observed_at) AS window_observations
+            FROM sampled s
+            LEFT JOIN chain_dedup d
+              ON d.chain_id = s.chain_id
+             AND d.observed_at > s.snapshot_at
+             AND d.observed_at <= s.snapshot_at + INTERVAL 24 HOUR
+            WHERE s.split IS NOT NULL
+              AND s.eligible
+              AND s.r24_covered
+            GROUP BY s.split, s.ttd_band, s.observation_era, s.chain_id, s.snapshot_at, s.check_at, s.label_observed
+        )
+        SELECT
+            split,
+            ttd_band AS band,
+            observation_era AS era,
+            count(*) AS rows,
+            count(*) FILTER (WHERE NOT label_observed) AS missing_at_check,
+            count(*) FILTER (WHERE NOT label_observed AND window_observations > 0) AS miss_one,
+            count(*) FILTER (WHERE NOT label_observed AND window_observations = 0) AS miss_all
+        FROM covered
+        GROUP BY split, ttd_band, observation_era
+        ORDER BY split, ttd_band, observation_era
+        """,
+    )
+    censored_band = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            count(*) FILTER (WHERE label_observed) AS labelled_rows,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
+            count(*) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_observed,
+            avg(breached_within_24h) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_within_day_rate,
+            avg(breached_within_24h) FILTER (
+                WHERE label_observed AND breached_within_24h IS NOT NULL
+            ) AS labelled_within_day_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band
+        ORDER BY split, ttd_band
+        """,
+    )
+    censored_outcome = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            observation_week AS week,
+            count(*) FILTER (WHERE label_observed) AS labelled_rows,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
+            count(*) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_observed,
+            avg(breached_within_24h) FILTER (
+                WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
+            ) AS censored_within_day_rate,
+            avg(breached_within_24h) FILTER (
+                WHERE label_observed AND breached_within_24h IS NOT NULL
+            ) AS labelled_within_day_rate
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band, observation_week
+        ORDER BY split, ttd_band, observation_week
+        """,
+    )
+    a26 = _dict_rows(
+        connection,
+        """
+        WITH matched AS (
+            SELECT DISTINCT
+                s.split,
+                s.ttd_band,
+                s.observation_era,
+                s.series_key,
+                s.snapshot_at,
+                (g.observed_at IS NOT NULL) AS has_scrape
+            FROM sampled s
+            LEFT JOIN scrape_grid g
+              ON g.route_id = s.route_id
+             AND g.departure_date = s.departure_date
+             AND g.observed_at BETWEEN s.snapshot_at + INTERVAL 10 HOUR
+                                    AND s.snapshot_at + INTERVAL 16 HOUR
+             AND g.observed_at < s.departure_planned
+            WHERE s.split IS NOT NULL
+        )
+        SELECT
+            split,
+            ttd_band AS band,
+            observation_era AS era,
+            count(*) AS rows,
+            count(*) FILTER (WHERE has_scrape) AS scrape_10_16
+        FROM matched
+        GROUP BY split, ttd_band, observation_era
+        ORDER BY split, ttd_band, observation_era
+        """,
+    )
+    tier = _dict_rows(
+        connection,
+        """
+        SELECT
+            split,
+            ttd_band AS band,
+            CASE WHEN future_observations >= 2 THEN 'two_plus' ELSE 'one_or_none' END AS tier,
+            count(*) AS rows,
+            count(*) FILTER (WHERE label_observed) AS labelled,
+            avg(breached_next_day) FILTER (WHERE label_observed) AS prevalence
+        FROM sampled
+        WHERE split IS NOT NULL
+        GROUP BY split, ttd_band, tier
+        ORDER BY split, ttd_band, tier
         """,
     )
     unlabelled = connection.execute(
@@ -1093,7 +1297,9 @@ def _profile(
             observation_era,
             observation_week,
             count(*) AS rows,
-            avg(CASE WHEN label_observed THEN 0.0 ELSE 1.0 END) AS unlabelled_share
+            count(*) FILTER (WHERE NOT label_observed) AS unlabelled,
+            count(*) FILTER (WHERE censor_reason = 'no_check') AS no_check,
+            count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed
         FROM sampled
         WHERE split IS NOT NULL
         GROUP BY split, ttd_band, observation_era, observation_week
@@ -1121,20 +1327,6 @@ def _profile(
     if max_row is None or max_row[0] is None:
         raise DatasetError("no panel rows for journey diagnostics")
     max_departure = str(max_row[0])
-    two_plus_week = connection.execute(
-        """
-        SELECT
-            split,
-            ttd_band,
-            observation_week,
-            count(*) AS rows,
-            avg(CASE WHEN future_observations >= 2 THEN 1.0 ELSE 0.0 END) AS two_plus_share
-        FROM sampled
-        WHERE split IS NOT NULL AND ttd_band = '14-30d'
-        GROUP BY split, ttd_band, observation_week
-        ORDER BY split, observation_week
-        """
-    ).fetchall()
     journey_row = connection.execute(
         f"""
         WITH series_obs AS (
@@ -1282,9 +1474,10 @@ def _profile(
                 "split": str(row[0]),
                 "headroom_pct": int(row[1]),
                 "rows": int(row[2]),
-                "labelled": int(row[3]),
-                "positives": int(row[4]),
-                "positive_rate": 0.0 if row[5] is None else float(row[5]),
+                "eligible": int(row[3]),
+                "labelled": int(row[4]),
+                "positives": int(row[5]),
+                "positive_rate": 0.0 if row[6] is None else float(row[6]),
             }
             for row in headroom
         ],
@@ -1292,28 +1485,39 @@ def _profile(
         "coverage": [
             {
                 "split": str(row[0]),
-                "labelled_share": float(row[1] or 0.0),
-                "one_observation_share": float(row[2] or 0.0),
-                "two_plus_share": float(row[3] or 0.0),
+                "eligible_share": float(row[1] or 0.0),
+                "labelled_share": float(row[2] or 0.0),
+                "censor_share": float(row[3] or 0.0),
                 "r24_share": None if row[4] is None else float(row[4]),
+                "within_24h_r24_rate": None if row[5] is None else float(row[5]),
             }
             for row in coverage
         ],
         "cohort": cohort,
+        "early_window": early_window,
         "ttd": [
             {
                 "split": str(row[0]),
                 "band": str(row[1]),
                 "rows": int(row[2]),
-                "labelled": int(row[3]),
-                "positive_rate": None if row[4] is None else float(row[4]),
+                "eligible": int(row[3]),
+                "labelled": int(row[4]),
+                "positives": int(row[5]),
+                "positive_rate": None if row[6] is None else float(row[6]),
             }
             for row in ttd
         ],
         "label": label,
         "label_era": label_era,
         "label_week": label_week,
+        "a18": a18,
+        "a19": a19,
+        "a24": a24,
+        "censored_band": censored_band,
+        "censored_outcome": censored_outcome,
+        "a26": a26,
         "a29": a29,
+        "tier": tier,
         "unlabelled": [
             {
                 "split": str(row[0]),
@@ -1321,7 +1525,9 @@ def _profile(
                 "era": str(row[2]),
                 "week": str(row[3]),
                 "rows": int(row[4]),
-                "unlabelled_share": float(row[5] or 0.0),
+                "unlabelled": int(row[5]),
+                "no_check": int(row[6]),
+                "not_listed": int(row[7]),
             }
             for row in unlabelled
         ],
@@ -1337,16 +1543,6 @@ def _profile(
                 "median_gap_h": None if row[7] is None else round(float(row[7]), 6),
             }
             for row in coverage_r24
-        ],
-        "two_plus_week": [
-            {
-                "split": str(row[0]),
-                "band": str(row[1]),
-                "week": str(row[2]),
-                "rows": int(row[3]),
-                "two_plus_share": float(row[4] or 0.0),
-            }
-            for row in two_plus_week
         ],
         "journey": {
             "total_journeys": total_journeys,
@@ -1376,16 +1572,21 @@ def _quality_gates(
     profile: dict[str, Any],
     config: TrainingConfig,
 ) -> None:
+    """Gate every split on eligible rows and positives, not on a future-selected coverage floor."""
     for split in stats.splits:
         if split.rows == 0:
             raise DatasetError(f"split {split.split} is empty")
-        coverage = split.labelled / split.rows
-        if coverage < config.report.min_label_coverage:
+        if split.eligible < config.report.min_eligible_rows:
             raise DatasetError(
-                f"split {split.split} has {coverage:.1%} labelled rows; floor is {config.report.min_label_coverage:.0%}"
+                f"split {split.split} has {split.eligible} eligible rows; floor is {config.report.min_eligible_rows}"
             )
+        if split.positives < config.report.min_split_positives:
+            raise DatasetError(
+                f"split {split.split} has {split.positives} positives; floor is {config.report.min_split_positives}"
+            )
+    gated_splits = {"validation_select", "validation_calibrate", "test"}
     for item in profile["headroom"]:
-        if item["split"] not in {"validation_select", "test"}:
+        if item["split"] not in gated_splits:
             continue
         if config.report.min_headroom_positives <= 0:
             continue
@@ -1393,6 +1594,16 @@ def _quality_gates(
             raise DatasetError(
                 f"split {item['split']} headroom {item['headroom_pct']}% has "
                 f"{item['positives']} positives; floor is {config.report.min_headroom_positives}"
+            )
+    for item in profile["ttd"]:
+        if item["split"] not in gated_splits:
+            continue
+        if config.report.min_band_positives <= 0:
+            continue
+        if item["positives"] < config.report.min_band_positives:
+            raise DatasetError(
+                f"split {item['split']} band {item['band']} has "
+                f"{item['positives']} positives; floor is {config.report.min_band_positives}"
             )
 
 
@@ -1409,6 +1620,8 @@ def build_dataset(
     strict_chains: bool = False,
 ) -> DatasetStats:
     """Build the panel, profile it and write the Parquet splits."""
+    # Provenance is the checkout state when the build starts, not when it happens to finish.
+    git_sha, git_dirty, git_untracked = _git_state()
     started = time.perf_counter()
     out_dir = out_dir.resolve()
     dataset_dir = out_dir / "dataset"
@@ -1419,6 +1632,7 @@ def build_dataset(
     if source_rows == 0:
         raise DatasetError(f"source {source.label} contains no rows")
 
+    build_started = time.perf_counter()
     chain_stats = _create_views(
         connection,
         source_sql,
@@ -1426,6 +1640,7 @@ def build_dataset(
         calendar_set,
         strict_chains=strict_chains,
     )
+    build_started = _phase("dataset views", build_started)
 
     columns = _final_columns(calendar_set)
     missing = set(columns) - {row[0] for row in connection.execute("DESCRIBE SELECT * FROM sampled").fetchall()}
@@ -1434,7 +1649,8 @@ def build_dataset(
     selected = ", ".join(columns)
     split_names = ("train", "validation_select", "validation_calibrate", "test")
     splits = _split_stats(connection)
-    profile = _profile(connection, chain_stats, source_sql)
+    profile = _profile(connection, chain_stats, source_sql, config)
+    build_started = _phase("profile audits", build_started)
     if {item.split for item in splits} != set(split_names):
         raise DatasetError(f"missing split(s): {sorted({item.split for item in splits})}")
 
@@ -1473,8 +1689,10 @@ def build_dataset(
     source_inventory = _source_inventory(connection, source)
     if not source_inventory:
         warnings.append("source inventory is empty; the scanned file set is not localisable")
+    git_sha_end, git_dirty_end, git_untracked_end = _git_state()
+    if (git_sha_end, git_dirty_end, git_untracked_end) != (git_sha, git_dirty, git_untracked):
+        warnings.append("git state changed during the run; the manifest keeps the start state")
     stats = replace(stats, warnings=tuple(warnings))
-    git_sha, git_dirty = _git_state()
 
     # Digest before writing: a failed gate or digest query must not leave plausible Parquet files.
     digests = {split: _content_digest(connection, split, columns) for split in split_names} if write_splits else {}
@@ -1510,6 +1728,10 @@ def build_dataset(
         "dataset_peak_rss_kb": _peak_rss_kb(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
+        "git_untracked": list(git_untracked),
+        "git_sha_end": git_sha_end,
+        "git_dirty_end": git_dirty_end,
+        "git_untracked_end": list(git_untracked_end),
         "uv_lock_sha256": _lock_sha256(),
         "cli_argv": list(cli_argv or ()),
         "threads": threads,
@@ -1526,6 +1748,8 @@ def build_dataset(
         "chains": {
             "strict": chain_stats.strict,
             "link_tolerance_seconds": LINK_TOLERANCE_SECONDS,
+            "base_series": chain_stats.base_series,
+            "split_series": chain_stats.split_series,
             "links": chain_stats.links,
             "link_rate": chain_stats.link_rate,
         },
@@ -1560,7 +1784,9 @@ def build_dataset(
             "seed": config.sample.seed,
         },
         "label": {
+            "estimand": config.label.estimand,
             "horizon_hours": config.label.horizon_hours,
+            "check_window_hours": list(config.label.check_window_hours),
             "headroom_pct": list(config.label.headroom_pct),
             "min_hours_to_departure": config.label.min_hours_to_departure,
             "max_hours_to_departure": config.label.max_hours_to_departure,
@@ -1569,6 +1795,7 @@ def build_dataset(
         "package_versions": _package_versions(),
         "warnings": list(warnings),
     }
+    _phase("splits and manifest", build_started)
     (out_dir / "column_roles.json").write_bytes(roles_bytes)
     (out_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"

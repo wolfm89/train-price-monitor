@@ -361,7 +361,7 @@ in [src/tpm_analytics/data/README.md](src/tpm_analytics/data/README.md).
 
 ## Baseline training builder
 
-The optional `train` group builds a **v1-only** journey panel with a 24-hour price-breach label,
+The optional `train` group builds a **v1-only** journey panel with a next-day price-breach label,
 joins the holiday calendar and writes one Parquet file per split. Training is local: nothing is
 uploaded and no AWS resource is created. Downloaded silver belongs under the ignored
 `analytics/.data/` directory.
@@ -383,41 +383,52 @@ must be raised for the 10/25/50 % learning-curve runs.
 
 Runs are validation-only by default; `--evaluate-test` scores the test split once, and `--ablation`
 stays validation-only while comparing the four calendar sets. Two clean builds write
-order-independent digests to `dataset_manifest.json` and must match. The report shows label
-coverage, the two-or-more-observation headline, known limitations and the git/silver/config
-provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
+order-independent digests to `dataset_manifest.json` and must match. The report shows eligibility,
+label coverage, known limitations and the git/silver/config provenance; artifacts stay in the
+ignored `analytics/artifacts/<run_id>/`.
 
-The label is the maximum over scraped observations in the next 24 hours (often one scrape about
-13 hours ahead). The domain is `24 h <= hours_to_departure <= 30 d`; the test split is a
-future-**departure** cohort, not a future-era holdout. Since the journey-identity change the label window and the
-history features follow the **journey chain**, not the itinerary-keyed series: a series that stops
-appearing is linked to the next series with the same route, class and first-train number, a planned
-departure within 15 minutes and its first observation at the next route-day scrape. Links are
-one-to-one and maximum-cardinality; the matcher prefers the closest departure but a crossing
+The label is the **next-day fare**: the journey chain's fare at the route-day check closest to
+`t + 24 h` inside 20-28 h, before departure. A row is eligible when that check scrape exists; the
+label is the chain fare at it. A missing chain at the check is **censored** (`not_listed`), not a
+negative. Fares and current prices are compared as integer cents
+(`check_cents * 100 >= price_cents * (100 + headroom)`), so a fare exactly on the limit counts as
+reached and the SQL and numpy paths share one definition. `label_window_end` is the check time and
+is at most `t + 28 h`. The within-24 h maximum remains a diagnostic on R24-covered 24 h-7 d rows.
+The snapshot domain is `24 h <= hours_to_departure <= 30 d`; the test split is a future-
+**departure** cohort, not a future-era holdout.
+
+Snapshots keep the **first observation per bin** (12 h outside 48 h, 1 h inside). The label window
+and history features follow the **journey chain**, not the itinerary-keyed series: a series that
+stops appearing is linked to the next series with the same route, class and first-train number, a
+planned departure within 15 minutes and its first observation at the next route-day scrape. Links
+are one-to-one and maximum-cardinality; the matcher prefers the closest departure but a crossing
 pattern may use the second-closest candidate. An arrival change therefore keeps the journey; a
-different train or a shift above 15 minutes starts a new chain. `--strict-chains` drops ambiguous
-candidates; it is a sensitivity run, not the default, and its metric difference is within refit
-noise.
+different train or a shift above 15 minutes starts a new chain. The decision is causal: if the old
+itinerary later returns it becomes a new incarnation (`#r` suffix), so no link uses a later
+observation. Split detection iterates to a fixed point, so a successor that is itself a later
+incarnation can also close the predecessor's gap. A split is committed only when the one-to-one
+matcher accepts the continuation; a rejected candidate leaves the return in the earlier
+incarnation. `--strict-chains` drops ambiguous candidates; it is a sensitivity run, not the
+default.
 
-The link decision uses the predecessor's full observation history: a series is linked only if it
-does not return after the gap. The 5 % review build measured 858 additional successor series that
-an online rule would link (about 12 % of all link events). A later training stage decides links
-causally at the check.
+One population is used for training, selection, calibration, threshold and evaluation: every
+eligible row with a known next-day check fare. The future evidence tier is a diagnostic stratum,
+not a population.
 
-The report and `metrics.json` carry the evaluation diagnostics: the route-day check grid
-(`check_at`, `check_lag_h`), within-24 h coverage, label/evidence-tier and journey-disappearance
-diagnostics, the climatology baseline, per-headroom x TTD metrics, strata, clustered intervals,
-calibration slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The next-day diagnostic is
-reported for both the 20-28 h and 22-26 h windows; the 20-24 h check is kept for the "crossed and
-came back" comparison and the decision-value diagnostic (the table states this). Each run also writes
+The report and `metrics.json` carry the evaluation diagnostics: eligibility and censoring, the
+route-day check grid (`check_at`, `check_lag_h`), the within-24 h diagnostic on R24-covered rows,
+bin collisions, history depth, missing-at-check shares, the scrape 10-16 h ahead profile, the
+climatology baseline, per-headroom x TTD metrics, strata, clustered intervals, calibration
+slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The decision-value
+diagnostic uses the 20-24 h check, inside the 24 h maximum. Each run also writes
 `predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
 produce. Test-split label and model diagnostics are gated by `--evaluate-test`; journey
 disappearance is a corpus-level diagnostic that includes test departures.
 
-The profile also reports the chain link rate, the v2 `journey_id` overlap (split/merge rate),
-route-day scrape cadence, same-scrape duplicate keys and the cross-sections whose three-peer status
-depends on them. `column_roles.json` lists every output column as `features`, `labels` or `audit`;
-`observation_week` is the Europe/Berlin ISO week.
+The profile also reports the causal chain link rate and incarnation count, the v2 `journey_id`
+overlap (split/merge rate), route-day scrape cadence, same-scrape duplicate keys and the
+cross-sections whose three-peer status depends on them. `column_roles.json` lists every output
+column as `features`, `labels` or `audit`; `observation_week` is the Europe/Berlin ISO week.
 
 ## Semantics the transform encodes
 
