@@ -1053,7 +1053,23 @@ def test_returning_successor_chain_is_causal() -> None:
             "SELECT chain_id FROM full_map_rows WHERE series_key = 's' AND observed_at = ?",
             [cutoff],
         ).fetchone()
+        full_links = set(
+            connection.execute(
+                "SELECT l.predecessor, l.successor FROM full_links l JOIN full_series s "
+                "ON s.series_key = l.successor WHERE s.first_obs <= ?",
+                [cutoff],
+            ).fetchall()
+        )
+        cut_links = set(
+            connection.execute(
+                "SELECT l.predecessor, l.successor FROM cut_links l JOIN cut_series s "
+                "ON s.series_key = l.successor WHERE s.first_obs <= ?",
+                [cutoff],
+            ).fetchall()
+        )
         assert full == cut
+        assert full_links == cut_links
+        assert ("p", "s#r1") in full_links
         assert successor_chain is not None
         assert set(full.values()) == {successor_chain[0]}
         split_series = connection.execute(
@@ -2403,7 +2419,9 @@ def test_git_state_ignores_untracked_files_outside_analytics(tmp_path: Path) -> 
 
     repo = tmp_path / "repo"
     (repo / "analytics").mkdir(parents=True)
+    (repo / "docs").mkdir()
     (repo / "analytics" / "tracked.py").write_text("x", encoding="utf-8")
+    (repo / "docs" / "tracked.txt").write_text("x", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(
@@ -2411,7 +2429,6 @@ def test_git_state_ignores_untracked_files_outside_analytics(tmp_path: Path) -> 
         cwd=repo,
         check=True,
     )
-    (repo / "docs").mkdir()
     (repo / "docs" / "explainer.html").write_text("user work", encoding="utf-8")
     sha, dirty, outside = _git_state(repo)
     assert sha
@@ -2422,6 +2439,10 @@ def test_git_state_ignores_untracked_files_outside_analytics(tmp_path: Path) -> 
     assert dirty is True
     (repo / "analytics" / "untracked.py").unlink()
     (repo / "analytics" / "tracked.py").write_text("changed", encoding="utf-8")
+    _, dirty, _ = _git_state(repo)
+    assert dirty is True
+    (repo / "analytics" / "tracked.py").write_text("x", encoding="utf-8")
+    (repo / "docs" / "tracked.txt").write_text("changed", encoding="utf-8")
     _, dirty, _ = _git_state(repo)
     assert dirty is True
 

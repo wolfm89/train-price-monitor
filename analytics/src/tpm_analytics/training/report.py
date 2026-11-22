@@ -320,6 +320,7 @@ def _report(
         [
             item["split"],
             item["band"],
+            item["labelled_rows"],
             item["not_listed"],
             item["censored_observed"],
             _p(item.get("censored_within_day_rate")),
@@ -816,7 +817,15 @@ def _report(
         a24_rows,
     )
     censored_band_table = _table(
-        ["split", "TTD band", "not listed", "observed within-24 h", "censored within-day", "labelled within-day"],
+        [
+            "split",
+            "TTD band",
+            "labelled rows",
+            "not listed",
+            "observed within-24 h",
+            "censored within-day",
+            "labelled within-day",
+        ],
         censored_band_rows,
     )
     a26_table = _table(
@@ -1080,10 +1089,10 @@ def _report(
         "## Known limitations\n\n"
         "- The label is the chain's fare at one route-day check 20-28 h after the snapshot. "
         "Eligibility depends on the route-day scrape grid, not on the journey's own fare; `no_check` "
-        "rows are unrelated to the fare. `not_listed` censoring is not neutral: the within-24 h "
-        "breach rate before vanishing is higher than for labelled rows in the bands with enough "
-        "censored rows (see the censoring table), so the next-day prevalence is probably "
-        "understated by about 0.1-0.3 points.\n"
+        "rows are unrelated to the fare. `not_listed` censoring is not neutral: in the long-horizon "
+        "bands (14-30 d and 7-14 d) the within-24 h breach rate before vanishing is higher than the "
+        "labelled rate (see the censoring table), so the next-day prevalence is probably understated "
+        "by about 0.1-0.3 points.\n"
         "- The 7-30 d next-day coverage remains sparse on the current v1 schedule; the paired "
         "next-day scraper is a separate plan and is not part of this run.\n"
         "- Test snapshots overlap validation-calibrate weeks unless the run used a later forward "
@@ -1178,7 +1187,7 @@ active crossed-back and decision-value check.
 `crossed back` is the share of R24-covered rows whose within-day maximum breached but the 20-24 h
 point did not. `dearer`/`cheaper`/`unchanged` use a +/-0.5 % band around the current fare and cover
 only rows with a backward 23-36 h reference. When several chain rows share the check scrape, the
-canonical row is the highest fare (then load factor, then deterministic keys); about 0.07 % of
+later-starting series wins; price, load factor and deterministic keys break ties. About 0.07 % of
 labelled rows are affected.
 
 By observation era:

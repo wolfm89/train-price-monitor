@@ -325,7 +325,7 @@ def build_chain_map(
     # A split is decidable at the scrape where the successor first appears. Adding a split can
     # create a new incarnation that is itself the successor of an earlier series, so iterate to a
     # fixed point. The first pass sees only base series; later passes see returning incarnations.
-    for iteration in range(100):
+    for iteration in range(500):
         connection.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {prefix}_obs_rekeyed AS

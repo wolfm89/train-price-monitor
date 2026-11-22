@@ -1204,6 +1204,7 @@ def _profile(
         SELECT
             split,
             ttd_band AS band,
+            count(*) FILTER (WHERE label_observed) AS labelled_rows,
             count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
             count(*) FILTER (
                 WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
@@ -1227,6 +1228,7 @@ def _profile(
             split,
             ttd_band AS band,
             observation_week AS week,
+            count(*) FILTER (WHERE label_observed) AS labelled_rows,
             count(*) FILTER (WHERE censor_reason = 'not_listed') AS not_listed,
             count(*) FILTER (
                 WHERE censor_reason = 'not_listed' AND breached_within_24h IS NOT NULL
@@ -1691,7 +1693,7 @@ def build_dataset(
     if not source_inventory:
         warnings.append("source inventory is empty; the scanned file set is not localisable")
     git_sha_end, git_dirty_end, git_untracked_end = _git_state()
-    if (git_sha_end, git_dirty_end) != (git_sha, git_dirty):
+    if (git_sha_end, git_dirty_end, git_untracked_end) != (git_sha, git_dirty, git_untracked):
         warnings.append("git state changed during the run; the manifest keeps the start state")
     stats = replace(stats, warnings=tuple(warnings))
 
