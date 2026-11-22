@@ -1274,6 +1274,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 - Runner: `{dataset_manifest.get("runner", "local")}`
 - Git: `{dataset_manifest.get("git_sha")}` (dirty: {dataset_manifest.get("git_dirty")})
 - Silver build: `{dataset_manifest.get("silver_build_id")}`
+- Dataset reused: {dataset_manifest.get("reused", False)} (key: {dataset_manifest.get("reuse_key")})
 - Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
 - Protocol: `backtest`; embargo {config.protocol.embargo_hours} h; block {config.protocol.block_days} d
 {recipe_line}
@@ -1385,6 +1386,8 @@ def write_backtest_artifacts(
         "git_dirty": dataset_manifest.get("git_dirty"),
         "git_untracked": dataset_manifest.get("git_untracked", []),
         "silver_build_id": dataset_manifest.get("silver_build_id"),
+        "dataset_reused": dataset_manifest.get("reused", False),
+        "dataset_reuse_key": dataset_manifest.get("reuse_key"),
         "warnings": dataset_manifest.get("warnings", []),
     }
     recipe_payload = {**result.recipe.payload(), "sha256": result.recipe.sha256()}
@@ -1445,6 +1448,8 @@ def write_backtest_artifacts(
             "folds_refit": result.folds_refit,
         },
         "git_dirty_end": dataset_manifest.get("git_dirty_end"),
+        "dataset_reused": dataset_manifest.get("reused", False),
+        "dataset_reuse_key": dataset_manifest.get("reuse_key"),
         "artifacts": {
             path.relative_to(out_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts
         },
