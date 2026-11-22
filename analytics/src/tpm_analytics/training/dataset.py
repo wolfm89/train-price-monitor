@@ -1819,6 +1819,7 @@ def build_dataset(
             "departure_end": config.protocol.forward_end.isoformat(),
             "min_hours_to_departure": config.protocol.forward_min_hours_to_departure,
             "max_hours_to_departure": config.protocol.forward_max_hours_to_departure,
+            "forward_sample_rate": config.protocol.forward_sample_rate,
             "rows": rows,
             "series": series,
             "route_days": route_days,
