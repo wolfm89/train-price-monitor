@@ -231,7 +231,7 @@ class ProtocolConfig:
         if self.forward_min_hours_to_departure >= self.forward_max_hours_to_departure:
             raise ConfigError("protocol forward TTD domain must be increasing")
         if not 0 < self.forward_sample_rate <= 1:
-            raise ConfigError("protocol.forward_sample_rate must be in (0, 1]")
+            raise ConfigError("protocol.forward.sample_rate must be in (0, 1]")
         if self.kind not in PROTOCOL_KINDS:
             raise ConfigError(f"protocol.kind must be one of {PROTOCOL_KINDS}")
         if self.embargo_hours < 0 or self.block_days < 1:

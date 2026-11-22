@@ -388,20 +388,21 @@ def _create_views(
         raise DatasetError(
             f"chain row map changed the panel row count: {base_rows} sampled rows, {chained_rows} chained rows"
         )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP TABLE scrape_grid_all AS
-        SELECT
-            route_id,
-            departure_date,
-            observed_at,
-            min(observation_era) AS observation_era
-        FROM {source_sql}
-        WHERE observed_at < departure_planned
-          AND schema_version = 1
-        GROUP BY route_id, departure_date, observed_at
-        """
-    )
+    if not forward:
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP TABLE scrape_grid_all AS
+            SELECT
+                route_id,
+                departure_date,
+                observed_at,
+                min(observation_era) AS observation_era
+            FROM {source_sql}
+            WHERE observed_at < departure_planned
+              AND schema_version = 1
+            GROUP BY route_id, departure_date, observed_at
+            """
+        )
     phase_started = _phase("base chained", phase_started)
     connection.execute(
         """
@@ -1782,6 +1783,49 @@ def build_dataset(
             ORDER BY ttd_band
             """,
         )
+        route_days_total = _scalar(
+            connection,
+            "SELECT count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) FROM base_all",
+        )
+        sampled_route_days = _scalar(
+            connection,
+            "SELECT count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) FROM base_sampled",
+        )
+        domain_route_days = _scalar(
+            connection,
+            """
+            SELECT count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR))
+            FROM base_all
+            WHERE hours_to_departure >= 24 AND hours_to_departure <= 168
+            """,
+        )
+        departure_dates = _scalar(connection, "SELECT count(DISTINCT departure_date) FROM sampled")
+        missing_dates = [
+            str(row[0])
+            for row in connection.execute(
+                f"""
+                SELECT CAST(day AS DATE)
+                FROM generate_series(
+                    DATE '{config.protocol.forward_start.isoformat()}',
+                    DATE '{config.protocol.forward_end.isoformat()}',
+                    INTERVAL 1 DAY
+                ) AS calendar(day)
+                EXCEPT
+                SELECT departure_date FROM sampled
+                ORDER BY 1
+                """
+            ).fetchall()
+        ]
+        null_counts = connection.execute(
+            "SELECT "
+            + ", ".join(f'sum(CASE WHEN "{name}" IS NULL THEN 1 ELSE 0 END)' for name in spec.names)
+            + " FROM sampled"
+        ).fetchone()
+        if null_counts is None:
+            raise DatasetError("forward feature missingness query returned no row")
+        feature_missingness = {
+            name: round(float(count or 0) / rows, 6) for name, count in zip(spec.names, null_counts, strict=True)
+        }
         out_dir.mkdir(parents=True, exist_ok=True)
         forward_path = out_dir / "forward.parquet"
         connection.execute(
@@ -1799,7 +1843,7 @@ def build_dataset(
         roles_path = out_dir / "forward_column_roles.json"
         roles_path.write_bytes(roles_bytes)
         source_inventory = _source_inventory(connection, source)
-        git_sha, git_dirty, git_untracked = _git_state()
+        git_sha_end, git_dirty_end, git_untracked_end = _git_state()
         forward_manifest = {
             "forward": True,
             "run_id": run_id,
@@ -1823,9 +1867,23 @@ def build_dataset(
             "rows": rows,
             "series": series,
             "route_days": route_days,
+            "route_days_total": route_days_total,
+            "sampled_route_days": sampled_route_days,
+            "route_days_with_domain_rows": domain_route_days,
+            "departure_dates": departure_dates,
+            "missing_departure_dates": missing_dates,
+            "feature_missingness": feature_missingness,
             "departure_bounds": None if bounds is None else [str(bounds[0]), str(bounds[1])],
             "coverage": coverage,
             "chains": chain_stats.to_dict(),
+            "git_sha_end": git_sha_end,
+            "git_dirty_end": git_dirty_end,
+            "git_untracked_end": list(git_untracked_end),
+            "runtime_seconds": round(time.perf_counter() - started, 3),
+            "peak_rss_kb": _peak_rss_kb(),
+            "threads": threads,
+            "cli_argv": list(cli_argv or ()),
+            "duckdb_settings": _duckdb_settings(connection),
             "artifact_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
         }
         (out_dir / "forward_manifest.json").write_text(

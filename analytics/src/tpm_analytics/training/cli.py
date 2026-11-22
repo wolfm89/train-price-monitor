@@ -53,7 +53,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--evaluate-test",
         action="store_true",
-        help="score the untouched test split once; default reports validation only",
+        help="score test-split metrics; in backtest mode score the evaluation and sparse-era folds",
     )
     parser.add_argument(
         "--cache-dir",

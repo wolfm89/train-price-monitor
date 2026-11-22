@@ -17,6 +17,7 @@ import pytest
 
 from tpm_analytics.training.backtest import (
     Recipe,
+    _check_fold_gates,
     fit_fold,
     fit_forward_scorer,
     load_forward,
@@ -39,7 +40,7 @@ from tpm_analytics.training.dataset import (
     _source_inventory,
     build_dataset,
 )
-from tpm_analytics.training.features import feature_spec
+from tpm_analytics.training.features import LABEL_COLUMNS, feature_spec
 from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
 from tpm_analytics.training.labels import breach, breach_sql, cents
 from tpm_analytics.training.model import (
@@ -3016,6 +3017,7 @@ def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
             config.protocol,
             forward_start=date(2026, 7, 1),
             forward_end=date(2026, 8, 10),
+            forward_sample_rate=1.0,
         ),
     )
     connection = duckdb.connect()
@@ -3040,10 +3042,17 @@ def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
         connection.close()
     assert stats.rows > 0
     assert {"eligible", "check_at", "check_lag_h", "hours_to_departure"} <= columns
-    assert not {"breached_next_day", "check_price_eur", "label_observed", "fare_lost"} & columns
+    assert not (set(LABEL_COLUMNS) - {"eligible", "check_at", "check_lag_h"}) & columns
     manifest = json.loads((tmp_path / "forward-run" / "forward_manifest.json").read_text())
     assert manifest["forward"] is True
     assert manifest["rows"] == stats.rows
+    assert manifest["forward_sample_rate"] == 1.0
+    assert manifest["sampled_route_days"] == manifest["route_days_total"]
+    assert manifest["route_days_with_domain_rows"] >= manifest["route_days"]
+    assert manifest["departure_bounds"] == ["2026-07-01", "2026-08-10"]
+    assert manifest["missing_departure_dates"] == []
+    assert manifest["feature_missingness"]
+    assert {"git_sha_end", "git_dirty_end", "runtime_seconds", "peak_rss_kb", "cli_argv"} <= manifest.keys()
 
     base_dir = tmp_path / "base"
     base_dir.mkdir()
@@ -3129,58 +3138,158 @@ def test_protocol_reads_and_validates_forward_sample_rate(tmp_path: Path) -> Non
 
     raw["protocol"]["forward"]["sample_rate"] = 0.0
     path.write_text(json.dumps(raw), encoding="utf-8")
-    with pytest.raises(ConfigError, match="forward_sample_rate"):
+    with pytest.raises(ConfigError, match="sample_rate"):
         load_config(path)
 
 
-def test_fold_masks_purge_on_label_end_and_gate_evaluation() -> None:
-    values = np.array([0, 1, 2, 3, 4], dtype=np.int8)
-    panel = TabularData(
-        features={"hours_to_departure": np.full(5, 48.0, dtype=np.float32)},
-        y=values,
-        series=np.array([f"s{i}" for i in range(5)], dtype=object),
-        route_day=np.arange(5, dtype=np.int64),
-        price=np.full(5, 100.0),
-        check_price=np.full(5, 100.0),
-        future_max=np.full(5, 100.0),
-        future_observations=np.full(5, 2, dtype=np.int16),
-        headroom=np.full(5, 1, dtype=np.int16),
-        departure_date=np.full(5, "2026-07-01", dtype=object),
+def _protocol_panel() -> TabularData:
+    count = 8
+    return TabularData(
+        features={"hours_to_departure": np.full(count, 48.0, dtype=np.float32)},
+        y=np.zeros(count, dtype=np.int8),
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 1, dtype=np.int16),
+        departure_date=np.full(count, "2026-07-01", dtype=object),
         snapshot_at=np.array(
             [
                 "2026-06-01 10:00:00",
-                "2026-06-21 10:00:00",
-                "2026-06-22 10:00:00",
+                "2026-06-21 12:00:00",
+                "2026-06-23 10:00:00",
                 "2026-06-30 10:00:00",
-                "2026-06-30 10:00:00",
+                "2026-06-19 10:00:00",
+                "2026-06-20 00:00:00",
+                "2026-06-24 10:00:00",
+                "2026-07-02 10:00:00",
             ],
             dtype=object,
         ),
-        observation_era=np.full(5, "dense", dtype=object),
-        observation_week=np.full(5, "2026-W22", dtype=object),
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W22", dtype=object),
         label_window_end=np.array(
             [
                 "2026-06-02 10:00:00",
-                "2026-06-23 10:00:00",
-                "2026-06-23 10:00:00",
+                "2026-06-21 12:00:00",
+                "2026-06-24 10:00:00",
                 "2026-07-01 10:00:00",
+                "2026-06-23 10:00:00",
+                "2026-06-21 00:00:00",
+                "2026-06-24 10:00:00",
                 "2026-07-08 10:00:00",
             ],
             dtype=object,
         ),
     )
+
+
+def test_fold_masks_purge_on_label_end_and_gate_evaluation() -> None:
+    panel = _protocol_panel()
     fold = FoldConfig(date(2026, 6, 22), "development", "dev")
     protocol = ProtocolConfig("backtest", (fold,))
     masks = fold_masks(panel, fold, protocol)
-    assert masks.train.tolist() == [True, False, False, False, False]
-    assert masks.calibrate.tolist() == [False, False, True, False, False]
-    assert masks.test.tolist() == [False, False, False, True, False]
+    # row 4 has a snapshot before the purge line but a label that matures after it: no block.
+    # row 1 matures inside the embargo; row 5 sits exactly on the label-end boundary.
+    assert masks.train.tolist() == [True, False, False, False, False, True, False, False]
+    assert masks.calibrate.tolist() == [False, False, True, False, False, False, True, False]
+    assert masks.test.tolist() == [False, False, False, True, False, False, False, False]
     assert_purged(panel, fold, protocol, masks)
     evaluation = FoldConfig(date(2026, 6, 22), "evaluation", "eval")
     forward = FoldConfig(date(2026, 6, 22), "forward", "forward")
     gated = ProtocolConfig("backtest", (fold, evaluation, forward))
     assert [item.name for item in scored_folds(gated, evaluate_test=False)] == ["dev"]
     assert [item.name for item in scored_folds(gated, evaluate_test=True)] == ["dev", "eval"]
+
+
+def test_assert_purged_rejects_each_boundary_violation() -> None:
+    panel = _protocol_panel()
+    fold = FoldConfig(date(2026, 6, 22), "development", "dev")
+    protocol = ProtocolConfig("backtest", (fold,))
+    masks = fold_masks(panel, fold, protocol)
+    index = np.arange(len(panel))
+
+    train_leak = replace(masks, train=(index == 1) | masks.train)
+    with pytest.raises(ModelError, match="training label"):
+        assert_purged(panel, fold, protocol, train_leak)
+
+    calibrate_leak = replace(masks, calibrate=(index == 7) | masks.calibrate)
+    with pytest.raises(ModelError, match="calibration label"):
+        assert_purged(panel, fold, protocol, calibrate_leak)
+
+    test_snapshot_leak = replace(masks, test=(index == 1) | masks.test)
+    with pytest.raises(ModelError, match="test snapshot"):
+        assert_purged(panel, fold, protocol, test_snapshot_leak)
+
+    test_label_leak = replace(masks, test=(index == 7) | masks.test)
+    with pytest.raises(ModelError, match="test label"):
+        assert_purged(panel, fold, protocol, test_label_leak)
+
+    overlap = replace(masks, calibrate=(index == 0) | masks.calibrate)
+    with pytest.raises(ModelError, match="overlap"):
+        assert_purged(panel, fold, protocol, overlap)
+
+
+def test_sparse_era_band_floor_and_domain_gate(tmp_path: Path) -> None:
+    hours = np.repeat(np.array([48.0, 100.0, 150.0, 200.0, 400.0], dtype=np.float32), 25)
+    count = len(hours)
+    block = TabularData(
+        features={"hours_to_departure": hours},
+        y=np.ones(count, dtype=np.int8),
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 1, dtype=np.int16),
+        departure_date=np.full(count, "2026-09-01", dtype=object),
+        snapshot_at=np.full(count, "2026-08-31 10:00:00", dtype=object),
+        observation_era=np.full(count, "sparse", dtype=object),
+        observation_week=np.full(count, "2026-W36", dtype=object),
+        label_window_end=np.full(count, "2026-09-01 10:00:00", dtype=object),
+    )
+    config = load_config(_config(tmp_path))
+    config = replace(
+        config,
+        report=replace(
+            config.report,
+            min_eligible_rows=0,
+            min_split_positives=0,
+            min_band_positives=50,
+            min_sparse_band_positives=20,
+        ),
+    )
+    sparse = FoldConfig(date(2026, 8, 31), "sparse_era", "sparse")
+    _check_fold_gates(sparse, block, block, block, config)
+    evaluation = FoldConfig(date(2026, 8, 31), "evaluation", "eval")
+    with pytest.raises(DatasetError, match="positives"):
+        _check_fold_gates(evaluation, block, block, block, config)
+
+    short = block.subset(np.arange(75))
+    with pytest.raises(DatasetError, match="missing TTD bands"):
+        _check_fold_gates(evaluation, short, short, short, config)
+
+
+def test_change_to_evaluation_calibration_labels_does_not_change_recipe(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    protocol = ProtocolConfig(
+        "backtest",
+        (
+            FoldConfig(date(2026, 7, 6), "development", "dev"),
+            FoldConfig(date(2026, 7, 20), "evaluation", "eval"),
+        ),
+    )
+    config = replace(config, protocol=protocol)
+    frozen = select_recipe(panel, config, spec).sha256()
+    mask = fold_masks(panel, protocol.cutoffs[1], protocol).calibrate
+    mutated = replace(panel, y=np.where(mask, 1 - panel.y, panel.y).astype(np.int8))
+    assert select_recipe(mutated, config, spec).sha256() == frozen
 
 
 def test_sparse_era_fold_keeps_all_bands_in_train() -> None:

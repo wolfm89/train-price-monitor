@@ -376,20 +376,21 @@ mise run //analytics:train:ablation -- --source .data/silver/<build>
 `--source` accepts an S3 pointer, a Parquet glob, a single file, a local directory or a local
 `_latest.json` pointer; S3 needs `DUCKDB_EXTENSION_DIR` and the httpfs extension
 (`mise run //analytics:httpfs`). The default config is `config/training.json` (backtest);
-`config/training-static.json` keeps the legacy static-split path for exact PR 4 comparisons.
+`config/training-static.json` keeps the legacy static-split path for exact reference comparisons.
 
 The training CLI defaults to a 6 GB DuckDB memory limit and 20 GB of temp spill space; both are
 recorded in `dataset_manifest.json`. The temp default is sized for the 5 % route-day sample and
 must be raised for the 10/25/50 % learning-curve runs.
 
 The default protocol is a **rolling-origin backtest**. The dataset is built once; each fold
-selects rows by `snapshot_at` and `label_window_end`. A fold trains on labels that matured at least
+selects rows by `snapshot_at` and `label_window_end`, and purges on the label end, never on the
+snapshot time. A fold trains on labels that matured at least
 24 h before the cutoff, calibrates on the following 7 days and tests the week after that. The recipe
 (model family, settings, calibration method, threshold rule) is selected on the 22 and 29 June
 development folds, written to `recipe.json`, and refitted on each evaluation fold without any
 selection. Evaluation and sparse-era folds are scored only with `--evaluate-test`; development
 folds are always reported. The static splits remain available through
-`config/training-static.json`; their digests and metrics must match the PR 4 reference exactly.
+`config/training-static.json`; their digests and metrics must match the static reference run exactly.
 A series may span a cutoff because labels are purged and every feature is past-only. Long backtests
 can resume with `--cache-dir`: finished folds and the frozen recipe are checkpointed there, keyed
 by the config and recipe hashes, and the checkpoints keep report state rather than the training
@@ -397,7 +398,7 @@ panels. Delete the cache directory to force a clean refit.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
-all-route build exceeds the 5 % memory ceiling; PR 7 raises the sample for the scored forward run.
+all-route build exceeds the 5 % memory ceiling; a later sample-scale run raises it for scoring.
 `--ablation` stays validation/static-only and compares the four calendar sets. Two clean builds write order-independent digests to `dataset_manifest.json` and must match.
 The report shows eligibility, label coverage, known limitations and the git/silver/config
 provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.

@@ -22,6 +22,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from tpm_analytics.silver._duck import sql_string
+from tpm_analytics.training.bands import HEADLINE_BANDS
 from tpm_analytics.training.config import FoldConfig, TrainingConfig
 from tpm_analytics.training.dataset import DatasetError
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, FeatureSpec
@@ -106,6 +107,9 @@ class FoldResult:
     climate: dict[int, Array]
     labels: dict[int, Array]
     runtime_seconds: float = 0.0
+    from_cache: bool = False
+    train_rows: int = 0
+    calibrate_rows: int = 0
     train: TabularData | None = None
     calibrate: TabularData | None = None
 
@@ -124,6 +128,10 @@ class BacktestResult:
     warnings: tuple[str, ...] = ()
     runtime_seconds: float = 0.0
     peak_rss_kb: int = 0
+    cache_dir: str | None = None
+    recipe_from_cache: bool = False
+    fold_cache_hits: int = 0
+    folds_refit: int = 0
 
 
 def load_panel(out_dir: Path, spec: FeatureSpec) -> TabularData:
@@ -244,6 +252,8 @@ def select_recipe_bundle(
     development = [item for item in config.protocol.cutoffs if item.role == "development"]
     if not development:
         raise ModelError("the backtest has no development folds")
+    if any(item.role != "development" for item in development):
+        raise ModelError("recipe selection must use development folds only")
     first_method = next(iter(config.calibration.methods))
     candidate_scores: dict[str, list[dict[str, float | None]]] = {name: [] for name in config.model.candidates}
     fitted: dict[tuple[str, str], FittedModel] = {}
@@ -305,9 +315,19 @@ def _check_fold_gates(
     band_floor = (
         config.report.min_sparse_band_positives if fold.role == "sparse_era" else config.report.min_band_positives
     )
+    expected = {
+        label
+        for label, low, _ in HEADLINE_BANDS
+        if fold.role != "sparse_era" or low < config.protocol.sparse_era_max_hours_to_departure
+    }
     for name, block in (("calibrate", calibrate), ("test", test)):
         bands = _ttd_array(block)
-        for band in sorted(set(bands.tolist())):
+        present = set(bands.tolist())
+        if band_floor > 0:
+            missing = expected - present
+            if missing:
+                raise DatasetError(f"{fold.name} {name}: missing TTD bands {sorted(missing)}")
+        for band in sorted(present):
             positives = int(np.sum(block.y[bands == band]))
             if positives < band_floor:
                 raise DatasetError(f"{fold.name} {name} band {band}: {positives} positives; floor is {band_floor}")
@@ -369,6 +389,8 @@ def fit_fold(
         labels[headroom] = breach(test.price_cents, test.check_price_cents, headroom)
     return FoldResult(
         fold=fold,
+        train_rows=len(train),
+        calibrate_rows=len(calibrate),
         test=test,
         calibrated=calibrated,
         raw=raw,
@@ -402,7 +424,6 @@ def _bss_paired_ci(
     clim_brier = (np.clip(climatology, 1e-9, 1.0 - 1e-9) - labels) ** 2
     model_sums = np.bincount(inverse, weights=model_brier, minlength=len(unique))
     clim_sums = np.bincount(inverse, weights=clim_brier, minlength=len(unique))
-    label_sums = np.bincount(inverse, weights=labels, minlength=len(unique))
     counts = np.bincount(inverse, minlength=len(unique))
     rng = np.random.default_rng(seed)
     values: list[float] = []
@@ -411,11 +432,11 @@ def _bss_paired_ci(
         total = counts[sampled].sum()
         model_b = model_sums[sampled].sum() / total
         clim_b = clim_sums[sampled].sum() / total
-        rate = label_sums[sampled].sum() / total
-        reference = rate * (1.0 - rate)
-        if reference <= 0:
+        if clim_b <= 0:
             continue
-        values.append((1.0 - model_b / reference) - (1.0 - clim_b / reference))
+        # Paired cluster bootstrap of the same quantity shown in the BSS-climatology
+        # column: 1 - model Brier / climatology Brier.
+        values.append(1.0 - model_b / clim_b)
     if not values:
         return []
     return [float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))]
@@ -445,7 +466,8 @@ def _headroom_rows(
             config.seed + headroom,
         )
         headroom_rows.append(item)
-        for band in sorted(set(bands.tolist())):
+        order = {label: index for index, (label, _, _) in enumerate(HEADLINE_BANDS)}
+        for band in sorted(set(bands.tolist()), key=lambda value: order.get(value, len(order))):
             mask = bands == band
             if int(mask.sum()) < MIN_CELL_ROWS:
                 continue
@@ -515,7 +537,7 @@ def _load_cached_fold(
     with data_path.open("rb") as handle:
         loaded = pickle.load(handle)
     # Older checkpoints stored the full train/calibrate panels; drop them from the report state.
-    return replace(loaded, train=None, calibrate=None)
+    return replace(loaded, train=None, calibrate=None, from_cache=True)
 
 
 def _save_cached_fold(
@@ -558,6 +580,7 @@ def run_backtest(
     if not folds:
         raise ModelError("no scored folds")
     cached_recipe = _load_cached_recipe(cache_dir, config)
+    recipe_from_cache = cached_recipe is not None
     if cached_recipe is not None:
         _LOGGER.info("backtest: using cached recipe %s / %s", cached_recipe.model, cached_recipe.calibration)
         recipe = cached_recipe
@@ -598,6 +621,8 @@ def run_backtest(
             "fold": item.fold.name,
             "role": item.fold.role,
             "cutoff": item.fold.cutoff.isoformat(),
+            "train_rows": item.train_rows,
+            "calibrate_rows": item.calibrate_rows,
             "rows": len(item.test),
             "positive_rate": item.metrics.get("positive_rate"),
             "brier": item.metrics.get("brier"),
@@ -607,8 +632,10 @@ def run_backtest(
             "roc_auc": item.metrics.get("roc_auc"),
             "average_precision": item.metrics.get("average_precision"),
             "threshold": item.threshold,
+            "threshold_met": item.threshold_met,
             "alert_share": item.metrics.get("alert_share"),
             "runtime_seconds": item.runtime_seconds,
+            "from_cache": item.from_cache,
         }
         for item in results
     ]
@@ -634,6 +661,7 @@ def run_backtest(
         pooled_metrics["bss_train"] = (
             1.0 - float(pooled_metrics["brier"] or 0.0) / reference_train if reference_train > 0 else None
         )
+        pooled_metrics["bootstrap_clusters"] = len(np.unique(pooled.departure_date))
         pooled_metrics["bootstrap"] = _bootstrap(
             pooled.y,
             calibrated,
@@ -678,6 +706,10 @@ def run_backtest(
         warnings=tuple(warnings),
         runtime_seconds=time.perf_counter() - started,
         peak_rss_kb=0,
+        cache_dir=None if cache_dir is None else str(cache_dir),
+        recipe_from_cache=recipe_from_cache,
+        fold_cache_hits=sum(1 for item in results if item.from_cache),
+        folds_refit=sum(1 for item in results if not item.from_cache),
     )
 
 
@@ -691,6 +723,10 @@ def _fmt(value: Any, digits: int = 4) -> str:
 
 def _p(value: Any) -> str:
     return "—" if value is None else f"{float(value):.1%}"
+
+
+def _yes(value: Any) -> str:
+    return "—" if value is None else ("yes" if float(value) >= 1.0 else "no")
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> str:
@@ -726,23 +762,28 @@ def _write_predictions(path: Path, result: BacktestResult) -> None:
             bands = _ttd_array(item.test)
             chain = item.test.chain if item.test.chain is not None else item.test.series
             count = len(item.test)
+            order = np.lexsort((item.test.snapshot_at, item.test.series))
+            series = item.test.series[order]
+            snapshot = item.test.snapshot_at[order]
+            departure = item.test.departure_date[order]
+            assigned = item.test.headroom[order].astype(np.int16)
             for headroom in sorted(item.probabilities):
                 writer.write_table(
                     pa.table(
                         {
                             "fold": [item.fold.name] * count,
                             "role": [item.fold.role] * count,
-                            "series_key": item.test.series.tolist(),
-                            "chain_id": chain.tolist(),
-                            "snapshot_at": item.test.snapshot_at.tolist(),
-                            "departure_date": item.test.departure_date.tolist(),
-                            "ttd_band": bands.tolist(),
-                            "assigned_headroom": item.test.headroom.astype(np.int16),
+                            "series_key": series.tolist(),
+                            "chain_id": chain[order].tolist(),
+                            "snapshot_at": snapshot.tolist(),
+                            "departure_date": departure.tolist(),
+                            "ttd_band": bands[order].tolist(),
+                            "assigned_headroom": assigned,
                             "headroom_pct": np.full(count, headroom, dtype=np.int16),
-                            "raw_score": item.raw_probabilities[headroom],
-                            "calibrated_score": item.probabilities[headroom],
-                            "calibrated_score_pooled": item.calibrated,
-                            "label": item.labels[headroom].astype(np.int8),
+                            "raw_score": item.raw_probabilities[headroom][order],
+                            "calibrated_score": item.probabilities[headroom][order],
+                            "calibrated_score_pooled": item.calibrated[order],
+                            "label": item.labels[headroom][order].astype(np.int8),
                             "fold_threshold": np.full(count, item.threshold, dtype=np.float64),
                         },
                         schema=schema,
@@ -757,6 +798,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             row["fold"],
             row["role"],
             row["cutoff"],
+            row.get("train_rows", "—"),
+            row.get("calibrate_rows", "—"),
             row["rows"],
             _p(row.get("positive_rate")),
             _fmt(row.get("brier")),
@@ -765,6 +808,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             _fmt(row.get("roc_auc")),
             _fmt(row.get("average_precision")),
             _fmt(row.get("threshold")),
+            _yes(row.get("threshold_met")),
             _p(row.get("alert_share")),
             _fmt(row.get("runtime_seconds"), 1),
         ]
@@ -777,7 +821,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             [
                 ["rows", sum(row["rows"] for row in result.per_fold if row["role"] == "evaluation")],
                 ["Brier", _fmt(pooled.get("brier"))],
-                ["BSS", _fmt(pooled.get("bss"))],
+                ["log loss", _fmt(pooled.get("log_loss"))],
+                ["BSS (base rate)", _fmt(pooled.get("bss"))],
                 ["BSS climatology", _fmt(pooled.get("bss_climatology"))],
                 ["BSS train", _fmt(pooled.get("bss_train"))],
                 ["ROC-AUC", _fmt(pooled.get("roc_auc"))],
@@ -789,7 +834,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         pooled_table = "Evaluation folds were not scored."
     headroom_table = (
         _table(
-            ["headroom %", "prevalence", "Brier", "BSS", "BSS clim", "BSS diff CI", "AUC", "AP"],
+            ["headroom %", "prevalence", "Brier", "BSS", "BSS clim", "BSS clim CI", "AUC", "AP"],
             [
                 [
                     item["headroom_pct"],
@@ -809,7 +854,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     )
     headroom_ttd_table = (
         _table(
-            ["TTD band", "headroom %", "prevalence", "Brier", "BSS", "BSS clim", "BSS diff CI", "AUC", "AP"],
+            ["TTD band", "headroom %", "prevalence", "Brier", "BSS", "BSS clim", "BSS clim CI", "AUC", "AP"],
             [
                 [
                     item["ttd_band"],
@@ -867,18 +912,49 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         else "Sparse-era folds were not scored."
     )
     intervals = pooled.get("intervals", {}) if pooled else {}
-    interval_rows = [[name, _fmt(values[0]), _fmt(values[1])] for name, values in intervals.items() if len(values) == 2]
+    bootstrap = pooled.get("bootstrap", {}) if pooled else {}
+    combined_intervals = {**bootstrap, **intervals}
+    interval_rows = [
+        [name, _fmt(values[0]), _fmt(values[1])] for name, values in combined_intervals.items() if len(values) == 2
+    ]
     interval_table = _table(["metric", "2.5 %", "97.5 %"], interval_rows) if interval_rows else ""
-    warnings = "\n".join(f"- {warning}" for warning in result.warnings) or "- none"
+    clusters = pooled.get("bootstrap_clusters") if pooled else None
+    intervals_note = (
+        f"Intervals are a cluster bootstrap by departure date across folds: "
+        f"{config.report.bootstrap_replicates} replicates for Brier and log loss, "
+        f"{config.report.metric_bootstrap_replicates} for the other metrics, {clusters} clusters."
+        if interval_rows
+        else ""
+    )
+    all_warnings = [*result.warnings, *dataset_manifest.get("warnings", [])]
+    warnings = "\n".join(f"- {warning}" for warning in all_warnings) or "- none"
     recipe_line = (
         f"- Recipe: model `{result.recipe.model}`, calibration `{result.recipe.calibration}`, "
         f"threshold floor {result.recipe.threshold_floor}"
     )
+    spread_note = ""
+    evaluation_rows = [row for row in result.per_fold if row["role"] == "evaluation"]
+    if evaluation_rows:
+
+        def _range(key: str, percent: bool = False) -> str:
+            values = [float(row[key]) for row in evaluation_rows if row.get(key) is not None]
+            if not values:
+                return "—"
+            low, high = min(values), max(values)
+            return f"{low:.2%}-{high:.2%}" if percent else f"{low:.4f}-{high:.4f}"
+
+        spread_note = (
+            "Evaluation-fold spread: "
+            f"Brier {_range('brier')}, BSS {_range('bss')}, AUC {_range('roc_auc')}, "
+            f"AP {_range('average_precision')}, prevalence {_range('positive_rate', percent=True)}."
+        )
     fold_table = _table(
         [
             "fold",
             "role",
             "cutoff",
+            "train",
+            "cal",
             "test rows",
             "prevalence",
             "Brier",
@@ -887,6 +963,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             "AUC",
             "AP",
             "threshold",
+            "floor met",
             "alert share",
             "s",
         ],
@@ -902,23 +979,37 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 - Runner: `{dataset_manifest.get("runner", "local")}`
 - Git: `{dataset_manifest.get("git_sha")}` (dirty: {dataset_manifest.get("git_dirty")})
 - Silver build: `{dataset_manifest.get("silver_build_id")}`
+- Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
 - Protocol: `backtest`; embargo {config.protocol.embargo_hours} h; block {config.protocol.block_days} d
 {recipe_line}
 - Recipe hash: `{result.recipe.sha256()}`
 - Evaluated blocks: {", ".join(result.evaluated_blocks)}
+- Cache: {result.cache_dir or "none"}; recipe cached: {result.recipe_from_cache}
+  fold hits: {result.fold_cache_hits}; refits: {result.folds_refit}
 - Wall: {result.runtime_seconds:.1f} s; peak RSS: {result.peak_rss_kb} KiB
+
+**Label:** the chain's fare at the route-day check closest to `t + 24 h` inside 20-28 h and before
+departure, in the 24 h-30 d domain. Rows are the labelled subset; a missing check is censored
+(`not_listed`), not a negative.
 
 **What is clean:** the evaluation weeks were part of earlier development, and the current recipe
 was chosen with them in view. They are a fair yardstick for choices made from this protocol on.
-The October-November forward set is the only untouched data.
+The October-November forward set is the only untouched data. These are different populations and
+protocols from the static validation split; a higher Brier here is not a model regression.
+
+> `BSS` is 1 - Brier / base-rate Brier; `BSS clim` is 1 - model Brier / fold-climatology Brier.
 
 ## Folds
 
 {fold_table}
 
+{spread_note}
+
 ## Pooled evaluation
 
 {pooled_table}
+
+{intervals_note}
 
 {interval_table}
 
@@ -935,6 +1026,11 @@ The October-November forward set is the only untouched data.
 {sparse_table}
 
 Sparse-era folds cover 24 h-7 d and are thin at the 5 % sample; read them as point estimates.
+The 3-6 September snapshot gap is why sparse-0907 has fewer rows and only 45 positives in its
+5-7 d test band.
+
+The cutoffs straddle the late-July scrape-cadence ramp and the 14-21 July outage, so evaluation
+folds train on 1.1-1.7 M rows rather than an equal sample. The 20 July cutoff is excluded by rule.
 
 ## Decision value
 
@@ -972,6 +1068,7 @@ def write_backtest_artifacts(
         "git_dirty": dataset_manifest.get("git_dirty"),
         "git_untracked": dataset_manifest.get("git_untracked", []),
         "silver_build_id": dataset_manifest.get("silver_build_id"),
+        "warnings": dataset_manifest.get("warnings", []),
     }
     recipe_payload = {**result.recipe.payload(), "sha256": result.recipe.sha256()}
     (out_dir / "recipe.json").write_text(json.dumps(recipe_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -993,7 +1090,7 @@ def write_backtest_artifacts(
         "headroom_ttd": result.headroom_ttd,
         "sparse": result.sparse,
         "decision_value": result.decision_value,
-        "warnings": list(result.warnings),
+        "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],
         "runtime_seconds": result.runtime_seconds,
         "peak_rss_kb": result.peak_rss_kb,
     }
@@ -1010,17 +1107,27 @@ def write_backtest_artifacts(
         "git_untracked": dataset_manifest.get("git_untracked", []),
         "silver_build_id": dataset_manifest.get("silver_build_id"),
         "recipe_sha256": result.recipe.sha256(),
+        "config_sha256": config.hash(),
+        "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
+        "sample": {"sample_rate": config.sample.sample_rate, "seed": config.sample.seed},
         "evaluated_blocks": list(result.evaluated_blocks),
         "runtime": runtime,
+        "cache": {
+            "dir": result.cache_dir,
+            "recipe_from_cache": result.recipe_from_cache,
+            "fold_cache_hits": result.fold_cache_hits,
+            "folds_refit": result.folds_refit,
+        },
+        "git_dirty_end": dataset_manifest.get("git_dirty_end"),
         "artifacts": {
             path.relative_to(out_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts
         },
-        "warnings": list(result.warnings),
+        "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return {
         "run_id": out_dir.name,
-        "rows": len(result.folds[-1].test) if result.folds else 0,
+        "rows": sum(row["rows"] for row in result.per_fold),
         "evaluated_blocks": list(result.evaluated_blocks),
         "recipe": recipe_payload,
         "pooled_brier": result.pooled.get("brier"),
