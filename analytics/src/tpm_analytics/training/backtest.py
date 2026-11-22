@@ -91,8 +91,6 @@ class Recipe:
 @dataclass
 class FoldResult:
     fold: FoldConfig
-    train: TabularData
-    calibrate: TabularData
     test: TabularData
     calibrated: Array
     raw: Array
@@ -108,6 +106,8 @@ class FoldResult:
     climate: dict[int, Array]
     labels: dict[int, Array]
     runtime_seconds: float = 0.0
+    train: TabularData | None = None
+    calibrate: TabularData | None = None
 
 
 @dataclass
@@ -369,8 +369,6 @@ def fit_fold(
         labels[headroom] = breach(test.price_cents, test.check_price_cents, headroom)
     return FoldResult(
         fold=fold,
-        train=train,
-        calibrate=calibrate,
         test=test,
         calibrated=calibrated,
         raw=raw,
@@ -468,6 +466,35 @@ def _headroom_rows(
     return headroom_rows, headroom_ttd
 
 
+def _recipe_cache_path(cache_dir: Path) -> Path:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "recipe.json"
+
+
+def _load_cached_recipe(cache_dir: Path | None, config: TrainingConfig) -> Recipe | None:
+    if cache_dir is None:
+        return None
+    path = _recipe_cache_path(cache_dir)
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("config_sha256") != config.hash():
+        return None
+    return Recipe(
+        model=payload["model"],
+        calibration=payload["calibration"],
+        threshold_floor=float(payload["threshold_floor"]),
+        model_settings=payload["model_settings"],
+    )
+
+
+def _save_cached_recipe(cache_dir: Path | None, config: TrainingConfig, recipe: Recipe) -> None:
+    if cache_dir is None:
+        return
+    payload = {**recipe.payload(), "config_sha256": config.hash()}
+    _recipe_cache_path(cache_dir).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _cache_paths(cache_dir: Path, fold: FoldConfig) -> tuple[Path, Path]:
     folder = cache_dir / "folds"
     folder.mkdir(parents=True, exist_ok=True)
@@ -486,7 +513,9 @@ def _load_cached_fold(
     if meta.get("recipe_sha256") != recipe.sha256() or meta.get("config_sha256") != config.hash():
         return None
     with data_path.open("rb") as handle:
-        return pickle.load(handle)
+        loaded = pickle.load(handle)
+    # Older checkpoints stored the full train/calibrate panels; drop them from the report state.
+    return replace(loaded, train=None, calibrate=None)
 
 
 def _save_cached_fold(
@@ -528,9 +557,16 @@ def run_backtest(
     folds = scored_folds(config.protocol, evaluate_test=evaluate_test)
     if not folds:
         raise ModelError("no scored folds")
-    _LOGGER.info("backtest: selecting recipe on development folds")
-    recipe, development_models = select_recipe_bundle(panel, config, spec)
-    _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
+    cached_recipe = _load_cached_recipe(cache_dir, config)
+    if cached_recipe is not None:
+        _LOGGER.info("backtest: using cached recipe %s / %s", cached_recipe.model, cached_recipe.calibration)
+        recipe = cached_recipe
+        development_models: dict[str, FittedModel] = {}
+    else:
+        _LOGGER.info("backtest: selecting recipe on development folds")
+        recipe, development_models = select_recipe_bundle(panel, config, spec)
+        _save_cached_recipe(cache_dir, config, recipe)
+        _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
     for fold in folds:
         cached = _load_cached_fold(cache_dir, fold, recipe, config)
@@ -665,47 +701,53 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
-def _prediction_table(result: BacktestResult) -> pa.Table:
-    columns: dict[str, list[Any]] = {
-        name: []
-        for name in (
-            "fold",
-            "role",
-            "series_key",
-            "chain_id",
-            "snapshot_at",
-            "departure_date",
-            "ttd_band",
-            "assigned_headroom",
-            "headroom_pct",
-            "raw_score",
-            "calibrated_score",
-            "calibrated_score_pooled",
-            "label",
-            "fold_threshold",
-        )
-    }
-    for item in result.folds:
-        bands = _ttd_array(item.test)
-        for headroom in sorted(item.probabilities):
+def _write_predictions(path: Path, result: BacktestResult) -> None:
+    """Stream one row group per fold/headroom so the pooled table never lives in Python lists."""
+    schema = pa.schema(
+        [
+            ("fold", pa.string()),
+            ("role", pa.string()),
+            ("series_key", pa.string()),
+            ("chain_id", pa.string()),
+            ("snapshot_at", pa.string()),
+            ("departure_date", pa.string()),
+            ("ttd_band", pa.string()),
+            ("assigned_headroom", pa.int16()),
+            ("headroom_pct", pa.int16()),
+            ("raw_score", pa.float64()),
+            ("calibrated_score", pa.float64()),
+            ("calibrated_score_pooled", pa.float64()),
+            ("label", pa.int8()),
+            ("fold_threshold", pa.float64()),
+        ]
+    )
+    with pq.ParquetWriter(path, schema, compression="zstd") as writer:
+        for item in result.folds:
+            bands = _ttd_array(item.test)
+            chain = item.test.chain if item.test.chain is not None else item.test.series
             count = len(item.test)
-            columns["fold"].extend([item.fold.name] * count)
-            columns["role"].extend([item.fold.role] * count)
-            columns["series_key"].extend(item.test.series.tolist())
-            columns["chain_id"].extend(
-                item.test.chain.tolist() if item.test.chain is not None else item.test.series.tolist()
-            )
-            columns["snapshot_at"].extend(item.test.snapshot_at.tolist())
-            columns["departure_date"].extend(item.test.departure_date.tolist())
-            columns["ttd_band"].extend(bands.tolist())
-            columns["assigned_headroom"].extend(item.test.headroom.tolist())
-            columns["headroom_pct"].extend([headroom] * count)
-            columns["raw_score"].extend(item.raw_probabilities[headroom].tolist())
-            columns["calibrated_score"].extend(item.probabilities[headroom].tolist())
-            columns["calibrated_score_pooled"].extend(item.calibrated.tolist())
-            columns["label"].extend(item.labels[headroom].tolist())
-            columns["fold_threshold"].extend([item.threshold] * count)
-    return pa.table(columns)
+            for headroom in sorted(item.probabilities):
+                writer.write_table(
+                    pa.table(
+                        {
+                            "fold": [item.fold.name] * count,
+                            "role": [item.fold.role] * count,
+                            "series_key": item.test.series.tolist(),
+                            "chain_id": chain.tolist(),
+                            "snapshot_at": item.test.snapshot_at.tolist(),
+                            "departure_date": item.test.departure_date.tolist(),
+                            "ttd_band": bands.tolist(),
+                            "assigned_headroom": item.test.headroom.astype(np.int16),
+                            "headroom_pct": np.full(count, headroom, dtype=np.int16),
+                            "raw_score": item.raw_probabilities[headroom],
+                            "calibrated_score": item.probabilities[headroom],
+                            "calibrated_score_pooled": item.calibrated,
+                            "label": item.labels[headroom].astype(np.int8),
+                            "fold_threshold": np.full(count, item.threshold, dtype=np.float64),
+                        },
+                        schema=schema,
+                    )
+                )
 
 
 def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: dict[str, Any]) -> str:
@@ -922,7 +964,7 @@ def write_backtest_artifacts(
     predictions_dir = out_dir / "predictions"
     predictions_dir.mkdir(parents=True, exist_ok=True)
     predictions_path = predictions_dir / "backtest.parquet"
-    pq.write_table(_prediction_table(result), predictions_path, compression="zstd")
+    _write_predictions(predictions_path, result)
     dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
     manifest_view = {
         "runner": runner,
