@@ -1018,6 +1018,9 @@ protocols from the static validation split; a higher Brier here is not a model r
 
 ## Per-headroom
 
+Per-headroom rows relabel each test row at a fixed headroom and fit a separate calibration for
+it; they are not directly comparable with the pooled-calibrator headline.
+
 {headroom_table}
 
 ## Per-headroom x TTD band
@@ -1036,6 +1039,9 @@ The cutoffs straddle the late-July scrape-cadence ramp and the 14-21 July outage
 folds train on 1.1-1.7 M rows rather than an equal sample. The 20 July cutoff is excluded by rule.
 
 ## Decision value
+
+Decision value uses the 20-24 h crossed-back check on a subset of test rows; it is a diagnostic,
+not a headline metric.
 
 {decision_table}
 
