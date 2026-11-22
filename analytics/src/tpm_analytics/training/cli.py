@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -185,12 +186,17 @@ def main(argv: list[str] | None = None) -> int:
             if args.ablation:
                 raise ValueError("--ablation is not available in backtest mode")
             panel = backtest_protocol.load_panel(work_dir, spec)
+            dataset_manifest = json.loads((work_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
+            dataset_sha256 = hashlib.sha256(
+                json.dumps(dataset_manifest.get("dataset_files", []), sort_keys=True).encode("utf-8")
+            ).hexdigest()
             result = backtest_protocol.run_backtest(
                 panel,
                 config,
                 spec,
                 evaluate_test=args.evaluate_test,
                 cache_dir=args.cache_dir,
+                dataset_sha256=dataset_sha256,
             )
             runtime = {
                 "wall_seconds": round(time.perf_counter() - run_started, 3),

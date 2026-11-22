@@ -494,7 +494,7 @@ def _recipe_cache_path(cache_dir: Path) -> Path:
     return cache_dir / "recipe.json"
 
 
-def _load_cached_recipe(cache_dir: Path | None, config: TrainingConfig) -> Recipe | None:
+def _load_cached_recipe(cache_dir: Path | None, config: TrainingConfig, dataset_sha256: str | None) -> Recipe | None:
     if cache_dir is None:
         return None
     path = _recipe_cache_path(cache_dir)
@@ -502,6 +502,8 @@ def _load_cached_recipe(cache_dir: Path | None, config: TrainingConfig) -> Recip
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("config_sha256") != config.hash():
+        return None
+    if dataset_sha256 is not None and payload.get("dataset_sha256") != dataset_sha256:
         return None
     return Recipe(
         model=payload["model"],
@@ -511,10 +513,12 @@ def _load_cached_recipe(cache_dir: Path | None, config: TrainingConfig) -> Recip
     )
 
 
-def _save_cached_recipe(cache_dir: Path | None, config: TrainingConfig, recipe: Recipe) -> None:
+def _save_cached_recipe(
+    cache_dir: Path | None, config: TrainingConfig, recipe: Recipe, dataset_sha256: str | None
+) -> None:
     if cache_dir is None:
         return
-    payload = {**recipe.payload(), "config_sha256": config.hash()}
+    payload = {**recipe.payload(), "config_sha256": config.hash(), "dataset_sha256": dataset_sha256}
     _recipe_cache_path(cache_dir).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -525,7 +529,11 @@ def _cache_paths(cache_dir: Path, fold: FoldConfig) -> tuple[Path, Path]:
 
 
 def _load_cached_fold(
-    cache_dir: Path | None, fold: FoldConfig, recipe: Recipe, config: TrainingConfig
+    cache_dir: Path | None,
+    fold: FoldConfig,
+    recipe: Recipe,
+    config: TrainingConfig,
+    dataset_sha256: str | None,
 ) -> FoldResult | None:
     if cache_dir is None:
         return None
@@ -534,6 +542,8 @@ def _load_cached_fold(
         return None
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     if meta.get("recipe_sha256") != recipe.sha256() or meta.get("config_sha256") != config.hash():
+        return None
+    if dataset_sha256 is not None and meta.get("dataset_sha256") != dataset_sha256:
         return None
     with data_path.open("rb") as handle:
         loaded = pickle.load(handle)
@@ -547,6 +557,7 @@ def _save_cached_fold(
     recipe: Recipe,
     config: TrainingConfig,
     result: FoldResult,
+    dataset_sha256: str | None,
 ) -> None:
     if cache_dir is None:
         return
@@ -561,6 +572,7 @@ def _save_cached_fold(
                 "fold": fold.name,
                 "recipe_sha256": recipe.sha256(),
                 "config_sha256": config.hash(),
+                "dataset_sha256": dataset_sha256,
             },
             indent=2,
             sort_keys=True,
@@ -577,12 +589,13 @@ def run_backtest(
     *,
     evaluate_test: bool,
     cache_dir: Path | None = None,
+    dataset_sha256: str | None = None,
 ) -> BacktestResult:
     started = time.perf_counter()
     folds = scored_folds(config.protocol, evaluate_test=evaluate_test)
     if not folds:
         raise ModelError("no scored folds")
-    cached_recipe = _load_cached_recipe(cache_dir, config)
+    cached_recipe = _load_cached_recipe(cache_dir, config, dataset_sha256)
     recipe_from_cache = cached_recipe is not None
     if cached_recipe is not None:
         _LOGGER.info("backtest: using cached recipe %s / %s", cached_recipe.model, cached_recipe.calibration)
@@ -591,11 +604,11 @@ def run_backtest(
     else:
         _LOGGER.info("backtest: selecting recipe on development folds")
         recipe, development_models = select_recipe_bundle(panel, config, spec)
-        _save_cached_recipe(cache_dir, config, recipe)
+        _save_cached_recipe(cache_dir, config, recipe, dataset_sha256)
         _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
     for fold in folds:
-        cached = _load_cached_fold(cache_dir, fold, recipe, config)
+        cached = _load_cached_fold(cache_dir, fold, recipe, config, dataset_sha256)
         if cached is not None:
             _LOGGER.info("backtest: using cached %s", fold.name)
             results.append(cached)
@@ -612,7 +625,7 @@ def run_backtest(
             spec,
             fitted_model=development_models.get(fold.name),
         )
-        _save_cached_fold(cache_dir, fold, recipe, config, result)
+        _save_cached_fold(cache_dir, fold, recipe, config, result, dataset_sha256)
         results.append(result)
         _LOGGER.info("backtest: finished %s", fold.name)
     development = tuple(item for item in results if item.fold.role == "development")
@@ -878,7 +891,15 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     )
     decision_table = (
         _table(
-            ["fold", "TTD band", "rows", "alert share", "saving vs wait EUR", "saving vs book EUR"],
+            [
+                "fold",
+                "TTD band",
+                "rows",
+                "alert share",
+                "saving vs wait EUR",
+                "95 % CI vs wait",
+                "saving vs book EUR",
+            ],
             [
                 [
                     item.get("fold"),
@@ -886,6 +907,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     item.get("rows"),
                     _p(item.get("alert_share")),
                     _fmt(item.get("saving_vs_always_wait_eur"), 2),
+                    _ci(item.get("ci_saving_vs_wait_eur")),
                     _fmt(item.get("saving_vs_always_book_eur"), 2),
                 ]
                 for item in result.decision_value
@@ -925,7 +947,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     intervals_note = (
         f"Intervals are a cluster bootstrap by departure date across folds: "
         f"{config.report.bootstrap_replicates} replicates for Brier and log loss, "
-        f"{config.report.metric_bootstrap_replicates} for the other metrics, {clusters} clusters."
+        f"{config.report.metric_bootstrap_replicates} for the other metrics, {clusters} clusters; "
+        f"precision and recall use the mean fold threshold."
         if interval_rows
         else ""
     )
