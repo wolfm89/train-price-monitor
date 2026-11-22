@@ -55,6 +55,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="score the untouched test split once; default reports validation only",
     )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="resume backtest folds from per-fold checkpoints in this directory",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -184,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                 config,
                 spec,
                 evaluate_test=args.evaluate_test,
+                cache_dir=args.cache_dir,
             )
             runtime = {
                 "wall_seconds": round(time.perf_counter() - run_started, 3),

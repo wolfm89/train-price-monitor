@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import pickle
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -467,8 +468,61 @@ def _headroom_rows(
     return headroom_rows, headroom_ttd
 
 
+def _cache_paths(cache_dir: Path, fold: FoldConfig) -> tuple[Path, Path]:
+    folder = cache_dir / "folds"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{fold.name}.pkl", folder / f"{fold.name}.json"
+
+
+def _load_cached_fold(
+    cache_dir: Path | None, fold: FoldConfig, recipe: Recipe, config: TrainingConfig
+) -> FoldResult | None:
+    if cache_dir is None:
+        return None
+    data_path, meta_path = _cache_paths(cache_dir, fold)
+    if not data_path.is_file() or not meta_path.is_file():
+        return None
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("recipe_sha256") != recipe.sha256() or meta.get("config_sha256") != config.hash():
+        return None
+    with data_path.open("rb") as handle:
+        return pickle.load(handle)
+
+
+def _save_cached_fold(
+    cache_dir: Path | None,
+    fold: FoldConfig,
+    recipe: Recipe,
+    config: TrainingConfig,
+    result: FoldResult,
+) -> None:
+    if cache_dir is None:
+        return
+    data_path, meta_path = _cache_paths(cache_dir, fold)
+    with data_path.open("wb") as handle:
+        pickle.dump(result, handle)
+    meta_path.write_text(
+        json.dumps(
+            {
+                "fold": fold.name,
+                "recipe_sha256": recipe.sha256(),
+                "config_sha256": config.hash(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def run_backtest(
-    panel: TabularData, config: TrainingConfig, spec: FeatureSpec, *, evaluate_test: bool
+    panel: TabularData,
+    config: TrainingConfig,
+    spec: FeatureSpec,
+    *,
+    evaluate_test: bool,
+    cache_dir: Path | None = None,
 ) -> BacktestResult:
     started = time.perf_counter()
     folds = scored_folds(config.protocol, evaluate_test=evaluate_test)
@@ -479,20 +533,25 @@ def run_backtest(
     _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
     for fold in folds:
+        cached = _load_cached_fold(cache_dir, fold, recipe, config)
+        if cached is not None:
+            _LOGGER.info("backtest: using cached %s", fold.name)
+            results.append(cached)
+            continue
         _LOGGER.info("backtest: fitting %s (%s)", fold.name, fold.role)
         _, train, calibrate, test = _fold_slices(panel, fold, config)
-        results.append(
-            fit_fold(
-                recipe,
-                fold,
-                train,
-                calibrate,
-                test,
-                config,
-                spec,
-                fitted_model=development_models.get(fold.name),
-            )
+        result = fit_fold(
+            recipe,
+            fold,
+            train,
+            calibrate,
+            test,
+            config,
+            spec,
+            fitted_model=development_models.get(fold.name),
         )
+        _save_cached_fold(cache_dir, fold, recipe, config, result)
+        results.append(result)
         _LOGGER.info("backtest: finished %s", fold.name)
     development = tuple(item for item in results if item.fold.role == "development")
     evaluation = tuple(item for item in results if item.fold.role == "evaluation")
