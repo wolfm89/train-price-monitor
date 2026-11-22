@@ -1274,7 +1274,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 - Runner: `{dataset_manifest.get("runner", "local")}`
 - Git: `{dataset_manifest.get("git_sha")}` (dirty: {dataset_manifest.get("git_dirty")})
 - Silver build: `{dataset_manifest.get("silver_build_id")}`
-- Dataset reused: {dataset_manifest.get("reused", False)} (key: {dataset_manifest.get("reuse_key")})
+- Dataset reused: {dataset_manifest.get("dataset_reused", False)} (key: {dataset_manifest.get("dataset_reuse_key")})
 - Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
 - Protocol: `backtest`; embargo {config.protocol.embargo_hours} h; block {config.protocol.block_days} d
 {recipe_line}
