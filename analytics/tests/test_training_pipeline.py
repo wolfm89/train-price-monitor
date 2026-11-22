@@ -3183,6 +3183,53 @@ def test_fold_masks_purge_on_label_end_and_gate_evaluation() -> None:
     assert [item.name for item in scored_folds(gated, evaluate_test=True)] == ["dev", "eval"]
 
 
+def test_sparse_era_fold_keeps_all_bands_in_train() -> None:
+    count = 6
+    panel = TabularData(
+        features={"hours_to_departure": np.array([48.0, 240.0, 48.0, 240.0, 48.0, 240.0], dtype=np.float32)},
+        y=np.zeros(count, dtype=np.int8),
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 1, dtype=np.int16),
+        departure_date=np.full(count, "2026-07-01", dtype=object),
+        snapshot_at=np.array(
+            [
+                "2026-06-01 10:00:00",
+                "2026-06-01 10:00:00",
+                "2026-06-23 10:00:00",
+                "2026-06-23 10:00:00",
+                "2026-06-30 10:00:00",
+                "2026-06-30 10:00:00",
+            ],
+            dtype=object,
+        ),
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W22", dtype=object),
+        label_window_end=np.array(
+            [
+                "2026-06-02 10:00:00",
+                "2026-06-02 10:00:00",
+                "2026-06-24 10:00:00",
+                "2026-06-24 10:00:00",
+                "2026-07-01 10:00:00",
+                "2026-07-01 10:00:00",
+            ],
+            dtype=object,
+        ),
+    )
+    fold = FoldConfig(date(2026, 6, 22), "sparse_era", "sparse")
+    protocol = ProtocolConfig("backtest", (fold,), sparse_era_max_hours_to_departure=168)
+    masks = fold_masks(panel, fold, protocol)
+    assert masks.train.tolist() == [True, True, False, False, False, False]
+    assert masks.calibrate.tolist() == [False, False, True, False, False, False]
+    assert masks.test.tolist() == [False, False, False, False, True, False]
+    assert_purged(panel, fold, protocol, masks)
+
+
 def test_panel_loader_includes_label_window_end(tmp_path: Path) -> None:
     _, out = _build(tmp_path)
     panel = load_panel(out, feature_spec("full"))
