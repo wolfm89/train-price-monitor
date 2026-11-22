@@ -36,8 +36,8 @@ from tpm_analytics.training.model import (
     TabularData,
     _bootstrap,
     _bootstrap_metrics,
-    _categorical,
     _choose_candidate,
+    _compact_category,
     _cross_fitted,
     _filled,
     _metrics,
@@ -165,7 +165,7 @@ def load_forward(path: Path, spec: FeatureSpec) -> TabularData:
     for feature in spec.features:
         values = rows[feature.name]
         if feature.kind == CATEGORICAL:
-            features[feature.name] = _categorical(values)
+            features[feature.name] = _compact_category(values)
         elif feature.kind == BOOLEAN:
             features[feature.name] = _filled(values, 0.0)
         else:
