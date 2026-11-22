@@ -392,8 +392,9 @@ folds are always reported. The static splits remain available through
 `config/training-static.json`; their digests and metrics must match the PR 4 reference exactly.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
-labels or check fares). `--ablation` stays validation/static-only and compares the four calendar
-sets. Two clean builds write order-independent digests to `dataset_manifest.json` and must match.
+labels or check fares). The smoke build uses a documented 5 % route-day sample because the
+all-route build exceeds the 5 % memory ceiling; PR 7 raises the sample for the scored forward run.
+`--ablation` stays validation/static-only and compares the four calendar sets. Two clean builds write order-independent digests to `dataset_manifest.json` and must match.
 The report shows eligibility, label coverage, known limitations and the git/silver/config
 provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 

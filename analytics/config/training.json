@@ -112,7 +112,7 @@
     "block_days": 7,
     "sparse_era_max_hours_to_departure": 168,
     "forward": {
-      "forward_sample_rate": 0.05
+      "sample_rate": 0.05
     }
   }
 }

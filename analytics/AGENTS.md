@@ -119,7 +119,9 @@ v2-only and mixed-schema input.
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only.
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
-  `check_lag_h`) and no label or check-fare columns. Do not score it in PR 5; that is PR 7.
+  `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
+  (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.
+  Do not score it in PR 5; that is PR 7.
 - The label is the **next-day fare**: the chain's fare at the route-day check closest to
   `t + 24 h` inside 20-28 h and before departure. Eligibility depends only on the route-day scrape
   grid. A chain missing at the check is censored (`censor_reason = 'not_listed'`), not a negative;

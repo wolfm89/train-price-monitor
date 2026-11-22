@@ -3118,6 +3118,21 @@ def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> Non
         load_config(path)
 
 
+def test_protocol_reads_and_validates_forward_sample_rate(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["protocol"]["forward"]["sample_rate"] = 0.25
+    path = tmp_path / "sample.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(path)
+    assert config.protocol.forward_sample_rate == 0.25
+    assert load_config(DEFAULT_CONFIG_PATH).protocol.forward_sample_rate == 0.05
+
+    raw["protocol"]["forward"]["sample_rate"] = 0.0
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="forward_sample_rate"):
+        load_config(path)
+
+
 def test_fold_masks_purge_on_label_end_and_gate_evaluation() -> None:
     values = np.array([0, 1, 2, 3, 4], dtype=np.int8)
     panel = TabularData(

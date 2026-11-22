@@ -62,7 +62,7 @@
   "protocol": {
     "kind": "static_split",
     "forward": {
-      "forward_sample_rate": 0.05
+      "sample_rate": 0.05
     }
   }
 }

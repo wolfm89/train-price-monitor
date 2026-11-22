@@ -386,6 +386,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
         forward_end=(_date(forward_raw, "departure_end") if "departure_end" in forward_raw else date(2026, 11, 12)),
         forward_min_hours_to_departure=_int(forward_raw, "min_hours_to_departure", minimum=1, default=24),
         forward_max_hours_to_departure=_int(forward_raw, "max_hours_to_departure", minimum=1, default=168),
+        forward_sample_rate=_float(forward_raw, "sample_rate") if "sample_rate" in forward_raw else 0.05,
     )
     check_window = label_raw.get("check_window_hours")
     if (
