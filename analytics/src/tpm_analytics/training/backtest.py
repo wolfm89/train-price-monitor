@@ -914,8 +914,10 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
 
 
 def _text(values: Array) -> list[str]:
-    if values.dtype.kind in {"S", "U"}:
-        return values.astype(str).tolist()
+    if values.dtype.kind == "S":
+        return [value.decode("utf-8") for value in values]
+    if values.dtype.kind == "U":
+        return values.tolist()
     if np.issubdtype(values.dtype, np.datetime64):
         text = np.datetime_as_string(values, unit="s").astype(str)
         return np.char.replace(text, "T", " ").tolist()

@@ -193,14 +193,19 @@ def _categorical(values: Any) -> Array:
     return np.asarray(flat, dtype=object).reshape(array.shape)
 
 
+def _encode_text(values: Any) -> Array:
+    flat = [("" if value is None else str(value)).encode("utf-8") for value in np.asarray(values, dtype=object).ravel()]
+    width = max((len(value) for value in flat), default=1)
+    return np.asarray(flat, dtype=f"S{width}")
+
+
 def _compact_text(values: Any) -> Array:
-    """Store string ids as fixed-width bytes, which cost a quarter of Python str objects."""
-    flat = ["" if value is None else str(value) for value in np.asarray(values, dtype=object).ravel()]
-    return np.asarray(flat, dtype="S")
+    """Store string ids as fixed-width UTF-8 bytes, which cost a quarter of Python str objects."""
+    return _encode_text(values)
 
 
 def _compact_category(values: Any) -> Array:
-    return _categorical(values).astype("S")
+    return _encode_text(_categorical(values))
 
 
 def _compact_datetime(values: Any, unit: str) -> Array:
