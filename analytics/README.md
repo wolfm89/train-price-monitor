@@ -396,6 +396,9 @@ can resume with `--cache-dir`: finished folds and the frozen recipe are checkpoi
 by the config and recipe hashes, and the checkpoints keep report state rather than the training
 panels. Delete the cache directory to force a clean refit.
 
+A cache-free 5 % backtest peaks at about 11.5 GB; 10 % is near the 17.6 GB host ceiling, so raise
+the memory limit before scaling the sample. The warm cached run peaks near 7.2 GB.
+
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
 all-route build exceeds the 5 % memory ceiling; a later sample-scale run raises it for scoring.

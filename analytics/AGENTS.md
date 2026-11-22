@@ -118,7 +118,9 @@ v2-only and mixed-schema input.
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. `--cache-dir` resumes completed folds and the frozen recipe by config/recipe hash;
-  checkpoints hold report state only, never the train or calibration panels.
+  checkpoints hold report state only, never the train or calibration panels. A cache-free 5 %
+  backtest peaks near 11.5 GB; 10 % is close to the 17.6 GB host ceiling, so raise memory before
+  scaling.
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
   `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
   (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.
