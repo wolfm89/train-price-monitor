@@ -60,6 +60,9 @@
     "min_sparse_band_positives": 20
   },
   "protocol": {
-    "kind": "static_split"
+    "kind": "static_split",
+    "forward": {
+      "forward_sample_rate": 0.05
+    }
   }
 }

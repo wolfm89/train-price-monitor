@@ -331,7 +331,11 @@ def _create_views(
         raise DatasetError(f"{v2_rows} v2 rows fall inside the baseline splits; this baseline is v1-only")
     threshold = max(1, round(config.sample.sample_rate * 10000))
     if forward:
-        connection.execute("CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all")
+        forward_threshold = max(1, round(protocol.forward_sample_rate * 10000))
+        connection.execute(
+            f"CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all "
+            f"WHERE route_day_hash < {forward_threshold}"
+        )
     elif config.sample.max_route_days is None:
         connection.execute(
             f"CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all "

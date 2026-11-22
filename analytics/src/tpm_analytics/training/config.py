@@ -223,12 +223,15 @@ class ProtocolConfig:
     forward_end: date = date(2026, 11, 12)
     forward_min_hours_to_departure: int = 24
     forward_max_hours_to_departure: int = 168
+    forward_sample_rate: float = 0.05
 
     def validate(self) -> None:
         if self.forward_start > self.forward_end:
             raise ConfigError("protocol.forward_start must not be after forward_end")
         if self.forward_min_hours_to_departure >= self.forward_max_hours_to_departure:
             raise ConfigError("protocol forward TTD domain must be increasing")
+        if not 0 < self.forward_sample_rate <= 1:
+            raise ConfigError("protocol.forward_sample_rate must be in (0, 1]")
         if self.kind not in PROTOCOL_KINDS:
             raise ConfigError(f"protocol.kind must be one of {PROTOCOL_KINDS}")
         if self.embargo_hours < 0 or self.block_days < 1:
