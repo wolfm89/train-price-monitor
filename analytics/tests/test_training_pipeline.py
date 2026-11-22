@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,10 +15,20 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from tpm_analytics.training.backtest import (
+    Recipe,
+    fit_forward_scorer,
+    load_forward,
+    load_panel,
+    run_backtest,
+    score_forward,
+    select_recipe,
+    write_backtest_artifacts,
+)
 from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
 from tpm_analytics.training.chains import build_chain_map
 from tpm_analytics.training.cli import main
-from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
+from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, FoldConfig, ProtocolConfig, load_config
 from tpm_analytics.training.dataset import (
     DatasetError,
     DatasetStats,
@@ -54,6 +64,7 @@ from tpm_analytics.training.model import (
     load_split,
     train_and_evaluate,
 )
+from tpm_analytics.training.protocol import assert_purged, fold_masks, fold_slices, scored_folds
 from tpm_analytics.training.report import _warnings
 from tpm_analytics.training.sources import SourceSpec
 
@@ -168,6 +179,7 @@ def _config(tmp_path: Path) -> Path:
     raw["splits"] = SPLITS
     raw["sample"]["sample_rate"] = 1.0
     raw["calendar"]["feature_set"] = "full"
+    raw["protocol"] = {"kind": "static_split"}
     raw["report"]["min_headroom_positives"] = 0
     raw["report"]["min_eligible_rows"] = 0
     raw["report"]["min_split_positives"] = 0
@@ -2949,6 +2961,175 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert (out / "dataset" / "train.parquet").is_file()
+
+
+def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
+    source = tmp_path / "forward.parquet"
+    _write_silver(source, _rows())
+    config = load_config(_config(tmp_path))
+    config = replace(
+        config,
+        protocol=replace(
+            config.protocol,
+            forward_start=date(2026, 7, 1),
+            forward_end=date(2026, 8, 10),
+        ),
+    )
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="forward", build_id="forward", manifest_sha256=None),
+            config,
+            tmp_path / "forward-run",
+            run_id="forward",
+            write_splits=False,
+            forward=True,
+        )
+        columns = {
+            row[0]
+            for row in connection.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)",
+                [str(tmp_path / "forward-run" / "forward.parquet")],
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+    assert stats.rows > 0
+    assert {"eligible", "check_at", "check_lag_h", "hours_to_departure"} <= columns
+    assert not {"breached_next_day", "check_price_eur", "label_observed", "fare_lost"} & columns
+    manifest = json.loads((tmp_path / "forward-run" / "forward_manifest.json").read_text())
+    assert manifest["forward"] is True
+    assert manifest["rows"] == stats.rows
+
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    _, base_out = _build(base_dir)
+    panel = load_panel(base_out, feature_spec("full"))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    masks = fold_masks(panel, fold, config.protocol)
+    train, calibrate, _ = fold_slices(panel, masks)
+    recipe = Recipe(
+        model="base_rate",
+        calibration="sigmoid",
+        threshold_floor=0.7,
+        model_settings={
+            "max_iter": config.model.max_iter,
+            "learning_rate": config.model.learning_rate,
+            "max_leaf_nodes": config.model.max_leaf_nodes,
+            "random_state": config.model.random_state,
+        },
+    )
+    scorer = fit_forward_scorer(recipe, train, calibrate, config, feature_spec("full"))
+    forward = load_forward(tmp_path / "forward-run" / "forward.parquet", feature_spec("full"))
+    probabilities = score_forward(forward, scorer)
+    assert len(probabilities) == len(forward)
+    assert np.all(np.isfinite(probabilities))
+    assert float(probabilities.min()) > 0.0
+    assert float(probabilities.max()) < 1.0
+
+
+def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    protocol = ProtocolConfig(
+        "backtest",
+        (
+            FoldConfig(date(2026, 7, 6), "development", "dev"),
+            FoldConfig(date(2026, 7, 20), "evaluation", "eval"),
+        ),
+    )
+    config = replace(config, protocol=protocol)
+    recipe = select_recipe(panel, config, spec)
+    frozen = recipe.sha256()
+    eval_mask = fold_masks(panel, protocol.cutoffs[1], protocol).test
+    mutated = replace(panel, y=np.where(eval_mask, 1 - panel.y, panel.y).astype(np.int8))
+    assert select_recipe(mutated, config, spec).sha256() == frozen
+    development = run_backtest(panel, config, spec, evaluate_test=False)
+    assert [item.fold.name for item in development.folds] == ["dev"]
+    assert development.pooled == {}
+    scored = run_backtest(panel, config, spec, evaluate_test=True)
+    assert [item.fold.role for item in scored.folds] == ["development", "evaluation"]
+    assert scored.pooled["brier"] is not None
+    summary = write_backtest_artifacts(out, scored, config, spec)
+    assert (out / "predictions" / "backtest.parquet").is_file()
+    assert (out / "recipe.json").is_file()
+    assert summary["evaluated_blocks"] == ["dev", "eval"]
+
+
+def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["protocol"]["cutoffs"] = [{"cutoff": "2026-06-23", "role": "development", "name": "bad"}]
+    path = tmp_path / "monday.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="Monday"):
+        load_config(path)
+    raw["protocol"]["cutoffs"] = [
+        {"cutoff": "2026-06-29", "role": "development", "name": "later"},
+        {"cutoff": "2026-06-22", "role": "development", "name": "earlier"},
+    ]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="sorted"):
+        load_config(path)
+
+
+def test_fold_masks_purge_on_label_end_and_gate_evaluation() -> None:
+    values = np.array([0, 1, 2, 3, 4], dtype=np.int8)
+    panel = TabularData(
+        features={"hours_to_departure": np.full(5, 48.0, dtype=np.float32)},
+        y=values,
+        series=np.array([f"s{i}" for i in range(5)], dtype=object),
+        route_day=np.arange(5, dtype=np.int64),
+        price=np.full(5, 100.0),
+        check_price=np.full(5, 100.0),
+        future_max=np.full(5, 100.0),
+        future_observations=np.full(5, 2, dtype=np.int16),
+        headroom=np.full(5, 1, dtype=np.int16),
+        departure_date=np.full(5, "2026-07-01", dtype=object),
+        snapshot_at=np.array(
+            [
+                "2026-06-01 10:00:00",
+                "2026-06-21 10:00:00",
+                "2026-06-22 10:00:00",
+                "2026-06-30 10:00:00",
+                "2026-06-30 10:00:00",
+            ],
+            dtype=object,
+        ),
+        observation_era=np.full(5, "dense", dtype=object),
+        observation_week=np.full(5, "2026-W22", dtype=object),
+        label_window_end=np.array(
+            [
+                "2026-06-02 10:00:00",
+                "2026-06-23 10:00:00",
+                "2026-06-23 10:00:00",
+                "2026-07-01 10:00:00",
+                "2026-07-08 10:00:00",
+            ],
+            dtype=object,
+        ),
+    )
+    fold = FoldConfig(date(2026, 6, 22), "development", "dev")
+    protocol = ProtocolConfig("backtest", (fold,))
+    masks = fold_masks(panel, fold, protocol)
+    assert masks.train.tolist() == [True, False, False, False, False]
+    assert masks.calibrate.tolist() == [False, False, True, False, False]
+    assert masks.test.tolist() == [False, False, False, True, False]
+    assert_purged(panel, fold, protocol, masks)
+    evaluation = FoldConfig(date(2026, 6, 22), "evaluation", "eval")
+    forward = FoldConfig(date(2026, 6, 22), "forward", "forward")
+    gated = ProtocolConfig("backtest", (fold, evaluation, forward))
+    assert [item.name for item in scored_folds(gated, evaluate_test=False)] == ["dev"]
+    assert [item.name for item in scored_folds(gated, evaluate_test=True)] == ["dev", "eval"]
+
+
+def test_panel_loader_includes_label_window_end(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    panel = load_panel(out, feature_spec("full"))
+    assert panel.label_window_end is not None
+    assert len(panel.label_window_end) == len(panel.y) > 0
 
 
 def test_config_rejects_out_of_range_check_windows(tmp_path: Path) -> None:

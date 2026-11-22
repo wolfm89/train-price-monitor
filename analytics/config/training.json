@@ -57,5 +57,58 @@
     "min_eligible_rows": 1000,
     "min_split_positives": 500,
     "min_band_positives": 50
+  },
+  "protocol": {
+    "kind": "backtest",
+    "cutoffs": [
+      {
+        "cutoff": "2026-06-22",
+        "role": "development",
+        "name": "dev-0622"
+      },
+      {
+        "cutoff": "2026-06-29",
+        "role": "development",
+        "name": "dev-0629"
+      },
+      {
+        "cutoff": "2026-07-27",
+        "role": "evaluation",
+        "name": "eval-0727"
+      },
+      {
+        "cutoff": "2026-08-03",
+        "role": "evaluation",
+        "name": "eval-0803"
+      },
+      {
+        "cutoff": "2026-08-10",
+        "role": "evaluation",
+        "name": "eval-0810"
+      },
+      {
+        "cutoff": "2026-08-17",
+        "role": "evaluation",
+        "name": "eval-0817"
+      },
+      {
+        "cutoff": "2026-08-31",
+        "role": "sparse_era",
+        "name": "sparse-0831"
+      },
+      {
+        "cutoff": "2026-09-07",
+        "role": "sparse_era",
+        "name": "sparse-0907"
+      },
+      {
+        "cutoff": "2026-09-14",
+        "role": "forward",
+        "name": "forward-0914"
+      }
+    ],
+    "embargo_hours": 24,
+    "block_days": 7,
+    "sparse_era_max_hours_to_departure": 168
   }
 }

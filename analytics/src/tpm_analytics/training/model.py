@@ -71,6 +71,7 @@ class TabularData:
     price_cents: Array | None = None
     check_price_cents: Array | None = None
     check_price_2024: Array | None = None
+    label_window_end: Array | None = None
     chain: Array | None = None
 
     def __len__(self) -> int:
@@ -87,6 +88,7 @@ class TabularData:
             price_cents=self.price_cents[indices] if self.price_cents is not None else None,
             check_price_cents=(self.check_price_cents[indices] if self.check_price_cents is not None else None),
             check_price_2024=self.check_price_2024[indices] if self.check_price_2024 is not None else None,
+            label_window_end=self.label_window_end[indices] if self.label_window_end is not None else None,
             future_max=self.future_max[indices],
             future_observations=self.future_observations[indices],
             headroom=self.headroom[indices],
@@ -108,6 +110,7 @@ class TabularData:
             price_cents=self.price_cents,
             check_price_cents=self.check_price_cents,
             check_price_2024=self.check_price_2024,
+            label_window_end=self.label_window_end,
             future_max=self.future_max,
             future_observations=self.future_observations,
             headroom=self.headroom,
@@ -117,6 +120,41 @@ class TabularData:
             observation_week=self.observation_week,
             chain=self.chain,
         )
+
+
+def concat_tabular(parts: list[TabularData]) -> TabularData:
+    """Concatenate split panels into one row-aligned table for a multi-fold run."""
+    if not parts:
+        raise ModelError("cannot concatenate an empty panel list")
+    features = {name: np.concatenate([part.features[name] for part in parts]) for name in parts[0].features}
+
+    def array(name: str) -> Array:
+        return np.concatenate([getattr(part, name) for part in parts])
+
+    def optional(name: str) -> Array | None:
+        values = [getattr(part, name) for part in parts]
+        return None if any(value is None for value in values) else np.concatenate(values)
+
+    return TabularData(
+        features=features,
+        y=array("y"),
+        series=array("series"),
+        route_day=array("route_day"),
+        price=array("price"),
+        check_price=array("check_price"),
+        future_max=array("future_max"),
+        future_observations=array("future_observations"),
+        headroom=array("headroom"),
+        departure_date=array("departure_date"),
+        snapshot_at=array("snapshot_at"),
+        observation_era=array("observation_era"),
+        observation_week=array("observation_week"),
+        price_cents=optional("price_cents"),
+        check_price_cents=optional("check_price_cents"),
+        check_price_2024=optional("check_price_2024"),
+        label_window_end=optional("label_window_end"),
+        chain=optional("chain"),
+    )
 
 
 def _train_prevalence(train: TabularData) -> float:
@@ -174,6 +212,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             "price_eur",
             "check_price_eur",
             "check_price_2024_eur",
+            "label_window_end",
             "future_max_fare_24h",
             "future_observations",
             "headroom_pct",
@@ -225,6 +264,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
         check_price=_filled64(rows["check_price_eur"], np.nan),
         check_price_cents=check_price_cents,
         check_price_2024=_filled64(rows["check_price_2024_eur"], np.nan),
+        label_window_end=np.asarray(rows["label_window_end"], dtype=str),
         future_max=future_max,
         future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=headroom,

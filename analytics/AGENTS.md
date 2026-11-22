@@ -111,6 +111,15 @@ v2-only and mixed-schema input.
 
 - The baseline is **v1-only**. `journey_id` starts with schema v2 on 2026-11-13; a v2 row inside a
   baseline split fails the build. Do not mix v1 and v2 series keys in one split.
+- The default protocol is **backtest**; static is the legacy `config/training-static.json` path.
+  A fold trains on `label_window_end <= cutoff - 24 h`, calibrates on the following 7 days and
+  tests the week after; purge on `label_window_end`, never on `snapshot_at`. The recipe is frozen
+  on development folds and refitted on evaluation folds without selection. Evaluation and
+  sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
+  the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
+  are past-only.
+- `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
+  `check_lag_h`) and no label or check-fare columns. Do not score it in PR 5; that is PR 7.
 - The label is the **next-day fare**: the chain's fare at the route-day check closest to
   `t + 24 h` inside 20-28 h and before departure. Eligibility depends only on the route-day scrape
   grid. A chain missing at the check is censored (`censor_reason = 'not_listed'`), not a negative;

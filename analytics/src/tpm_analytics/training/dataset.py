@@ -236,6 +236,12 @@ def _final_columns(calendar_set: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*AUDIT_COLUMNS, *LABEL_COLUMNS, *spec.names)))
 
 
+def _forward_columns(calendar_set: str) -> tuple[str, ...]:
+    """Forward features plus the grid-only check columns; no label or check fare."""
+    spec = feature_spec(calendar_set)
+    return tuple(dict.fromkeys((*AUDIT_COLUMNS, "eligible", "check_at", "check_lag_h", *spec.names)))
+
+
 def _create_views(
     connection: duckdb.DuckDBPyConnection,
     source_sql: str,
@@ -243,8 +249,10 @@ def _create_views(
     calendar_set: str,
     *,
     strict_chains: bool = False,
+    forward: bool = False,
 ) -> ChainStats:
     splits = config.splits
+    protocol = config.protocol
     label = config.label
     resample = config.resample
     grid = label.headroom_pct
@@ -254,6 +262,12 @@ def _create_views(
         f"concat_ws('|', {config.sample.seed}, route_id, CAST(departure_date AS VARCHAR))", 10000
     )
 
+    departure_filter = (
+        f"departure_date BETWEEN DATE '{protocol.forward_start.isoformat()}' "
+        f"AND DATE '{protocol.forward_end.isoformat()}' AND schema_version = 1"
+        if forward
+        else f"departure_date <= DATE '{splits.test_end.isoformat()}'"
+    )
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP VIEW base_all AS
@@ -287,13 +301,16 @@ def _create_views(
             {route_day_hash_expr} AS route_day_hash
         FROM {source_sql}
         WHERE fare_lowest_eur IS NOT NULL
-          AND departure_date <= DATE '{splits.test_end.isoformat()}'
+          AND {departure_filter}
           AND observed_at < departure_planned
         """
     )
-    v2_rows = _scalar(
-        connection,
-        f"""
+    v2_rows = (
+        0
+        if forward
+        else _scalar(
+            connection,
+            f"""
         SELECT count(*) FROM {source_sql}
         WHERE fare_lowest_eur IS NOT NULL
           AND observed_at < departure_planned
@@ -308,11 +325,14 @@ def _create_views(
           )
           AND (schema_version != 1 OR journey_id IS NOT NULL)
         """,
+        )
     )
     if v2_rows:
         raise DatasetError(f"{v2_rows} v2 rows fall inside the baseline splits; this baseline is v1-only")
     threshold = max(1, round(config.sample.sample_rate * 10000))
-    if config.sample.max_route_days is None:
+    if forward:
+        connection.execute("CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all")
+    elif config.sample.max_route_days is None:
         connection.execute(
             f"CREATE OR REPLACE TEMP VIEW base_sampled_view AS SELECT * FROM base_all "
             f"WHERE route_day_hash < {threshold}"
@@ -476,9 +496,10 @@ def _create_views(
     phase_started = _phase("raw features", phase_started)
     # Exact timestamp bounds: ``EXCLUDE CURRENT ROW`` starts the frame strictly after the snapshot
     # without an epsilon. Duplicate timestamps are already collapsed by dedup.
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW future AS
+    if not forward:
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW future AS
         SELECT
             chain_id,
             observed_at,
@@ -502,7 +523,7 @@ def _create_views(
             ) AS future_last_observed_at
         FROM chain_dedup
         """
-    )
+        )
     phase_started = _phase("future window", phase_started)
     connection.execute(
         f"""
@@ -534,51 +555,52 @@ def _create_views(
         FROM cross_section
         """
     )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE snapshot AS
-        SELECT
-            r.* EXCLUDE (rn),
-            f.future_max_fare_24h,
-            f.future_observations,
-            f.future_last_observed_at
-        FROM resampled r
-        LEFT JOIN future f ON f.chain_id = r.chain_id AND f.observed_at = r.observed_at
-        WHERE r.rn = 1
-        """
-    )
+    if forward:
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE snapshot AS
+            SELECT r.* EXCLUDE (rn)
+            FROM resampled r
+            WHERE r.rn = 1
+            """
+        )
+    else:
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE snapshot AS
+            SELECT
+                r.* EXCLUDE (rn),
+                f.future_max_fare_24h,
+                f.future_observations,
+                f.future_last_observed_at
+            FROM resampled r
+            LEFT JOIN future f ON f.chain_id = r.chain_id AND f.observed_at = r.observed_at
+            WHERE r.rn = 1
+            """
+        )
     phase_started = _phase("resample and snapshot", phase_started)
-    # One superset join against the route-day scrape grid; the check windows are filtered picks
-    # from these candidates, so the grid is joined once instead of three times.
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE check_candidates AS
-        SELECT
-            n.series_key,
-            n.snapshot_at,
-            n.chain_id,
-            g.observed_at AS check_at,
-            abs(date_diff('microsecond', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_us
-        FROM snapshot n
-        JOIN scrape_grid g
-          ON g.route_id = n.route_id
-         AND g.departure_date = n.departure_date
-        WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
-                                AND n.snapshot_at + INTERVAL 28 HOUR
-          AND g.observed_at < n.departure_planned
-        """
-    )
-    # The primary next-day check is the scrape closest to ``t + 24 h``; a tie goes to the earlier
-    # scrape. The 20-24 h point is the crossed-back and decision-value diagnostic; the 22-26 h
-    # point stays the PR 2 sensitivity diagnostic.
-    for name, lower, upper in (
-        ("check_points", label.check_window_hours[0], label.check_window_hours[1]),
-        ("check_points_2024", 20, 24),
-        ("check_points_2226", 22, 26),
-    ):
+    if forward:
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE check_candidates AS
+            SELECT
+                n.series_key,
+                n.snapshot_at,
+                n.chain_id,
+                g.observed_at AS check_at,
+                abs(date_diff('microsecond', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_us
+            FROM snapshot n
+            JOIN scrape_grid g
+              ON g.route_id = n.route_id
+             AND g.departure_date = n.departure_date
+            WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
+                                    AND n.snapshot_at + INTERVAL 28 HOUR
+              AND g.observed_at < n.departure_planned
+            """
+        )
         connection.execute(
             f"""
-            CREATE OR REPLACE TEMP TABLE {name} AS
+            CREATE OR REPLACE TEMP TABLE check_points AS
             SELECT
                 series_key,
                 snapshot_at,
@@ -590,178 +612,261 @@ def _create_views(
                     PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
                 ) AS rn
                 FROM check_candidates
-                WHERE check_at BETWEEN snapshot_at + INTERVAL {lower} HOUR
-                                   AND snapshot_at + INTERVAL {upper} HOUR
+                WHERE check_at BETWEEN snapshot_at + INTERVAL {label.check_window_hours[0]} HOUR
+                                   AND snapshot_at + INTERVAL {label.check_window_hours[1]} HOUR
             )
             WHERE rn = 1
             """
         )
-    # Price each distinct (chain, check) once; the three windows share most check points.
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE check_prices AS
-        SELECT d.chain_id, d.observed_at AS check_at, d.price_eur
-        FROM chain_dedup d
-        JOIN (
-            SELECT chain_id, check_at FROM check_points
-            UNION
-            SELECT chain_id, check_at FROM check_points_2024
-            UNION
-            SELECT chain_id, check_at FROM check_points_2226
-        ) p
-          ON p.chain_id = d.chain_id
-         AND p.check_at = d.observed_at
-        """
-    )
-    phase_started = _phase("check and label views", phase_started)
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP VIEW coverage_events AS
-        SELECT
-            n.series_key,
-            n.snapshot_at,
-            g.observed_at AS s,
-            lag(g.observed_at, 1, n.snapshot_at) OVER (
-                PARTITION BY n.series_key, n.snapshot_at ORDER BY g.observed_at
-            ) AS previous_s
-        FROM snapshot n
-        JOIN scrape_grid g
-          ON g.route_id = n.route_id
-         AND g.departure_date = n.departure_date
-        WHERE g.observed_at > n.snapshot_at
-          AND g.observed_at <= n.snapshot_at + INTERVAL 24 HOUR
-          AND g.observed_at < n.departure_planned
-        """
-    )
-    connection.execute(
-        """
-        CREATE OR REPLACE TEMP VIEW coverage_stats AS
-        SELECT
-            series_key,
-            snapshot_at,
-            date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR) / 3600.0 AS cov_tail_h,
-            greatest(
-                max(date_diff('second', previous_s, s)),
-                date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR)
-            ) / 3600.0 AS cov_max_gap_h
-        FROM coverage_events
-        GROUP BY series_key, snapshot_at
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW snapshot_diag AS
-        SELECT
-            n.*,
-            c.check_at,
-            c.check_lag_h,
-            c24.check_at AS check_at_2024,
-            c24.check_lag_h AS check_lag_2024_h,
-            c26.check_at AS check_at_2226,
-            c26.check_lag_h AS check_lag_2226_h,
-            d.price_eur AS check_price_eur,
-            d24.price_eur AS check_price_2024_eur,
-            d26.price_eur AS check_price_2226_eur,
-            cv.cov_tail_h,
-            cv.cov_max_gap_h,
-            CASE
-                WHEN hours_to_departure BETWEEN 24 AND 168 THEN coalesce(
-                    cv.cov_tail_h <= {config.report.r24_max_tail_hours}
-                    AND cv.cov_max_gap_h <= {config.report.r24_max_gap_hours},
-                    FALSE
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW snapshot_forward AS
+            SELECT
+                n.*,
+                c.check_at,
+                c.check_lag_h,
+                (c.check_at IS NOT NULL) AS eligible
+            FROM snapshot n
+            LEFT JOIN check_points c USING (series_key, snapshot_at)
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW labelled AS
+            SELECT
+                *,
+                {bucket_expr} AS bucket
+            FROM snapshot_forward
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW split_rows AS
+            SELECT
+                * EXCLUDE (bucket),
+                {headroom_expr} AS headroom_pct,
+                {ttd_band_case("hours_to_departure")} AS ttd_band,
+                {berlin_week_sql("observed_at")} AS observation_week,
+                'forward' AS split,
+                CAST(TRUE AS BOOLEAN) AS fare_available
+            FROM labelled
+            """
+        )
+    else:
+        # One superset join against the route-day scrape grid; the check windows are filtered picks
+        # from these candidates, so the grid is joined once instead of three times.
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE check_candidates AS
+            SELECT
+                n.series_key,
+                n.snapshot_at,
+                n.chain_id,
+                g.observed_at AS check_at,
+                abs(date_diff('microsecond', n.snapshot_at + INTERVAL 24 HOUR, g.observed_at)) AS distance_us
+            FROM snapshot n
+            JOIN scrape_grid g
+              ON g.route_id = n.route_id
+             AND g.departure_date = n.departure_date
+            WHERE g.observed_at BETWEEN n.snapshot_at + INTERVAL 20 HOUR
+                                    AND n.snapshot_at + INTERVAL 28 HOUR
+              AND g.observed_at < n.departure_planned
+            """
+        )
+        # The primary next-day check is the scrape closest to ``t + 24 h``; a tie goes to the earlier
+        # scrape. The 20-24 h point is the crossed-back and decision-value diagnostic; the 22-26 h
+        # point stays the PR 2 sensitivity diagnostic.
+        for name, lower, upper in (
+            ("check_points", label.check_window_hours[0], label.check_window_hours[1]),
+            ("check_points_2024", 20, 24),
+            ("check_points_2226", 22, 26),
+        ):
+            connection.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE {name} AS
+                SELECT
+                    series_key,
+                    snapshot_at,
+                    chain_id,
+                    check_at,
+                    date_diff('second', snapshot_at + INTERVAL 24 HOUR, check_at) / 3600.0 AS check_lag_h
+                FROM (
+                    SELECT *, row_number() OVER (
+                        PARTITION BY series_key, snapshot_at ORDER BY distance_us, check_at
+                    ) AS rn
+                    FROM check_candidates
+                    WHERE check_at BETWEEN snapshot_at + INTERVAL {lower} HOUR
+                                       AND snapshot_at + INTERVAL {upper} HOUR
                 )
-                ELSE NULL
-            END AS r24_covered
-        FROM snapshot n
-        LEFT JOIN check_points c USING (series_key, snapshot_at)
-        LEFT JOIN check_points_2024 c24 USING (series_key, snapshot_at)
-        LEFT JOIN check_points_2226 c26 USING (series_key, snapshot_at)
-        LEFT JOIN check_prices d ON d.chain_id = n.chain_id AND d.check_at = c.check_at
-        LEFT JOIN check_prices d24 ON d24.chain_id = n.chain_id AND d24.check_at = c24.check_at
-        LEFT JOIN check_prices d26 ON d26.chain_id = n.chain_id AND d26.check_at = c26.check_at
-        LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW labelled AS
-        SELECT
-            *,
-            {bucket_expr} AS bucket
-        FROM snapshot_diag
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW priced AS
-        SELECT
-            *,
-            {price_cents_sql("price_eur")} AS price_cents,
-            {price_cents_sql("check_price_eur")} AS check_price_cents,
-            {price_cents_sql("check_price_2024_eur")} AS check_price_2024_cents,
-            {price_cents_sql("check_price_2226_eur")} AS check_price_2226_cents,
-            {price_cents_sql("future_max_fare_24h")} AS future_max_fare_24h_cents
-        FROM labelled
-        """
-    )
-    connection.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW split_rows AS
-        SELECT
-            * EXCLUDE (bucket),
-            {headroom_expr} AS headroom_pct,
-            price_eur * (1 + ({headroom_expr}) / 100.0) AS limit_eur,
-            price_cents,
-            check_price_cents,
-            CASE
-                WHEN check_price_cents IS NULL THEN NULL
-                ELSE CAST({breach_sql("check_price_cents", "price_cents", headroom_expr)} AS INTEGER)
-            END AS breached_next_day,
-            (check_at IS NOT NULL) AS eligible,
-            CASE
-                WHEN check_at IS NULL THEN 'no_check'
-                WHEN check_price_cents IS NULL THEN 'not_listed'
-                ELSE NULL
-            END AS censor_reason,
-            CAST(FALSE AS BOOLEAN) AS fare_lost,
-            (check_at IS NOT NULL AND check_price_cents IS NOT NULL) AS label_observed,
-            CASE
-                WHEN future_max_fare_24h_cents IS NULL THEN NULL
-                ELSE CAST({breach_sql("future_max_fare_24h_cents", "price_cents", headroom_expr)} AS INTEGER)
-            END AS breached_within_24h,
-            CASE
-                WHEN check_price_2024_cents IS NULL THEN NULL
-                ELSE CAST({breach_sql("check_price_2024_cents", "price_cents", headroom_expr)} AS INTEGER)
-            END AS breached_at_check_2024,
-            CASE
-                WHEN check_price_2226_cents IS NULL THEN NULL
-                ELSE CAST({breach_sql("check_price_2226_cents", "price_cents", headroom_expr)} AS INTEGER)
-            END AS breached_at_check_2226,
-            CASE
-                WHEN future_max_fare_24h_cents IS NULL OR check_price_2024_cents IS NULL THEN NULL
-                WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", headroom_expr)}
-                 AND NOT {breach_sql("check_price_2024_cents", "price_cents", headroom_expr)}
-                THEN 1 ELSE 0
-            END AS crossed_and_came_back,
-            {ttd_band_case("hours_to_departure")} AS ttd_band,
-            {berlin_week_sql("observed_at")} AS observation_week,
-            CASE
-                WHEN chain_departure_date <= DATE '{splits.train_end.isoformat()}' THEN 'train'
-                WHEN chain_departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
-                    AND DATE '{splits.validation_select_end.isoformat()}' THEN 'validation_select'
-                WHEN chain_departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}'
-                    AND DATE '{splits.validation_calibrate_end.isoformat()}' THEN 'validation_calibrate'
-                WHEN chain_departure_date BETWEEN DATE '{splits.test_start.isoformat()}'
-                    AND DATE '{splits.test_end.isoformat()}' THEN 'test'
-                ELSE NULL
-            END AS split,
-            check_at AS label_window_end,
-            date_diff('second', observed_at, future_last_observed_at) / 3600.0 AS future_span_h,
-            CAST(TRUE AS BOOLEAN) AS fare_available
-        FROM priced
-        """
-    )
-    phase_started = _phase("label and split rows", phase_started)
+                WHERE rn = 1
+                """
+            )
+        # Price each distinct (chain, check) once; the three windows share most check points.
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE check_prices AS
+            SELECT d.chain_id, d.observed_at AS check_at, d.price_eur
+            FROM chain_dedup d
+            JOIN (
+                SELECT chain_id, check_at FROM check_points
+                UNION
+                SELECT chain_id, check_at FROM check_points_2024
+                UNION
+                SELECT chain_id, check_at FROM check_points_2226
+            ) p
+              ON p.chain_id = d.chain_id
+             AND p.check_at = d.observed_at
+            """
+        )
+        phase_started = _phase("check and label views", phase_started)
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW coverage_events AS
+            SELECT
+                n.series_key,
+                n.snapshot_at,
+                g.observed_at AS s,
+                lag(g.observed_at, 1, n.snapshot_at) OVER (
+                    PARTITION BY n.series_key, n.snapshot_at ORDER BY g.observed_at
+                ) AS previous_s
+            FROM snapshot n
+            JOIN scrape_grid g
+              ON g.route_id = n.route_id
+             AND g.departure_date = n.departure_date
+            WHERE g.observed_at > n.snapshot_at
+              AND g.observed_at <= n.snapshot_at + INTERVAL 24 HOUR
+              AND g.observed_at < n.departure_planned
+            """
+        )
+        connection.execute(
+            """
+            CREATE OR REPLACE TEMP VIEW coverage_stats AS
+            SELECT
+                series_key,
+                snapshot_at,
+                date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR) / 3600.0 AS cov_tail_h,
+                greatest(
+                    max(date_diff('second', previous_s, s)),
+                    date_diff('second', max(s), any_value(snapshot_at) + INTERVAL 24 HOUR)
+                ) / 3600.0 AS cov_max_gap_h
+            FROM coverage_events
+            GROUP BY series_key, snapshot_at
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW snapshot_diag AS
+            SELECT
+                n.*,
+                c.check_at,
+                c.check_lag_h,
+                c24.check_at AS check_at_2024,
+                c24.check_lag_h AS check_lag_2024_h,
+                c26.check_at AS check_at_2226,
+                c26.check_lag_h AS check_lag_2226_h,
+                d.price_eur AS check_price_eur,
+                d24.price_eur AS check_price_2024_eur,
+                d26.price_eur AS check_price_2226_eur,
+                cv.cov_tail_h,
+                cv.cov_max_gap_h,
+                CASE
+                    WHEN hours_to_departure BETWEEN 24 AND 168 THEN coalesce(
+                        cv.cov_tail_h <= {config.report.r24_max_tail_hours}
+                        AND cv.cov_max_gap_h <= {config.report.r24_max_gap_hours},
+                        FALSE
+                    )
+                    ELSE NULL
+                END AS r24_covered
+            FROM snapshot n
+            LEFT JOIN check_points c USING (series_key, snapshot_at)
+            LEFT JOIN check_points_2024 c24 USING (series_key, snapshot_at)
+            LEFT JOIN check_points_2226 c26 USING (series_key, snapshot_at)
+            LEFT JOIN check_prices d ON d.chain_id = n.chain_id AND d.check_at = c.check_at
+            LEFT JOIN check_prices d24 ON d24.chain_id = n.chain_id AND d24.check_at = c24.check_at
+            LEFT JOIN check_prices d26 ON d26.chain_id = n.chain_id AND d26.check_at = c26.check_at
+            LEFT JOIN coverage_stats cv USING (series_key, snapshot_at)
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW labelled AS
+            SELECT
+                *,
+                {bucket_expr} AS bucket
+            FROM snapshot_diag
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW priced AS
+            SELECT
+                *,
+                {price_cents_sql("price_eur")} AS price_cents,
+                {price_cents_sql("check_price_eur")} AS check_price_cents,
+                {price_cents_sql("check_price_2024_eur")} AS check_price_2024_cents,
+                {price_cents_sql("check_price_2226_eur")} AS check_price_2226_cents,
+                {price_cents_sql("future_max_fare_24h")} AS future_max_fare_24h_cents
+            FROM labelled
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE OR REPLACE TEMP VIEW split_rows AS
+            SELECT
+                * EXCLUDE (bucket),
+                {headroom_expr} AS headroom_pct,
+                price_eur * (1 + ({headroom_expr}) / 100.0) AS limit_eur,
+                price_cents,
+                check_price_cents,
+                CASE
+                    WHEN check_price_cents IS NULL THEN NULL
+                    ELSE CAST({breach_sql("check_price_cents", "price_cents", headroom_expr)} AS INTEGER)
+                END AS breached_next_day,
+                (check_at IS NOT NULL) AS eligible,
+                CASE
+                    WHEN check_at IS NULL THEN 'no_check'
+                    WHEN check_price_cents IS NULL THEN 'not_listed'
+                    ELSE NULL
+                END AS censor_reason,
+                CAST(FALSE AS BOOLEAN) AS fare_lost,
+                (check_at IS NOT NULL AND check_price_cents IS NOT NULL) AS label_observed,
+                CASE
+                    WHEN future_max_fare_24h_cents IS NULL THEN NULL
+                    ELSE CAST({breach_sql("future_max_fare_24h_cents", "price_cents", headroom_expr)} AS INTEGER)
+                END AS breached_within_24h,
+                CASE
+                    WHEN check_price_2024_cents IS NULL THEN NULL
+                    ELSE CAST({breach_sql("check_price_2024_cents", "price_cents", headroom_expr)} AS INTEGER)
+                END AS breached_at_check_2024,
+                CASE
+                    WHEN check_price_2226_cents IS NULL THEN NULL
+                    ELSE CAST({breach_sql("check_price_2226_cents", "price_cents", headroom_expr)} AS INTEGER)
+                END AS breached_at_check_2226,
+                CASE
+                    WHEN future_max_fare_24h_cents IS NULL OR check_price_2024_cents IS NULL THEN NULL
+                    WHEN {breach_sql("future_max_fare_24h_cents", "price_cents", headroom_expr)}
+                     AND NOT {breach_sql("check_price_2024_cents", "price_cents", headroom_expr)}
+                    THEN 1 ELSE 0
+                END AS crossed_and_came_back,
+                {ttd_band_case("hours_to_departure")} AS ttd_band,
+                {berlin_week_sql("observed_at")} AS observation_week,
+                CASE
+                    WHEN chain_departure_date <= DATE '{splits.train_end.isoformat()}' THEN 'train'
+                    WHEN chain_departure_date BETWEEN DATE '{splits.validation_select_start.isoformat()}'
+                        AND DATE '{splits.validation_select_end.isoformat()}' THEN 'validation_select'
+                    WHEN chain_departure_date BETWEEN DATE '{splits.validation_calibrate_start.isoformat()}'
+                        AND DATE '{splits.validation_calibrate_end.isoformat()}' THEN 'validation_calibrate'
+                    WHEN chain_departure_date BETWEEN DATE '{splits.test_start.isoformat()}'
+                        AND DATE '{splits.test_end.isoformat()}' THEN 'test'
+                    ELSE NULL
+                END AS split,
+                check_at AS label_window_end,
+                date_diff('second', observed_at, future_last_observed_at) / 3600.0 AS future_span_h,
+                CAST(TRUE AS BOOLEAN) AS fare_available
+            FROM priced
+            """
+        )
+        phase_started = _phase("label and split rows", phase_started)
     connection.execute(
         """
         CREATE OR REPLACE TEMP VIEW features_base AS
@@ -872,9 +977,14 @@ def _create_views(
         if missing:
             raise DatasetError(f"{missing} panel rows have no calendar coverage")
 
+    hours_min, hours_max = (
+        (config.protocol.forward_min_hours_to_departure, config.protocol.forward_max_hours_to_departure)
+        if forward
+        else (label.min_hours_to_departure, label.max_hours_to_departure)
+    )
     connection.execute(
         f"CREATE OR REPLACE TEMP TABLE sampled AS SELECT * FROM panel_calendar "
-        f"WHERE hours_to_departure BETWEEN {label.min_hours_to_departure} AND {label.max_hours_to_departure}"
+        f"WHERE hours_to_departure BETWEEN {hours_min} AND {hours_max}"
     )
     _phase("features and sampled panel", phase_started)
     null_splits = _scalar(connection, "SELECT count(*) FROM sampled WHERE split IS NULL")
@@ -1618,6 +1728,7 @@ def build_dataset(
     cli_argv: tuple[str, ...] | None = None,
     threads: int | None = None,
     strict_chains: bool = False,
+    forward: bool = False,
 ) -> DatasetStats:
     """Build the panel, profile it and write the Parquet splits."""
     # Provenance is the checkout state when the build starts, not when it happens to finish.
@@ -1639,14 +1750,82 @@ def build_dataset(
         config,
         calendar_set,
         strict_chains=strict_chains,
+        forward=forward,
     )
     build_started = _phase("dataset views", build_started)
 
-    columns = _final_columns(calendar_set)
+    columns = _forward_columns(calendar_set) if forward else _final_columns(calendar_set)
     missing = set(columns) - {row[0] for row in connection.execute("DESCRIBE SELECT * FROM sampled").fetchall()}
     if missing:
         raise DatasetError(f"sampled panel is missing columns: {sorted(missing)}")
     selected = ", ".join(columns)
+    if forward:
+        rows = _scalar(connection, "SELECT count(*) FROM sampled")
+        if rows == 0:
+            raise DatasetError("forward panel is empty; check the departure window and source")
+        series = _scalar(connection, "SELECT count(DISTINCT series_key) FROM sampled")
+        route_days = _scalar(
+            connection,
+            "SELECT count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) FROM sampled",
+        )
+        bounds = connection.execute("SELECT min(departure_date), max(departure_date) FROM sampled").fetchone()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        forward_path = out_dir / "forward.parquet"
+        connection.execute(
+            f"COPY (SELECT {selected} FROM sampled "
+            f"ORDER BY series_key, snapshot_at, bin_regime, bin_index) "
+            f"TO '{sql_string(forward_path.as_posix())}' (FORMAT parquet, COMPRESSION zstd)"
+        )
+        roles_payload = {
+            "version": 1,
+            "features": list(spec.names),
+            "audit": [name for name in AUDIT_COLUMNS if name not in set(spec.names)],
+            "grid": ["eligible", "check_at", "check_lag_h"],
+        }
+        roles_bytes = (json.dumps(roles_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        roles_path = out_dir / "forward_column_roles.json"
+        roles_path.write_bytes(roles_bytes)
+        source_inventory = _source_inventory(connection, source)
+        git_sha, git_dirty, git_untracked = _git_state()
+        forward_manifest = {
+            "forward": True,
+            "run_id": run_id,
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "source": source.label,
+            "source_rows": source_rows,
+            "source_inventory": source_inventory,
+            "git_sha": git_sha,
+            "git_dirty": git_dirty,
+            "git_untracked": list(git_untracked),
+            "config_sha256": config.hash(),
+            "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
+            "column_roles": roles_path.name,
+            "column_roles_sha256": hashlib.sha256(roles_bytes).hexdigest(),
+            "columns": list(columns),
+            "departure_start": config.protocol.forward_start.isoformat(),
+            "departure_end": config.protocol.forward_end.isoformat(),
+            "min_hours_to_departure": config.protocol.forward_min_hours_to_departure,
+            "max_hours_to_departure": config.protocol.forward_max_hours_to_departure,
+            "rows": rows,
+            "series": series,
+            "route_days": route_days,
+            "departure_bounds": None if bounds is None else [str(bounds[0]), str(bounds[1])],
+            "chains": chain_stats.to_dict(),
+            "artifact_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
+        }
+        (out_dir / "forward_manifest.json").write_text(
+            json.dumps(forward_manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
+        )
+        return DatasetStats(
+            run_id=run_id,
+            rows=rows,
+            labelled_rows=0,
+            series=series,
+            route_days=route_days,
+            splits=(),
+            duration_seconds=round(time.perf_counter() - started, 3),
+            profile={"forward": forward_manifest},
+        )
     split_names = ("train", "validation_select", "validation_calibrate", "test")
     splits = _split_stats(connection)
     profile = _profile(connection, chain_stats, source_sql, config)

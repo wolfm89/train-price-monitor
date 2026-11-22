@@ -15,6 +15,8 @@ from typing import Any
 
 CALENDAR_SETS = ("none", "public", "public_school", "full")
 LABEL_ESTIMANDS = ("next_day_fare",)
+PROTOCOL_KINDS = ("backtest", "static_split")
+FOLD_ROLES = ("development", "evaluation", "sparse_era", "forward")
 MODEL_NAMES = ("base_rate", "logistic", "hist_gradient_boosting", "lightgbm")
 CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
 
@@ -193,12 +195,62 @@ class ReportConfig:
 
 
 @dataclass(frozen=True)
+class FoldConfig:
+    cutoff: date
+    role: str
+    name: str
+
+    def validate(self) -> None:
+        if self.role not in FOLD_ROLES:
+            raise ConfigError(f"protocol fold role must be one of {FOLD_ROLES}")
+        if self.cutoff.weekday() != 0:
+            raise ConfigError(f"protocol cutoff {self.cutoff} is not a Monday")
+        if not self.name:
+            raise ConfigError("protocol fold name must not be empty")
+
+
+@dataclass(frozen=True)
+class ProtocolConfig:
+    kind: str
+    cutoffs: tuple[FoldConfig, ...]
+    embargo_hours: int = 24
+    block_days: int = 7
+    sparse_era_max_hours_to_departure: int = 168
+    forward_start: date = date(2026, 10, 1)
+    forward_end: date = date(2026, 11, 12)
+    forward_min_hours_to_departure: int = 24
+    forward_max_hours_to_departure: int = 168
+
+    def validate(self) -> None:
+        if self.forward_start > self.forward_end:
+            raise ConfigError("protocol.forward_start must not be after forward_end")
+        if self.forward_min_hours_to_departure >= self.forward_max_hours_to_departure:
+            raise ConfigError("protocol forward TTD domain must be increasing")
+        if self.kind not in PROTOCOL_KINDS:
+            raise ConfigError(f"protocol.kind must be one of {PROTOCOL_KINDS}")
+        if self.embargo_hours < 0 or self.block_days < 1:
+            raise ConfigError("protocol embargo and block length must be non-negative/positive")
+        if self.sparse_era_max_hours_to_departure < 1:
+            raise ConfigError("protocol sparse-era domain must be positive")
+        if self.kind == "backtest" and not self.cutoffs:
+            raise ConfigError("protocol.cutoffs must not be empty in backtest mode")
+        dates = [item.cutoff for item in self.cutoffs]
+        if dates != sorted(set(dates)):
+            raise ConfigError("protocol.cutoffs must be sorted and unique")
+        for item in self.cutoffs:
+            item.validate()
+        if self.kind == "backtest" and not any(item.role == "development" for item in self.cutoffs):
+            raise ConfigError("protocol.cutoffs must contain at least one development fold")
+
+
+@dataclass(frozen=True)
 class TrainingConfig:
     version: int
     seed: int
     source: str | None
     output_root: str
     splits: SplitConfig
+    protocol: ProtocolConfig
     label: LabelConfig
     resample: ResampleConfig
     sample: SampleConfig
@@ -213,6 +265,7 @@ class TrainingConfig:
         if not self.output_root or self.output_root.startswith("/"):
             raise ConfigError("output_root must be a relative path")
         self.splits.validate()
+        self.protocol.validate()
         self.label.validate()
         self.resample.validate()
         self.sample.validate()
@@ -291,6 +344,43 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
     ):
         raise ConfigError("every config section must be an object")
 
+    protocol_raw = raw.get("protocol")
+    if protocol_raw is None:
+        protocol_raw = {"kind": "static_split"}
+    if not isinstance(protocol_raw, dict):
+        raise ConfigError("protocol must be an object")
+    cutoffs_raw = protocol_raw.get("cutoffs") or []
+    if not isinstance(cutoffs_raw, list):
+        raise ConfigError("protocol.cutoffs must be a list")
+    cutoffs: list[FoldConfig] = []
+    for item in cutoffs_raw:
+        if not isinstance(item, dict):
+            raise ConfigError("every protocol cutoff must be an object")
+        cutoffs.append(
+            FoldConfig(
+                cutoff=_date(item, "cutoff"),
+                role=_str(item, "role"),
+                name=_str(item, "name"),
+            )
+        )
+    forward_raw = protocol_raw.get("forward") or {}
+    if not isinstance(forward_raw, dict):
+        raise ConfigError("protocol.forward must be an object")
+    protocol = ProtocolConfig(
+        kind=_str(protocol_raw, "kind"),
+        cutoffs=tuple(cutoffs),
+        embargo_hours=_int(protocol_raw, "embargo_hours", minimum=0, default=24),
+        block_days=_int(protocol_raw, "block_days", minimum=1, default=7),
+        sparse_era_max_hours_to_departure=_int(
+            protocol_raw, "sparse_era_max_hours_to_departure", minimum=1, default=168
+        ),
+        forward_start=(
+            _date(forward_raw, "departure_start") if "departure_start" in forward_raw else date(2026, 10, 1)
+        ),
+        forward_end=(_date(forward_raw, "departure_end") if "departure_end" in forward_raw else date(2026, 11, 12)),
+        forward_min_hours_to_departure=_int(forward_raw, "min_hours_to_departure", minimum=1, default=24),
+        forward_max_hours_to_departure=_int(forward_raw, "max_hours_to_departure", minimum=1, default=168),
+    )
     check_window = label_raw.get("check_window_hours")
     if (
         not isinstance(check_window, list)
@@ -303,6 +393,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
         seed=_int(raw, "seed", minimum=0),
         source=None if raw.get("source") is None else _str(raw, "source"),
         output_root=_str(raw, "output_root"),
+        protocol=protocol,
         splits=SplitConfig(
             train_end=_date(splits_raw, "train_end"),
             validation_select_start=_date(splits_raw, "validation_select_start"),

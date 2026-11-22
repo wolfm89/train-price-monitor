@@ -19,6 +19,7 @@ import duckdb
 import pyarrow
 
 from tpm_analytics.silver._duck import connect
+from tpm_analytics.training import backtest as backtest_protocol
 from tpm_analytics.training import model as training_model
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, TrainingConfig, load_config
 from tpm_analytics.training.dataset import build_dataset
@@ -38,6 +39,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default=None, help="explicit run id; default: UTC timestamp + config hash")
     parser.add_argument("--calendar-features", choices=CALENDAR_SETS, default=None)
     parser.add_argument("--profile", action="store_true", help="build and profile without training")
+    parser.add_argument(
+        "--forward",
+        action="store_true",
+        help="build the unscored forward Parquet only; no labels or check fares",
+    )
     parser.add_argument(
         "--strict-chains",
         action="store_true",
@@ -155,19 +161,49 @@ def main(argv: list[str] | None = None) -> int:
                 build_config,
                 work_dir,
                 run_id=run_id,
-                write_splits=not args.profile,
+                write_splits=not args.profile and not args.forward,
                 cli_argv=tuple(sys.argv),
                 threads=threads,
                 strict_chains=args.strict_chains,
+                forward=args.forward,
             )
         finally:
             connection.close()
             shutil.rmtree(temp_dir, ignore_errors=True)
-        if args.profile:
+        if args.profile or args.forward:
             os.replace(work_dir, out_dir)
             print(json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str))
             return 0
         spec = feature_spec(primary_set)
+        if config.protocol.kind == "backtest":
+            if args.ablation:
+                raise ValueError("--ablation is not available in backtest mode")
+            panel = backtest_protocol.load_panel(work_dir, spec)
+            result = backtest_protocol.run_backtest(
+                panel,
+                config,
+                spec,
+                evaluate_test=args.evaluate_test,
+            )
+            runtime = {
+                "wall_seconds": round(time.perf_counter() - run_started, 3),
+                "peak_rss_kb": _peak_rss_kb(),
+            }
+            result.runtime_seconds = round(time.perf_counter() - run_started, 3)
+            result.peak_rss_kb = int(runtime["peak_rss_kb"])
+            summary = backtest_protocol.write_backtest_artifacts(
+                work_dir,
+                result,
+                config,
+                spec,
+                runtime=runtime,
+            )
+            os.replace(work_dir, out_dir)
+            summary.update(
+                {"out": str(out_dir), "run_id": run_id, "labelled_rows": stats.labelled_rows, "rows": stats.rows}
+            )
+            print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+            return 0
         full_splits = _load_splits(work_dir, feature_spec(build_set))
         splits = {name: data.select(spec.names) for name, data in full_splits.items()}
         evaluation, fitted, calibrator = training_model.train_and_evaluate(
