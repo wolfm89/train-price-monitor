@@ -168,6 +168,7 @@ class ReportConfig:
     min_split_positives: int
     min_band_positives: int
     min_headroom_positives: int
+    min_sparse_band_positives: int = 20
     r24_max_tail_hours: int = 4
     r24_max_gap_hours: int = 6
 
@@ -188,6 +189,8 @@ class ReportConfig:
             raise ConfigError("report.min_split_positives must be non-negative")
         if self.min_band_positives < 0:
             raise ConfigError("report.min_band_positives must be non-negative")
+        if self.min_sparse_band_positives < 0:
+            raise ConfigError("report.min_sparse_band_positives must be non-negative")
         if self.min_headroom_positives < 0:
             raise ConfigError("report.min_headroom_positives must be non-negative")
         if self.r24_max_tail_hours < 0 or self.r24_max_gap_hours < 0:
@@ -445,6 +448,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             min_eligible_rows=_int(report_raw, "min_eligible_rows", minimum=0),
             min_split_positives=_int(report_raw, "min_split_positives", minimum=0),
             min_band_positives=_int(report_raw, "min_band_positives", minimum=0),
+            min_sparse_band_positives=_int(report_raw, "min_sparse_band_positives", minimum=0, default=20),
             min_headroom_positives=_int(report_raw, "min_headroom_positives", minimum=0),
             r24_max_tail_hours=_int(report_raw, "r24_max_tail_hours", minimum=0, default=4),
             r24_max_gap_hours=_int(report_raw, "r24_max_gap_hours", minimum=0, default=6),

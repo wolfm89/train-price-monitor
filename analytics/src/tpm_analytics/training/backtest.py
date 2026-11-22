@@ -301,15 +301,15 @@ def _check_fold_gates(
             raise DatasetError(
                 f"{fold.name} {name}: {positives} positives; floor is {config.report.min_split_positives}"
             )
+    band_floor = (
+        config.report.min_sparse_band_positives if fold.role == "sparse_era" else config.report.min_band_positives
+    )
     for name, block in (("calibrate", calibrate), ("test", test)):
         bands = _ttd_array(block)
         for band in sorted(set(bands.tolist())):
             positives = int(np.sum(block.y[bands == band]))
-            if positives < config.report.min_band_positives:
-                raise DatasetError(
-                    f"{fold.name} {name} band {band}: {positives} positives; "
-                    f"floor is {config.report.min_band_positives}"
-                )
+            if positives < band_floor:
+                raise DatasetError(f"{fold.name} {name} band {band}: {positives} positives; floor is {band_floor}")
 
 
 def fit_fold(

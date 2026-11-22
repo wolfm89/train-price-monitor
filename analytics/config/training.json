@@ -56,7 +56,8 @@
     "r24_max_gap_hours": 6,
     "min_eligible_rows": 1000,
     "min_split_positives": 500,
-    "min_band_positives": 50
+    "min_band_positives": 50,
+    "min_sparse_band_positives": 20
   },
   "protocol": {
     "kind": "backtest",
