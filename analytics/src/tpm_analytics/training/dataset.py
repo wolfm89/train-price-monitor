@@ -1769,6 +1769,15 @@ def build_dataset(
             "SELECT count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR)) FROM sampled",
         )
         bounds = connection.execute("SELECT min(departure_date), max(departure_date) FROM sampled").fetchone()
+        coverage = _dict_rows(
+            connection,
+            """
+            SELECT ttd_band AS band, count(*) AS rows, sum(CASE WHEN eligible THEN 1 ELSE 0 END) AS eligible
+            FROM sampled
+            GROUP BY ttd_band
+            ORDER BY ttd_band
+            """,
+        )
         out_dir.mkdir(parents=True, exist_ok=True)
         forward_path = out_dir / "forward.parquet"
         connection.execute(
@@ -1810,6 +1819,7 @@ def build_dataset(
             "series": series,
             "route_days": route_days,
             "departure_bounds": None if bounds is None else [str(bounds[0]), str(bounds[1])],
+            "coverage": coverage,
             "chains": chain_stats.to_dict(),
             "artifact_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
         }
