@@ -17,6 +17,7 @@ import pytest
 
 from tpm_analytics.training.backtest import (
     Recipe,
+    fit_fold,
     fit_forward_scorer,
     load_forward,
     load_panel,
@@ -2961,6 +2962,48 @@ def test_failed_build_leaves_output_directory_reusable(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert (out / "dataset" / "train.parquet").is_file()
+
+
+def test_backtest_fold_gate_and_baseline_isolation(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    protocol = ProtocolConfig(
+        "backtest",
+        (FoldConfig(date(2026, 7, 6), "development", "dev"),),
+    )
+    config = replace(config, protocol=protocol)
+    fold = protocol.cutoffs[0]
+    masks = fold_masks(panel, fold, protocol)
+    train, calibrate, test = fold_slices(panel, masks)
+    recipe = Recipe(
+        model="base_rate",
+        calibration="sigmoid",
+        threshold_floor=0.7,
+        model_settings={
+            "max_iter": config.model.max_iter,
+            "learning_rate": config.model.learning_rate,
+            "max_leaf_nodes": config.model.max_leaf_nodes,
+            "random_state": config.model.random_state,
+        },
+    )
+    base = fit_fold(recipe, fold, train, calibrate, test, config, spec)
+    mutated = fit_fold(
+        recipe,
+        fold,
+        train,
+        calibrate,
+        replace(test, y=1 - test.y),
+        config,
+        spec,
+    )
+    for headroom in config.label.headroom_pct:
+        assert np.array_equal(base.climate[headroom], mutated.climate[headroom])
+        assert np.array_equal(base.probabilities[headroom], mutated.probabilities[headroom])
+    strict = replace(config, report=replace(config.report, min_band_positives=10**9))
+    with pytest.raises(DatasetError, match="band"):
+        fit_fold(recipe, fold, train, calibrate, test, strict, spec)
 
 
 def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -21,6 +22,7 @@ import pyarrow.parquet as pq
 
 from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.config import FoldConfig, TrainingConfig
+from tpm_analytics.training.dataset import DatasetError
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, FeatureSpec
 from tpm_analytics.training.labels import breach
 from tpm_analytics.training.model import (
@@ -54,6 +56,7 @@ from tpm_analytics.training.protocol import (
 )
 
 MIN_CELL_ROWS = 20
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -233,17 +236,21 @@ def _fold_metrics(
     return metrics
 
 
-def select_recipe(panel: TabularData, config: TrainingConfig, spec: FeatureSpec) -> Recipe:
+def select_recipe_bundle(
+    panel: TabularData, config: TrainingConfig, spec: FeatureSpec
+) -> tuple[Recipe, dict[str, FittedModel]]:
     """Choose model family and calibration method on the development folds only."""
     development = [item for item in config.protocol.cutoffs if item.role == "development"]
     if not development:
         raise ModelError("the backtest has no development folds")
     first_method = next(iter(config.calibration.methods))
     candidate_scores: dict[str, list[dict[str, float | None]]] = {name: [] for name in config.model.candidates}
+    fitted: dict[tuple[str, str], FittedModel] = {}
     for fold in development:
         _, train, calibrate, _ = _fold_slices(panel, fold, config)
         for name in config.model.candidates:
             model = fit_candidate(name, train, spec, config)
+            fitted[(fold.name, name)] = model
             raw = model.predict(calibrate)
             if name == "base_rate":
                 candidate_scores[name].append(_metrics(calibrate.y, raw))
@@ -259,19 +266,50 @@ def select_recipe(panel: TabularData, config: TrainingConfig, spec: FeatureSpec)
     chosen = _choose_candidate(averaged)
     method_scores: dict[str, list[float]] = {method: [] for method in config.calibration.methods}
     for fold in development:
-        _, train, calibrate, _ = _fold_slices(panel, fold, config)
-        model = fit_candidate(chosen, train, spec, config)
+        _, _, calibrate, _ = _fold_slices(panel, fold, config)
+        model = fitted[(fold.name, chosen)]
         raw = model.predict(calibrate)
         for method in config.calibration.methods:
             oof = _cross_fitted(raw, calibrate.y, calibrate.route_day, method, config)
             method_scores[method].append(float(_metrics(calibrate.y, oof)["brier"] or 1.0))
     calibration = min(method_scores, key=lambda name: float(np.mean(method_scores[name])))
-    return Recipe(
+    recipe = Recipe(
         model=chosen,
         calibration=calibration,
         threshold_floor=config.report.threshold_precision_floor,
         model_settings=_model_settings(config),
     )
+    return recipe, {name: model for (name, candidate), model in fitted.items() if candidate == chosen}
+
+
+def select_recipe(panel: TabularData, config: TrainingConfig, spec: FeatureSpec) -> Recipe:
+    return select_recipe_bundle(panel, config, spec)[0]
+
+
+def _check_fold_gates(
+    fold: FoldConfig,
+    train: TabularData,
+    calibrate: TabularData,
+    test: TabularData,
+    config: TrainingConfig,
+) -> None:
+    for name, block in (("train", train), ("calibrate", calibrate), ("test", test)):
+        if len(block) < config.report.min_eligible_rows:
+            raise DatasetError(f"{fold.name} {name}: {len(block)} rows; floor is {config.report.min_eligible_rows}")
+        positives = int(np.sum(block.y))
+        if positives < config.report.min_split_positives:
+            raise DatasetError(
+                f"{fold.name} {name}: {positives} positives; floor is {config.report.min_split_positives}"
+            )
+    for name, block in (("calibrate", calibrate), ("test", test)):
+        bands = _ttd_array(block)
+        for band in sorted(set(bands.tolist())):
+            positives = int(np.sum(block.y[bands == band]))
+            if positives < config.report.min_band_positives:
+                raise DatasetError(
+                    f"{fold.name} {name} band {band}: {positives} positives; "
+                    f"floor is {config.report.min_band_positives}"
+                )
 
 
 def fit_fold(
@@ -282,13 +320,16 @@ def fit_fold(
     test: TabularData,
     config: TrainingConfig,
     spec: FeatureSpec,
+    *,
+    fitted_model: FittedModel | None = None,
 ) -> FoldResult:
     started = time.perf_counter()
+    _check_fold_gates(fold, train, calibrate, test, config)
     # The recipe, not the live config, supplies the model family and settings. A later config
     # change cannot silently re-tune an evaluation fold.
     model_config = replace(config.model, **recipe.model_settings)
     fold_config = replace(config, model=model_config)
-    model = fit_candidate(recipe.model, train, spec, fold_config)
+    model = fitted_model or fit_candidate(recipe.model, train, spec, fold_config)
     climatology = fit_climatology(train)
     raw_cal = model.predict(calibrate)
     oof_cal = _cross_fitted(raw_cal, calibrate.y, calibrate.route_day, recipe.calibration, config)
@@ -433,11 +474,26 @@ def run_backtest(
     folds = scored_folds(config.protocol, evaluate_test=evaluate_test)
     if not folds:
         raise ModelError("no scored folds")
-    recipe = select_recipe(panel, config, spec)
+    _LOGGER.info("backtest: selecting recipe on development folds")
+    recipe, development_models = select_recipe_bundle(panel, config, spec)
+    _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
     for fold in folds:
+        _LOGGER.info("backtest: fitting %s (%s)", fold.name, fold.role)
         _, train, calibrate, test = _fold_slices(panel, fold, config)
-        results.append(fit_fold(recipe, fold, train, calibrate, test, config, spec))
+        results.append(
+            fit_fold(
+                recipe,
+                fold,
+                train,
+                calibrate,
+                test,
+                config,
+                spec,
+                fitted_model=development_models.get(fold.name),
+            )
+        )
+        _LOGGER.info("backtest: finished %s", fold.name)
     development = tuple(item for item in results if item.fold.role == "development")
     evaluation = tuple(item for item in results if item.fold.role == "evaluation")
     if not development:
