@@ -49,7 +49,7 @@ def fold_masks(panel: TabularData, fold: FoldConfig, protocol: ProtocolConfig) -
     test = (snapshot >= cutoff + block + embargo) & (label_end <= cutoff + 2 * block + embargo)
     if fold.role == "sparse_era":
         # Train on the dense era at every lead time; calibrate and score the forward-like 1-7 d domain.
-        domain = np.asarray(panel.features["hours_to_departure"], dtype=np.float64) <= float(
+        domain = np.asarray(panel.features["hours_to_departure"], dtype=np.float64) < float(
             protocol.sparse_era_max_hours_to_departure
         )
         calibrate &= domain

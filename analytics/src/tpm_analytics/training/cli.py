@@ -23,7 +23,7 @@ from tpm_analytics.silver._duck import connect
 from tpm_analytics.training import backtest as backtest_protocol
 from tpm_analytics.training import model as training_model
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, TrainingConfig, load_config
-from tpm_analytics.training.dataset import build_dataset
+from tpm_analytics.training.dataset import DatasetStats, SplitStats, _git_state, build_dataset
 from tpm_analytics.training.features import CALENDAR_SETS, FeatureSpec, feature_spec
 from tpm_analytics.training.report import write_report
 from tpm_analytics.training.sources import resolve_source
@@ -57,13 +57,74 @@ def _parser() -> argparse.ArgumentParser:
         help="score test-split metrics; in backtest mode score the evaluation and sparse-era folds",
     )
     parser.add_argument(
+        "--score-forward",
+        type=Path,
+        default=None,
+        help="score an unscored forward Parquet with the forward fold; no labels or metrics",
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=None,
         help="resume backtest folds from per-fold checkpoints in this directory",
     )
+    parser.add_argument(
+        "--dataset-cache-dir",
+        type=Path,
+        default=None,
+        help="reuse a matching dataset build from this directory when the code is clean",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
+
+
+def _dataset_cache_key(config: TrainingConfig, source_uri: str, code_sha: str) -> str:
+    payload = {
+        "version": 1,
+        "code_sha": code_sha,
+        "config_sha256": config.hash(),
+        "source": source_uri,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _restore_dataset(cache_root: Path, key: str, work_dir: Path) -> DatasetStats | None:
+    entry = cache_root / key
+    manifest_path = entry / "dataset_manifest.json"
+    profile_path = entry / "profile.json"
+    if not manifest_path.is_file() or not profile_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for item in manifest.get("dataset_files", []):
+        path = entry / item["path"]
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+            return None
+    shutil.copytree(entry / "dataset", work_dir / "dataset", dirs_exist_ok=True)
+    for name in ("dataset_manifest.json", "profile.json", "column_roles.json"):
+        source = entry / name
+        if source.is_file():
+            shutil.copy2(source, work_dir / name)
+    manifest["reused"] = True
+    manifest["reuse_key"] = key
+    (work_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
+    )
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    splits = tuple(SplitStats(**item) for item in payload.pop("splits"))
+    return DatasetStats(**payload, splits=splits)
+
+
+def _store_dataset(cache_root: Path, key: str, work_dir: Path) -> None:
+    entry = cache_root / key
+    if entry.exists():
+        return
+    entry.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(work_dir / "dataset", entry / "dataset", dirs_exist_ok=True)
+    for name in ("dataset_manifest.json", "profile.json", "column_roles.json"):
+        source = work_dir / name
+        if source.is_file():
+            shutil.copy2(source, entry / name)
+    (entry / "DONE").write_text("ok\n", encoding="utf-8")
 
 
 def _run_id(config: TrainingConfig, explicit: str | None) -> str:
@@ -153,6 +214,16 @@ def main(argv: list[str] | None = None) -> int:
             configured_extensions = str(Path(".duckdb-extensions").resolve())
         extensions = Path(configured_extensions) if configured_extensions else None
         threads = min(8, os.cpu_count() or 4)
+        code_sha, code_dirty, _ = _git_state()
+        dataset_key: str | None = None
+        dataset_reused = False
+        stats: DatasetStats | None = None
+        cache_root: Path | None = None
+        if not args.profile and not args.forward and code_sha is not None and code_dirty is False:
+            cache_root = args.dataset_cache_dir or (DEFAULT_CONFIG_PATH.parent.parent / "artifacts/.cache/datasets")
+            dataset_key = _dataset_cache_key(build_config, source_uri, code_sha)
+            stats = _restore_dataset(cache_root, dataset_key, work_dir)
+            dataset_reused = stats is not None
         connection = connect(
             temp_directory=temp_dir,
             threads=threads,
@@ -162,18 +233,21 @@ def main(argv: list[str] | None = None) -> int:
             secret=source.s3_secret,
         )
         try:
-            stats = build_dataset(
-                connection,
-                source,
-                build_config,
-                work_dir,
-                run_id=run_id,
-                write_splits=not args.profile and not args.forward,
-                cli_argv=tuple(sys.argv),
-                threads=threads,
-                strict_chains=args.strict_chains,
-                forward=args.forward,
-            )
+            if stats is None:
+                stats = build_dataset(
+                    connection,
+                    source,
+                    build_config,
+                    work_dir,
+                    run_id=run_id,
+                    write_splits=not args.profile and not args.forward,
+                    cli_argv=tuple(sys.argv),
+                    threads=threads,
+                    strict_chains=args.strict_chains,
+                    forward=args.forward,
+                )
+                if cache_root is not None and dataset_key is not None and not args.profile and not args.forward:
+                    _store_dataset(cache_root, dataset_key, work_dir)
         finally:
             connection.close()
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -198,6 +272,15 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
                 dataset_sha256=dataset_sha256,
             )
+            if args.score_forward is not None:
+                backtest_protocol.score_forward_artifact(
+                    work_dir,
+                    panel,
+                    config,
+                    result.recipe,
+                    spec,
+                    args.score_forward,
+                )
             runtime = {
                 "wall_seconds": round(time.perf_counter() - run_started, 3),
                 "peak_rss_kb": _peak_rss_kb(),
@@ -213,7 +296,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             os.replace(work_dir, out_dir)
             summary.update(
-                {"out": str(out_dir), "run_id": run_id, "labelled_rows": stats.labelled_rows, "rows": stats.rows}
+                {
+                    "out": str(out_dir),
+                    "run_id": run_id,
+                    "labelled_rows": stats.labelled_rows,
+                    "rows": stats.rows,
+                    "dataset_reused": dataset_reused,
+                    "dataset_cache_key": dataset_key,
+                }
             )
             print(json.dumps(summary, indent=2, sort_keys=True, default=str))
             return 0

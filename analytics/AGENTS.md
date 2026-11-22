@@ -117,7 +117,8 @@ v2-only and mixed-schema input.
   on development folds and refitted on evaluation folds without selection. Evaluation and
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
-  are past-only. `--cache-dir` resumes completed folds and the frozen recipe by config/recipe hash;
+  are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
+  for backtest scoring. `--cache-dir` resumes completed folds and the frozen recipe by config/recipe hash;
   checkpoints hold report state only, never the train or calibration panels. A cache-free 5 %
   backtest peaks near 11.5 GB; 10 % is close to the 17.6 GB host ceiling, so raise memory before
   scaling.

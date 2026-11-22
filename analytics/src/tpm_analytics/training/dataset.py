@@ -1872,6 +1872,7 @@ def build_dataset(
             "route_days_with_domain_rows": domain_route_days,
             "departure_dates": departure_dates,
             "missing_departure_dates": missing_dates,
+            "missing_departure_reason": ("13-18 October scraper outage" if missing_dates else None),
             "feature_missingness": feature_missingness,
             "departure_bounds": None if bounds is None else [str(bounds[0]), str(bounds[1])],
             "coverage": coverage,

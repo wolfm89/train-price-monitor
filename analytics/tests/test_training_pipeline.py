@@ -15,8 +15,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from tpm_analytics.training import backtest as backtest_module
 from tpm_analytics.training.backtest import (
     Recipe,
+    _bss_paired_ci,
     _check_fold_gates,
     fit_fold,
     fit_forward_scorer,
@@ -29,7 +31,7 @@ from tpm_analytics.training.backtest import (
 )
 from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
 from tpm_analytics.training.chains import build_chain_map
-from tpm_analytics.training.cli import main
+from tpm_analytics.training.cli import _restore_dataset, _store_dataset, main
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, FoldConfig, ProtocolConfig, load_config
 from tpm_analytics.training.dataset import (
     DatasetError,
@@ -3045,6 +3047,180 @@ def test_fit_fold_uses_the_frozen_recipe(tmp_path: Path) -> None:
     assert np.allclose(base.raw, base.raw[0])
 
 
+def test_calibration_cross_fit_uses_departure_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    protocol = ProtocolConfig("backtest", (fold,))
+    config = replace(config, protocol=protocol)
+    masks = fold_masks(panel, fold, protocol)
+    train, calibrate, test = fold_slices(panel, masks)
+    recipe = Recipe(
+        "base_rate",
+        "sigmoid",
+        0.7,
+        {
+            "max_iter": config.model.max_iter,
+            "learning_rate": config.model.learning_rate,
+            "max_leaf_nodes": config.model.max_leaf_nodes,
+            "random_state": config.model.random_state,
+        },
+    )
+    captured: list[np.ndarray] = []
+    original = backtest_module._cross_fitted
+
+    def spy(raw: Any, y: Any, groups: Any, method: str, cfg: Any) -> Any:
+        captured.append(np.asarray(groups).copy())
+        return original(raw, y, groups, method, cfg)
+
+    monkeypatch.setattr(backtest_module, "_cross_fitted", spy)
+    fit_fold(recipe, fold, train, calibrate, test, config, spec)
+    assert captured
+    assert all(np.array_equal(groups, calibrate.departure_date) for groups in captured)
+
+
+def test_protocol_boundaries_are_inclusive() -> None:
+    count = 6
+    panel = TabularData(
+        features={"hours_to_departure": np.full(count, 48.0, dtype=np.float32)},
+        y=np.zeros(count, dtype=np.int8),
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 1, dtype=np.int16),
+        departure_date=np.full(count, "2026-07-01", dtype=object),
+        snapshot_at=np.array(
+            [
+                "2026-06-23 00:00:00",
+                "2026-06-23 00:01:00",
+                "2026-06-30 00:00:00",
+                "2026-06-29 23:59:59",
+                "2026-06-30 12:00:00",
+                "2026-06-30 12:00:00",
+            ],
+            dtype=object,
+        ),
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W26", dtype=object),
+        label_window_end=np.array(
+            [
+                "2026-06-29 00:00:00",
+                "2026-06-29 00:01:00",
+                "2026-07-01 00:00:00",
+                "2026-06-30 12:00:00",
+                "2026-07-07 00:00:00",
+                "2026-07-07 00:01:00",
+            ],
+            dtype=object,
+        ),
+    )
+    fold = FoldConfig(date(2026, 6, 22), "development", "dev")
+    masks = fold_masks(panel, fold, ProtocolConfig("backtest", (fold,)))
+    assert masks.calibrate.tolist() == [True, False, False, False, False, False]
+    assert masks.test.tolist() == [False, False, True, False, True, False]
+
+
+def test_forward_fold_limits_calibration_and_test_domain() -> None:
+    panel = _protocol_panel()
+    panel = replace(
+        panel,
+        features={
+            "hours_to_departure": np.array([200.0, 200.0, 48.0, 48.0, 48.0, 200.0, 48.0, 200.0], dtype=np.float32)
+        },
+    )
+    fold = FoldConfig(date(2026, 6, 22), "forward", "forward")
+    masks = fold_masks(panel, fold, ProtocolConfig("backtest", (fold,)))
+    assert masks.train.tolist() == [True, False, False, False, False, True, False, False]
+    assert masks.calibrate.tolist() == [False, False, True, False, False, False, True, False]
+    assert masks.test.tolist() == [False, False, False, True, False, False, False, False]
+    assert not masks.calibrate[3]
+    assert not masks.test[7]
+
+
+def test_recipe_depends_on_development_labels(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    protocol = ProtocolConfig(
+        "backtest",
+        (
+            FoldConfig(date(2026, 7, 6), "development", "dev"),
+            FoldConfig(date(2026, 7, 20), "development", "dev2"),
+        ),
+    )
+    config = replace(config, protocol=protocol)
+    base = select_recipe(panel, config, spec)
+    flipped = select_recipe(replace(panel, y=(1 - panel.y).astype(np.int8)), config, spec)
+    assert base.sha256() != flipped.sha256()
+
+
+def test_bootstrap_clusters_by_group_not_row() -> None:
+    y = np.array([0, 1] * 50, dtype=np.int8)
+    probabilities = np.linspace(0.1, 0.9, len(y))
+    assert _bootstrap(y, probabilities, np.zeros(len(y), dtype=int), 20, 1) == {}
+    assert _bootstrap_metrics(y, probabilities, np.zeros(len(y), dtype=int), 20, 1, 0.5) == {}
+
+
+def test_bss_interval_matches_the_climatology_estimand() -> None:
+    rng = np.random.default_rng(7)
+    labels = rng.integers(0, 2, 400).astype(np.int8)
+    model = np.clip(rng.normal(0.5, 0.2, 400), 0.01, 0.99)
+    climatology = np.clip(rng.normal(0.45, 0.1, 400), 0.01, 0.99)
+    groups = np.repeat(np.arange(20), 20)
+    interval = _bss_paired_ci(labels, model, climatology, groups, 200, 3)
+    point = 1.0 - float(np.mean((model - labels) ** 2)) / float(np.mean((climatology - labels) ** 2))
+    assert interval[0] <= point <= interval[1]
+
+
+def test_backtest_gate_failure_aborts_instead_of_skipping(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    config = replace(
+        config,
+        protocol=ProtocolConfig("backtest", (fold,)),
+        report=replace(config.report, min_eligible_rows=10**9),
+    )
+    with pytest.raises(DatasetError, match="floor"):
+        run_backtest(panel, config, spec, evaluate_test=False)
+
+
+def test_dirty_tree_disables_fold_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    config = replace(config, protocol=ProtocolConfig("backtest", (fold,)))
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(backtest_module, "_code_identity", lambda: ("deadbeef", True))
+    run_backtest(panel, config, spec, evaluate_test=False, cache_dir=cache)
+    assert not (cache / "folds").exists() or not list((cache / "folds").glob("*.pkl"))
+    assert not (cache / "recipe.json").exists()
+
+
+def test_dataset_cache_round_trip(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    cache = tmp_path / "datasets"
+    _store_dataset(cache, "key", out)
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    stats = _restore_dataset(cache, "key", restored)
+    assert stats is not None
+    assert stats.rows > 0
+    assert (restored / "dataset" / "train.parquet").is_file()
+    manifest = json.loads((restored / "dataset_manifest.json").read_text())
+    assert manifest["reused"] is True
+
+
 def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
     source = tmp_path / "forward.parquet"
     _write_silver(source, _rows())
@@ -3140,6 +3316,9 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     development = run_backtest(panel, config, spec, evaluate_test=False)
     assert [item.fold.name for item in development.folds] == ["dev"]
     assert development.pooled == {}
+    assert development.development_pooled["brier"] is not None
+    assert development.development_headroom
+    assert development.development_headroom_ttd
     scored = run_backtest(panel, config, spec, evaluate_test=True)
     assert [item.fold.role for item in scored.folds] == ["development", "evaluation"]
     assert scored.pooled["brier"] is not None

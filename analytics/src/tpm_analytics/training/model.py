@@ -193,14 +193,22 @@ def _categorical(values: Any) -> Array:
     return np.asarray(flat, dtype=object).reshape(array.shape)
 
 
-def load_split(path: Path, spec: FeatureSpec) -> TabularData:
-    """Load a Parquet split into numpy arrays, preserving nulls as NaN/missing categories.
+def _compact_text(values: Any) -> Array:
+    """Store string ids as fixed-width bytes, which cost a quarter of Python str objects."""
+    flat = ["" if value is None else str(value) for value in np.asarray(values, dtype=object).ravel()]
+    return np.asarray(flat, dtype="S")
 
-    Only rows whose next-day check fare is known are loaded: the training, calibration and
-    evaluation populations are identical. The stored label is verified against the shared
-    integer-cent definition, so a SQL/Python drift fails the run instead of training silently.
-    """
-    columns = ", ".join(
+
+def _compact_category(values: Any) -> Array:
+    return _categorical(values).astype("S")
+
+
+def _compact_datetime(values: Any, unit: str) -> Array:
+    return np.asarray(values, dtype=f"datetime64[{unit}]")
+
+
+def _split_columns(spec: FeatureSpec) -> str:
+    return ", ".join(
         (
             *spec.names,
             "breached_next_day",
@@ -224,27 +232,20 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
             "bin_index",
         )
     )
-    connection = duckdb.connect()
-    try:
-        rows = connection.execute(
-            f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') "
-            "WHERE label_observed "
-            "ORDER BY series_key, snapshot_at, bin_regime, bin_index"
-        ).fetchnumpy()
-    finally:
-        connection.close()
+
+
+def _tabular(rows: dict[str, Any], spec: FeatureSpec, *, compact: bool, source: str) -> TabularData:
     if len(rows["breached_next_day"]) == 0:
-        raise ModelError(f"{path} has no labelled rows")
+        raise ModelError(f"{source} has no labelled rows")
     features: dict[str, Array] = {}
     for feature in spec.features:
         values = rows[feature.name]
         if feature.kind == CATEGORICAL:
-            features[feature.name] = _categorical(values)
+            features[feature.name] = _compact_category(values) if compact else _categorical(values)
         elif feature.kind == BOOLEAN:
             features[feature.name] = _filled(values, 0.0)
         else:
             features[feature.name] = _filled(values, np.nan)
-    # The within-24 h maximum is a diagnostic, not the target; sparse eras may not have one.
     future_max = _filled64(rows["future_max_fare_24h"], np.nan)
     price_cents = cents(rows["price_eur"])
     check_price_cents = cents(rows["check_price_eur"])
@@ -253,27 +254,75 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
     actual = np.asarray(rows["breached_next_day"], dtype=np.int8)
     if not np.array_equal(expected, actual):
         mismatches = int(np.sum(expected != actual))
-        raise ModelError(f"{path} has {mismatches} label rows that disagree with the integer-cent definition")
+        raise ModelError(f"{source} has {mismatches} label rows that disagree with the integer-cent definition")
     return TabularData(
         features=features,
         y=actual,
-        series=np.asarray(rows["series_key"], dtype=str),
-        route_day=np.asarray(rows["route_day"], dtype=str),
+        series=_compact_text(rows["series_key"]) if compact else np.asarray(rows["series_key"], dtype=str),
+        route_day=_compact_text(rows["route_day"]) if compact else np.asarray(rows["route_day"], dtype=str),
         price=_filled64(rows["price_eur"], np.nan),
         price_cents=price_cents,
         check_price=_filled64(rows["check_price_eur"], np.nan),
         check_price_cents=check_price_cents,
         check_price_2024=_filled64(rows["check_price_2024_eur"], np.nan),
-        label_window_end=np.asarray(rows["label_window_end"], dtype=str),
+        label_window_end=(
+            _compact_datetime(rows["label_window_end"], "s")
+            if compact
+            else np.asarray(rows["label_window_end"], dtype=str)
+        ),
         future_max=future_max,
         future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=headroom,
-        departure_date=np.asarray(rows["departure_date"], dtype=str),
-        snapshot_at=np.asarray(rows["snapshot_at"], dtype=str),
-        observation_era=_categorical(rows["observation_era"]),
-        observation_week=_categorical(rows["observation_week"]),
-        chain=np.asarray(rows["chain_id"], dtype=str),
+        departure_date=(
+            _compact_datetime(rows["departure_date"], "D") if compact else np.asarray(rows["departure_date"], dtype=str)
+        ),
+        snapshot_at=(
+            _compact_datetime(rows["snapshot_at"], "s") if compact else np.asarray(rows["snapshot_at"], dtype=str)
+        ),
+        observation_era=_compact_category(rows["observation_era"])
+        if compact
+        else _categorical(rows["observation_era"]),
+        observation_week=(
+            _compact_category(rows["observation_week"]) if compact else _categorical(rows["observation_week"])
+        ),
+        chain=_compact_text(rows["chain_id"]) if compact else np.asarray(rows["chain_id"], dtype=str),
     )
+
+
+def load_splits(paths: list[Path], spec: FeatureSpec) -> TabularData:
+    """Load the four splits in one query and compact representation for the backtest panel."""
+    columns = _split_columns(spec)
+    selects = [
+        f"SELECT {columns}, {index} AS split_order FROM read_parquet('{sql_string(path.as_posix())}') "
+        "WHERE label_observed"
+        for index, path in enumerate(paths)
+    ]
+    query = " UNION ALL ".join(selects) + " ORDER BY split_order, series_key, snapshot_at, bin_regime, bin_index"
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(query).fetchnumpy()
+    finally:
+        connection.close()
+    return _tabular(rows, spec, compact=True, source="panel")
+
+
+def load_split(path: Path, spec: FeatureSpec) -> TabularData:
+    """Load a Parquet split into numpy arrays, preserving nulls as NaN/missing categories.
+
+    Only rows whose next-day check fare is known are loaded: the training, calibration and
+    evaluation populations are identical. The stored label is verified against the shared
+    integer-cent definition, so a SQL/Python drift fails the run instead of training silently.
+    """
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(
+            f"SELECT {_split_columns(spec)} FROM read_parquet('{sql_string(path.as_posix())}') "
+            "WHERE label_observed "
+            "ORDER BY series_key, snapshot_at, bin_regime, bin_index"
+        ).fetchnumpy()
+    finally:
+        connection.close()
+    return _tabular(rows, spec, compact=False, source=str(path))
 
 
 def _cat_matrix(data: TabularData, spec: FeatureSpec) -> Array:
@@ -345,12 +394,36 @@ class FittedModel:
     selected: tuple[int, ...] | None = None
     dropped: tuple[str, ...] = ()
 
+    def transform(self, data: TabularData) -> Array:
+        matrix = _matrix(data, self.spec, self.encoder)
+        if self.selected is not None:
+            matrix = matrix[:, list(self.selected)]
+        return matrix
+
+    def with_headroom(self, matrix: Array, headroom: int) -> Array:
+        index = next(
+            (position for position, feature in enumerate(self.spec.features) if feature.name == "headroom_pct"),
+            None,
+        )
+        if index is None:
+            return matrix
+        if self.selected is not None:
+            if index not in self.selected:
+                return matrix
+            index = self.selected.index(index)
+        adjusted = matrix.copy()
+        adjusted[:, index] = float(headroom)
+        return adjusted
+
+    def predict_matrix(self, matrix: Array) -> Array:
+        probabilities = self.estimator.predict_proba(matrix)[:, 1]
+        return np.asarray(probabilities, dtype=np.float64)
+
     def predict(self, data: TabularData, headroom: int | None = None) -> Array:
         matrix = _matrix(data, self.spec, self.encoder, headroom)
         if self.selected is not None:
             matrix = matrix[:, list(self.selected)]
-        probabilities = self.estimator.predict_proba(matrix)[:, 1]
-        return np.asarray(probabilities, dtype=np.float64)
+        return self.predict_matrix(matrix)
 
 
 class BaseRateModel:

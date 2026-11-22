@@ -241,14 +241,14 @@ class ProtocolConfig:
             raise ConfigError("protocol sparse-era domain must be positive")
         if self.kind == "backtest" and not self.cutoffs:
             raise ConfigError("protocol.cutoffs must not be empty in backtest mode")
+        for item in self.cutoffs:
+            item.validate()
         dates = [item.cutoff for item in self.cutoffs]
         if dates != sorted(set(dates)):
             raise ConfigError("protocol.cutoffs must be sorted and unique")
         ranks = [FOLD_ROLE_ORDER[item.role] for item in self.cutoffs]
         if ranks != sorted(ranks):
             raise ConfigError("protocol.cutoffs must follow role order: development, evaluation, sparse_era, forward")
-        for item in self.cutoffs:
-            item.validate()
         if self.kind == "backtest" and not any(item.role == "development" for item in self.cutoffs):
             raise ConfigError("protocol.cutoffs must contain at least one development fold")
 
