@@ -2999,12 +2999,50 @@ def test_backtest_fold_gate_and_baseline_isolation(tmp_path: Path) -> None:
         config,
         spec,
     )
+    assert np.array_equal(base.calibrated, mutated.calibrated)
+    assert np.array_equal(base.raw, mutated.raw)
+    assert base.threshold == mutated.threshold
+    assert base.threshold_met == mutated.threshold_met
+    assert base.train_rate == mutated.train_rate
+    assert base.metrics["alert_share"] == mutated.metrics["alert_share"]
     for headroom in config.label.headroom_pct:
         assert np.array_equal(base.climate[headroom], mutated.climate[headroom])
         assert np.array_equal(base.probabilities[headroom], mutated.probabilities[headroom])
     strict = replace(config, report=replace(config.report, min_band_positives=10**9))
     with pytest.raises(DatasetError, match="band"):
         fit_fold(recipe, fold, train, calibrate, test, strict, spec)
+
+
+def test_fit_fold_uses_the_frozen_recipe(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    protocol = ProtocolConfig("backtest", (fold,))
+    config = replace(config, protocol=protocol)
+    masks = fold_masks(panel, fold, protocol)
+    train, calibrate, test = fold_slices(panel, masks)
+    settings = {
+        "max_iter": 2,
+        "learning_rate": config.model.learning_rate,
+        "max_leaf_nodes": 3,
+        "random_state": config.model.random_state,
+    }
+    recipe = Recipe("hist_gradient_boosting", "sigmoid", 0.7, settings)
+    small = fit_fold(recipe, fold, train, calibrate, test, config, spec)
+    large = fit_fold(
+        replace(recipe, model_settings={**settings, "max_iter": 80}),
+        fold,
+        train,
+        calibrate,
+        test,
+        config,
+        spec,
+    )
+    assert not np.allclose(small.raw, large.raw)
+    base = fit_fold(replace(recipe, model="base_rate"), fold, train, calibrate, test, config, spec)
+    assert np.allclose(base.raw, base.raw[0])
 
 
 def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
@@ -3124,6 +3162,13 @@ def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> Non
     ]
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ConfigError, match="sorted"):
+        load_config(path)
+    raw["protocol"]["cutoffs"] = [
+        {"cutoff": "2026-06-22", "role": "evaluation", "name": "eval"},
+        {"cutoff": "2026-06-29", "role": "development", "name": "dev"},
+    ]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="role order"):
         load_config(path)
 
 

@@ -16,6 +16,7 @@ from typing import Any
 CALENDAR_SETS = ("none", "public", "public_school", "full")
 LABEL_ESTIMANDS = ("next_day_fare",)
 PROTOCOL_KINDS = ("backtest", "static_split")
+FOLD_ROLE_ORDER = {"development": 0, "evaluation": 1, "sparse_era": 2, "forward": 3}
 FOLD_ROLES = ("development", "evaluation", "sparse_era", "forward")
 MODEL_NAMES = ("base_rate", "logistic", "hist_gradient_boosting", "lightgbm")
 CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
@@ -243,6 +244,9 @@ class ProtocolConfig:
         dates = [item.cutoff for item in self.cutoffs]
         if dates != sorted(set(dates)):
             raise ConfigError("protocol.cutoffs must be sorted and unique")
+        ranks = [FOLD_ROLE_ORDER[item.role] for item in self.cutoffs]
+        if ranks != sorted(ranks):
+            raise ConfigError("protocol.cutoffs must follow role order: development, evaluation, sparse_era, forward")
         for item in self.cutoffs:
             item.validate()
         if self.kind == "backtest" and not any(item.role == "development" for item in self.cutoffs):

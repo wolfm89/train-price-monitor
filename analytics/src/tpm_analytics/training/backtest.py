@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import pickle
 import time
 from dataclasses import dataclass, replace
@@ -550,8 +551,10 @@ def _save_cached_fold(
     if cache_dir is None:
         return
     data_path, meta_path = _cache_paths(cache_dir, fold)
-    with data_path.open("wb") as handle:
+    tmp_path = data_path.with_suffix(".tmp")
+    with tmp_path.open("wb") as handle:
         pickle.dump(result, handle)
+    os.replace(tmp_path, data_path)
     meta_path.write_text(
         json.dumps(
             {
