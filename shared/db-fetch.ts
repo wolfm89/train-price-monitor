@@ -470,7 +470,11 @@ async function resolveDecodoKey(): Promise<string | null> {
   return decodoKeyRequest;
 }
 
-/** Executes one request through Decodo; a DB refusal is retried once because the egress is picked per request. */
+/**
+ * Executes one request through Decodo. Both a DB refusal and an empty result are
+ * retried: the vendor picks a new egress IP per request, and some of those IPs
+ * are refused by the target even though the next one would pass.
+ */
 async function decodoFetch(
   key: string,
   url: string,
@@ -484,12 +488,18 @@ async function decodoFetch(
     headers[name] = value;
   }
 
+  const MAX_ATTEMPTS = 2;
+  let lastNoResultError: Error | null = null;
+
   for (let attempt = 1; ; attempt++) {
     // Share one wall-clock budget with the direct path: the API Lambda lives
     // behind a 29 s gateway cap, so a late throttling response must not start
     // another full 18 s attempt.
     const remaining = deadline - Date.now();
-    if (remaining < 1_000) throw new Error('DB request budget exhausted before the fallback');
+    if (remaining < 1_000) {
+      if (lastNoResultError) throw lastNoResultError;
+      throw new Error('DB request budget exhausted before the fallback');
+    }
 
     const response = await globalThis.fetch(DECODO_SCRAPE_URL, {
       method: 'POST',
@@ -512,13 +522,22 @@ async function decodoFetch(
 
     const envelope = JSON.parse(text) as {
       results?: Array<{ content?: string; status_code?: number; headers?: Record<string, string> }>;
+      error?: unknown;
     };
     const result = envelope.results?.[0];
-    if (!result) throw new Error('Decodo returned no result');
+    if (!result) {
+      // HTTP 200 with an empty result set means the proxy IP Decodo picked was
+      // refused by the target (its error text says so). Retrying picks another
+      // IP; throwing here made the fallback fail on a single unlucky egress.
+      const vendorError = typeof envelope.error === 'string' ? envelope.error.slice(0, 200) : '';
+      lastNoResultError = new Error(`Decodo returned no result${vendorError ? `: ${vendorError}` : ''}`);
+      if (attempt < MAX_ATTEMPTS && deadline - Date.now() > 3_000) continue;
+      throw lastNoResultError;
+    }
 
     const status = result.status_code ?? 200;
     const bodyText = result.content ?? '';
-    if (isThrottled(status, bodyText) && attempt < 2 && deadline - Date.now() > 3_000) continue;
+    if (isThrottled(status, bodyText) && attempt < MAX_ATTEMPTS && deadline - Date.now() > 3_000) continue;
 
     return new FetchCompatibleResponse(status, '', bodyText, Object.entries(result.headers ?? {}));
   }
