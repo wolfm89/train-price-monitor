@@ -57,9 +57,11 @@ scraper only writes `prices/`.
 ### DB Vendo Client (`src/client.ts`)
 
 - Singleton wrapper around `db-vendo-client` (Deutsche Bahn's internal timetable API).
-- Custom profile normalizes nested time fields (sollzeit/istzeit) the `dbweb` endpoint returns.
+- Uses the DB Navigator profile (`dbnav`, `app.services-bahn.de`). The bahn.de web API
+  (`int.bahn.de`) began refusing every AWS Lambda egress IP with `403 OPS_BLOCKED` on 2026-11-23;
+  the Navigator API still serves the same daily prices.
 - Uses the `tagesbestpreis` (bestprice) endpoint, which returns all trains for a full calendar day
-  in a single call.
+  in a single call. The request needs `X-Correlation-ID` and explicit Deutschland-Ticket flags.
 
 ### TTD Tiering (`src/ttd.ts`)
 
@@ -100,7 +102,7 @@ S3 key layout: `prices/year={YYYY}/month={MM}/day={DD}/batch_{epoch}_{random}.pa
 | `load_factor_ordinal` | INT32/null  | 1 = low-to-medium … 4 = exceptionally-high (v2)                          |
 | `journey_id`          | STRING/null | SHA-1 of the route and ordered itinerary; null for v1 rows (v2)          |
 | `schema_version`      | INT32       | 1 for pre-v2 rows, 2 from this change                                    |
-| `source_profile`      | STRING      | Vendo profile used, `dbweb`                                              |
+| `source_profile`      | STRING      | Vendo profile used, `dbnav` (older rows `dbweb`)                         |
 | `query_mode`          | STRING      | `bestprice`                                                              |
 
 Only `fare_lowest_eur`, `load_factor`, `load_factor_ordinal` and `journey_id`

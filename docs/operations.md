@@ -79,8 +79,11 @@ then.
    `DECODO_API_KEY_PARAM` resolves. If Decodo is unavailable, interactive search degrades.
 3. The poller has no Decodo key. On throttling it ends the batch; untouched targets are retried by
    the next run. Do not raise `SCRAPER_BATCH_SIZE` while the transport counters are dirty.
-4. If every TLS profile is blocked, wait for the profile cooldown or rotate the preferred profile;
-   the breaker prevents hammering a throttled IP.
+4. If every TLS profile is blocked, check whether the egress is refused. On 2026-11-23 the web
+   booking API rejected every AWS Lambda IP and region tested while German residential egress still
+   passed. The poller uses the DB Navigator API (`app.services-bahn.de`); a poller `OPS_BLOCKED`
+   means that edge is refusing the egress too. Another profile, Lambda IP or AWS region will not
+   help; pause the poller instead of re-probing every 15 minutes.
 
 ### Poller not running / no prices
 

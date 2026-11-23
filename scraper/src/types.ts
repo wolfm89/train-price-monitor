@@ -38,6 +38,6 @@ export interface ParquetRow {
   load_factor_ordinal: number | null; // 1 = low-to-medium … 4 = exceptionally-high
   journey_id: string | null; // null for v1 rows; v2: hash of the full itinerary
   schema_version: number; // 1 for rows written before schema v2, 2 from this change
-  source_profile: string; // dbweb
+  source_profile: string; // dbnav
   query_mode: string; // bestprice
 }

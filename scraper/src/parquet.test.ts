@@ -25,7 +25,7 @@ const baseRow: ParquetRow = {
   load_factor_ordinal: null,
   journey_id: '3d1f5c4e8b2a97f0c6e1d4b7a9f2c5e8d1b4a7f0',
   schema_version: 2,
-  source_profile: 'dbweb',
+  source_profile: 'dbnav',
   query_mode: 'bestprice',
 };
 

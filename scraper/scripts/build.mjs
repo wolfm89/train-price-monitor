@@ -32,7 +32,7 @@ await esbuild.build({
   external: pollerExternal,
   // db-vendo-client hardcodes `import {Request, fetch} from 'cross-fetch'`,
   // which always resolves to Node's fetch (undici) regardless of runtime.
-  // int.bahn.de blocks that TLS/HTTP2 fingerprint outright (OPS_BLOCKED).
+  // DB's booking APIs block that TLS/HTTP2 fingerprint (OPS_BLOCKED).
   // Redirecting the import to the shared HTTPS transport fixes this
   // without patching node_modules or touching db-vendo-client's
   // request-building/response-parsing logic.

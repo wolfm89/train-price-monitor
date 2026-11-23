@@ -7,6 +7,11 @@ declare module 'db-vendo-client/p/dbweb/index.js' {
   export const profile: Profile;
 }
 
+declare module 'db-vendo-client/p/dbnav/index.js' {
+  import type { Profile } from 'hafas-client';
+  export const profile: Profile;
+}
+
 declare module 'db-vendo-client/parse/journey-leg.js' {
   export function parseJourneyLeg(ctx: unknown, pt: unknown, date: unknown, fallbackLocations: unknown): unknown;
 }

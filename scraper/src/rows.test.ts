@@ -129,7 +129,7 @@ describe('buildRows', () => {
     assert.equal(row.duration_minutes, 190);
     assert.equal(row.fare_lowest_eur, 49.99);
     assert.equal(row.schema_version, 2);
-    assert.equal(row.source_profile, 'dbweb');
+    assert.equal(row.source_profile, 'dbnav');
     assert.equal(row.query_mode, 'bestprice');
   });
 
@@ -402,7 +402,7 @@ describe('fromParquetRecord', () => {
       load_factor_ordinal: 3,
       journey_id: 'trip-1',
       schema_version: 2,
-      source_profile: 'dbweb',
+      source_profile: 'dbnav',
       query_mode: 'bestprice',
     });
 

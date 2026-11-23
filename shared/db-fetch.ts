@@ -16,8 +16,10 @@
  * cooldown. No browser, no proxy, no vendor account.
  *
  * Measured constraints this file encodes:
- *  - Only `Content-Type`/`Accept` plus `Origin`/`Referer` may be sent. db-vendo's
- *    own User-Agent and correlation headers turn an accepted request into a 403.
+ *  - For the bahn.de web API, only `Content-Type`/`Accept` plus `Origin`/`Referer`
+ *    may be sent. db-vendo's own User-Agent and correlation headers turn an
+ *    accepted request into a 403. The DB Navigator API is the exception: it
+ *    requires `X-Correlation-ID`, which is forwarded when the profile supplies it.
  *  - Bursts get an IP throttled (429) for minutes: 6 parallel calls were fine,
  *    60 at concurrency 6 were not. Calls are therefore spaced and few are in flight.
  *  - Once an environment is throttled, hammering it only extends the ban. After a
@@ -347,7 +349,9 @@ function availableProfiles(): TlsProfile[] {
 }
 
 function isFingerprintBlocked(status: number, bodyText: string): boolean {
-  return status === 403 && /OPS_BLOCKED/.test(bodyText);
+  // The bahn.de web API answers 403; the DB Navigator API answers 452. Both use
+  // the same OPS_BLOCKED body and mean "this profile is refused, rotate".
+  return (status === 403 || status === 452) && /OPS_BLOCKED/.test(bodyText);
 }
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
@@ -380,8 +384,10 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
   };
   const contentType = pick(init.headers, 'content-type');
   const accept = pick(init.headers, 'accept');
+  const correlationId = pick(init.headers, 'x-correlation-id');
   if (contentType) headers['Content-Type'] = contentType;
   if (accept) headers.Accept = accept;
+  if (correlationId) headers['X-Correlation-ID'] = correlationId;
 
   return new Promise((resolve, reject) => {
     const request = https.request(
