@@ -122,6 +122,35 @@ v2-only and mixed-schema input.
   checkpoints hold report state only, never the train or calibration panels. A cache-free 5 %
   backtest peaks near 6.47 GB (4.03 GB with the dataset cache); 10 % has not been measured, so
   raise memory before scaling.
+- **Recipe selection is development-only.** `training/selection.py` performs a joint search over
+  every model x calibration pair on the development folds and refuses any other role. Comparison
+  is a paired departure-date cluster bootstrap (2,000 replicates) on delta log loss (primary) and
+  delta Brier. A more complex choice replaces a simpler one only when the log-loss 95 % interval is
+  entirely below zero and the Brier interval is not entirely above zero. Complexity order is
+  `base_rate < logistic < hist_gradient_boosting` and
+  `sigmoid = temperature < isotonic < covariate`; climatology is a reference row, never selectable.
+  The full table goes to `recipe.json`; only the rule settings enter the recipe hash.
+- **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on
+  logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom)). The covariate
+  calibrator must be monotone in score in every band and non-increasing in headroom; otherwise it
+  falls back to isotonic and the requested/fitted methods are recorded per fold. All outputs are
+  clipped to `[1e-6, 1 - 1e-6]`. Per-headroom tables use the selected calibrator at each headroom;
+  the per-headroom isotonic is a diagnostic column. The static path keeps its three legacy
+  methods so its reference run stays byte-identical.
+- **Thresholds.** One per headroom x TTD band on the calibration block's out-of-fold scores: the
+  highest recall whose one-sided 95 % Wilson lower bound on precision is at least
+  `threshold_precision_floor` with at least `threshold_min_alerts` (30) alerts. A cell with no
+  qualifying point does not alert. Pooled precision and recall use each row's own fold and cell
+  threshold; never substitute the mean threshold.
+- **Decision value and importance.** Decision value uses the primary 20-28 h `check_at` and
+  compares the alert policy with waiting (the current product, primary) and booking now, plus a
+  random alert, both perfect-breach oracles and perfect timing. Grouped permutation importance uses
+  each development fold's own model and calibrator on the pooled test blocks; families live in
+  `features.py` and every feature must belong to exactly one.
+- **Early stopping.** HGB holds out the last 7 days of the fold's training rows by `snapshot_at`,
+  stops when the holdout log loss has not improved by 1e-4 for 50 iterations, and refits on all
+  training rows with the chosen iteration count. The holdout never touches calibration. The cap
+  is the recipe's `max_iter` (at most 400).
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
   `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
   (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.

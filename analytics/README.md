@@ -388,8 +388,13 @@ snapshot time. A fold trains on labels that matured at least
 24 h before the cutoff, calibrates on the following 7 days and tests the week after that. The recipe
 (model family, settings, calibration method, threshold rule) is selected on the 22 and 29 June
 development folds, written to `recipe.json`, and refitted on each evaluation fold without any
-selection. Evaluation and sparse-era folds are scored only with `--evaluate-test`; development
-folds are always reported. The static splits remain available through
+selection. The selection is a joint search over every model x calibration pair: a paired
+departure-date cluster bootstrap (2,000 replicates) on delta log loss and delta Brier replaces a
+simpler choice only when the log-loss interval is entirely below zero and the Brier interval is not
+entirely above zero. Complexity order is base rate < logistic < HGB and
+sigmoid = temperature < isotonic < covariate. The full selection table is in `recipe.json`; the
+fitted table is not hashed, only the rule settings are. Evaluation and sparse-era folds are scored
+only with `--evaluate-test`; development folds are always reported. The static splits remain available through
 `config/training-static.json`; their digests and metrics must match the static reference run exactly.
 A series may span a cutoff because labels are purged and every feature is past-only. Backtest
 mode still requires the static `splits` block: it bounds the panel at `test_end`, but those splits
@@ -400,6 +405,27 @@ than the training panels. A dirty tree disables reuse. Delete the cache director
 
 A fresh cache-free 5 % backtest peaks at about 6.47 GB; a run that reuses the dataset cache peaks
 near 4.03 GB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
+
+Calibration offers sigmoid, temperature, isotonic and a **covariate** calibrator: a logistic model
+on logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom), one model for
+every limit. It is checked for monotonicity in score in every band and for non-increase in
+headroom; a violation falls back to isotonic and the requested and fitted methods are recorded per
+fold. Every calibrator output is clipped to [1e-6, 1 - 1e-6]. The per-headroom tables use the
+selected calibrator at each headroom; the old per-headroom isotonic is the `Brier isotonic`
+diagnostic column. The static path keeps its three legacy methods.
+
+Thresholds are chosen per headroom x TTD band on the calibration block's out-of-fold calibrated
+scores: the highest recall whose one-sided 95 % Wilson lower bound on precision is at least
+`report.threshold_precision_floor` (0.70) with at least `report.threshold_min_alerts` (30) alerts.
+A cell with no qualifying operating point does not alert. The report shows calibration-block and
+test precision/recall, the share of cells that held the floor on test, and precision at fixed
+recalls per band. Pooled precision and recall use each row's own fold and cell threshold.
+
+Decision value uses the primary 20-28 h `check_at`: an alert means book now and no alert means
+wait one day. It reports the saving against waiting (the current product, primary) and against
+booking now, each with a departure-date cluster interval, a random alert at the same share, both
+perfect-breach oracles, perfect timing against booking now and the mean cost of waiting. Grouped
+permutation importance covers six families on the pooled development test blocks.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
@@ -449,8 +475,8 @@ The report and `metrics.json` carry the evaluation diagnostics: eligibility and 
 route-day check grid (`check_at`, `check_lag_h`), the within-24 h diagnostic on R24-covered rows,
 bin collisions, history depth, missing-at-check shares, the scrape 10-16 h ahead profile, the
 climatology baseline, per-headroom x TTD metrics, strata, clustered intervals, calibration
-slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The decision-value
-diagnostic uses the 20-24 h check, inside the 24 h maximum. Each run also writes
+slope/intercept/ECE per headroom x band x era, per-cell thresholds and decision value. The static
+report keeps its 20-24 h crossed-back decision-value diagnostic. Each run also writes
 `predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
 produce. Test-split label and model diagnostics are gated by `--evaluate-test`; journey
 disappearance is a corpus-level diagnostic that includes test departures.
