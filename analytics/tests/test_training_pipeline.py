@@ -21,6 +21,8 @@ from tpm_analytics.training.backtest import (
     Recipe,
     _bss_paired_ci,
     _check_fold_gates,
+    _grouped_importance,
+    _permuted_features,
     fit_fold,
     fit_forward_scorer,
     load_forward,
@@ -50,7 +52,7 @@ from tpm_analytics.training.dataset import (
     _source_inventory,
     build_dataset,
 )
-from tpm_analytics.training.features import LABEL_COLUMNS, feature_spec
+from tpm_analytics.training.features import LABEL_COLUMNS, family_members, feature_family, feature_spec
 from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
 from tpm_analytics.training.labels import breach, breach_sql, cents
 from tpm_analytics.training.model import (
@@ -3694,6 +3696,13 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     assert all(required_oracle <= set(row) for row in scored.decision_value)
     assert all(len(row["ci_saving_vs_wait_eur"]) == 2 for row in scored.decision_value)
     assert all(len(row["ci_saving_vs_book_eur"]) == 2 for row in scored.decision_value)
+    assert scored.importance
+    assert {row["kind"] for row in scored.importance} == {"family", "feature"}
+    assert all(np.isfinite(row["delta_log_loss"]) for row in scored.importance)
+    development = tuple(item for item in scored.folds if item.fold.role == "development")
+    small = _grouped_importance(development, config, spec, sample=400, repeats=1, seed=5)
+    assert len([row for row in small if row["kind"] == "family"]) == 6
+    assert len([row for row in small if row["kind"] == "feature"]) == len(spec.names)
 
 
 def test_selection_rejects_a_non_development_fold() -> None:
@@ -4054,6 +4063,34 @@ def test_cell_threshold_handles_ties_and_prefers_recall() -> None:
     recall_first = _cell_threshold(y, probabilities, 0.7, 10)
     assert recall_first["threshold"] == pytest.approx(0.8)
     assert recall_first["recall"] == pytest.approx(1.0)
+
+
+def test_feature_families_cover_every_feature() -> None:
+    for calendar_set in ("none", "public", "public_school", "full"):
+        spec = feature_spec(calendar_set)
+        assigned: list[str] = []
+        for names in family_members().values():
+            assigned.extend(names)
+        assert len(assigned) == len(set(assigned))
+        assert set(spec.names) <= set(assigned)
+        assert all(feature_family(name) in family_members() for name in spec.names)
+    assert set(feature_spec("full").names) == set(assigned)
+
+
+def test_permuting_a_family_changes_only_that_family() -> None:
+    features = {
+        "a": np.array([10.0, 20.0, 30.0]),
+        "b": np.array([1.0, 2.0, 3.0]),
+        "c": np.array([100.0, 200.0, 300.0]),
+    }
+    order = np.array([2, 0, 1])
+    permuted = _permuted_features(features, ("a", "b"), order)
+    assert permuted["a"].tolist() == [30.0, 10.0, 20.0]
+    assert permuted["b"].tolist() == [3.0, 1.0, 2.0]
+    assert "c" not in permuted
+    assert features["c"].tolist() == [100.0, 200.0, 300.0]
+    # The within-family row correspondence survives the shared permutation.
+    assert (permuted["a"] / permuted["b"]).tolist() == [10.0, 10.0, 10.0]
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:

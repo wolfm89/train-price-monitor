@@ -28,7 +28,7 @@ from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import HEADLINE_BANDS, band_labels
 from tpm_analytics.training.config import MODEL_NAMES, FoldConfig, ProtocolConfig, TrainingConfig
 from tpm_analytics.training.dataset import DatasetError, _git_state
-from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS, FeatureSpec
+from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS, FeatureSpec, family_members
 from tpm_analytics.training.labels import breach
 from tpm_analytics.training.model import (
     Array,
@@ -144,6 +144,8 @@ class FoldResult:
     calibration_methods: tuple[dict[str, Any], ...] = ()
     isotonic_probabilities: dict[int, Array] = field(default_factory=dict)
     cell_thresholds: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
+    model: FittedModel | None = field(default=None, repr=False, compare=False)
+    calibrator: Any | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -169,6 +171,7 @@ class BacktestResult:
     pr_curves: list[dict[str, Any]] = field(default_factory=list)
     threshold_hold_rate: dict[str, Any] = field(default_factory=dict)
     development_decision_value: list[dict[str, Any]] = field(default_factory=list)
+    importance: list[dict[str, Any]] = field(default_factory=list)
     warnings: tuple[str, ...] = ()
     runtime_seconds: float = 0.0
     peak_rss_kb: int = 0
@@ -637,6 +640,8 @@ def fit_fold(
         calibration_methods=calibration_methods,
         isotonic_probabilities=isotonic_probabilities,
         cell_thresholds=cell_thresholds,
+        model=model,
+        calibrator=calibrator,
     )
 
 
@@ -945,6 +950,112 @@ def _decision_value_cells(
             row["operating_point"] = operating
             rows.append(row)
     return rows
+
+
+def _row_log_loss(y: Array, probabilities: Array) -> Array:
+    """Return the clipped per-row log loss."""
+    clipped = np.clip(probabilities, 1e-6, 1.0 - 1e-6)
+    return -(y * np.log(clipped) + (1.0 - y) * np.log(1.0 - clipped))
+
+
+def _permuted_features(features: dict[str, Array], names: tuple[str, ...], order: Array) -> dict[str, Array]:
+    """Return the named columns permuted by one shared row order."""
+    return {name: np.asarray(features[name])[order] for name in names}
+
+
+def _importance_loss(
+    samples: list[tuple[FoldResult, Array, Array]],
+    pooled_sample: TabularData,
+    overrides: dict[str, Array] | None,
+) -> float:
+    """Mean log loss for the sampled rows, optionally with permuted feature columns."""
+    losses = np.empty(sum(len(local) for _, _, local in samples), dtype=np.float64)
+    for fold, positions, local in samples:
+        model = fold.model
+        calibrator = fold.calibrator
+        if model is None or calibrator is None:
+            raise ModelError("permutation importance needs a fitted model and calibrator")
+        data = fold.test.subset(local)
+        if overrides:
+            data = replace(
+                data,
+                features={**data.features, **{name: values[positions] for name, values in overrides.items()}},
+            )
+        probabilities = model.predict(data)
+        calibrated = calibrator.predict(
+            probabilities,
+            hours=_hours(data),
+            headroom=data.headroom,
+        )
+        losses[positions] = _row_log_loss(data.y, calibrated)
+    return float(losses.mean())
+
+
+def _grouped_importance(
+    folds: tuple[FoldResult, ...],
+    config: TrainingConfig,
+    spec: FeatureSpec,
+    *,
+    sample: int = 20_000,
+    repeats: int = 5,
+    seed: int = 0,
+) -> list[dict[str, Any]]:
+    """Grouped permutation importance on the pooled development test blocks."""
+    if not folds or any(fold.model is None or fold.calibrator is None for fold in folds):
+        return []
+    pooled = concat_tabular([fold.test for fold in folds])
+    rng = np.random.default_rng(seed)
+    dates = np.unique(np.asarray(pooled.departure_date, dtype=str))
+    rng.shuffle(dates)
+    chosen: set[str] = set()
+    count = 0
+    for value in dates:
+        chosen.add(str(value))
+        count += int(np.sum(np.asarray(pooled.departure_date, dtype=str) == value))
+        if count >= sample:
+            break
+    selected = np.flatnonzero(np.isin(np.asarray(pooled.departure_date, dtype=str), list(chosen)))
+    if len(selected) == 0:
+        return []
+    samples: list[tuple[FoldResult, Array, Array]] = []
+    start = 0
+    for fold in folds:
+        end = start + len(fold.test)
+        positions = np.flatnonzero((selected >= start) & (selected < end))
+        samples.append((fold, positions, selected[positions] - start))
+        start = end
+    pooled_sample = pooled.subset(selected)
+    baseline = _importance_loss(samples, pooled_sample, None)
+    families = {
+        family: tuple(name for name in names if name in spec.names) for family, names in family_members().items()
+    }
+    entries: list[tuple[str, str, tuple[str, ...]]] = [
+        ("family", family, names) for family, names in families.items() if names
+    ]
+    entries.extend(("feature", name, (name,)) for name in spec.names)
+    rows: list[dict[str, Any]] = []
+    for kind, name, names in entries:
+        deltas: list[float] = []
+        for _ in range(repeats):
+            order = rng.permutation(len(selected))
+            overrides = _permuted_features(pooled_sample.features, names, order)
+            deltas.append(_importance_loss(samples, pooled_sample, overrides) - baseline)
+        values = np.asarray(deltas, dtype=np.float64)
+        rows.append(
+            {
+                "kind": kind,
+                "name": name,
+                "features": list(names),
+                "delta_log_loss": float(values.mean()),
+                "std": float(values.std()),
+                "min": float(values.min()),
+                "max": float(values.max()),
+                "repeats": int(repeats),
+                "rows": len(selected),
+                "departures": len(chosen),
+            }
+        )
+    return sorted(rows, key=lambda row: (row["kind"], -row["delta_log_loss"]))
 
 
 def _code_identity() -> tuple[str | None, bool | None]:
@@ -1306,6 +1417,12 @@ def run_backtest(
         floor=recipe.threshold_floor,
         min_alerts=recipe.threshold_min_alerts,
     )
+    importance = _grouped_importance(
+        development_results,
+        config,
+        spec,
+        seed=config.seed + 4,
+    )
     return BacktestResult(
         recipe=recipe,
         folds=tuple(results),
@@ -1325,6 +1442,7 @@ def run_backtest(
         threshold_hold_rate=_threshold_hold_rate(threshold_cells),
         decision_value=decision_value,
         development_decision_value=development_decision_value,
+        importance=importance,
         evaluated_blocks=tuple(item.fold.name for item in results),
         warnings=tuple(warnings),
         runtime_seconds=time.perf_counter() - started,
@@ -1672,6 +1790,44 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         )
         if result.threshold_cells
         else "Evaluation folds were not scored."
+    )
+    family_importance = [row for row in result.importance if row["kind"] == "family"]
+    feature_importance = [row for row in result.importance if row["kind"] == "feature"]
+    importance_table = (
+        _table(
+            ["group", "features", "delta log loss", "std", "min", "max", "rows"],
+            [
+                [
+                    row["name"],
+                    len(row["features"]),
+                    _fmt(row["delta_log_loss"], 5),
+                    _fmt(row["std"], 5),
+                    _fmt(row["min"], 5),
+                    _fmt(row["max"], 5),
+                    row["rows"],
+                ]
+                for row in family_importance
+            ],
+        )
+        if family_importance
+        else "Development folds were not scored."
+    )
+    feature_importance_table = (
+        _table(
+            ["feature", "delta log loss", "std", "min", "max"],
+            [
+                [
+                    row["name"],
+                    _fmt(row["delta_log_loss"], 5),
+                    _fmt(row["std"], 5),
+                    _fmt(row["min"], 5),
+                    _fmt(row["max"], 5),
+                ]
+                for row in feature_importance[:15]
+            ],
+        )
+        if feature_importance
+        else "Development folds were not scored."
     )
     pr_targets = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
     pr_table = (
@@ -2095,6 +2251,21 @@ point; the precision and recall columns pool every fold at its own threshold. {h
 
 {pr_table}
 
+## Development importance
+
+Grouped permutation importance on the pooled development test blocks with each fold's own model
+and calibrator: {result.importance[0]["rows"] if result.importance else 0} rows sampled by
+departure date, five repeats, delta log loss. The spread columns are the minimum, maximum and
+standard deviation across repeats.
+
+### Feature families
+
+{importance_table}
+
+### Single features (top 15)
+
+{feature_importance_table}
+
 ## Sparse-era folds
 
 {sparse_table}
@@ -2203,6 +2374,7 @@ def write_backtest_artifacts(
         "selection": result.selection,
         "decision_value": result.decision_value,
         "development_decision_value": result.development_decision_value,
+        "importance": result.importance,
         "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],
         "runtime_seconds": result.runtime_seconds,
         "peak_rss_kb": result.peak_rss_kb,

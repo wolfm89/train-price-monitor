@@ -90,6 +90,66 @@ FULL_CALENDAR: tuple[Feature, ...] = (
     Feature("dest_public_holiday_scope", CATEGORICAL, nullable=True, source="calendar"),
 )
 
+# Grouped permutation importance reports these families; every feature belongs to exactly one.
+FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
+    "price_level": (
+        "price_eur",
+        "headroom_pct",
+        "price_rank_route_day",
+        "price_rank_missing",
+    ),
+    "price_history": (
+        "price_vs_series_min",
+        "price_vs_series_median",
+        "price_change_24h",
+        "price_change_24h_missing",
+        "price_velocity_24h",
+        "price_jumps_24h",
+        "price_min_7d",
+        "price_max_7d",
+        "price_drawdown_7d",
+        "price_runup_7d",
+    ),
+    "load_factor": (
+        "load_factor_ordinal",
+        "load_factor_missing",
+        "load_factor_change_24h",
+        "load_factor_change_24h_missing",
+    ),
+    "timing": (
+        "hours_to_departure",
+        "departure_weekday",
+        "departure_hour_local",
+    ),
+    "route": (
+        "service_class",
+        "distance_km",
+        "train_type",
+        "duration_minutes",
+        "transfers_actual",
+        "transfers_missing",
+        "origin_state",
+        "dest_state",
+        "origin_station_category",
+        "dest_station_category",
+    ),
+    "calendar": tuple(feature.name for feature in PUBLIC_CALENDAR + SCHOOL_CALENDAR + FULL_CALENDAR),
+}
+
+
+def family_members() -> dict[str, tuple[str, ...]]:
+    """Return the feature families with every feature in exactly one family."""
+    return dict(FEATURE_FAMILIES)
+
+
+def feature_family(name: str) -> str:
+    """Return the family of one feature name."""
+    for family, names in FEATURE_FAMILIES.items():
+        if name in names:
+            return family
+    raise ValueError(f"feature {name!r} is not assigned to a family")
+
+
 CALENDAR_FEATURES: dict[str, tuple[Feature, ...]] = {
     "none": (),
     "public": PUBLIC_CALENDAR,
