@@ -370,7 +370,7 @@ uploaded and no AWS resource is created. Downloaded silver belongs under the ign
 uv sync --group train
 mise run //analytics:train -- --source .data/silver/<build> --profile   # profile only
 mise run //analytics:train -- --source .data/silver/<build>
-mise run //analytics:train:ablation -- --config config/training-static.json --source .data/silver/<build>
+mise run //analytics:train:ablation -- --source .data/silver/<build>
 ```
 
 `--source` accepts an S3 pointer, a Parquet glob, a single file, a local directory or a local

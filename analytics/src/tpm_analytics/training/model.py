@@ -1014,7 +1014,7 @@ def _bootstrap_replicate(
     probabilities: Array,
     clusters: list[Array],
     sampled: Array,
-    threshold: float,
+    threshold: float | Array,
 ) -> tuple[float, float, float, float, float, float, float]:
     indices = np.concatenate([clusters[index] for index in sampled])
     yy = y[indices]
@@ -1023,15 +1023,20 @@ def _bootstrap_replicate(
     brier = float(brier_score_loss(yy, pp))
     base = float(np.mean(yy))
     bss = 1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan
-    decisions = _decision_metrics(yy, pp, threshold)
+    predicted = pp >= float(threshold) if np.isscalar(threshold) else pp >= np.asarray(threshold)[indices]
+    true_positive = int(np.sum(predicted & (yy == 1)))
+    false_positive = int(np.sum(predicted & (yy == 0)))
+    false_negative = int(np.sum(~predicted & (yy == 1)))
+    precision = true_positive / max(true_positive + false_positive, 1)
+    recall = true_positive / max(true_positive + false_negative, 1)
     return (
         brier,
         float(log_loss(yy, pp, labels=[0, 1])),
         bss,
         float(roc_auc_score(yy, pp)) if both else np.nan,
         float(average_precision_score(yy, pp)) if both else np.nan,
-        decisions["precision_at_threshold"],
-        decisions["recall_at_threshold"],
+        float(precision),
+        float(recall),
     )
 
 
@@ -1041,7 +1046,7 @@ def _bootstrap_metrics(
     groups: Array,
     replicates: int,
     seed: int,
-    threshold: float,
+    threshold: float | Array,
 ) -> dict[str, list[float]]:
     """Cluster bootstrap for the headline metrics that cannot use sufficient statistics."""
     unique, inverse = np.unique(groups, return_inverse=True)
@@ -1337,7 +1342,12 @@ def _fit_final_calibration(
     for method in config.calibration.methods:
         oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
         method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
-    requested = min(method_scores, key=lambda name: float(method_scores[name]["brier"] or 1.0))
+
+    def _brier_key(name: str) -> float:
+        value = method_scores[name]["brier"]
+        return 1.0 if value is None else float(value)
+
+    requested = min(method_scores, key=_brier_key)
     calibrator = fit_calibrator(
         raw_cal,
         cal_data.y,

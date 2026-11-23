@@ -55,7 +55,7 @@ def fold_masks(panel: TabularData, fold: FoldConfig, protocol: ProtocolConfig) -
             upper = float(protocol.forward_max_hours_to_departure)
             domain = (hours >= lower) & (hours <= upper)
         else:
-            domain = (hours >= 24.0) & (hours < float(protocol.sparse_era_max_hours_to_departure))
+            domain = (hours >= 24.0) & (hours <= float(protocol.sparse_era_max_hours_to_departure))
         calibrate &= domain
         test &= domain
     return FoldMasks(train=train, calibrate=calibrate, test=test)

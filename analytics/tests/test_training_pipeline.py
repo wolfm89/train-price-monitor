@@ -26,6 +26,7 @@ from tpm_analytics.training.backtest import (
     load_panel,
     run_backtest,
     score_forward,
+    score_forward_artifact,
     select_recipe,
     write_backtest_artifacts,
 )
@@ -3277,11 +3278,45 @@ def test_dataset_cache_key_covers_build_inputs(tmp_path: Path) -> None:
     assert base != _dataset_cache_key(config, "x", "sha", True, source)
     assert base != _dataset_cache_key(config, "x", "other", False, source)
     changed = replace(config, model=replace(config.model, max_iter=config.model.max_iter + 1))
-    assert base != _dataset_cache_key(changed, "x", "sha", False, source)
+    assert base == _dataset_cache_key(changed, "x", "sha", False, source)
+    reseeded = replace(config, seed=config.seed + 1)
+    assert base != _dataset_cache_key(reseeded, "x", "sha", False, source)
     other_build = SourceSpec(glob="x", label="x", build_id="b", manifest_sha256="m")
     assert base != _dataset_cache_key(config, "x", "sha", False, other_build)
     other_manifest = SourceSpec(glob="x", label="x", build_id="a", manifest_sha256="n")
     assert base != _dataset_cache_key(config, "x", "sha", False, other_manifest)
+
+
+def test_backtest_cli_smoke(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _, _ = _build(tmp_path)
+    raw = json.loads(_config(tmp_path).read_text())
+    raw["protocol"] = {
+        "kind": "backtest",
+        "cutoffs": [
+            {"cutoff": "2026-07-06", "role": "development", "name": "dev"},
+            {"cutoff": "2026-07-20", "role": "evaluation", "name": "eval"},
+        ],
+    }
+    config_path = tmp_path / "backtest.json"
+    config_path.write_text(json.dumps(raw))
+    out = tmp_path / "cli-backtest"
+    code = main(
+        [
+            "--config",
+            str(config_path),
+            "--source",
+            str(tmp_path / "silver.parquet"),
+            "--out",
+            str(out),
+            "--evaluate-test",
+        ]
+    )
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["evaluated_blocks"] == ["dev", "eval"]
+    assert (out / "predictions" / "backtest.parquet").is_file()
+    assert (out / "backtest.json").is_file()
+    assert (out / "manifest.json").is_file()
 
 
 def test_clean_fold_cache_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3472,13 +3507,13 @@ def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
     masks = fold_masks(panel, fold, config.protocol)
     train, calibrate, _ = fold_slices(panel, masks)
     recipe = Recipe(
-        model="base_rate",
+        model="hist_gradient_boosting",
         calibration="sigmoid",
         threshold_floor=0.7,
         model_settings={
-            "max_iter": config.model.max_iter,
+            "max_iter": 2,
             "learning_rate": config.model.learning_rate,
-            "max_leaf_nodes": config.model.max_leaf_nodes,
+            "max_leaf_nodes": 3,
             "random_state": config.model.random_state,
         },
     )
@@ -3489,6 +3524,31 @@ def test_forward_builder_has_grid_columns_but_no_labels(tmp_path: Path) -> None:
     assert np.all(np.isfinite(probabilities))
     assert float(probabilities.min()) > 0.0
     assert float(probabilities.max()) < 1.0
+    assert float(np.std(probabilities)) > 0.0
+
+    forward_config = replace(
+        config,
+        protocol=ProtocolConfig("backtest", (FoldConfig(date(2026, 7, 6), "forward", "forward"),)),
+    )
+    smoke_dir = tmp_path / "forward-smoke"
+    smoke_dir.mkdir()
+    smoke = score_forward_artifact(
+        smoke_dir,
+        panel,
+        forward_config,
+        recipe,
+        feature_spec("full"),
+        tmp_path / "forward-run" / "forward.parquet",
+    )
+    assert smoke["finite"] is True
+    assert smoke["labels"] is False
+    assert smoke["rows"] == len(forward)
+    assert 0.0 < smoke["min_score"] < smoke["max_score"] < 1.0
+    assert (
+        smoke["forward_sha256"]
+        == hashlib.sha256((tmp_path / "forward-run" / "forward.parquet").read_bytes()).hexdigest()
+    )
+    assert (smoke_dir / "forward_input.parquet").is_file()
 
 
 def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
@@ -3521,6 +3581,18 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     summary = write_backtest_artifacts(out, scored, config, spec)
     assert (out / "predictions" / "backtest.parquet").is_file()
     assert (out / "recipe.json").is_file()
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            "SELECT count(*) AS total, count(d.snapshot_at) AS matched "
+            "FROM read_parquet(?) p LEFT JOIN read_parquet(?) d "
+            "ON p.series_key = d.series_key AND p.snapshot_at = d.snapshot_at",
+            [str(out / "predictions" / "backtest.parquet"), str(out / "dataset" / "*.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert row[0] == row[1]
     assert summary["evaluated_blocks"] == ["dev", "eval"]
     assert scored.recipe.sha256() == recipe.sha256()
     assert scored.recipe.model_settings["max_iter"] == config.model.max_iter
@@ -3557,6 +3629,12 @@ def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> Non
     ]
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ConfigError, match="unique names"):
+        load_config(path)
+    raw["protocol"]["cutoffs"] = [
+        {"cutoff": "2026-06-22", "role": "development", "name": "../escape"},
+    ]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="fold name"):
         load_config(path)
 
 

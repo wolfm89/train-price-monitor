@@ -8,6 +8,7 @@ selection. Evaluation and sparse-era folds are scored only with ``--evaluate-tes
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -31,12 +32,12 @@ from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS,
 from tpm_analytics.training.labels import breach
 from tpm_analytics.training.model import (
     Array,
-    ClimatologyModel,
     FittedModel,
     ModelError,
     TabularData,
     _bootstrap,
     _bootstrap_metrics,
+    _calibration_stats,
     _choose_candidate,
     _compact_category,
     _cross_fitted,
@@ -71,8 +72,6 @@ class ForwardScorer:
     model: FittedModel
     calibrator: Any
     threshold: float
-    climatology: ClimatologyModel
-    train_rate: float
 
 
 @dataclass(frozen=True)
@@ -81,6 +80,8 @@ class Recipe:
     calibration: str
     threshold_floor: float
     model_settings: dict[str, Any]
+    calibration_folds: int = 5
+    calibration_min_positives: int = 1000
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -88,6 +89,8 @@ class Recipe:
             "calibration": self.calibration,
             "threshold_floor": self.threshold_floor,
             "model_settings": self.model_settings,
+            "calibration_folds": self.calibration_folds,
+            "calibration_min_positives": self.calibration_min_positives,
         }
 
     def sha256(self) -> str:
@@ -118,6 +121,8 @@ class FoldResult:
     calibrate_rows: int = 0
     train: TabularData | None = None
     calibrate: TabularData | None = None
+    calibration_stats: dict[str, float | None] = field(default_factory=dict)
+    headroom_monotonic: bool = True
 
 
 @dataclass
@@ -158,7 +163,18 @@ def load_panel(out_dir: Path, spec: FeatureSpec) -> TabularData:
 def load_forward(path: Path, spec: FeatureSpec) -> TabularData:
     """Load the label-free forward Parquet for prediction only."""
     columns = ", ".join(
-        dict.fromkeys((*spec.names, "series_key", "chain_id", "snapshot_at", "departure_date", "headroom_pct"))
+        dict.fromkeys(
+            (
+                *spec.names,
+                "series_key",
+                "chain_id",
+                "snapshot_at",
+                "departure_date",
+                "headroom_pct",
+                "bin_regime",
+                "bin_index",
+            )
+        )
     )
     connection = duckdb.connect()
     try:
@@ -172,7 +188,8 @@ def load_forward(path: Path, spec: FeatureSpec) -> TabularData:
         if forbidden & available:
             raise ModelError(f"forward Parquet contains label columns: {sorted(forbidden & available)}")
         rows = connection.execute(
-            f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') ORDER BY series_key, snapshot_at"
+            f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') "
+            "ORDER BY series_key, snapshot_at, bin_regime, bin_index"
         ).fetchnumpy()
     finally:
         connection.close()
@@ -212,24 +229,26 @@ def fit_forward_scorer(
     spec: FeatureSpec,
 ) -> ForwardScorer:
     model_config = replace(config.model, **recipe.model_settings)
-    fold_config = replace(config, model=model_config)
+    calibration_config = replace(
+        config.calibration,
+        folds=recipe.calibration_folds,
+        min_positives=recipe.calibration_min_positives,
+    )
+    fold_config = replace(config, model=model_config, calibration=calibration_config)
     model = fit_candidate(recipe.model, train, spec, fold_config)
-    climatology = fit_climatology(train)
     raw_cal = model.predict(calibrate)
-    oof = _cross_fitted(raw_cal, calibrate.y, calibrate.departure_date, recipe.calibration, config)
+    oof = _cross_fitted(raw_cal, calibrate.y, calibrate.departure_date, recipe.calibration, fold_config)
     calibrator = fit_calibrator(
         raw_cal,
         calibrate.y,
         recipe.calibration,
-        min_positives=config.calibration.min_positives,
+        min_positives=recipe.calibration_min_positives,
     )
     threshold, _ = _threshold(calibrate.y, oof, recipe.threshold_floor)
     return ForwardScorer(
         model=model,
         calibrator=calibrator,
         threshold=threshold,
-        climatology=climatology,
-        train_rate=float(np.mean(train.y)),
     )
 
 
@@ -256,8 +275,13 @@ def fit_forward_fold(
     assert_purged(panel, fold, config.protocol, masks)
     train = panel.subset(masks.train)
     calibrate = panel.subset(masks.calibrate)
-    if len(train) == 0 or len(calibrate) == 0:
-        raise ModelError(f"{fold.name}: empty train or calibration block")
+    for name, block in (("train", train), ("calibrate", calibrate)):
+        if len(block) < config.report.min_eligible_rows:
+            raise DatasetError(f"{fold.name} {name}: {len(block)} rows; floor is {config.report.min_eligible_rows}")
+        if int(np.sum(block.y)) < config.report.min_split_positives:
+            raise DatasetError(
+                f"{fold.name} {name}: {int(np.sum(block.y))} positives; floor is {config.report.min_split_positives}"
+            )
     scorer = fit_forward_scorer(recipe, train, calibrate, config, spec)
     return scorer, fold
 
@@ -303,14 +327,17 @@ def score_forward_artifact(
     )
     pq.write_table(table, predictions_path, compression="zstd")
     sibling = forward_path.parent / "forward_manifest.json"
-    manifest_payload: dict[str, Any] = {}
-    if sibling.is_file():
-        manifest_payload = json.loads(sibling.read_text(encoding="utf-8"))
+    if not sibling.is_file():
+        raise ModelError(f"forward manifest is missing: {sibling}")
+    manifest_payload = json.loads(sibling.read_text(encoding="utf-8"))
+    expected_spec = hashlib.sha256(json.dumps(list(spec.names)).encode("utf-8")).hexdigest()
+    if manifest_payload.get("feature_spec_sha256") != expected_spec:
+        raise ModelError("forward Parquet was built with a different feature specification")
     missingness = manifest_payload.get("feature_missingness", {})
     smoke = {
         "fold": fold.name,
         "forward_input": str(forward_path),
-        "forward_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
+        "forward_sha256": _file_sha256(forward_path),
         "forward_manifest_sha256": (hashlib.sha256(sibling.read_bytes()).hexdigest() if sibling.is_file() else None),
         "forward_artifact_sha256": manifest_payload.get("artifact_sha256"),
         "forward_sample_rate": manifest_payload.get("forward_sample_rate"),
@@ -372,8 +399,13 @@ def select_recipe_bundle(
     first_method = next(iter(config.calibration.methods))
     candidate_scores: dict[str, list[dict[str, float | None]]] = {name: [] for name in config.model.candidates}
     fitted: dict[tuple[str, str], FittedModel] = {}
+    calibrates: dict[str, TabularData] = {}
     for fold in development:
-        _, train, calibrate, _ = _fold_slices(panel, fold, config)
+        masks = fold_masks(panel, fold, config.protocol)
+        assert_purged(panel, fold, config.protocol, masks)
+        train = panel.subset(masks.train)
+        calibrate = panel.subset(masks.calibrate)
+        calibrates[fold.name] = calibrate
         encoder = fit_encoder(train, spec)
         matrix = _matrix(train, spec, encoder)
         for name in config.model.candidates:
@@ -394,18 +426,21 @@ def select_recipe_bundle(
     chosen = _choose_candidate(averaged)
     method_scores: dict[str, list[float]] = {method: [] for method in config.calibration.methods}
     for fold in development:
-        _, _, calibrate, _ = _fold_slices(panel, fold, config)
+        calibrate = calibrates[fold.name]
         model = fitted[(fold.name, chosen)]
         raw = model.predict(calibrate)
         for method in config.calibration.methods:
             oof = _cross_fitted(raw, calibrate.y, calibrate.departure_date, method, config)
-            method_scores[method].append(float(_metrics(calibrate.y, oof)["brier"] or 1.0))
+            brier = _metrics(calibrate.y, oof)["brier"]
+            method_scores[method].append(1.0 if brier is None else float(brier))
     calibration = min(method_scores, key=lambda name: float(np.mean(method_scores[name])))
     recipe = Recipe(
         model=chosen,
         calibration=calibration,
         threshold_floor=config.report.threshold_precision_floor,
         model_settings=_model_settings(config),
+        calibration_folds=config.calibration.folds,
+        calibration_min_positives=config.calibration.min_positives,
     )
     return recipe, {name: model for (name, candidate), model in fitted.items() if candidate == chosen}
 
@@ -466,18 +501,23 @@ def fit_fold(
     # The recipe, not the live config, supplies the model family and settings. A later config
     # change cannot silently re-tune an evaluation fold.
     model_config = replace(config.model, **recipe.model_settings)
-    fold_config = replace(config, model=model_config)
+    calibration_config = replace(
+        config.calibration,
+        folds=recipe.calibration_folds,
+        min_positives=recipe.calibration_min_positives,
+    )
+    fold_config = replace(config, model=model_config, calibration=calibration_config)
     model = fitted_model or fit_candidate(recipe.model, train, spec, fold_config)
     climatology = fit_climatology(train)
     cal_matrix = model.transform(calibrate)
     test_matrix = model.transform(test)
     raw_cal = model.predict_matrix(cal_matrix)
-    oof_cal = _cross_fitted(raw_cal, calibrate.y, calibrate.departure_date, recipe.calibration, config)
+    oof_cal = _cross_fitted(raw_cal, calibrate.y, calibrate.departure_date, recipe.calibration, fold_config)
     calibrator = fit_calibrator(
         raw_cal,
         calibrate.y,
         recipe.calibration,
-        min_positives=config.calibration.min_positives,
+        min_positives=recipe.calibration_min_positives,
     )
     threshold, threshold_met = _threshold(calibrate.y, oof_cal, recipe.threshold_floor)
     raw = model.predict_matrix(test_matrix)
@@ -500,13 +540,16 @@ def fit_fold(
             raw_cal_headroom,
             y_cal,
             recipe.calibration,
-            min_positives=config.calibration.min_positives,
+            min_positives=recipe.calibration_min_positives,
         )
         raw_headroom = model.predict_matrix(model.with_headroom(test_matrix, headroom))
         raw_probabilities[headroom] = raw_headroom
         probabilities[headroom] = calibrator_headroom.predict(raw_headroom)
         climate_by_headroom[headroom] = climatology.predict(test, headroom=headroom)
         labels[headroom] = breach(test.price_cents, test.check_price_cents, headroom)
+    ordered = [probabilities[headroom] for headroom in config.label.headroom_pct]
+    headroom_monotonic = bool(all(np.all(left >= right) for left, right in itertools.pairwise(ordered)))
+    calibration_stats = _calibration_stats(test.y, calibrated, config.report.calibration_bins)
     return FoldResult(
         fold=fold,
         train_rows=len(train),
@@ -527,6 +570,8 @@ def fit_fold(
         labels=labels,
         runtime_seconds=time.perf_counter() - started,
         fit_included=fitted_model is None,
+        calibration_stats=calibration_stats,
+        headroom_monotonic=headroom_monotonic,
     )
 
 
@@ -623,16 +668,9 @@ def _code_identity() -> tuple[str | None, bool | None]:
 
 def _fit_code_hash() -> str:
     root = Path(__file__).resolve().parents[1]
-    files = [
-        root / "training" / "backtest.py",
-        root / "training" / "model.py",
-        root / "training" / "protocol.py",
-        root / "training" / "config.py",
-        root / "training" / "labels.py",
-        root / "training" / "features.py",
-        root / "training" / "bands.py",
-        root.parent.parent / "uv.lock",
-    ]
+    excluded = {"cli.py", "report.py", "__init__.py"}
+    files = sorted(path for path in (root / "training").glob("*.py") if path.name not in excluded)
+    files.extend((root / "calendar.py", root / "silver" / "_duck.py", root.parent.parent / "uv.lock"))
     digest = hashlib.sha256()
     for path in files:
         if path.is_file():
@@ -661,11 +699,11 @@ def _load_cached_recipe(
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, ValueError, TypeError:
+    except OSError, ValueError, TypeError, KeyError, AttributeError:
         return None
-    if payload.get("config_sha256") != config.hash():
+    if not isinstance(payload, dict) or payload.get("config_sha256") != config.hash():
         return None
-    if dataset_sha256 is not None and payload.get("dataset_sha256") != dataset_sha256:
+    if dataset_sha256 is None or payload.get("dataset_sha256") != dataset_sha256:
         return None
     if code_sha is None or code_dirty is not False:
         return None
@@ -676,6 +714,8 @@ def _load_cached_recipe(
         calibration=payload["calibration"],
         threshold_floor=float(payload["threshold_floor"]),
         model_settings=payload["model_settings"],
+        calibration_folds=int(payload.get("calibration_folds", config.calibration.folds)),
+        calibration_min_positives=int(payload.get("calibration_min_positives", config.calibration.min_positives)),
     )
 
 
@@ -696,7 +736,10 @@ def _save_cached_recipe(
         "code_sha": code_sha,
         "fit_code_sha": fit_code_sha,
     }
-    _recipe_cache_path(cache_dir).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path = _recipe_cache_path(cache_dir)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _cache_paths(cache_dir: Path, fold: FoldConfig) -> tuple[Path, Path]:
@@ -726,16 +769,28 @@ def _load_cached_fold(
         return None
     if meta.get("recipe_sha256") != recipe.sha256() or meta.get("config_sha256") != config.hash():
         return None
-    if dataset_sha256 is not None and meta.get("dataset_sha256") != dataset_sha256:
+    if dataset_sha256 is None or meta.get("dataset_sha256") != dataset_sha256:
         return None
     if code_sha is None or code_dirty is not False:
         return None
     if meta.get("fit_code_sha") != fit_code_sha:
         return None
+    expected = meta.get("pkl_sha256")
+    if expected is None or hashlib.sha256(data_path.read_bytes()).hexdigest() != expected:
+        return None
     try:
         with data_path.open("rb") as handle:
             loaded = pickle.load(handle)
-    except OSError, EOFError, pickle.UnpicklingError, ValueError:
+    except (
+        OSError,
+        EOFError,
+        pickle.UnpicklingError,
+        ValueError,
+        AttributeError,
+        ImportError,
+        TypeError,
+        KeyError,
+    ):
         return None
     # Older checkpoints stored the full train/calibrate panels; drop them from the report state.
     return replace(loaded, train=None, calibrate=None, from_cache=True)
@@ -758,6 +813,7 @@ def _save_cached_fold(
     with tmp_path.open("wb") as handle:
         pickle.dump(result, handle)
     os.replace(tmp_path, data_path)
+    pkl_sha256 = hashlib.sha256(data_path.read_bytes()).hexdigest()
     meta_tmp = meta_path.with_suffix(".tmp")
     meta_tmp.write_text(
         json.dumps(
@@ -768,6 +824,7 @@ def _save_cached_fold(
                 "dataset_sha256": dataset_sha256,
                 "code_sha": code_sha,
                 "fit_code_sha": fit_code_sha,
+                "pkl_sha256": pkl_sha256,
             },
             indent=2,
             sort_keys=True,
@@ -800,7 +857,7 @@ def _pooled_summary(
         pooled.departure_date,
         config.report.metric_bootstrap_replicates,
         config.seed + 1,
-        float(np.mean([item.threshold for item in folds])),
+        np.concatenate([np.full(len(item.test), item.threshold) for item in folds]),
     )
     headroom, headroom_ttd = _headroom_rows(pooled, folds, config)
     return metrics, headroom, headroom_ttd
@@ -816,13 +873,20 @@ def run_backtest(
     dataset_sha256: str | None = None,
 ) -> BacktestResult:
     started = time.perf_counter()
+    if config.report.bootstrap_cluster != "departure_date":
+        raise ModelError("backtest bootstrap_cluster must be departure_date")
     code_sha, code_dirty = _code_identity()
     fit_code_sha = _fit_code_hash()
-    cache_enabled = cache_dir is not None and code_sha is not None and code_dirty is False
+    cache_enabled = (
+        cache_dir is not None and dataset_sha256 is not None and code_sha is not None and code_dirty is False
+    )
     active_cache = cache_dir if cache_enabled else None
     folds = scored_folds(config.protocol, evaluate_test=evaluate_test)
     if not folds:
         raise ModelError("no scored folds")
+    for fold in folds:
+        _, train, calibrate, test = _fold_slices(panel, fold, config)
+        _check_fold_gates(fold, train, calibrate, test, config)
     cached_recipe = _load_cached_recipe(active_cache, config, dataset_sha256, code_sha, code_dirty, fit_code_sha)
     recipe_from_cache = cached_recipe is not None
     if cached_recipe is not None:
@@ -882,6 +946,8 @@ def run_backtest(
             "alert_share": item.metrics.get("alert_share"),
             "precision_at_threshold": item.metrics.get("precision_at_threshold"),
             "recall_at_threshold": item.metrics.get("recall_at_threshold"),
+            "headroom_monotonic": item.headroom_monotonic,
+            "calibration_stats": item.calibration_stats,
             "runtime_seconds": item.runtime_seconds,
             "from_cache": item.from_cache,
             "fit_included": item.fit_included,
@@ -889,6 +955,8 @@ def run_backtest(
         for item in results
     ]
     warnings: list[str] = []
+    if cache_dir is not None and not cache_enabled:
+        warnings.append("fold cache disabled: the working tree is dirty or the git state is unknown")
     if not evaluation:
         warnings.append("evaluation folds were not scored; pass --evaluate-test to score them")
     pooled_metrics: dict[str, Any] = {}
@@ -971,6 +1039,14 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _text(values: Array) -> list[str]:
     if values.dtype.kind == "S":
         return [value.decode("utf-8") for value in values]
@@ -1012,8 +1088,8 @@ def _write_predictions(path: Path, result: BacktestResult) -> None:
             ("role", pa.string()),
             ("series_key", pa.string()),
             ("chain_id", pa.string()),
-            ("snapshot_at", pa.string()),
-            ("departure_date", pa.string()),
+            ("snapshot_at", pa.timestamp("ms")),
+            ("departure_date", pa.date32()),
             ("ttd_band", pa.string()),
             ("assigned_headroom", pa.int16()),
             ("headroom_pct", pa.int16()),
@@ -1036,8 +1112,6 @@ def _write_predictions(path: Path, result: BacktestResult) -> None:
             assigned = item.test.headroom[order].astype(np.int16)
             series_text = _text(series)
             chain_text = _text(chain[order])
-            snapshot_text = _text(snapshot)
-            departure_text = _dates(departure)
             band_text = bands[order].tolist()
             for headroom in sorted(item.probabilities):
                 writer.write_table(
@@ -1047,8 +1121,8 @@ def _write_predictions(path: Path, result: BacktestResult) -> None:
                             "role": [item.fold.role] * count,
                             "series_key": series_text,
                             "chain_id": chain_text,
-                            "snapshot_at": snapshot_text,
-                            "departure_date": departure_text,
+                            "snapshot_at": snapshot,
+                            "departure_date": departure,
                             "ttd_band": band_text,
                             "assigned_headroom": assigned,
                             "headroom_pct": np.full(count, headroom, dtype=np.int16),
@@ -1081,6 +1155,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             _fmt(row.get("average_precision")),
             _fmt(row.get("threshold")),
             _yes(row.get("threshold_met")),
+            _fmt(row.get("precision_at_threshold")),
+            _fmt(row.get("recall_at_threshold")),
             _p(row.get("alert_share")),
             _fmt(row.get("runtime_seconds"), 1),
         ]
@@ -1334,9 +1410,22 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     )
     precision_note = (
         f"Test precision at each fold's threshold ranges {min(test_precision):.3f}-{max(test_precision):.3f}; "
-        "the 0.7 floor is selected on the calibration block, not guaranteed on test."
+        f"the {result.recipe.threshold_floor:g} floor is selected on the calibration block, "
+        "not guaranteed on test."
         if test_precision
         else ""
+    )
+    diagnostics_table = _table(
+        ["fold", "headroom monotonic", "calibration slope", "ECE"],
+        [
+            [
+                row["fold"],
+                _yes(row.get("headroom_monotonic")),
+                _fmt((row.get("calibration_stats") or {}).get("slope")),
+                _fmt((row.get("calibration_stats") or {}).get("ece")),
+            ]
+            for row in result.per_fold
+        ],
     )
     fold_table = _table(
         [
@@ -1354,6 +1443,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             "AP",
             "threshold",
             "floor met",
+            "test prec",
+            "test rec",
             "alert share",
             "s",
         ],
@@ -1368,8 +1459,9 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 
 - Runner: `{dataset_manifest.get("runner", "local")}`
 - Code: `{dataset_manifest.get("run_code_sha") or dataset_manifest.get("git_sha")}`
-  (dirty: {dataset_manifest.get("git_dirty")})
+  (dirty: {dataset_manifest.get("run_code_dirty", dataset_manifest.get("git_dirty"))})
 - Dataset build: `{dataset_manifest.get("dataset_git_sha") or dataset_manifest.get("git_sha")}`
+  (dirty: {dataset_manifest.get("dataset_git_dirty", dataset_manifest.get("git_dirty"))})
 - Silver build: `{dataset_manifest.get("silver_build_id")}`
 - Dataset cache: {dataset_manifest.get("dataset_cache_key")}; reused: {dataset_manifest.get("dataset_reused", False)}
 - Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
@@ -1393,11 +1485,14 @@ protocols from the static validation split; a higher Brier here is not a model r
 
 > `BSS` is 1 - Brier / base-rate Brier; `BSS clim` is 1 - model Brier / fold-climatology Brier;
 > `BSS train` uses each fold's train prevalence. The BSS interval re-estimates prevalence in each
-> resample.
+> resample. The climatology is the smoothed train prevalence; unlike the static report it is not
+> passed through the model calibrator.
 
 ## Folds
 
 {fold_table}
+
+{diagnostics_table}
 
 {spread_note}
 
@@ -1494,7 +1589,9 @@ def write_backtest_artifacts(
         "dataset_reuse_key": dataset_manifest.get("reuse_key"),
         "dataset_cache_key": dataset_manifest.get("dataset_cache_key"),
         "run_code_sha": result.code_sha,
+        "run_code_dirty": result.code_dirty,
         "dataset_git_sha": dataset_manifest.get("git_sha"),
+        "dataset_git_dirty": dataset_manifest.get("git_dirty"),
         "warnings": dataset_manifest.get("warnings", []),
     }
     recipe_payload = {**result.recipe.payload(), "sha256": result.recipe.sha256()}

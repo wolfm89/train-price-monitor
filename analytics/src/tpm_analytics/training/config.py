@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -209,8 +210,8 @@ class FoldConfig:
             raise ConfigError(f"protocol fold role must be one of {FOLD_ROLES}")
         if self.cutoff.weekday() != 0:
             raise ConfigError(f"protocol cutoff {self.cutoff} is not a Monday")
-        if not self.name:
-            raise ConfigError("protocol fold name must not be empty")
+        if not self.name or not re.fullmatch(r"[A-Za-z0-9._-]+", self.name):
+            raise ConfigError("protocol fold name must use only letters, digits, dot, underscore or hyphen")
 
 
 @dataclass(frozen=True)

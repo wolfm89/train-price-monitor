@@ -12,7 +12,7 @@ import shutil
 import sys
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +102,28 @@ def _dataset_code_hash() -> str:
     return digest.hexdigest()
 
 
+def _dataset_config_payload(config: TrainingConfig) -> dict[str, Any]:
+    return {
+        "seed": config.seed,
+        "splits": asdict(config.splits),
+        "label": asdict(config.label),
+        "resample": asdict(config.resample),
+        "sample": asdict(config.sample),
+        "calendar": asdict(config.calendar),
+        "r24_max_tail_hours": config.report.r24_max_tail_hours,
+        "r24_max_gap_hours": config.report.r24_max_gap_hours,
+        "min_eligible_rows": config.report.min_eligible_rows,
+        "min_split_positives": config.report.min_split_positives,
+        "min_headroom_positives": config.report.min_headroom_positives,
+        "min_band_positives": config.report.min_band_positives,
+        "min_sparse_band_positives": config.report.min_sparse_band_positives,
+        "forward_start": config.protocol.forward_start.isoformat(),
+        "forward_end": config.protocol.forward_end.isoformat(),
+        "forward_min_hours_to_departure": config.protocol.forward_min_hours_to_departure,
+        "forward_max_hours_to_departure": config.protocol.forward_max_hours_to_departure,
+    }
+
+
 def _dataset_cache_key(
     config: TrainingConfig,
     source_uri: str,
@@ -112,7 +134,9 @@ def _dataset_cache_key(
     payload = {
         "version": 2,
         "dataset_code_sha": code_sha,
-        "config_sha256": config.hash(),
+        "dataset_config_sha256": hashlib.sha256(
+            json.dumps(_dataset_config_payload(config), sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest(),
         "source": source_uri,
         "strict_chains": strict_chains,
         "source_build_id": getattr(source, "build_id", None),
@@ -157,22 +181,28 @@ def _restore_dataset(
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
                 return None
         roles = entry / "column_roles.json"
-        if roles.is_file() and hashlib.sha256(roles.read_bytes()).hexdigest() != manifest.get("column_roles_sha256"):
+        if not roles.is_file() or hashlib.sha256(roles.read_bytes()).hexdigest() != manifest.get("column_roles_sha256"):
             return None
         profile = entry / "profile.json"
         if (
-            profile.is_file()
-            and manifest.get("profile_sha256")
-            and hashlib.sha256(profile.read_bytes()).hexdigest() != manifest["profile_sha256"]
+            not profile.is_file()
+            or not manifest.get("profile_sha256")
+            or hashlib.sha256(profile.read_bytes()).hexdigest() != manifest["profile_sha256"]
         ):
             return None
     except OSError, ValueError, TypeError, KeyError, AttributeError:
         return None
+    try:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        splits = tuple(SplitStats(**item) for item in payload.pop("splits"))
+        stats = DatasetStats(**payload, splits=splits)
+    except OSError, ValueError, TypeError, KeyError, AttributeError:
+        return None
     shutil.copytree(entry / "dataset", work_dir / "dataset", dirs_exist_ok=True)
     for name in ("dataset_manifest.json", "profile.json", "column_roles.json"):
-        source = entry / name
-        if source.is_file():
-            shutil.copy2(source, work_dir / name)
+        src = entry / name
+        if src.is_file():
+            shutil.copy2(src, work_dir / name)
     manifest["original_run_id"] = manifest.get("run_id")
     manifest["run_id"] = run_id
     manifest["cli_argv"] = list(cli_argv)
@@ -182,12 +212,6 @@ def _restore_dataset(
     (work_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
-    try:
-        payload = json.loads(profile_path.read_text(encoding="utf-8"))
-        splits = tuple(SplitStats(**item) for item in payload.pop("splits"))
-        stats = DatasetStats(**payload, splits=splits)
-    except OSError, ValueError, TypeError, KeyError, AttributeError:
-        return None
     return replace(stats, run_id=run_id)
 
 
@@ -318,7 +342,8 @@ def main(argv: list[str] | None = None) -> int:
             and not args.no_dataset_cache
             and code_sha is not None
             and code_dirty is False
-            and (getattr(source, "build_id", None) or getattr(source, "manifest_sha256", None))
+            and getattr(source, "build_id", None) is not None
+            and getattr(source, "manifest_sha256", None) is not None
         ):
             cache_root = args.dataset_cache_dir or (DEFAULT_CONFIG_PATH.parent.parent / "artifacts/.cache/datasets")
             dataset_key = _dataset_cache_key(build_config, source_uri, _dataset_code_hash(), args.strict_chains, source)
@@ -421,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
                     "out": str(out_dir),
                     "run_id": run_id,
                     "labelled_rows": stats.labelled_rows,
-                    "rows": stats.rows,
+                    "dataset_rows": stats.rows,
                     "dataset_reused": dataset_reused,
                     "dataset_cache_key": dataset_key,
                 }
@@ -477,6 +502,10 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(work_dir, ignore_errors=True)
         print(f"error: {error}", file=sys.stderr)
         return 2
+    except BaseException:
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        raise
 
 
 if __name__ == "__main__":
