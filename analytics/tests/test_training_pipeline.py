@@ -81,6 +81,13 @@ from tpm_analytics.training.model import (
 )
 from tpm_analytics.training.protocol import assert_purged, fold_masks, fold_slices, scored_folds
 from tpm_analytics.training.report import _warnings
+from tpm_analytics.training.selection import (
+    development_folds,
+    paired_bootstrap,
+    replacement_rule,
+    select_outcome,
+    table_sha256,
+)
 from tpm_analytics.training.sources import SourceSpec
 
 SPLITS = {
@@ -3644,6 +3651,98 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     evaluation = tuple(item for item in scored.folds if item.fold.role == "evaluation")
     expected_clusters = len(np.unique(np.concatenate([item.test.departure_date for item in evaluation])))
     assert scored.pooled["bootstrap_clusters"] == expected_clusters
+
+
+def test_selection_rejects_a_non_development_fold() -> None:
+    development = FoldConfig(date(2026, 6, 22), "development", "dev")
+    assert development_folds((development,)) == (development,)
+    with pytest.raises(ModelError, match="development folds"):
+        development_folds((FoldConfig(date(2026, 7, 27), "evaluation", "eval"),))
+    with pytest.raises(ModelError, match="development folds"):
+        development_folds((FoldConfig(date(2026, 8, 31), "sparse_era", "sparse"),))
+    with pytest.raises(ModelError, match="at least one"):
+        development_folds(())
+
+
+def _bootstrap_fixture(
+    magnitudes: np.ndarray, labels_per_cluster: np.ndarray, rows_per_cluster: int = 200
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return labels, challenger, incumbent and date clusters with per-cluster values."""
+    count = len(magnitudes) * rows_per_cluster
+    clusters = np.repeat(np.arange(len(magnitudes)), rows_per_cluster)
+    labels = np.repeat(labels_per_cluster, rows_per_cluster).astype(np.int8)
+    incumbent = np.full(count, 0.5, dtype=np.float64)
+    challenger = np.clip(incumbent + np.repeat(magnitudes, rows_per_cluster), 1e-6, 1.0 - 1e-6)
+    return labels, challenger, incumbent, clusters
+
+
+def test_replacement_rule_keeps_a_clear_winner_and_rejects_a_crossing_interval() -> None:
+    labels, challenger, incumbent, clusters = _bootstrap_fixture(np.array([0.2, -0.2] * 4), np.array([1, 0] * 4))
+    winner = paired_bootstrap(labels, challenger, incumbent, clusters, replicates=500, seed=7)
+    assert replacement_rule(winner)[0] is True
+    assert winner["log_loss"][1] < 0.0
+
+    labels, challenger, incumbent, clusters = _bootstrap_fixture(
+        np.array([0.32, -0.32, -0.18, 0.18, 0.32, -0.32, -0.18, 0.18]),
+        np.array([1, 0, 1, 0, 1, 0, 1, 0]),
+    )
+    interval = paired_bootstrap(labels, challenger, incumbent, clusters, replicates=500, seed=7)
+    assert interval["mean_log_loss"] < 0.0
+    assert interval["log_loss"][0] < 0.0 < interval["log_loss"][1]
+    accepted, reason = replacement_rule(interval)
+    assert accepted is False
+    assert "not entirely below zero" in reason
+
+
+def test_paired_bootstrap_clusters_by_departure_date() -> None:
+    labels, challenger, incumbent, clusters = _bootstrap_fixture(
+        np.array([0.25, -0.23, 0.24, -0.22, 0.26, -0.21, 0.25, -0.22]),
+        np.array([1, 0, 1, 0, 1, 0, 1, 0]),
+    )
+    by_date = paired_bootstrap(labels, challenger, incumbent, clusters, replicates=800, seed=11)
+    rows = np.arange(len(labels))
+    by_row = paired_bootstrap(labels, challenger, incumbent, rows, replicates=800, seed=11)
+    date_width = by_date["log_loss"][1] - by_date["log_loss"][0]
+    row_width = by_row["log_loss"][1] - by_row["log_loss"][0]
+    # A row-clustered mutant ignores the within-date correlation and reports a much narrower interval.
+    assert date_width > row_width * 2.0
+    assert by_date["clusters"] == 8
+    assert by_row["clusters"] == len(labels)
+
+
+def test_selection_joint_search_and_deterministic_table(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    protocol = ProtocolConfig(
+        "backtest",
+        (
+            FoldConfig(date(2026, 7, 6), "development", "dev"),
+            FoldConfig(date(2026, 7, 20), "development", "dev2"),
+        ),
+    )
+    config = replace(config, protocol=protocol)
+    first = select_outcome(panel, config, spec, replicates=200)
+    second = select_outcome(panel, config, spec, replicates=200)
+    assert table_sha256(first.table) == table_sha256(second.table)
+    assert first.table["chosen"] == {"model": first.model, "calibration": first.calibration}
+    pairs = {(row["model"], row["calibration"]) for row in first.table["rows"]}
+    assert pairs == {
+        ("base_rate", "sigmoid"),
+        ("logistic", "sigmoid"),
+        ("logistic", "isotonic"),
+        ("logistic", "temperature"),
+        ("hist_gradient_boosting", "sigmoid"),
+        ("hist_gradient_boosting", "isotonic"),
+        ("hist_gradient_boosting", "temperature"),
+        ("climatology", "none"),
+    }
+    assert first.table["folds"] == ["dev", "dev2"]
+    assert set(first.models) == {"dev", "dev2"}
+    assert all("beats_climatology" in row for row in first.table["rows"] if row.get("selectable", True))
+    assert first.table["rule"]["cluster"] == "departure_date"
+    assert first.table["rule"]["replicates"] == 200
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:

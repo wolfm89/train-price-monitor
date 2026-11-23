@@ -38,12 +38,10 @@ from tpm_analytics.training.model import (
     _bootstrap,
     _bootstrap_metrics,
     _calibration_stats,
-    _choose_candidate,
     _compact_category,
     _cross_fitted,
     _decision_metrics,
     _filled,
-    _matrix,
     _metrics,
     _pooled_decision_value_rows,
     _threshold,
@@ -52,7 +50,6 @@ from tpm_analytics.training.model import (
     fit_calibrator,
     fit_candidate,
     fit_climatology,
-    fit_encoder,
     load_splits,
 )
 from tpm_analytics.training.protocol import (
@@ -62,6 +59,7 @@ from tpm_analytics.training.protocol import (
     fold_slices,
     scored_folds,
 )
+from tpm_analytics.training.selection import select_outcome, selection_settings
 
 MIN_CELL_ROWS = 20
 _LOGGER = logging.getLogger(__name__)
@@ -86,9 +84,13 @@ class Recipe:
     model_settings: dict[str, Any]
     calibration_folds: int = 5
     calibration_min_positives: int = 1000
+    selection_settings: dict[str, Any] = field(default_factory=dict)
 
     def payload(self) -> dict[str, Any]:
-        """Return the recipe as a JSON-serialisable payload."""
+        """Return the recipe as a JSON-serialisable payload.
+
+        The selection *rule* settings are part of the hash; the fitted selection table is not.
+        """
         return {
             "model": self.model,
             "calibration": self.calibration,
@@ -96,6 +98,7 @@ class Recipe:
             "model_settings": self.model_settings,
             "calibration_folds": self.calibration_folds,
             "calibration_min_positives": self.calibration_min_positives,
+            "selection_settings": self.selection_settings,
         }
 
     def sha256(self) -> str:
@@ -160,6 +163,7 @@ class BacktestResult:
     recipe_from_cache: bool = False
     fold_cache_hits: int = 0
     folds_refit: int = 0
+    selection: dict[str, Any] = field(default_factory=dict)
 
 
 def load_panel(out_dir: Path, spec: FeatureSpec) -> TabularData:
@@ -406,60 +410,19 @@ def _fold_metrics(
 
 def select_recipe_bundle(
     panel: TabularData, config: TrainingConfig, spec: FeatureSpec
-) -> tuple[Recipe, dict[str, FittedModel]]:
+) -> tuple[Recipe, dict[str, FittedModel], dict[str, Any]]:
     """Choose model family and calibration method on the development folds only."""
-    development = [item for item in config.protocol.cutoffs if item.role == "development"]
-    if not development:
-        raise ModelError("the backtest has no development folds")
-    if any(item.role != "development" for item in development):
-        raise ModelError("recipe selection must use development folds only")
-    first_method = next(iter(config.calibration.methods))
-    candidate_scores: dict[str, list[dict[str, float | None]]] = {name: [] for name in config.model.candidates}
-    fitted: dict[tuple[str, str], FittedModel] = {}
-    calibrates: dict[str, TabularData] = {}
-    for fold in development:
-        masks = fold_masks(panel, fold, config.protocol)
-        assert_purged(panel, fold, config.protocol, masks)
-        train = panel.subset(masks.train)
-        calibrate = panel.subset(masks.calibrate)
-        calibrates[fold.name] = calibrate
-        encoder = fit_encoder(train, spec)
-        matrix = _matrix(train, spec, encoder)
-        for name in config.model.candidates:
-            model = fit_candidate(name, train, spec, config, encoder=encoder, matrix=matrix)
-            fitted[(fold.name, name)] = model
-            raw = model.predict(calibrate)
-            if name == "base_rate":
-                candidate_scores[name].append(_metrics(calibrate.y, raw))
-            else:
-                oof = _cross_fitted(raw, calibrate.y, calibrate.departure_date, first_method, config)
-                candidate_scores[name].append(_metrics(calibrate.y, oof))
-    averaged: dict[str, dict[str, float | None]] = {
-        name: {
-            key: float(np.mean([float(item[key] or 0.0) for item in values])) for key in ("brier", "average_precision")
-        }
-        for name, values in candidate_scores.items()
-    }
-    chosen = _choose_candidate(averaged)
-    method_scores: dict[str, list[float]] = {method: [] for method in config.calibration.methods}
-    for fold in development:
-        calibrate = calibrates[fold.name]
-        model = fitted[(fold.name, chosen)]
-        raw = model.predict(calibrate)
-        for method in config.calibration.methods:
-            oof = _cross_fitted(raw, calibrate.y, calibrate.departure_date, method, config)
-            brier = _metrics(calibrate.y, oof)["brier"]
-            method_scores[method].append(1.0 if brier is None else float(brier))
-    calibration = min(method_scores, key=lambda name: float(np.mean(method_scores[name])))
+    outcome = select_outcome(panel, config, spec)
     recipe = Recipe(
-        model=chosen,
-        calibration=calibration,
+        model=outcome.model,
+        calibration=outcome.calibration,
         threshold_floor=config.report.threshold_precision_floor,
         model_settings=_model_settings(config),
         calibration_folds=config.calibration.folds,
         calibration_min_positives=config.calibration.min_positives,
+        selection_settings=selection_settings(outcome.table),
     )
-    return recipe, {name: model for (name, candidate), model in fitted.items() if candidate == chosen}
+    return recipe, outcome.models, outcome.table
 
 
 def select_recipe(panel: TabularData, config: TrainingConfig, spec: FeatureSpec) -> Recipe:
@@ -745,6 +708,7 @@ def _load_cached_recipe(
         model_settings=payload["model_settings"],
         calibration_folds=int(payload.get("calibration_folds", config.calibration.folds)),
         calibration_min_positives=int(payload.get("calibration_min_positives", config.calibration.min_positives)),
+        selection_settings=payload.get("selection_settings") or {},
     )
 
 
@@ -924,13 +888,14 @@ def run_backtest(
         _check_fold_gates(fold, train, calibrate, test, config)
     cached_recipe = _load_cached_recipe(active_cache, config, dataset_sha256, code_sha, code_dirty, fit_code_sha)
     recipe_from_cache = cached_recipe is not None
+    selection_table: dict[str, Any] = {}
     if cached_recipe is not None:
         _LOGGER.info("backtest: using cached recipe %s / %s", cached_recipe.model, cached_recipe.calibration)
         recipe = cached_recipe
         development_models: dict[str, FittedModel] = {}
     else:
         _LOGGER.info("backtest: selecting recipe on development folds")
-        recipe, development_models = select_recipe_bundle(panel, config, spec)
+        recipe, development_models, selection_table = select_recipe_bundle(panel, config, spec)
         _save_cached_recipe(active_cache, config, recipe, dataset_sha256, code_sha, fit_code_sha)
         _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
@@ -1047,6 +1012,7 @@ def run_backtest(
         recipe_from_cache=recipe_from_cache,
         fold_cache_hits=sum(1 for item in results if item.from_cache),
         folds_refit=sum(1 for item in results if not item.from_cache),
+        selection=selection_table,
     )
 
 
@@ -1641,7 +1607,11 @@ def write_backtest_artifacts(
         "dataset_git_dirty": dataset_manifest.get("git_dirty"),
         "warnings": dataset_manifest.get("warnings", []),
     }
-    recipe_payload = {**result.recipe.payload(), "sha256": result.recipe.sha256()}
+    recipe_payload = {
+        **result.recipe.payload(),
+        "sha256": result.recipe.sha256(),
+        "selection": result.selection,
+    }
     (out_dir / "recipe.json").write_text(json.dumps(recipe_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     backtest_payload = {
         "protocol": {
@@ -1663,6 +1633,7 @@ def write_backtest_artifacts(
         "development_pooled": result.development_pooled,
         "development_headroom": result.development_headroom,
         "development_headroom_ttd": result.development_headroom_ttd,
+        "selection": result.selection,
         "decision_value": result.decision_value,
         "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],
         "runtime_seconds": result.runtime_seconds,
