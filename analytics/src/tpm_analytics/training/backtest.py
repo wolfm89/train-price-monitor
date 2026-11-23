@@ -1367,7 +1367,9 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 ## Run
 
 - Runner: `{dataset_manifest.get("runner", "local")}`
-- Git: `{dataset_manifest.get("git_sha")}` (dirty: {dataset_manifest.get("git_dirty")})
+- Code: `{dataset_manifest.get("run_code_sha") or dataset_manifest.get("git_sha")}`
+  (dirty: {dataset_manifest.get("git_dirty")})
+- Dataset build: `{dataset_manifest.get("dataset_git_sha") or dataset_manifest.get("git_sha")}`
 - Silver build: `{dataset_manifest.get("silver_build_id")}`
 - Dataset cache: {dataset_manifest.get("dataset_cache_key")}; reused: {dataset_manifest.get("dataset_reused", False)}
 - Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
@@ -1491,6 +1493,8 @@ def write_backtest_artifacts(
         "dataset_reused": dataset_manifest.get("reused", False),
         "dataset_reuse_key": dataset_manifest.get("reuse_key"),
         "dataset_cache_key": dataset_manifest.get("dataset_cache_key"),
+        "run_code_sha": result.code_sha,
+        "dataset_git_sha": dataset_manifest.get("git_sha"),
         "warnings": dataset_manifest.get("warnings", []),
     }
     recipe_payload = {**result.recipe.payload(), "sha256": result.recipe.sha256()}
@@ -1564,6 +1568,8 @@ def write_backtest_artifacts(
             "folds_refit": result.folds_refit,
         },
         "git_dirty_end": dataset_manifest.get("git_dirty_end"),
+        "run_code_sha": result.code_sha,
+        "dataset_git_sha": dataset_manifest.get("git_sha"),
         "dataset_reused": dataset_manifest.get("reused", False),
         "dataset_reuse_key": dataset_manifest.get("reuse_key"),
         "dataset_cache_key": dataset_manifest.get("dataset_cache_key"),
