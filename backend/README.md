@@ -27,8 +27,9 @@ From the repository root, use `mise run //backend:dev` and `mise run //backend:t
   refresher has a 120 s timeout and paces DB calls gently.
 - **Storage:** DynamoDB `TrainPriceMonitor` (users, journeys, notifications), S3 profile images, SQS
   queue and DLQ, SES email.
-- **DB access:** `db-vendo-client` through the shared `cross-fetch` alias. The shared transport uses
-  Node `https` with browser-like TLS profiles; the API/refresher can fall back to Decodo. See
+- **DB access:** `db-vendo-client` through the shared `cross-fetch` alias, using the `dbnav`
+  Navigator profile. The shared transport uses Node `https` with browser-like TLS profiles; the
+  API/refresher can fall back to Decodo. See
   [docs/architecture.md](../docs/architecture.md#design-decisions).
 
 The handler exports `handler` from `src/main.ts` and supports API Gateway payload v1 and v2 plus SQS.

@@ -50,8 +50,9 @@ From the repository root: `mise run //backend:dev` and `mise run //backend:test`
 
 ## DB transport and bundling
 
-- `db-vendo-client` reaches DB through the shared `cross-fetch` alias to `../shared/db-fetch.ts`.
-  Read [`shared/AGENTS.md`](../shared/AGENTS.md) before touching transport behavior.
+- `db-vendo-client` reaches DB through the shared `cross-fetch` alias to `../shared/db-fetch.ts`,
+  using the `dbnav` Navigator profile. Read [`shared/AGENTS.md`](../shared/AGENTS.md) before
+  touching transport behavior.
 - The API and refresher can fall back to Decodo when the direct path is throttled
   (`DECODO_API_KEY_PARAM`, premium pool). `DB_TRANSPORT=decodo` is the kill switch. The key lives in
   an SSM SecureString written by CI; functions receive only the parameter name, never the key.
