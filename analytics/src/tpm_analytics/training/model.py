@@ -385,7 +385,7 @@ def _usable_columns(
     for index in range(matrix.shape[1]):
         column = matrix[:, index]
         values = column if index in categorical_set else column[~np.isnan(column)]
-        if np.unique(values).size >= 2:
+        if values.size >= 2 and np.any(values != values[0]):
             usable.append(index)
         else:
             dropped.append(names[index])

@@ -309,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         code_sha, code_dirty, _ = _git_state()
         dataset_key: str | None = None
         dataset_reused = False
+        original_build_seconds: float | None = None
         stats: DatasetStats | None = None
         cache_root: Path | None = None
         if (
@@ -321,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             cache_root = args.dataset_cache_dir or (DEFAULT_CONFIG_PATH.parent.parent / "artifacts/.cache/datasets")
             dataset_key = _dataset_cache_key(build_config, source_uri, _dataset_code_hash(), args.strict_chains, source)
+            restore_started = time.perf_counter()
             stats = _restore_dataset(
                 cache_root,
                 dataset_key,
@@ -331,6 +333,9 @@ def main(argv: list[str] | None = None) -> int:
                 source=source,
             )
             dataset_reused = stats is not None
+            if stats is not None:
+                original_build_seconds = stats.duration_seconds
+                stats = replace(stats, duration_seconds=round(time.perf_counter() - restore_started, 3))
         connection = connect(
             temp_directory=temp_dir,
             threads=threads,
@@ -396,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime = {
                 "wall_seconds": total_seconds,
                 "dataset_seconds": stats.duration_seconds,
+                "dataset_source": "cache" if dataset_reused else "build",
+                "original_build_seconds": original_build_seconds,
                 "fit_seconds": round(max(0.0, total_seconds - stats.duration_seconds), 3),
                 "peak_rss_kb": _peak_rss_kb(),
             }

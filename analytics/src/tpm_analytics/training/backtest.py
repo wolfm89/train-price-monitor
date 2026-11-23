@@ -113,6 +113,7 @@ class FoldResult:
     labels: dict[int, Array]
     runtime_seconds: float = 0.0
     from_cache: bool = False
+    fit_included: bool = True
     train_rows: int = 0
     calibrate_rows: int = 0
     train: TabularData | None = None
@@ -525,6 +526,7 @@ def fit_fold(
         climate=climate_by_headroom,
         labels=labels,
         runtime_seconds=time.perf_counter() - started,
+        fit_included=fitted_model is None,
     )
 
 
@@ -882,6 +884,7 @@ def run_backtest(
             "recall_at_threshold": item.metrics.get("recall_at_threshold"),
             "runtime_seconds": item.runtime_seconds,
             "from_cache": item.from_cache,
+            "fit_included": item.fit_included,
         }
         for item in results
     ]
@@ -1031,17 +1034,22 @@ def _write_predictions(path: Path, result: BacktestResult) -> None:
             snapshot = item.test.snapshot_at[order]
             departure = item.test.departure_date[order]
             assigned = item.test.headroom[order].astype(np.int16)
+            series_text = _text(series)
+            chain_text = _text(chain[order])
+            snapshot_text = _text(snapshot)
+            departure_text = _dates(departure)
+            band_text = bands[order].tolist()
             for headroom in sorted(item.probabilities):
                 writer.write_table(
                     pa.table(
                         {
                             "fold": [item.fold.name] * count,
                             "role": [item.fold.role] * count,
-                            "series_key": _text(series),
-                            "chain_id": _text(chain[order]),
-                            "snapshot_at": _text(snapshot),
-                            "departure_date": _dates(departure),
-                            "ttd_band": bands[order].tolist(),
+                            "series_key": series_text,
+                            "chain_id": chain_text,
+                            "snapshot_at": snapshot_text,
+                            "departure_date": departure_text,
+                            "ttd_band": band_text,
                             "assigned_headroom": assigned,
                             "headroom_pct": np.full(count, headroom, dtype=np.int16),
                             "raw_score": item.raw_probabilities[headroom][order],
@@ -1319,6 +1327,11 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     test_precision = [
         float(row["precision_at_threshold"]) for row in result.per_fold if row.get("precision_at_threshold") is not None
     ]
+    fit_note = (
+        "Development fold times exclude the selection fit; their model was reused."
+        if any(not row.get("fit_included", True) for row in result.per_fold)
+        else ""
+    )
     precision_note = (
         f"Test precision at each fold's threshold ranges {min(test_precision):.3f}-{max(test_precision):.3f}; "
         "the 0.7 floor is selected on the calibration block, not guaranteed on test."
@@ -1387,6 +1400,8 @@ protocols from the static validation split; a higher Brier here is not a model r
 {spread_note}
 
 {precision_note}
+
+{fit_note}
 
 ## Development folds
 
