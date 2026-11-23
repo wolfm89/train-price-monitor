@@ -50,7 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _phase(name: str, started: float) -> float:
-    """Log one build phase and return a new start timestamp."""
+    """Log a timed build phase and return a new start time."""
     finished = time.perf_counter()
     _LOGGER.info("%s: %.1f s", name, finished - started)
     return finished
@@ -58,6 +58,8 @@ def _phase(name: str, started: float) -> float:
 
 @dataclass(frozen=True)
 class SplitStats:
+    """The SplitStats value."""
+
     split: str
     rows: int
     series: int
@@ -71,6 +73,8 @@ class SplitStats:
 
 @dataclass(frozen=True)
 class DatasetStats:
+    """The DatasetStats value."""
+
     run_id: str
     rows: int
     labelled_rows: int
@@ -82,6 +86,7 @@ class DatasetStats:
     profile: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serialisable dictionary representation."""
         payload = asdict(self)
         payload["splits"] = [asdict(item) for item in self.splits]
         return payload
@@ -93,11 +98,13 @@ def _hash_bucket(expression: str, buckets: int) -> str:
 
 
 def _headroom_case(column: str, grid: tuple[int, ...]) -> str:
+    """Return SQL mapping resample bins to headroom percentages."""
     whens = " ".join(f"WHEN {index} THEN {value}" for index, value in enumerate(grid))
     return f"CASE {column} {whens} END"
 
 
 def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
+    """Return the first integer value from a query."""
     row = connection.execute(sql).fetchone()
     if row is None:
         raise DatasetError(f"query returned no row: {sql[:80]}")
@@ -105,17 +112,19 @@ def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
 
 
 def _source_count(connection: duckdb.DuckDBPyConnection, source_sql: str) -> int:
+    """Return the number of rows in the source relation."""
     return _scalar(connection, f"SELECT count(*) FROM {source_sql}")
 
 
 def _dict_rows(connection: duckdb.DuckDBPyConnection, sql: str) -> list[dict[str, Any]]:
+    """Run a query and return rows as dictionaries."""
     cursor = connection.execute(sql)
     columns = [item[0] for item in cursor.description or []]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
 def _peak_rss_kb() -> int:
-    """Return the process peak RSS in KiB (Linux/macOS units normalised to KiB)."""
+    """Return the process peak resident set size in KiB."""
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return value if sys.platform != "darwin" else value // 1024
 
@@ -157,6 +166,7 @@ def _lock_sha256() -> str | None:
 
 
 def _package_versions() -> dict[str, str | None]:
+    """Return installed versions of the build dependencies."""
     names = ("numpy", "scikit-learn", "scipy", "pyarrow", "joblib")
     result: dict[str, str | None] = {"python": platform.python_version(), "duckdb": duckdb.__version__}
     for name in names:
@@ -232,6 +242,7 @@ def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: 
 
 
 def _final_columns(calendar_set: str) -> tuple[str, ...]:
+    """Return the ordered output columns for a split build."""
     spec = feature_spec(calendar_set)
     return tuple(dict.fromkeys((*AUDIT_COLUMNS, *LABEL_COLUMNS, *spec.names)))
 
@@ -251,6 +262,7 @@ def _create_views(
     strict_chains: bool = False,
     forward: bool = False,
 ) -> ChainStats:
+    """Create the sampled, chained and labelled DuckDB views."""
     splits = config.splits
     protocol = config.protocol
     label = config.label
@@ -999,6 +1011,7 @@ def _create_views(
 
 
 def _split_stats(connection: duckdb.DuckDBPyConnection) -> tuple[SplitStats, ...]:
+    """Return row, label and positive counts per split."""
     rows = connection.execute(
         """
         SELECT
@@ -1063,6 +1076,7 @@ def _profile(
     source_sql: str,
     config: TrainingConfig,
 ) -> dict[str, Any]:
+    """Run the dataset audit queries used by the report and gates."""
     headroom = connection.execute(
         """
         SELECT

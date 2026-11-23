@@ -69,6 +69,8 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ForwardScorer:
+    """The fitted model, calibrator and threshold used to score the forward set."""
+
     model: FittedModel
     calibrator: Any
     threshold: float
@@ -76,6 +78,8 @@ class ForwardScorer:
 
 @dataclass(frozen=True)
 class Recipe:
+    """The frozen model family, settings and calibration choice used by every fold."""
+
     model: str
     calibration: str
     threshold_floor: float
@@ -84,6 +88,7 @@ class Recipe:
     calibration_min_positives: int = 1000
 
     def payload(self) -> dict[str, Any]:
+        """Return the recipe as a JSON-serialisable payload."""
         return {
             "model": self.model,
             "calibration": self.calibration,
@@ -94,11 +99,14 @@ class Recipe:
         }
 
     def sha256(self) -> str:
+        """Return the stable recipe content hash."""
         return hashlib.sha256(json.dumps(self.payload(), sort_keys=True).encode()).hexdigest()
 
 
 @dataclass
 class FoldResult:
+    """The fitted state and scores for one backtest fold."""
+
     fold: FoldConfig
     test: TabularData
     calibrated: Array
@@ -127,6 +135,8 @@ class FoldResult:
 
 @dataclass
 class BacktestResult:
+    """The complete result of a backtest run."""
+
     recipe: Recipe
     folds: tuple[FoldResult, ...]
     pooled: dict[str, Any]
@@ -153,6 +163,7 @@ class BacktestResult:
 
 
 def load_panel(out_dir: Path, spec: FeatureSpec) -> TabularData:
+    """Load the four split Parquets as one compact backtest panel."""
     paths = [
         out_dir / "dataset" / f"{name}.parquet"
         for name in ("train", "validation_select", "validation_calibrate", "test")
@@ -228,6 +239,7 @@ def fit_forward_scorer(
     config: TrainingConfig,
     spec: FeatureSpec,
 ) -> ForwardScorer:
+    """Fit the forward model, calibrator and threshold on the forward fold."""
     model_config = replace(config.model, **recipe.model_settings)
     calibration_config = replace(
         config.calibration,
@@ -258,6 +270,7 @@ def score_forward(forward: TabularData, scorer: ForwardScorer) -> Array:
 
 
 def forward_fold(protocol: ProtocolConfig) -> FoldConfig:
+    """Return the configured forward refit fold."""
     for fold in protocol.cutoffs:
         if fold.role == "forward":
             return fold
@@ -270,6 +283,7 @@ def fit_forward_fold(
     recipe: Recipe,
     spec: FeatureSpec,
 ) -> tuple[ForwardScorer, FoldConfig]:
+    """Slice the forward fold and fit its scorer."""
     fold = forward_fold(config.protocol)
     masks = fold_masks(panel, fold, config.protocol)
     assert_purged(panel, fold, config.protocol, masks)
@@ -359,6 +373,7 @@ def score_forward_artifact(
 
 
 def _model_settings(config: TrainingConfig) -> dict[str, Any]:
+    """Return the frozen estimator settings from the config."""
     return {
         "max_iter": config.model.max_iter,
         "learning_rate": config.model.learning_rate,
@@ -370,6 +385,7 @@ def _model_settings(config: TrainingConfig) -> dict[str, Any]:
 def _fold_slices(
     panel: TabularData, fold: FoldConfig, config: TrainingConfig
 ) -> tuple[FoldMasks, TabularData, TabularData, TabularData]:
+    """Return the purged train, calibration and test blocks for a fold."""
     masks = fold_masks(panel, fold, config.protocol)
     assert_purged(panel, fold, config.protocol, masks)
     train, calibrate, test = fold_slices(panel, masks)
@@ -379,6 +395,7 @@ def _fold_slices(
 def _fold_metrics(
     test: TabularData, calibrated: Array, climatology: Array, train_rate: float
 ) -> dict[str, float | None]:
+    """Compute metrics for one fitted fold."""
     metrics = _metrics(test.y, calibrated)
     reference = float(np.mean((test.y - climatology) ** 2))
     metrics["bss_climatology"] = 1.0 - float(metrics["brier"] or 0.0) / reference if reference > 0 else None
@@ -446,6 +463,7 @@ def select_recipe_bundle(
 
 
 def select_recipe(panel: TabularData, config: TrainingConfig, spec: FeatureSpec) -> Recipe:
+    """Select and return recipe."""
     return select_recipe_bundle(panel, config, spec)[0]
 
 
@@ -456,6 +474,7 @@ def _check_fold_gates(
     test: TabularData,
     config: TrainingConfig,
 ) -> None:
+    """Raise when a fold block is below its row, positive or band floor."""
     for name, block in (("train", train), ("calibrate", calibrate), ("test", test)):
         if len(block) < config.report.min_eligible_rows:
             raise DatasetError(f"{fold.name} {name}: {len(block)} rows; floor is {config.report.min_eligible_rows}")
@@ -496,6 +515,7 @@ def fit_fold(
     *,
     fitted_model: FittedModel | None = None,
 ) -> FoldResult:
+    """Fit one fold with the frozen recipe and return its scores and metrics."""
     started = time.perf_counter()
     _check_fold_gates(fold, train, calibrate, test, config)
     # The recipe, not the live config, supplies the model family and settings. A later config
@@ -583,6 +603,7 @@ def _bss_paired_ci(
     replicates: int,
     seed: int,
 ) -> list[float]:
+    """Return the paired cluster-bootstrap interval for BSS against climatology."""
     unique, inverse = np.unique(groups, return_inverse=True)
     if len(unique) < 2:
         return []
@@ -609,12 +630,14 @@ def _bss_paired_ci(
 
 
 def _band_seed(seed: int, headroom: int, band: str) -> int:
+    """Return a deterministic seed for a headroom and TTD band."""
     return seed + headroom * 1000 + sum((index + 1) * ord(char) for index, char in enumerate(band))
 
 
 def _headroom_rows(
     pooled: TabularData, folds: tuple[FoldResult, ...], config: TrainingConfig
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Compute per-headroom and headroom by TTD metrics."""
     bands = _ttd_array(pooled)
     groups = pooled.departure_date
     headroom_rows: list[dict[str, Any]] = []
@@ -659,6 +682,7 @@ def _headroom_rows(
 
 
 def _code_identity() -> tuple[str | None, bool | None]:
+    """Return the current git SHA and dirty flag."""
     try:
         sha, dirty, _ = _git_state()
     except Exception:
@@ -667,6 +691,7 @@ def _code_identity() -> tuple[str | None, bool | None]:
 
 
 def _fit_code_hash() -> str:
+    """Hash the fit-relevant source files for cache identity."""
     root = Path(__file__).resolve().parents[1]
     excluded = {"cli.py", "report.py", "__init__.py"}
     files = sorted(path for path in (root / "training").glob("*.py") if path.name not in excluded)
@@ -680,6 +705,7 @@ def _fit_code_hash() -> str:
 
 
 def _recipe_cache_path(cache_dir: Path) -> Path:
+    """Recipe cache path."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "recipe.json"
 
@@ -692,6 +718,7 @@ def _load_cached_recipe(
     code_dirty: bool | None,
     fit_code_sha: str,
 ) -> Recipe | None:
+    """Load and return cached recipe."""
     if cache_dir is None:
         return None
     path = _recipe_cache_path(cache_dir)
@@ -727,6 +754,7 @@ def _save_cached_recipe(
     code_sha: str | None,
     fit_code_sha: str,
 ) -> None:
+    """Persist cached recipe."""
     if cache_dir is None:
         return
     payload = {
@@ -743,6 +771,7 @@ def _save_cached_recipe(
 
 
 def _cache_paths(cache_dir: Path, fold: FoldConfig) -> tuple[Path, Path]:
+    """Return the fold checkpoint paths."""
     folder = cache_dir / "folds"
     folder.mkdir(parents=True, exist_ok=True)
     return folder / f"{fold.name}.pkl", folder / f"{fold.name}.json"
@@ -758,6 +787,7 @@ def _load_cached_fold(
     code_dirty: bool | None,
     fit_code_sha: str,
 ) -> FoldResult | None:
+    """Load and return cached fold."""
     if cache_dir is None:
         return None
     data_path, meta_path = _cache_paths(cache_dir, fold)
@@ -806,6 +836,7 @@ def _save_cached_fold(
     code_sha: str | None,
     fit_code_sha: str,
 ) -> None:
+    """Persist cached fold."""
     if cache_dir is None:
         return
     data_path, meta_path = _cache_paths(cache_dir, fold)
@@ -838,6 +869,7 @@ def _save_cached_fold(
 def _pooled_summary(
     folds: tuple[FoldResult, ...], config: TrainingConfig
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Compute pooled metrics and headroom tables for a set of folds."""
     pooled = concat_tabular([item.test for item in folds])
     calibrated = np.concatenate([item.calibrated for item in folds])
     climatology = np.concatenate([item.climatology for item in folds])
@@ -872,6 +904,7 @@ def run_backtest(
     cache_dir: Path | None = None,
     dataset_sha256: str | None = None,
 ) -> BacktestResult:
+    """Run the rolling-origin backtest and return its result."""
     started = time.perf_counter()
     if config.report.bootstrap_cluster != "departure_date":
         raise ModelError("backtest bootstrap_cluster must be departure_date")
@@ -1016,6 +1049,7 @@ def run_backtest(
 
 
 def _fmt(value: Any, digits: int = 4) -> str:
+    """Format a report value."""
     if value is None:
         return "—"
     if isinstance(value, float):
@@ -1024,14 +1058,17 @@ def _fmt(value: Any, digits: int = 4) -> str:
 
 
 def _p(value: Any) -> str:
+    """Format a probability as a percentage."""
     return "—" if value is None else f"{float(value):.1%}"
 
 
 def _yes(value: Any) -> str:
+    """Format a boolean as yes or no."""
     return "—" if value is None else ("yes" if float(value) >= 1.0 else "no")
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> str:
+    """Render a Markdown table from headers and rows."""
     if any(len(row) != len(headers) for row in rows):
         raise ValueError("backtest table row width does not match the header width")
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
@@ -1040,6 +1077,7 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
 
 
 def _file_sha256(path: Path) -> str:
+    """Return the SHA-256 of a file, read in chunks."""
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -1048,6 +1086,7 @@ def _file_sha256(path: Path) -> str:
 
 
 def _text(values: Array) -> list[str]:
+    """Convert compact text or datetime values to report strings."""
     if values.dtype.kind == "S":
         return [value.decode("utf-8") for value in values]
     if values.dtype.kind == "U":
@@ -1065,6 +1104,7 @@ def _text(values: Array) -> list[str]:
 
 
 def _snapshot_strings(values: Array) -> list[str]:
+    """Normalise snapshot timestamps to the dataset string format."""
     cleaned: list[str] = []
     for value in values:
         item = str(value).replace("T", " ")
@@ -1075,6 +1115,7 @@ def _snapshot_strings(values: Array) -> list[str]:
 
 
 def _dates(values: Array) -> list[str]:
+    """Convert date values to ISO date strings."""
     if np.issubdtype(values.dtype, np.datetime64):
         return np.datetime_as_string(values, unit="D").astype(str).tolist()
     return values.astype(str).tolist()
@@ -1138,6 +1179,7 @@ def _write_predictions(path: Path, result: BacktestResult) -> None:
 
 
 def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: dict[str, Any]) -> str:
+    """Render the backtest report as Markdown."""
     sparse = [row for row in result.per_fold if row["role"] == "sparse_era"]
     fold_rows = [
         [
@@ -1389,6 +1431,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     if evaluation_rows:
 
         def _range(key: str, percent: bool = False) -> str:
+            """Format the observed minimum and maximum of a metric."""
             values = [float(row[key]) for row in evaluation_rows if row.get(key) is not None]
             if not values:
                 return "—"
@@ -1560,6 +1603,7 @@ not a headline metric.
 
 
 def _ci(values: Any, digits: int = 4) -> str:
+    """Format a two-sided interval."""
     if not isinstance(values, list) or len(values) != 2:
         return "—"
     return f"{_fmt(values[0], digits)}..{_fmt(values[1], digits)}"
@@ -1574,6 +1618,7 @@ def write_backtest_artifacts(
     runner: str = "local",
     runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Write backtest artifacts."""
     predictions_dir = out_dir / "predictions"
     predictions_dir.mkdir(parents=True, exist_ok=True)
     predictions_path = predictions_dir / "backtest.parquet"

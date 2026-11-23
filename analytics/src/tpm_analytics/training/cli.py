@@ -31,6 +31,7 @@ from tpm_analytics.training.sources import resolve_source
 
 
 def _parser() -> argparse.ArgumentParser:
+    """Build the training command-line parser."""
     parser = argparse.ArgumentParser(
         prog="python -m tpm_analytics.training.cli",
         description="Build the baseline training set, train the candidates and write a report.",
@@ -85,6 +86,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _dataset_code_hash() -> str:
+    """Dataset code hash."""
     root = Path(__file__).resolve().parents[1]
     excluded = {"backtest.py", "cli.py", "model.py", "report.py", "__init__.py"}
     files = sorted(
@@ -103,6 +105,7 @@ def _dataset_code_hash() -> str:
 
 
 def _dataset_config_payload(config: TrainingConfig) -> dict[str, Any]:
+    """Dataset config payload."""
     return {
         "seed": config.seed,
         "splits": asdict(config.splits),
@@ -131,6 +134,7 @@ def _dataset_cache_key(
     strict_chains: bool,
     source: Any,
 ) -> str:
+    """Dataset cache key."""
     payload = {
         "version": 2,
         "dataset_code_sha": code_sha,
@@ -155,6 +159,7 @@ def _restore_dataset(
     strict_chains: bool,
     source: Any,
 ) -> DatasetStats | None:
+    """Restore a verified cached dataset into the work directory."""
     entry = cache_root / key
     manifest_path = entry / "dataset_manifest.json"
     profile_path = entry / "profile.json"
@@ -216,6 +221,7 @@ def _restore_dataset(
 
 
 def _mark_dataset_cache(work_dir: Path, key: str) -> None:
+    """Mark dataset cache."""
     path = work_dir / "dataset_manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest["dataset_cache_key"] = key
@@ -223,6 +229,7 @@ def _mark_dataset_cache(work_dir: Path, key: str) -> None:
 
 
 def _store_dataset(cache_root: Path, key: str, work_dir: Path) -> None:
+    """Copy a completed dataset build into the cache."""
     entry = cache_root / key
     if entry.exists() and (entry / "DONE").is_file():
         return
@@ -238,12 +245,14 @@ def _store_dataset(cache_root: Path, key: str, work_dir: Path) -> None:
 
 
 def _run_id(config: TrainingConfig, explicit: str | None) -> str:
+    """Return the configured or generated run id."""
     if explicit:
         return explicit
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + config.hash()[:8]
 
 
 def _load_splits(out_dir: Path, spec: FeatureSpec) -> dict[str, training_model.TabularData]:
+    """Load and return splits."""
     return {
         name: training_model.load_split(out_dir / "dataset" / f"{name}.parquet", spec)
         for name in ("train", "validation_select", "validation_calibrate", "test")
@@ -256,6 +265,7 @@ def _ablation(
     primary_set: str,
     primary: training_model.Evaluation,
 ) -> dict[str, Any]:
+    """Compare calendar feature sets on the static path."""
     results: dict[str, Any] = {
         primary_set: {
             "chosen_model": primary.chosen_model,
@@ -282,11 +292,13 @@ def _ablation(
 
 
 def _peak_rss_kb() -> int:
+    """Return the process peak resident set size in KiB."""
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return value if sys.platform != "darwin" else value // 1024
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command-line entry point."""
     args = _parser().parse_args(argv)
     run_started = time.perf_counter()
     work_dir: Path | None = None

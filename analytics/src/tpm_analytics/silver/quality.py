@@ -168,6 +168,8 @@ DUPLICATE_KEY = ", ".join(DEDUPE_KEY)
 
 @dataclass(frozen=True)
 class Violation:
+    """One failed quality check."""
+
     check: str
     detail: str
 
@@ -181,6 +183,7 @@ class Report:
 
     @property
     def ok(self) -> bool:
+        """Return whether the result is valid."""
         return not self.violations
 
 
@@ -188,20 +191,24 @@ class QualityError(RuntimeError):
     """Raised when one or more silver invariants do not hold."""
 
     def __init__(self, violations: Iterable[Violation]) -> None:
+        """Initialise the instance."""
         self.violations = tuple(violations)
         summary = "; ".join(f"{violation.check} ({violation.detail})" for violation in self.violations)
         super().__init__(f"silver quality gate failed: {summary}")
 
 
 def _silver_source(silver_glob: str) -> str:
+    """Return the SQL relation for the silver build."""
     return read_parquet(silver_glob, hive_partitioning=True)
 
 
 def _columns(connection: duckdb.DuckDBPyConnection, source: str) -> set[str]:
+    """Return the column names of a relation."""
     return {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
 
 
 def _row_violations(connection: duckdb.DuckDBPyConnection, silver: str) -> tuple[list[Violation], int]:
+    """Yield row-level quality violations."""
     projection = ", ".join(
         f"count(*) FILTER (WHERE {predicate}) AS c{index}" for index, (_, predicate) in enumerate(ROW_CHECKS)
     )
@@ -213,6 +220,7 @@ def _row_violations(connection: duckdb.DuckDBPyConnection, silver: str) -> tuple
 
 
 def _duplicate_violation(connection: duckdb.DuckDBPyConnection, silver: str) -> list[Violation]:
+    """Duplicate violation."""
     duplicates = scalar(
         connection,
         "SELECT coalesce(sum(n - 1), 0) FROM ("
@@ -265,6 +273,7 @@ def check(
 
 
 def raise_for_violations(violations: Iterable[Violation]) -> None:
+    """Raise for violations."""
     violations = tuple(violations)
     if violations:
         raise QualityError(violations)

@@ -77,6 +77,8 @@ def redact_error(message: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
+    """Runtime settings for the silver Lambda handler."""
+
     bucket: str
     prefix: str
     source: str
@@ -89,6 +91,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    """Load and return settings."""
     bucket = os.environ["SILVER_BUCKET"]
     lambda_config = _CONFIG.lambda_
     return Settings(
@@ -146,6 +149,7 @@ def sweep_workspace() -> list[str]:
 
 
 def remaining_seconds(context: object) -> float | None:
+    """Remaining seconds."""
     getter = getattr(context, "get_remaining_time_in_millis", None)
     if not callable(getter):
         return None
@@ -212,6 +216,7 @@ def _run_build(
     build_id: str,
     progress: dict[str, str],
 ) -> dict[str, Any]:
+    """Run one silver build and publish its manifest."""
     started = time.perf_counter()
     settings = load_settings()
     if not settings.source.startswith("s3://"):
@@ -399,6 +404,7 @@ def _run_build(
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
+    """Handle a scheduled Lambda invocation."""
     build_id = build_id_for(utc_now())
     progress = {"stage": "settings"}
     LOGGER.info("silver handler start build_id=%s", build_id)

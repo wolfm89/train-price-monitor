@@ -29,6 +29,8 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class SplitConfig:
+    """Departure-date boundaries for the static split path."""
+
     train_end: date
     validation_select_start: date
     validation_select_end: date
@@ -38,6 +40,7 @@ class SplitConfig:
     test_end: date
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if not (
             self.train_end
             < self.validation_select_start
@@ -58,6 +61,8 @@ class SplitConfig:
 
 @dataclass(frozen=True)
 class LabelConfig:
+    """The next-day label definition and prediction domain."""
+
     estimand: str
     horizon_hours: int
     check_window_hours: tuple[int, int]
@@ -66,6 +71,7 @@ class LabelConfig:
     headroom_pct: tuple[int, ...]
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if self.estimand not in LABEL_ESTIMANDS:
             raise ConfigError(f"label.estimand must be one of {LABEL_ESTIMANDS}")
         if self.horizon_hours < 1:
@@ -91,11 +97,14 @@ class LabelConfig:
 
 @dataclass(frozen=True)
 class ResampleConfig:
+    """Snapshot resampling boundaries."""
+
     outer_bin_hours: int
     outer_threshold_hours: int
     inner_bin_hours: int
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if min(self.outer_bin_hours, self.outer_threshold_hours, self.inner_bin_hours) < 1:
             raise ConfigError("resample values must be positive")
         if self.outer_threshold_hours <= self.inner_bin_hours:
@@ -104,11 +113,14 @@ class ResampleConfig:
 
 @dataclass(frozen=True)
 class SampleConfig:
+    """Route-day sampling settings."""
+
     sample_rate: float
     max_route_days: int | None
     seed: int
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if not 0 < self.sample_rate <= 1:
             raise ConfigError("sample.sample_rate must be in (0, 1]")
         if self.max_route_days is not None and self.max_route_days < 1:
@@ -117,15 +129,20 @@ class SampleConfig:
 
 @dataclass(frozen=True)
 class CalendarConfig:
+    """Calendar feature-family selection."""
+
     feature_set: str
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if self.feature_set not in CALENDAR_SETS:
             raise ConfigError(f"calendar.feature_set must be one of {CALENDAR_SETS}")
 
 
 @dataclass(frozen=True)
 class ModelConfig:
+    """Candidate families and shared estimator settings."""
+
     candidates: tuple[str, ...]
     max_iter: int
     learning_rate: float
@@ -133,6 +150,7 @@ class ModelConfig:
     random_state: int
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if not self.candidates:
             raise ConfigError("model.candidates must not be empty")
         unknown = set(self.candidates) - set(MODEL_NAMES)
@@ -146,11 +164,14 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class CalibrationConfig:
+    """Calibration methods and cross-fitting settings."""
+
     methods: tuple[str, ...]
     min_positives: int
     folds: int
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if not self.methods or set(self.methods) - set(CALIBRATION_METHODS):
             raise ConfigError(f"calibration.methods must be a subset of {CALIBRATION_METHODS}")
         if self.min_positives < 1:
@@ -161,6 +182,8 @@ class CalibrationConfig:
 
 @dataclass(frozen=True)
 class ReportConfig:
+    """Report gates, bootstrap settings and thresholds."""
+
     bootstrap_replicates: int
     metric_bootstrap_replicates: int
     bootstrap_cluster: str
@@ -175,6 +198,7 @@ class ReportConfig:
     r24_max_gap_hours: int = 6
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if not 1 <= self.bootstrap_replicates <= 5000:
             raise ConfigError("report.bootstrap_replicates must be between 1 and 5000")
         if not 1 <= self.metric_bootstrap_replicates <= 2000:
@@ -201,11 +225,14 @@ class ReportConfig:
 
 @dataclass(frozen=True)
 class FoldConfig:
+    """One backtest cutoff and its role."""
+
     cutoff: date
     role: str
     name: str
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if self.role not in FOLD_ROLES:
             raise ConfigError(f"protocol fold role must be one of {FOLD_ROLES}")
         if self.cutoff.weekday() != 0:
@@ -216,6 +243,8 @@ class FoldConfig:
 
 @dataclass(frozen=True)
 class ProtocolConfig:
+    """Static or rolling-origin protocol settings."""
+
     kind: str
     cutoffs: tuple[FoldConfig, ...]
     embargo_hours: int = 24
@@ -228,6 +257,7 @@ class ProtocolConfig:
     forward_sample_rate: float = 0.05
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if self.forward_start > self.forward_end:
             raise ConfigError("protocol.forward_start must not be after forward_end")
         if self.forward_min_hours_to_departure >= self.forward_max_hours_to_departure:
@@ -259,6 +289,8 @@ class ProtocolConfig:
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    """The complete training configuration."""
+
     version: int
     seed: int
     source: str | None
@@ -274,6 +306,7 @@ class TrainingConfig:
     report: ReportConfig
 
     def validate(self) -> None:
+        """Validate this configuration section."""
         if self.version != 1:
             raise ConfigError(f"unsupported training config version {self.version}")
         if not self.output_root or self.output_root.startswith("/"):
@@ -289,14 +322,17 @@ class TrainingConfig:
         self.report.validate()
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serialisable dictionary representation."""
         return asdict(self)
 
     def hash(self) -> str:
+        """Return the stable configuration hash."""
         payload = json.dumps(self.to_dict(), sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
 
 def _date(raw: dict[str, Any], key: str) -> date:
+    """Parse an ISO date from a config mapping."""
     value = raw.get(key)
     if not isinstance(value, str):
         raise ConfigError(f"splits.{key} must be an ISO date string")
@@ -307,6 +343,7 @@ def _date(raw: dict[str, Any], key: str) -> date:
 
 
 def _int(raw: dict[str, Any], key: str, *, minimum: int | None = None, default: int | None = None) -> int:
+    """Read an integer from a config mapping with optional bounds."""
     if key not in raw and default is not None:
         return default
     value = raw.get(key)
@@ -318,6 +355,7 @@ def _int(raw: dict[str, Any], key: str, *, minimum: int | None = None, default: 
 
 
 def _float(raw: dict[str, Any], key: str) -> float:
+    """Read a float from a config mapping."""
     value = raw.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{key} must be a number")
@@ -325,6 +363,7 @@ def _float(raw: dict[str, Any], key: str) -> float:
 
 
 def _str(raw: dict[str, Any], key: str) -> str:
+    """Read a non-empty string from a config mapping."""
     value = raw.get(key)
     if not isinstance(value, str):
         raise ConfigError(f"{key} must be a string")
@@ -332,6 +371,7 @@ def _str(raw: dict[str, Any], key: str) -> str:
 
 
 def parse_config(raw: dict[str, Any]) -> TrainingConfig:
+    """Parse a raw mapping into validated configuration objects."""
     try:
         splits_raw = raw["splits"]
         label_raw = raw["label"]
@@ -471,6 +511,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
 
 
 def load_config(path: str | Path) -> TrainingConfig:
+    """Load and validate the configuration from a file."""
     config_path = Path(path)
     try:
         raw = json.loads(config_path.read_text(encoding="utf-8"))

@@ -95,6 +95,8 @@ class CalendarCoverageError(CalendarError):
 
 @dataclass(frozen=True)
 class PublicHoliday:
+    """A public-holiday entry."""
+
     state: str
     day: date
     name: str
@@ -103,6 +105,8 @@ class PublicHoliday:
 
 @dataclass(frozen=True)
 class SchoolHoliday:
+    """A school-holiday entry."""
+
     state: str
     start: date
     end: date
@@ -112,6 +116,8 @@ class SchoolHoliday:
 
 @dataclass(frozen=True)
 class Calendar:
+    """The holiday and school-break calendar used for feature generation."""
+
     schema_version: int
     calendar_version: str
     coverage_start: date

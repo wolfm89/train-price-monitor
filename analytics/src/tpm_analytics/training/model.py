@@ -55,6 +55,8 @@ class ModelError(RuntimeError):
 
 @dataclass(frozen=True)
 class TabularData:
+    """A row-aligned training panel with features, labels and provenance columns."""
+
     features: dict[str, Array]
     y: Array
     series: Array
@@ -75,9 +77,11 @@ class TabularData:
     chain: Array | None = None
 
     def __len__(self) -> int:
+        """Return the number of rows in the panel."""
         return len(self.y)
 
     def subset(self, indices: Array) -> TabularData:
+        """Return a row subset of the panel."""
         return TabularData(
             features={name: values[indices] for name, values in self.features.items()},
             y=self.y[indices],
@@ -100,6 +104,7 @@ class TabularData:
         )
 
     def select(self, names: tuple[str, ...]) -> TabularData:
+        """Return the panel with the selected feature columns."""
         return TabularData(
             features={name: self.features[name] for name in names},
             y=self.y,
@@ -129,9 +134,11 @@ def concat_tabular(parts: list[TabularData]) -> TabularData:
     features = {name: np.concatenate([part.features[name] for part in parts]) for name in parts[0].features}
 
     def array(name: str) -> Array:
+        """Concatenate one column across all parts."""
         return np.concatenate([getattr(part, name) for part in parts])
 
     def optional(name: str) -> Array | None:
+        """Concatenate an optional column across all parts."""
         values = [getattr(part, name) for part in parts]
         return None if any(value is None for value in values) else np.concatenate(values)
 
@@ -171,18 +178,21 @@ def _bss_train(brier: float | None, labels: Array, train_rate: float) -> float |
 
 
 def _filled(values: Any, fill: float) -> Array:
+    """Convert a nullable numeric column to float64 with a fill value."""
     if isinstance(values, np.ma.MaskedArray):
         return np.asarray(values.astype(np.float32).filled(fill), dtype=np.float32)
     return np.asarray(values, dtype=np.float32)
 
 
 def _filled64(values: Any, fill: float) -> Array:
+    """Convert a nullable column to float64 with a fill value."""
     if isinstance(values, np.ma.MaskedArray):
         return np.asarray(values.astype(np.float64).filled(fill), dtype=np.float64)
     return np.asarray(values, dtype=np.float64)
 
 
 def _categorical(values: Any) -> Array:
+    """Convert categorical values to strings, mapping missing to a sentinel."""
     if isinstance(values, np.ma.MaskedArray):
         values = values.astype(object).filled("__missing__")
     array = np.asarray(values, dtype=object)
@@ -194,6 +204,7 @@ def _categorical(values: Any) -> Array:
 
 
 def _encode_text(values: Any) -> Array:
+    """Encode strings as fixed-width UTF-8 bytes."""
     flat = [("" if value is None else str(value)).encode("utf-8") for value in np.asarray(values, dtype=object).ravel()]
     width = max((len(value) for value in flat), default=1)
     return np.asarray(flat, dtype=f"S{width}")
@@ -205,14 +216,17 @@ def _compact_text(values: Any) -> Array:
 
 
 def _compact_category(values: Any) -> Array:
+    """Encode categorical strings as UTF-8 bytes."""
     return _encode_text(_categorical(values))
 
 
 def _compact_datetime(values: Any, unit: str) -> Array:
+    """Convert values to a compact datetime dtype."""
     return np.asarray(values, dtype=f"datetime64[{unit}]")
 
 
 def _split_columns(spec: FeatureSpec) -> str:
+    """Return the ordered columns loaded from a split Parquet."""
     return ", ".join(
         dict.fromkeys(
             (
@@ -242,6 +256,7 @@ def _split_columns(spec: FeatureSpec) -> str:
 
 
 def _tabular(rows: dict[str, Any], spec: FeatureSpec, *, compact: bool, source: str) -> TabularData:
+    """Build a training panel from DuckDB result columns."""
     if len(rows["breached_next_day"]) == 0:
         raise ModelError(f"{source} has no labelled rows")
     features: dict[str, Array] = {}
@@ -297,7 +312,7 @@ def _tabular(rows: dict[str, Any], spec: FeatureSpec, *, compact: bool, source: 
 
 
 def load_splits(paths: list[Path], spec: FeatureSpec) -> TabularData:
-    """Load the four splits in one query and compact representation for the backtest panel."""
+    """Load the four splits in one query into the compact backtest panel."""
     columns = _split_columns(spec)
     selects = [
         f"SELECT {columns}, {index} AS split_order FROM read_parquet('{sql_string(path.as_posix())}') "
@@ -333,6 +348,7 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
 
 
 def _cat_matrix(data: TabularData, spec: FeatureSpec) -> Array:
+    """Stack categorical feature columns for the encoder."""
     categories = [data.features[feature.name] for feature in spec.features if feature.kind == CATEGORICAL]
     if not categories:
         raise ModelError("the feature spec has no categorical columns")
@@ -340,6 +356,7 @@ def _cat_matrix(data: TabularData, spec: FeatureSpec) -> Array:
 
 
 def fit_encoder(data: TabularData, spec: FeatureSpec) -> OrdinalEncoder:
+    """Fit the ordinal encoder on the training panel."""
     encoder = OrdinalEncoder(
         handle_unknown="use_encoded_value",
         unknown_value=-1,
@@ -350,6 +367,7 @@ def fit_encoder(data: TabularData, spec: FeatureSpec) -> OrdinalEncoder:
 
 
 def _matrix(data: TabularData, spec: FeatureSpec, encoder: OrdinalEncoder, headroom: int | None = None) -> Array:
+    """Build the numeric model matrix, optionally overriding headroom."""
     cat = encoder.transform(_cat_matrix(data, spec)).astype(np.float32) + 1.0
     cat[cat < 1] = 0.0
     cat_lookup = {
@@ -370,6 +388,7 @@ def _matrix(data: TabularData, spec: FeatureSpec, encoder: OrdinalEncoder, headr
 
 
 def _indices(spec: FeatureSpec, kinds: tuple[str, ...]) -> list[int]:
+    """Return feature positions for the requested kinds."""
     return [index for index, feature in enumerate(spec.features) if feature.kind in kinds]
 
 
@@ -394,6 +413,8 @@ def _usable_columns(
 
 @dataclass
 class FittedModel:
+    """A fitted estimator together with its feature encoder and selected columns."""
+
     name: str
     estimator: Any
     encoder: OrdinalEncoder
@@ -402,12 +423,14 @@ class FittedModel:
     dropped: tuple[str, ...] = ()
 
     def transform(self, data: TabularData) -> Array:
+        """Build the model matrix for the panel."""
         matrix = _matrix(data, self.spec, self.encoder)
         if self.selected is not None:
             matrix = matrix[:, list(self.selected)]
         return matrix
 
     def with_headroom(self, matrix: Array, headroom: int) -> Array:
+        """Return a copy of the matrix with a different headroom column."""
         index = next(
             (position for position, feature in enumerate(self.spec.features) if feature.name == "headroom_pct"),
             None,
@@ -423,10 +446,12 @@ class FittedModel:
         return adjusted
 
     def predict_matrix(self, matrix: Array) -> Array:
+        """Return probabilities for an already encoded matrix."""
         probabilities = self.estimator.predict_proba(matrix)[:, 1]
         return np.asarray(probabilities, dtype=np.float64)
 
     def predict(self, data: TabularData, headroom: int | None = None) -> Array:
+        """Return model probabilities for the supplied rows."""
         matrix = _matrix(data, self.spec, self.encoder, headroom)
         if self.selected is not None:
             matrix = matrix[:, list(self.selected)]
@@ -434,10 +459,14 @@ class FittedModel:
 
 
 class BaseRateModel:
+    """A constant-probability baseline."""
+
     def __init__(self, rate: float) -> None:
+        """Initialise the instance."""
         self.rate = float(rate)
 
     def predict_proba(self, matrix: Array) -> Array:
+        """Return class probabilities for the supplied matrix."""
         return np.column_stack([np.full(len(matrix), 1.0 - self.rate), np.full(len(matrix), self.rate)])
 
 
@@ -450,6 +479,7 @@ def fit_candidate(
     encoder: OrdinalEncoder | None = None,
     matrix: Array | None = None,
 ) -> FittedModel:
+    """Fit one candidate model on the training panel."""
     encoder = fit_encoder(data, spec) if encoder is None else encoder
     matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
@@ -549,6 +579,7 @@ class ClimatologyModel:
     global_rate: float
 
     def predict(self, data: TabularData, headroom: int | None = None) -> Array:
+        """Return model probabilities for the supplied rows."""
         hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
         heads = np.asarray(
             data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16),
@@ -649,11 +680,13 @@ class ScoreCalibrator:
     """A calibrator over raw probabilities, fitted on a held-out slice."""
 
     def __init__(self, method: str, model: Any, temperature: float | None = None) -> None:
+        """Initialise the instance."""
         self.method = method
         self.model = model
         self.temperature = temperature
 
     def predict(self, raw: Array) -> Array:
+        """Return model probabilities for the supplied rows."""
         clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
         if self.method == "constant":
             return np.full(len(clipped), float(self.model), dtype=np.float64)
@@ -670,6 +703,7 @@ class ScoreCalibrator:
 
 
 def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
+    """Fit and return a probability calibrator."""
     clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
     if len(np.unique(y)) < 2:
         return ScoreCalibrator("constant", float(np.mean(y)))
@@ -688,6 +722,7 @@ def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> 
         logits = np.log(clipped / (1.0 - clipped))
 
         def loss(log_temperature: float) -> float:
+            """Return the calibration loss for one temperature."""
             probabilities = np.clip(expit(logits / np.exp(log_temperature)), 1e-9, 1.0 - 1e-9)
             return float(-np.mean(y * np.log(probabilities) + (1 - y) * np.log(1.0 - probabilities)))
 
@@ -697,10 +732,12 @@ def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> 
 
 
 def _metric_value(value: float | None, default: float = 1.0) -> float:
+    """Return a metric value, or a fallback for None."""
     return default if value is None else float(value)
 
 
 def _metrics(y: Array, probabilities: Array) -> dict[str, float | None]:
+    """Compute Brier, log loss, skill, AUC and AP."""
     clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
     both = len(np.unique(y)) == 2
     brier = float(brier_score_loss(y, clipped))
@@ -746,11 +783,14 @@ def _cross_fitted_with_folds(
 
 
 def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: TrainingConfig) -> Array:
+    """Return out-of-fold calibrated predictions by group."""
     return _cross_fitted_with_folds(raw, y, groups, method, config)[0]
 
 
 @dataclass(frozen=True)
 class Evaluation:
+    """The fitted model, calibration and evaluation diagnostics for the static path."""
+
     chosen_model: str
     calibration_method: str
     threshold: float
@@ -803,6 +843,7 @@ class Evaluation:
     prediction_split: str = field(default="", repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serialisable dictionary representation."""
         return {
             "chosen_model": self.chosen_model,
             "calibration_method": self.calibration_method,
@@ -847,6 +888,7 @@ class Evaluation:
 
 
 def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, bool]:
+    """Choose a threshold meeting the precision floor or maximising F1."""
     classes = np.unique(y)
     if len(classes) < 2:
         return (0.0, True) if classes[0] == 1 else (0.5, False)
@@ -862,6 +904,7 @@ def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, boo
 
 
 def _decision_metrics(y: Array, probabilities: Array, threshold: float) -> dict[str, float]:
+    """Compute precision and recall at a threshold."""
     predicted = probabilities >= threshold
     true_positive = int(np.sum((predicted == 1) & (y == 1)))
     false_positive = int(np.sum((predicted == 1) & (y == 0)))
@@ -967,11 +1010,13 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
 
 
 def _band_index(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
+    """Return the TTD band index for each duration."""
     edges = np.asarray([band[1] for band in bands], dtype=np.float64)
     return np.searchsorted(edges, hours, side="right") - 1
 
 
 def _band_labels(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
+    """Return TTD band labels, marking out-of-domain durations unknown."""
     index = _band_index(hours, bands)
     labels = np.asarray([band[0] for band in bands], dtype=object)
     valid = (
@@ -987,6 +1032,7 @@ def _band_labels(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array
 
 
 def _ttd_array(data: TabularData) -> Array:
+    """Return the headline TTD band for each row."""
     hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
     return _band_labels(hours, HEADLINE_BANDS).astype(str)
 
@@ -1016,6 +1062,7 @@ def _bootstrap_replicate(
     sampled: Array,
     threshold: float | Array,
 ) -> tuple[float, float, float, float, float, float, float]:
+    """Bootstrap replicate."""
     indices = np.concatenate([clusters[index] for index in sampled])
     yy = y[indices]
     pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
@@ -1104,6 +1151,7 @@ def _bootstrap_paired(
 
 
 def _cluster_mean_ci(values: Array, groups: Array, replicates: int, seed: int) -> list[float]:
+    """Return a cluster-bootstrap interval for a mean."""
     unique, inverse = np.unique(groups, return_inverse=True)
     if len(unique) < 2 or len(values) == 0:
         return []
@@ -1121,6 +1169,7 @@ def _cluster_mean_ci(values: Array, groups: Array, replicates: int, seed: int) -
 
 
 def _stratum_metrics(y: Array, probabilities: Array, train_y: Array, threshold: float) -> dict[str, float | None]:
+    """Compute metrics for one report stratum."""
     metrics = _metrics(y, probabilities)
     train_rate = float(np.mean(train_y)) if len(train_y) else float("nan")
     metrics["bss_train"] = _bss_train(metrics["brier"], y, train_rate) if np.isfinite(train_rate) else None
@@ -1275,6 +1324,7 @@ def _pooled_decision_value_rows(
 
 
 def _canonical(data: TabularData) -> TabularData:
+    """Return rows in canonical series and time order."""
     identity = data.chain if data.chain is not None else data.series
     order = np.lexsort(
         (
@@ -1291,6 +1341,7 @@ def _fit_candidates(
     spec: FeatureSpec,
     config: TrainingConfig,
 ) -> tuple[dict[str, FittedModel], dict[str, dict[str, float | None]], dict[str, dict[str, float | None]]]:
+    """Fit all configured candidates on the static training split."""
     candidates: dict[str, FittedModel] = {}
     metrics: dict[str, dict[str, float | None]] = {}
     train_metrics: dict[str, dict[str, float | None]] = {}
@@ -1311,6 +1362,7 @@ def _fit_candidates(
 
 
 def _choose_candidate(candidate_metrics: dict[str, dict[str, float | None]]) -> str:
+    """Choose a candidate using Brier and a logistic tie-break."""
     logistic = candidate_metrics.get("logistic")
     best = min(candidate_metrics, key=lambda name: _metric_value(candidate_metrics[name]["brier"]))
     chosen = best
@@ -1335,6 +1387,7 @@ def _fit_final_calibration(
     validation_calibrate: TabularData,
     config: TrainingConfig,
 ) -> tuple[TabularData, ScoreCalibrator, str, bool, dict[str, Array], float, bool]:
+    """Cross-fit, choose and fit the final static calibrator."""
     cal_data = validation_calibrate
     raw_cal = model.predict(cal_data)
     method_scores: dict[str, dict[str, float | None]] = {}
@@ -1344,6 +1397,7 @@ def _fit_final_calibration(
         method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
 
     def _brier_key(name: str) -> float:
+        """Return the Brier score used to rank calibration methods."""
         value = method_scores[name]["brier"]
         return 1.0 if value is None else float(value)
 
@@ -1413,6 +1467,7 @@ def _headroom_diagnostics(
     list[Array],
     list[Array],
 ]:
+    """Headroom diagnostics."""
     headroom: list[dict[str, Any]] = []
     headroom_ttd: list[dict[str, Any]] = []
     probabilities_by_headroom: list[Array] = []
@@ -1517,6 +1572,7 @@ def _calibration_groups(
     bands_eval: Array,
     config: TrainingConfig,
 ) -> list[dict[str, Any]]:
+    """Calibration groups."""
     rows: list[dict[str, Any]] = []
     for value_index, value in enumerate(config.label.headroom_pct):
         for band in band_labels():
@@ -1556,6 +1612,7 @@ def _strata_comparison(
     train_eval: TabularData,
     threshold: float,
 ) -> list[dict[str, Any]]:
+    """Strata comparison."""
     validation = {
         (item["dimension"], item["value"]): item
         for item in _strata_rows(cal_data, oof_predictions, train_eval, threshold)

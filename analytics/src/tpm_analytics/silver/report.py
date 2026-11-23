@@ -21,12 +21,15 @@ REPORT_CONTENT_TYPE = "application/json"
 
 @dataclass(frozen=True)
 class Violation:
+    """One failed quality check."""
+
     metric: str
     value: float
     threshold: float
     message: str
 
     def to_dict(self) -> dict[str, object]:
+        """Return a serialisable dictionary representation."""
         return {
             "metric": self.metric,
             "value": self.value,
@@ -37,6 +40,8 @@ class Violation:
 
 @dataclass(frozen=True)
 class QualityReport:
+    """The quality report for one silver build."""
+
     report_version: int
     build_id: str
     generated_at: str
@@ -49,6 +54,7 @@ class QualityReport:
     build: dict[str, Any]
 
     def to_json(self) -> bytes:
+        """Serialise the value to JSON."""
         payload = {
             "report_version": self.report_version,
             "build_id": self.build_id,
@@ -64,30 +70,37 @@ class QualityReport:
 
 
 def quality_prefix(prefix: str, quality: QualityConfig) -> str:
+    """Return the prefix for quality reports."""
     return f"{prefix.strip('/')}/{quality.prefix.strip('/')}"
 
 
 def report_key(prefix: str, quality: QualityConfig, build_id: str) -> str:
+    """Return the object key for a quality report."""
     return f"{quality_prefix(prefix, quality)}/{build_id}.json"
 
 
 def pointer_key(prefix: str, quality: QualityConfig) -> str:
+    """Return the object key for the current-build pointer."""
     return f"{quality_prefix(prefix, quality)}/{quality.pointer_name}"
 
 
 def _utc(moment: datetime) -> datetime:
+    """Return an ISO UTC timestamp."""
     return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
 
 
 def _timestamp(moment: datetime) -> str:
+    """Parse a timestamp from report data."""
     return _utc(moment).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
+    """Return a ratio with a zero-denominator guard."""
     return None if denominator == 0 else numerator / denominator
 
 
 def _violation(metric: str, value: float, threshold: float, message: str) -> Violation:
+    """Build a quality violation record."""
     return Violation(metric=metric, value=value, threshold=threshold, message=message)
 
 
@@ -356,7 +369,7 @@ def write_report(
     quality: QualityConfig,
     report: QualityReport,
 ) -> str:
-    """Write the immutable report and the latest pointer; return the report key."""
+    """Write the static evaluation report and return its summary."""
     key = report_key(prefix, quality, report.build_id)
     store.put_bytes(report.to_json(), key, content_type=REPORT_CONTENT_TYPE)
     LOGGER.info("silver quality report object written build_id=%s report=%s", report.build_id, key)

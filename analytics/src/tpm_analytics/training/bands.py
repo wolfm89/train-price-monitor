@@ -47,4 +47,5 @@ def ttd_band_case(column: str, bands: tuple[tuple[str, int, int], ...] = HEADLIN
 
 
 def band_labels(bands: tuple[tuple[str, int, int], ...] = HEADLINE_BANDS) -> tuple[str, ...]:
+    """Return the labels of the supplied TTD bands."""
     return tuple(label for label, _, _ in bands)

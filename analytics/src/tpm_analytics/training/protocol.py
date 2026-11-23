@@ -19,19 +19,24 @@ DATETIME = "datetime64[ms]"
 
 @dataclass(frozen=True)
 class FoldMasks:
+    """Boolean train, calibration and test masks for one fold."""
+
     train: Array
     calibrate: Array
     test: Array
 
     def count(self) -> tuple[int, int, int]:
+        """Return the block counts.."""
         return int(self.train.sum()), int(self.calibrate.sum()), int(self.test.sum())
 
 
 def _datetime(values: Array) -> Array:
+    """Convert a datetime column to the protocol dtype."""
     return np.asarray(values, dtype=DATETIME)
 
 
 def _at(value: datetime) -> np.datetime64:
+    """Return a protocol datetime for a Python datetime."""
     return np.datetime64(value, "ms")
 
 
@@ -71,6 +76,7 @@ def scored_folds(protocol: ProtocolConfig, *, evaluate_test: bool) -> tuple[Fold
 
 
 def fold_slices(panel: TabularData, masks: FoldMasks) -> tuple[TabularData, TabularData, TabularData]:
+    """Return train, calibration and test panels for a fold."""
     train = panel.subset(masks.train)
     calibrate = panel.subset(masks.calibrate)
     test = panel.subset(masks.test)

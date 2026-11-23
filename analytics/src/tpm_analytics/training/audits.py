@@ -135,6 +135,7 @@ def scrape_gap_audit(connection: duckdb.DuckDBPyConnection) -> list[dict[str, An
 
 
 def _overlap_bounds(connection: duckdb.DuckDBPyConnection, source_sql: str) -> tuple[str, str] | None:
+    """Return the shared departure bounds of two splits."""
     rows = connection.execute(
         f"""
         SELECT min(departure_date), max(departure_date)

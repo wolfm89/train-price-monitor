@@ -44,59 +44,73 @@ class ObjectStore(Protocol):
     bucket: str
 
     def put_file(self, local_path: Path, key: str) -> int:
-        """Upload a file and return its size in bytes."""
+        """Upload a local file and return its size in bytes."""
 
-    def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None: ...
+    def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None:
+        """Upload bytes to an object key."""
 
-    def get_bytes(self, key: str) -> bytes: ...
+    def get_bytes(self, key: str) -> bytes:
+        """Download an object and return its bytes."""
 
-    def size(self, key: str) -> int: ...
+    def size(self, key: str) -> int:
+        """Return the size of an object in bytes."""
 
-    def list_keys(self, prefix: str) -> list[str]: ...
+    def list_keys(self, prefix: str) -> list[str]:
+        """Return object keys under a prefix."""
 
-    def delete(self, keys: list[str]) -> None: ...
+    def delete(self, keys: list[str]) -> None:
+        """Delete a list of object keys."""
 
 
 class LocalObjectStore:
     """A directory pretending to be a bucket. Simplified: no multipart, no ETags, no per-key errors."""
 
     def __init__(self, root: Path, bucket: str = "local") -> None:
+        """Initialise the instance."""
         self.bucket = bucket
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
+        """Return the local path for an object key."""
         path = (self._root / key).resolve()
         if not path.is_relative_to(self._root.resolve()):
             raise ValueError(f"key {key!r} escapes the store root")
         return path
 
     def _write(self, destination: Path, data: bytes) -> None:
+        """Write bytes below the local object-store root."""
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(destination.suffix + ".tmp")
         temporary.write_bytes(data)
         os.replace(temporary, destination)
 
     def put_file(self, local_path: Path, key: str) -> int:
+        """Upload a local file and return its size in bytes."""
         self._write(self._path(key), local_path.read_bytes())
         return self._path(key).stat().st_size
 
     def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None:
+        """Upload bytes to an object key."""
         self._write(self._path(key), data)
 
     def get_bytes(self, key: str) -> bytes:
+        """Download an object and return its bytes."""
         return self._path(key).read_bytes()
 
     def size(self, key: str) -> int:
+        """Return the size of an object in bytes."""
         return self._path(key).stat().st_size
 
     def list_keys(self, prefix: str) -> list[str]:
+        """Return object keys under a prefix."""
         base = self._path(prefix)
         if not base.exists():
             return []
         return sorted(path.relative_to(self._root).as_posix() for path in base.rglob("*") if path.is_file())
 
     def delete(self, keys: list[str]) -> None:
+        """Delete a list of object keys."""
         for key in keys:
             path = self._path(key)
             if path.exists():
@@ -114,26 +128,32 @@ class S3ObjectStore:
         region: str | None = None,
         config: Any | None = None,
     ) -> None:
+        """Initialise the instance."""
         self.bucket = bucket
         self._client: Any = client if client is not None else boto3.client("s3", region_name=region, config=config)
 
     def put_file(self, local_path: Path, key: str) -> int:
+        """Upload a local file and return its size in bytes."""
         self._client.upload_file(str(local_path), self.bucket, key)
         return local_path.stat().st_size
 
     def put_bytes(self, data: bytes, key: str, *, content_type: str = "application/octet-stream") -> None:
+        """Upload bytes to an object key."""
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
     def get_bytes(self, key: str) -> bytes:
+        """Download an object and return its bytes."""
         response = self._client.get_object(Bucket=self.bucket, Key=key)
         body: bytes = response["Body"].read()
         return body
 
     def size(self, key: str) -> int:
+        """Return the size of an object in bytes."""
         response = self._client.head_object(Bucket=self.bucket, Key=key)
         return int(response["ContentLength"])
 
     def list_keys(self, prefix: str) -> list[str]:
+        """Return object keys under a prefix."""
         keys: list[str] = []
         paginator = self._client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
@@ -141,6 +161,7 @@ class S3ObjectStore:
         return sorted(keys)
 
     def delete(self, keys: list[str]) -> None:
+        """Delete a list of object keys."""
         for batch in batched(keys, 1000, strict=False):
             response = self._client.delete_objects(
                 Bucket=self.bucket, Delete={"Objects": [{"Key": key} for key in batch]}
