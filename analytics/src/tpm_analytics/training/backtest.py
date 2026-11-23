@@ -43,10 +43,10 @@ from tpm_analytics.training.model import (
     _cross_fitted,
     _cross_fitted_detailed,
     _decision_metrics,
+    _decision_row,
     _filled,
     _hours,
     _metrics,
-    _pooled_decision_value_rows,
     _pr_curve_points,
     _threshold,
     _ttd_array,
@@ -168,6 +168,7 @@ class BacktestResult:
     development_threshold_cells: list[dict[str, Any]] = field(default_factory=list)
     pr_curves: list[dict[str, Any]] = field(default_factory=list)
     threshold_hold_rate: dict[str, Any] = field(default_factory=dict)
+    development_decision_value: list[dict[str, Any]] = field(default_factory=list)
     warnings: tuple[str, ...] = ()
     runtime_seconds: float = 0.0
     peak_rss_kb: int = 0
@@ -890,6 +891,62 @@ def _pr_curves(folds: tuple[FoldResult, ...]) -> list[dict[str, Any]]:
     return curves
 
 
+def _decision_value_cells(
+    folds: tuple[FoldResult, ...],
+    config: TrainingConfig,
+    *,
+    replicates: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Decision value per headroom x TTD band on the next-day check."""
+    rows: list[dict[str, Any]] = []
+    if not folds:
+        return rows
+    for headroom in config.label.headroom_pct:
+        for band in band_labels():
+            prices: list[Array] = []
+            savings: list[Array] = []
+            alerts: list[Array] = []
+            labels: list[Array] = []
+            groups: list[Array] = []
+            operating = False
+            for fold in folds:
+                bands = _ttd_array(fold.test)
+                check = np.asarray(fold.test.check_price, dtype=np.float64)
+                price = np.asarray(fold.test.price, dtype=np.float64)
+                mask = (bands == band) & np.isfinite(check) & np.isfinite(price) & (price > 0)
+                if not mask.any():
+                    continue
+                entry = fold.cell_thresholds.get((headroom, band))
+                qualified = bool(entry is not None and entry["qualified"])
+                operating = operating or qualified
+                if qualified:
+                    alert = fold.probabilities[headroom][mask] >= float(entry["threshold"])
+                else:
+                    alert = np.zeros(int(mask.sum()), dtype=bool)
+                prices.append(price[mask])
+                savings.append(check[mask] - price[mask])
+                alerts.append(alert)
+                labels.append(fold.labels[headroom][mask])
+                groups.append(fold.test.departure_date[mask])
+            if not prices:
+                continue
+            row = _decision_row(
+                band=band,
+                headroom_pct=headroom,
+                price=np.concatenate(prices),
+                saving=np.concatenate(savings),
+                alert=np.concatenate(alerts),
+                groups=np.concatenate(groups),
+                replicates=replicates,
+                seed=seed + headroom * 1000 + sum((index + 1) * ord(char) for index, char in enumerate(band)),
+                labels=np.concatenate(labels),
+            )
+            row["operating_point"] = operating
+            rows.append(row)
+    return rows
+
+
 def _code_identity() -> tuple[str | None, bool | None]:
     """Return the current git SHA and dirty flag."""
     try:
@@ -1217,22 +1274,19 @@ def run_backtest(
     decision_value: list[dict[str, Any]] = []
     if evaluation:
         pooled_metrics, headroom_rows, headroom_ttd = _pooled_summary(evaluation, config)
-        for item in evaluation:
-            decision_value.extend(
-                {
-                    "fold": item.fold.name,
-                    **row,
-                }
-                for row in _pooled_decision_value_rows(
-                    item.test,
-                    item.calibrated,
-                    _ttd_array(item.test),
-                    item.threshold,
-                    config.report.metric_bootstrap_replicates,
-                    config.seed + 2,
-                )
-            )
+        decision_value = _decision_value_cells(
+            evaluation,
+            config,
+            replicates=config.report.metric_bootstrap_replicates,
+            seed=config.seed + 2,
+        )
     development_results = tuple(item for item in results if item.fold.role == "development")
+    development_decision_value = _decision_value_cells(
+        development_results,
+        config,
+        replicates=config.report.metric_bootstrap_replicates,
+        seed=config.seed + 3,
+    )
     development_pooled: dict[str, Any] = {}
     development_headroom: list[dict[str, Any]] = []
     development_headroom_ttd: list[dict[str, Any]] = []
@@ -1270,6 +1324,7 @@ def run_backtest(
         pr_curves=_pr_curves(evaluation),
         threshold_hold_rate=_threshold_hold_rate(threshold_cells),
         decision_value=decision_value,
+        development_decision_value=development_decision_value,
         evaluated_blocks=tuple(item.fold.name for item in results),
         warnings=tuple(warnings),
         runtime_seconds=time.perf_counter() - started,
@@ -1655,32 +1710,50 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         if hold_rate
         else ""
     )
+    decision_headers = [
+        "headroom %",
+        "TTD band",
+        "rows",
+        "alert share",
+        "saving vs wait EUR",
+        "95 % CI vs wait",
+        "saving vs book EUR",
+        "95 % CI vs book",
+        "random vs wait",
+        "perfect breach vs wait",
+        "perfect breach vs book",
+        "perfect timing vs book",
+        "cost of waiting",
+    ]
+
+    def _decision_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
+        """Render decision-value cells."""
+        return [
+            [
+                item.get("headroom_pct"),
+                item.get("band"),
+                item.get("rows"),
+                _p(item.get("alert_share")),
+                _fmt(item.get("saving_vs_always_wait_eur"), 2),
+                _ci(item.get("ci_saving_vs_wait_eur")),
+                _fmt(item.get("saving_vs_always_book_eur"), 2),
+                _ci(item.get("ci_saving_vs_book_eur")),
+                _fmt(item.get("random_alert_saving_vs_wait_eur"), 2),
+                _fmt(item.get("perfect_breach_vs_wait_eur"), 2),
+                _fmt(item.get("perfect_breach_vs_book_eur"), 2),
+                _fmt(item.get("perfect_timing_vs_book_eur"), 2),
+                _fmt(item.get("cost_of_waiting_eur"), 2),
+            ]
+            for item in items
+        ]
+
+    development_decision_table = (
+        _table(decision_headers, _decision_rows(result.development_decision_value))
+        if result.development_decision_value
+        else "Development folds were not scored."
+    )
     decision_table = (
-        _table(
-            [
-                "fold",
-                "TTD band",
-                "rows",
-                "alert share",
-                "saving vs wait EUR",
-                "95 % CI vs wait",
-                "saving vs book EUR",
-                "95 % CI vs book",
-            ],
-            [
-                [
-                    item.get("fold"),
-                    item.get("band"),
-                    item.get("rows"),
-                    _p(item.get("alert_share")),
-                    _fmt(item.get("saving_vs_always_wait_eur"), 2),
-                    _ci(item.get("ci_saving_vs_wait_eur")),
-                    _fmt(item.get("saving_vs_always_book_eur"), 2),
-                    _ci(item.get("ci_saving_vs_book_eur")),
-                ]
-                for item in result.decision_value
-            ],
-        )
+        _table(decision_headers, _decision_rows(result.decision_value))
         if result.decision_value
         else "Evaluation folds were not scored."
     )
@@ -2035,8 +2108,20 @@ The cutoffs straddle the late-July scrape-cadence ramp and the 13-21 July outage
 
 ## Decision value
 
-Decision value uses the 20-24 h crossed-back check on a subset of test rows; it is a diagnostic,
-not a headline metric.
+Decision value uses the next-day check at 20-28 h. An alert means "book now"; no alert means "wait
+one day". The saving is the check fare minus today's fare, so positive means waiting costs more.
+The primary comparison is **waiting** (the current product notifies only once the fare reaches the
+limit). The oracle columns show the ceiling: a perfect breach alert beats booking now by only a few
+euros near departure, and perfect timing is not reachable.
+
+For a user who is already waiting, the alert saves about EUR 4-5 per snapshot at 1-5 days. "Book
+now" stays out of reach for any breach alert because fares near departure mostly rise.
+
+### Development decision value
+
+{development_decision_table}
+
+### Evaluation decision value
 
 {decision_table}
 
@@ -2117,6 +2202,7 @@ def write_backtest_artifacts(
         "pr_curves": result.pr_curves,
         "selection": result.selection,
         "decision_value": result.decision_value,
+        "development_decision_value": result.development_decision_value,
         "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],
         "runtime_seconds": result.runtime_seconds,
         "peak_rss_kb": result.peak_rss_kb,

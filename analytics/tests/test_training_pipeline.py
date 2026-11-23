@@ -70,6 +70,7 @@ from tpm_analytics.training.model import (
     _cluster_mean_ci,
     _compact_datetime,
     _cross_fitted_with_folds,
+    _decision_row,
     _decision_value_rows,
     _early_stopping_plan,
     _encode_text,
@@ -3687,6 +3688,12 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     assert scored.pr_curves
     assert all(point["precision"] >= 0.0 for curve in scored.pr_curves for point in curve["points"])
     assert all(row["cell_thresholds"] for row in scored.per_fold)
+    assert 0 < len(scored.development_decision_value) <= 5 * len(HEADLINE_BANDS)
+    assert 0 < len(scored.decision_value) <= 5 * len(HEADLINE_BANDS)
+    required_oracle = {"perfect_breach_vs_wait_eur", "perfect_breach_vs_book_eur", "perfect_timing_vs_book_eur"}
+    assert all(required_oracle <= set(row) for row in scored.decision_value)
+    assert all(len(row["ci_saving_vs_wait_eur"]) == 2 for row in scored.decision_value)
+    assert all(len(row["ci_saving_vs_book_eur"]) == 2 for row in scored.decision_value)
 
 
 def test_selection_rejects_a_non_development_fold() -> None:
@@ -4711,6 +4718,35 @@ def test_decision_value_sign_convention() -> None:
     assert row["saving_vs_always_book_eur"] == pytest.approx(5.0)
     assert row["conditional_saving_when_alert_eur"] == pytest.approx(10.0)
     assert row["cost_of_waiting_eur"] == pytest.approx(0.0)
+
+
+def test_decision_row_pins_the_oracle_columns() -> None:
+    saving = np.array([10.0, 10.0, -10.0, -10.0])
+    price = np.full(4, 100.0)
+    alert = np.array([True, True, False, False])
+    labels = np.array([1, 1, 0, 0], dtype=np.int8)
+    groups = np.array(["2026-07-01", "2026-07-02", "2026-07-03", "2026-07-04"], dtype=object)
+    row = _decision_row(
+        band="1-3d",
+        headroom_pct=5,
+        price=price,
+        saving=saving,
+        alert=alert,
+        groups=groups,
+        replicates=50,
+        seed=3,
+        labels=labels,
+    )
+    assert row["alert_share"] == pytest.approx(0.5)
+    assert row["saving_vs_always_wait_eur"] == pytest.approx(5.0)
+    assert row["saving_vs_always_book_eur"] == pytest.approx(5.0)
+    assert row["random_alert_saving_vs_wait_eur"] == pytest.approx(0.0)
+    assert row["cost_of_waiting_eur"] == pytest.approx(0.0)
+    assert row["conditional_saving_when_alert_eur"] == pytest.approx(10.0)
+    assert row["perfect_breach_vs_wait_eur"] == pytest.approx(5.0)
+    assert row["perfect_breach_vs_book_eur"] == pytest.approx(5.0)
+    assert row["perfect_timing_vs_book_eur"] == pytest.approx(5.0)
+    assert row["perfect_breach_rows"] == 2
 
 
 def test_zero_alert_decision_row_is_kept() -> None:

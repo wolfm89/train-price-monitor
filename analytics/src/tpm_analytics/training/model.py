@@ -1642,8 +1642,13 @@ def _decision_row(
     groups: Array,
     replicates: int,
     seed: int,
+    labels: Array | None = None,
 ) -> dict[str, Any]:
-    """One decision-value row for an alert mask and a set of check prices."""
+    """One decision-value row for an alert mask and a set of check prices.
+
+    ``saving`` is the check fare minus today's fare: positive when waiting costs more. An alert
+    means booking now, so the policy saves the rise on alerted rows and nothing elsewhere.
+    """
     saving_vs_wait = np.where(alert, saving, 0.0)
     saving_vs_book = -np.where(alert, 0.0, saving)
     row: dict[str, Any] = {
@@ -1665,6 +1670,13 @@ def _decision_row(
     }
     if headroom_pct is not None:
         row["headroom_pct"] = int(headroom_pct)
+    if labels is not None:
+        truth = np.asarray(labels, dtype=np.int8)
+        perfect = truth == 1
+        row["perfect_breach_rows"] = int(perfect.sum())
+        row["perfect_breach_vs_wait_eur"] = float(np.mean(np.where(perfect, saving, 0.0)))
+        row["perfect_breach_vs_book_eur"] = float(np.mean(-np.where(perfect, 0.0, saving)))
+        row["perfect_timing_vs_book_eur"] = float(np.mean(np.maximum(-saving, 0.0)))
     return row
 
 
