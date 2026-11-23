@@ -395,10 +395,10 @@ A series may span a cutoff because labels are purged and every feature is past-o
 mode still requires the static `splits` block: it bounds the panel at `test_end`, but those splits
 are not used for scoring. Long backtests
 can resume with `--cache-dir`: finished folds and the frozen recipe are checkpointed there, keyed
-by the config and recipe hashes, and the checkpoints keep report state rather than the training
-panels. Delete the cache directory to force a clean refit.
+by the config, dataset digest and a fit-code hash, and the checkpoints keep report state rather
+than the training panels. A dirty tree disables reuse. Delete the cache directory to force a clean refit.
 
-A fresh cache-free 5 % backtest peaks at about 6.65 GB; a run that reuses the dataset cache peaks
+A fresh cache-free 5 % backtest peaks at about 6.47 GB; a run that reuses the dataset cache peaks
 near 4.03 GB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
@@ -412,8 +412,8 @@ the four calendar sets. `--cache-dir` resumes backtest folds. `--dataset-cache-d
 matching dataset build (default `artifacts/.cache/datasets`); reuse is allowed only on a clean tree,
 verifies every split hash and records the reuse key. Pass `--no-dataset-cache` for an independent
 build, and note that two clean builds are only independent when the dataset cache is disabled or
-pointed at a fresh directory. Each code SHA and source build can add about 92 MB to the dataset
-cache; delete `artifacts/.cache/datasets` to reclaim it.
+pointed at a fresh directory. Each distinct dataset-code/config/source build can add about 92 MB
+to the dataset cache; delete `artifacts/.cache/datasets` to reclaim it.
 The report shows eligibility, label coverage, known limitations and the git/silver/config
 provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 

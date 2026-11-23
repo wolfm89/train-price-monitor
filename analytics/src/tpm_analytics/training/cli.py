@@ -19,6 +19,7 @@ from typing import Any
 import duckdb
 import pyarrow
 
+from tpm_analytics import calendar
 from tpm_analytics.silver._duck import connect
 from tpm_analytics.training import backtest as backtest_protocol
 from tpm_analytics.training import model as training_model
@@ -86,8 +87,11 @@ def _parser() -> argparse.ArgumentParser:
 def _dataset_code_hash() -> str:
     root = Path(__file__).resolve().parents[1]
     excluded = {"backtest.py", "cli.py", "model.py", "report.py", "__init__.py"}
-    files = sorted(path for path in (root / "training").glob("*.py") if path.name not in excluded)
-    files.extend(sorted((root / "calendar").glob("*.py")))
+    files = sorted(
+        path for path in (root / "training").glob("*.py") if path.name not in excluded and path.name != "protocol.py"
+    )
+    files.extend((root / "calendar.py", root / "silver" / "_duck.py"))
+    files.append(root / "data" / "calendar.json")
     lock = root.parent.parent / "uv.lock"
     if lock.is_file():
         files.append(lock)
@@ -132,19 +136,38 @@ def _restore_dataset(
     profile_path = entry / "profile.json"
     if not manifest_path.is_file() or not profile_path.is_file() or not (entry / "DONE").is_file():
         return None
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not manifest.get("dataset_files"):
-        return None
-    if manifest.get("strict_chains") != strict_chains:
-        return None
-    if manifest.get("silver_build_id") != getattr(source, "build_id", None):
-        return None
-    if manifest.get("silver_manifest_sha256") != getattr(source, "manifest_sha256", None):
-        return None
-    for item in manifest.get("dataset_files", []):
-        path = entry / item["path"]
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("manifest_version") != 3:
             return None
+        if not manifest.get("dataset_files"):
+            return None
+        if manifest.get("dataset_cache_key") != key:
+            return None
+        if manifest.get("calendar_version") != calendar.dataset_version():
+            return None
+        if manifest.get("strict_chains") != strict_chains:
+            return None
+        if manifest.get("silver_build_id") != getattr(source, "build_id", None):
+            return None
+        if manifest.get("silver_manifest_sha256") != getattr(source, "manifest_sha256", None):
+            return None
+        for item in manifest.get("dataset_files", []):
+            path = entry / item["path"]
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                return None
+        roles = entry / "column_roles.json"
+        if roles.is_file() and hashlib.sha256(roles.read_bytes()).hexdigest() != manifest.get("column_roles_sha256"):
+            return None
+        profile = entry / "profile.json"
+        if (
+            profile.is_file()
+            and manifest.get("profile_sha256")
+            and hashlib.sha256(profile.read_bytes()).hexdigest() != manifest["profile_sha256"]
+        ):
+            return None
+    except OSError, ValueError, TypeError, KeyError, AttributeError:
+        return None
     shutil.copytree(entry / "dataset", work_dir / "dataset", dirs_exist_ok=True)
     for name in ("dataset_manifest.json", "profile.json", "column_roles.json"):
         source = entry / name
@@ -159,9 +182,13 @@ def _restore_dataset(
     (work_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
-    payload = json.loads(profile_path.read_text(encoding="utf-8"))
-    splits = tuple(SplitStats(**item) for item in payload.pop("splits"))
-    return DatasetStats(**payload, splits=splits)
+    try:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        splits = tuple(SplitStats(**item) for item in payload.pop("splits"))
+        stats = DatasetStats(**payload, splits=splits)
+    except OSError, ValueError, TypeError, KeyError, AttributeError:
+        return None
+    return replace(stats, run_id=run_id)
 
 
 def _mark_dataset_cache(work_dir: Path, key: str) -> None:
@@ -327,8 +354,11 @@ def main(argv: list[str] | None = None) -> int:
                     forward=args.forward,
                 )
                 if cache_root is not None and dataset_key is not None and not args.profile and not args.forward:
-                    _mark_dataset_cache(work_dir, dataset_key)
-                    _store_dataset(cache_root, dataset_key, work_dir)
+                    try:
+                        _mark_dataset_cache(work_dir, dataset_key)
+                        _store_dataset(cache_root, dataset_key, work_dir)
+                    except (OSError, ValueError, TypeError, KeyError) as error:
+                        logging.getLogger(__name__).warning("dataset cache write skipped: %s", error)
         finally:
             connection.close()
             shutil.rmtree(temp_dir, ignore_errors=True)

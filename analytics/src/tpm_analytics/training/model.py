@@ -450,7 +450,7 @@ def fit_candidate(
     encoder: OrdinalEncoder | None = None,
     matrix: Array | None = None,
 ) -> FittedModel:
-    encoder = encoder or fit_encoder(data, spec)
+    encoder = fit_encoder(data, spec) if encoder is None else encoder
     matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
         estimator: Any = BaseRateModel(float(np.mean(data.y)))
@@ -576,8 +576,21 @@ class ClimatologyModel:
         clipped_bands = np.clip(band_index, 0, len(labels) - 1)
         clipped_heads = np.clip(heads, 0, max_head)
         values = cell_values[clipped_bands, clipped_heads, class_inverse]
-        valid = np.isfinite(hours) & (band_index >= 0) & (band_index < len(labels))
-        values[~valid] = self.global_rate
+        valid = (
+            np.isfinite(hours) & (hours >= float(CLIMATOLOGY_BANDS[0][1])) & (hours <= float(CLIMATOLOGY_BANDS[-1][2]))
+        )
+        if not np.all(valid):
+            fallback = np.asarray(
+                [
+                    self.band_headroom.get(
+                        ("unknown", int(head)),
+                        self.headroom.get(int(head), self.global_rate),
+                    )
+                    for head in heads[~valid]
+                ],
+                dtype=np.float64,
+            )
+            values[~valid] = fallback
         return values
 
 
@@ -599,12 +612,12 @@ def fit_climatology(data: TabularData, *, strength: float = 50.0) -> Climatology
         for key, count, positive in zip(head_keys, head_counts, head_positives, strict=True)
     }
 
-    band_labels, band_inverse = np.unique(bands, return_inverse=True)
+    band_values, band_inverse = np.unique(bands, return_inverse=True)
     band_head = band_inverse * len(head_keys) + head_inverse
-    band_counts = np.bincount(band_head, minlength=len(band_labels) * len(head_keys))
-    band_positives = np.bincount(band_head, weights=data.y, minlength=len(band_labels) * len(head_keys))
+    band_counts = np.bincount(band_head, minlength=len(band_values) * len(head_keys))
+    band_positives = np.bincount(band_head, weights=data.y, minlength=len(band_values) * len(head_keys))
     band_rate: dict[tuple[str, int], float] = {}
-    for band_position, band in enumerate(band_labels):
+    for band_position, band in enumerate(band_values):
         for head_position, head in enumerate(head_keys):
             index = band_position * len(head_keys) + head_position
             band_rate[(str(band), int(head))] = (int(band_positives[index]) + strength * head_rate[int(head)]) / (
@@ -613,10 +626,10 @@ def fit_climatology(data: TabularData, *, strength: float = 50.0) -> Climatology
 
     class_labels, class_inverse = np.unique(classes, return_inverse=True)
     cell = (band_inverse * len(head_keys) + head_inverse) * len(class_labels) + class_inverse
-    cell_counts = np.bincount(cell, minlength=len(band_labels) * len(head_keys) * len(class_labels))
-    cell_positives = np.bincount(cell, weights=data.y, minlength=len(band_labels) * len(head_keys) * len(class_labels))
+    cell_counts = np.bincount(cell, minlength=len(band_values) * len(head_keys) * len(class_labels))
+    cell_positives = np.bincount(cell, weights=data.y, minlength=len(band_values) * len(head_keys) * len(class_labels))
     cell_rate: dict[tuple[str, int, str], float] = {}
-    for band_position, band in enumerate(band_labels):
+    for band_position, band in enumerate(band_values):
         for head_position, head in enumerate(head_keys):
             for class_position, service_class in enumerate(class_labels):
                 index = (band_position * len(head_keys) + head_position) * len(class_labels) + class_position
@@ -961,7 +974,13 @@ def _band_index(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
 def _band_labels(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
     index = _band_index(hours, bands)
     labels = np.asarray([band[0] for band in bands], dtype=object)
-    valid = np.isfinite(hours) & (index >= 0) & (index < len(bands))
+    valid = (
+        np.isfinite(hours)
+        & (hours >= float(bands[0][1]))
+        & (hours <= float(bands[-1][2]))
+        & (index >= 0)
+        & (index < len(bands))
+    )
     result = np.full(len(hours), "unknown", dtype=object)
     result[valid] = labels[index[valid]]
     return result

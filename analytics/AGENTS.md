@@ -118,17 +118,18 @@ v2-only and mixed-schema input.
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
-  for backtest scoring. `--ablation` requires `config/training-static.json`. `--cache-dir` resumes completed folds and the frozen recipe by config/recipe hash;
+  for backtest scoring. `--ablation` requires `config/training-static.json`. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
   checkpoints hold report state only, never the train or calibration panels. A cache-free 5 %
-  backtest peaks near 6.65 GB (4.03 GB with the dataset cache); 10 % has not been measured, so
+  backtest peaks near 6.47 GB (4.03 GB with the dataset cache); 10 % has not been measured, so
   raise memory before scaling.
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
   `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
   (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.
   `--score-forward PATH` smoke-scores it with the 14 September refit; no labels or metrics.
 - The automatic dataset cache lives in `artifacts/.cache/datasets` and is keyed by config, source
-  identity, strict-chain mode, code SHA and dirty flag. Use `--no-dataset-cache` for an independent
-  build; reuse verifies every split hash.
+  build/manifest identity, strict-chain mode, dataset-code hash and a clean tree. Use
+  `--no-dataset-cache` for an independent build; reuse verifies every split, profile and column-role
+  hash.
 - The label is the **next-day fare**: the chain's fare at the route-day check closest to
   `t + 24 h` inside 20-28 h and before departure. Eligibility depends only on the route-day scrape
   grid. A chain missing at the check is censored (`censor_reason = 'not_listed'`), not a negative;

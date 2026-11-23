@@ -629,11 +629,12 @@ def _fit_code_hash() -> str:
         root / "training" / "labels.py",
         root / "training" / "features.py",
         root / "training" / "bands.py",
+        root.parent.parent / "uv.lock",
     ]
     digest = hashlib.sha256()
     for path in files:
         if path.is_file():
-            digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+            digest.update(path.relative_to(root.parent.parent).as_posix().encode("utf-8"))
             digest.update(path.read_bytes())
     return digest.hexdigest()
 
@@ -664,7 +665,7 @@ def _load_cached_recipe(
         return None
     if dataset_sha256 is not None and payload.get("dataset_sha256") != dataset_sha256:
         return None
-    if code_sha is None or code_dirty is not False or payload.get("code_sha") != code_sha:
+    if code_sha is None or code_dirty is not False:
         return None
     if payload.get("fit_code_sha") != fit_code_sha:
         return None
@@ -725,7 +726,7 @@ def _load_cached_fold(
         return None
     if dataset_sha256 is not None and meta.get("dataset_sha256") != dataset_sha256:
         return None
-    if code_sha is None or code_dirty is not False or meta.get("code_sha") != code_sha:
+    if code_sha is None or code_dirty is not False:
         return None
     if meta.get("fit_code_sha") != fit_code_sha:
         return None
@@ -1510,7 +1511,16 @@ def write_backtest_artifacts(
     (out_dir / "report.md").write_text(_report(result, config, manifest_view), encoding="utf-8")
     artifacts = [predictions_path, out_dir / "recipe.json", out_dir / "backtest.json", out_dir / "report.md"]
     artifacts.extend(
-        path for path in (out_dir / "forward_predictions.parquet", out_dir / "forward_smoke.json") if path.is_file()
+        path
+        for path in (
+            out_dir / "forward_predictions.parquet",
+            out_dir / "forward_input.parquet",
+            out_dir / "forward_smoke.json",
+            out_dir / "dataset_manifest.json",
+            out_dir / "profile.json",
+            out_dir / "column_roles.json",
+        )
+        if path.is_file()
     )
     runtime = runtime or {}
     manifest = {
@@ -1523,6 +1533,9 @@ def write_backtest_artifacts(
         "config_sha256": config.hash(),
         "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
         "sample": {"sample_rate": config.sample.sample_rate, "seed": config.sample.seed},
+        "dataset_sha256": hashlib.sha256(
+            json.dumps(dataset_manifest.get("dataset_files", []), sort_keys=True).encode("utf-8")
+        ).hexdigest(),
         "evaluated_blocks": list(result.evaluated_blocks),
         "runtime": runtime,
         "cache": {

@@ -29,9 +29,15 @@ from tpm_analytics.training.backtest import (
     select_recipe,
     write_backtest_artifacts,
 )
-from tpm_analytics.training.bands import HEADLINE_BANDS, ttd_band
+from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, ttd_band
 from tpm_analytics.training.chains import build_chain_map
-from tpm_analytics.training.cli import _dataset_cache_key, _restore_dataset, _store_dataset, main
+from tpm_analytics.training.cli import (
+    _dataset_cache_key,
+    _mark_dataset_cache,
+    _restore_dataset,
+    _store_dataset,
+    main,
+)
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, ConfigError, FoldConfig, ProtocolConfig, load_config
 from tpm_analytics.training.dataset import (
     DatasetError,
@@ -50,6 +56,7 @@ from tpm_analytics.training.model import (
     FittedModel,
     ModelError,
     TabularData,
+    _band_labels,
     _bootstrap,
     _bootstrap_metrics,
     _bootstrap_paired,
@@ -3239,6 +3246,21 @@ def test_dirty_tree_disables_fold_cache(tmp_path: Path, monkeypatch: pytest.Monk
     assert not (cache / "recipe.json").exists()
 
 
+def test_band_labels_match_ttd_band_at_every_edge() -> None:
+    values = [
+        CLIMATOLOGY_BANDS[0][1],
+        CLIMATOLOGY_BANDS[0][2] - 1e-6,
+        CLIMATOLOGY_BANDS[0][2],
+        CLIMATOLOGY_BANDS[-1][2],
+        CLIMATOLOGY_BANDS[-1][2] + 1e-6,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ]
+    for value in values:
+        assert _band_labels(np.array([value]), CLIMATOLOGY_BANDS)[0] == ttd_band(value, CLIMATOLOGY_BANDS)
+
+
 def test_compact_text_and_datetime_preserve_values() -> None:
     values = np.array(["Baden-Württemberg", "München", "plain"], dtype=object)
     encoded = _encode_text(values)
@@ -3253,6 +3275,9 @@ def test_dataset_cache_key_covers_build_inputs(tmp_path: Path) -> None:
     source = SourceSpec(glob="x", label="x", build_id="a", manifest_sha256="m")
     base = _dataset_cache_key(config, "x", "sha", False, source)
     assert base != _dataset_cache_key(config, "x", "sha", True, source)
+    assert base != _dataset_cache_key(config, "x", "other", False, source)
+    changed = replace(config, model=replace(config.model, max_iter=config.model.max_iter + 1))
+    assert base != _dataset_cache_key(changed, "x", "sha", False, source)
     other_build = SourceSpec(glob="x", label="x", build_id="b", manifest_sha256="m")
     assert base != _dataset_cache_key(config, "x", "sha", False, other_build)
     other_manifest = SourceSpec(glob="x", label="x", build_id="a", manifest_sha256="n")
@@ -3275,15 +3300,22 @@ def test_clean_fold_cache_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert second.fold_cache_hits == 1
     assert first.pooled == second.pooled
     assert first.folds[0].metrics == second.folds[0].metrics
-    (cache / "folds" / "dev.pkl").write_bytes(b"corrupt")
+    monkeypatch.setattr(backtest_module, "_code_identity", lambda: ("other-head", False))
     third = run_backtest(panel, config, spec, evaluate_test=False, cache_dir=cache, dataset_sha256="data")
-    assert third.fold_cache_hits == 0
-    assert third.folds[0].metrics == first.folds[0].metrics
+    assert third.fold_cache_hits == 1
+    monkeypatch.setattr(backtest_module, "_fit_code_hash", lambda: "changed-fit-code")
+    fourth = run_backtest(panel, config, spec, evaluate_test=False, cache_dir=cache, dataset_sha256="data")
+    assert fourth.fold_cache_hits == 0
+    (cache / "folds" / "dev.pkl").write_bytes(b"corrupt")
+    fifth = run_backtest(panel, config, spec, evaluate_test=False, cache_dir=cache, dataset_sha256="data")
+    assert fifth.fold_cache_hits == 0
+    assert fifth.folds[0].metrics == first.folds[0].metrics
 
 
 def test_dataset_cache_round_trip(tmp_path: Path) -> None:
     _, out = _build(tmp_path)
     cache = tmp_path / "datasets"
+    _mark_dataset_cache(out, "key")
     _store_dataset(cache, "key", out)
     restored = tmp_path / "restored"
     restored.mkdir()
@@ -3303,6 +3335,41 @@ def test_dataset_cache_round_trip(tmp_path: Path) -> None:
     manifest = json.loads((restored / "dataset_manifest.json").read_text())
     assert manifest["reused"] is True
 
+    manifest_path = cache / "key" / "dataset_manifest.json"
+    original = manifest_path.read_text()
+    changed = json.loads(original)
+    changed["calendar_version"] = "1999-01-01"
+    manifest_path.write_text(json.dumps(changed))
+    calendar_target = tmp_path / "calendar"
+    calendar_target.mkdir()
+    assert (
+        _restore_dataset(
+            cache,
+            "key",
+            calendar_target,
+            run_id="calendar",
+            cli_argv=("test",),
+            strict_chains=False,
+            source=source,
+        )
+        is None
+    )
+    manifest_path.write_text(original)
+    (cache / "key" / "profile.json").write_text("{}")
+    profile_target = tmp_path / "profile"
+    profile_target.mkdir()
+    assert (
+        _restore_dataset(
+            cache,
+            "key",
+            profile_target,
+            run_id="profile",
+            cli_argv=("test",),
+            strict_chains=False,
+            source=source,
+        )
+        is None
+    )
     (cache / "key" / "dataset" / "train.parquet").write_bytes(b"corrupt")
     corrupt_target = tmp_path / "corrupt"
     corrupt_target.mkdir()

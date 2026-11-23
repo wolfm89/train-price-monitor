@@ -2049,12 +2049,12 @@ def build_dataset(
         "package_versions": _package_versions(),
         "warnings": list(warnings),
     }
+    profile_bytes = (json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str) + "\n").encode("utf-8")
+    manifest["profile_sha256"] = hashlib.sha256(profile_bytes).hexdigest()
     _phase("splits and manifest", build_started)
     (out_dir / "column_roles.json").write_bytes(roles_bytes)
     (out_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
-    (out_dir / "profile.json").write_text(
-        json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
-    )
+    (out_dir / "profile.json").write_bytes(profile_bytes)
     return stats
