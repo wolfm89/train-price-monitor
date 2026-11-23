@@ -27,6 +27,8 @@ def size_mib(value: str) -> int:
 
 @dataclass(frozen=True)
 class DuckDbConfig:
+    """DuckDB resource settings for the build."""
+
     threads: int
     memory_limit: str
     max_temp_size: str
@@ -34,6 +36,8 @@ class DuckDbConfig:
 
 @dataclass(frozen=True)
 class LambdaConfig:
+    """Lambda deployment settings for the scheduled build."""
+
     memory_mib: int
     timeout_seconds: int
     ephemeral_mib: int
@@ -48,12 +52,16 @@ class LambdaConfig:
 
 @dataclass(frozen=True)
 class ScheduleConfig:
+    """EventBridge schedule settings."""
+
     retry_attempts: int
     max_event_age_minutes: int
 
 
 @dataclass(frozen=True)
 class QualityConfig:
+    """Thresholds for the post-build quality report."""
+
     report_version: int
     prefix: str
     pointer_name: str
@@ -72,6 +80,8 @@ class QualityConfig:
 
 @dataclass(frozen=True)
 class SilverConfig:
+    """Configuration for the silver build and its handler."""
+
     prefix: str
     bronze_prefix: str
     builds_root: str
@@ -89,6 +99,7 @@ class SilverConfig:
 
 
 def _validate(config: SilverConfig) -> SilverConfig:
+    """Validate this configuration section.."""
     if not config.prefix or config.prefix.startswith("/") or config.prefix.endswith("/"):
         raise ValueError("prefix must be a non-empty path without leading/trailing slashes")
     if not config.bronze_prefix or config.bronze_prefix.startswith("/") or config.bronze_prefix.endswith("/"):
@@ -161,6 +172,7 @@ def _validate(config: SilverConfig) -> SilverConfig:
 
 
 def _quality_int(raw: dict[str, object], key: str) -> int:
+    """Read a positive integer quality threshold."""
     value = raw[key]
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"quality.{key} must be an integer")
@@ -168,6 +180,7 @@ def _quality_int(raw: dict[str, object], key: str) -> int:
 
 
 def _quality_float(raw: dict[str, object], key: str) -> float:
+    """Read a positive float quality threshold."""
     value = raw[key]
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"quality.{key} must be a number")
@@ -175,6 +188,7 @@ def _quality_float(raw: dict[str, object], key: str) -> float:
 
 
 def _quality_str(raw: dict[str, object], key: str) -> str:
+    """Read a non-empty string quality setting."""
     value = raw[key]
     if not isinstance(value, str):
         raise ValueError(f"quality.{key} must be a string")
@@ -183,6 +197,7 @@ def _quality_str(raw: dict[str, object], key: str) -> str:
 
 @lru_cache(maxsize=1)
 def load_config() -> SilverConfig:
+    """Load and validate the configuration from a file."""
     raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     lambda_raw = raw["lambda"]
     local_raw = raw["local"]

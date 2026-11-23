@@ -18,6 +18,8 @@ BOOLEAN = "boolean"
 
 @dataclass(frozen=True)
 class Feature:
+    """One feature in the model allowlist."""
+
     name: str
     kind: str
     nullable: bool = False
@@ -98,10 +100,13 @@ CALENDAR_FEATURES: dict[str, tuple[Feature, ...]] = {
 
 @dataclass(frozen=True)
 class FeatureSpec:
+    """The ordered feature allowlist for a calendar set."""
+
     calendar_set: str
     features: tuple[Feature, ...]
 
     def __post_init__(self) -> None:
+        """Validate that the feature allowlist is internally consistent."""
         if self.calendar_set not in CALENDAR_SETS:
             raise ValueError(f"unknown calendar feature set {self.calendar_set!r}")
         names = [feature.name for feature in self.features]
@@ -110,10 +115,12 @@ class FeatureSpec:
 
     @property
     def names(self) -> tuple[str, ...]:
+        """Return feature names in declaration order."""
         return tuple(feature.name for feature in self.features)
 
 
 def feature_spec(calendar_set: str) -> FeatureSpec:
+    """Return the allowlisted feature specification for a calendar set."""
     if calendar_set not in CALENDAR_FEATURES:
         raise ValueError(f"unknown calendar feature set {calendar_set!r}")
     return FeatureSpec(calendar_set, CORE_FEATURES + CALENDAR_FEATURES[calendar_set])

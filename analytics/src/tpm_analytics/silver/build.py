@@ -272,6 +272,7 @@ def run_build(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command-line entry point."""
     parser = argparse.ArgumentParser(
         prog="python -m tpm_analytics.silver.build",
         description="Build the silver layer from a bronze Parquet glob.",

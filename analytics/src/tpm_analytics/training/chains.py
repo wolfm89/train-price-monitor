@@ -34,6 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _phase(name: str, started: float) -> float:
+    """Log a timed build phase and return a new start time."""
     finished = time.perf_counter()
     _LOGGER.info("chain %s: %.1f s", name, finished - started)
     return finished
@@ -68,6 +69,7 @@ class ChainStats:
     size_histogram: tuple[tuple[int, int], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serialisable dictionary representation."""
         return {
             "strict": self.strict,
             "series": self.series,
@@ -96,6 +98,7 @@ class ChainStats:
 
 
 def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
+    """Return the first integer value from a query."""
     rows = connection.execute(sql).fetchall()
     if not rows:
         raise RuntimeError(f"query returned no row: {sql[:80]}")
@@ -103,18 +106,24 @@ def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
 
 
 def _optional_rate(numerator: int, denominator: int) -> float | None:
+    """Return a ratio, or None for a zero denominator."""
     return None if denominator == 0 else numerator / denominator
 
 
 def _pyarrow_table(rows: list[tuple[str, str]], names: tuple[str, ...]) -> pa.Table:
+    """Build an Arrow table from column arrays."""
     return pa.table({name: [row[index] for row in rows] for index, name in enumerate(names)})
 
 
 class _UnionFind:
+    """The UnionFind value."""
+
     def __init__(self) -> None:
+        """Initialise the instance."""
         self._parent: dict[str, str] = {}
 
     def find(self, value: str) -> str:
+        """Return the representative of a union-find element."""
         parent = self._parent.setdefault(value, value)
         while parent != value:
             self._parent[value] = self._parent[parent]
@@ -123,6 +132,7 @@ class _UnionFind:
         return value
 
     def union(self, left: str, right: str) -> None:
+        """Merge two union-find components."""
         left_root = self.find(left)
         right_root = self.find(right)
         if left_root == right_root:
@@ -162,6 +172,7 @@ def _match_candidates(
     distance: dict[str, int] = {}
 
     def bfs() -> bool:
+        """Return nodes reachable from the seed."""
         queue: deque[str] = deque()
         for left in adjacency:
             if left not in pair_left:
@@ -182,6 +193,7 @@ def _match_candidates(
         return found
 
     def dfs(left: str) -> bool:
+        """Return nodes reachable from the seed."""
         for right in adjacency[left]:
             matched = pair_right.get(right)
             if matched is None or (distance.get(matched) == distance[left] + 1 and dfs(matched)):
@@ -199,6 +211,7 @@ def _match_candidates(
 
 
 def _chain_components(links: list[tuple[str, str]]) -> dict[str, str]:
+    """Return connected components of the candidate graph."""
     union = _UnionFind()
     for predecessor, successor in links:
         union.union(predecessor, successor)
@@ -402,6 +415,7 @@ def build_chain_map(
     phase_started = _phase("rekeyed series", phase_started)
 
     def rebuild_series() -> None:
+        """Rebuild split series keys from accepted chain links."""
         connection.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {prefix}_obs_rekeyed AS
@@ -448,6 +462,7 @@ def build_chain_map(
         )
 
     def build_links() -> list[tuple[str, str]]:
+        """Build and return links."""
         connection.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {prefix}_next AS

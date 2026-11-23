@@ -375,17 +375,47 @@ mise run //analytics:train:ablation -- --source .data/silver/<build>
 
 `--source` accepts an S3 pointer, a Parquet glob, a single file, a local directory or a local
 `_latest.json` pointer; S3 needs `DUCKDB_EXTENSION_DIR` and the httpfs extension
-(`mise run //analytics:httpfs`). The default config is `config/training.json`.
+(`mise run //analytics:httpfs`). The default config is `config/training.json` (backtest);
+`config/training-static.json` keeps the legacy static-split path for exact reference comparisons.
 
 The training CLI defaults to a 6 GB DuckDB memory limit and 20 GB of temp spill space; both are
 recorded in `dataset_manifest.json`. The temp default is sized for the 5 % route-day sample and
 must be raised for the 10/25/50 % learning-curve runs.
 
-Runs are validation-only by default; `--evaluate-test` scores the test split once, and `--ablation`
-stays validation-only while comparing the four calendar sets. Two clean builds write
-order-independent digests to `dataset_manifest.json` and must match. The report shows eligibility,
-label coverage, known limitations and the git/silver/config provenance; artifacts stay in the
-ignored `analytics/artifacts/<run_id>/`.
+The default protocol is a **rolling-origin backtest**. The dataset is built once; each fold
+selects rows by `snapshot_at` and `label_window_end`, and purges on the label end, never on the
+snapshot time. A fold trains on labels that matured at least
+24 h before the cutoff, calibrates on the following 7 days and tests the week after that. The recipe
+(model family, settings, calibration method, threshold rule) is selected on the 22 and 29 June
+development folds, written to `recipe.json`, and refitted on each evaluation fold without any
+selection. Evaluation and sparse-era folds are scored only with `--evaluate-test`; development
+folds are always reported. The static splits remain available through
+`config/training-static.json`; their digests and metrics must match the static reference run exactly.
+A series may span a cutoff because labels are purged and every feature is past-only. Backtest
+mode still requires the static `splits` block: it bounds the panel at `test_end`, but those splits
+are not used for scoring. Long backtests
+can resume with `--cache-dir`: finished folds and the frozen recipe are checkpointed there, keyed
+by the config, dataset digest and a fit-code hash, and the checkpoints keep report state rather
+than the training panels. A dirty tree disables reuse. Delete the cache directory to force a clean refit.
+
+A fresh cache-free 5 % backtest peaks at about 6.47 GB; a run that reuses the dataset cache peaks
+near 4.03 GB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
+
+`--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
+labels or check fares). The smoke build uses a documented 5 % route-day sample because the
+all-route build exceeds the host memory ceiling; a later sample-scale run raises it for scoring.
+`--score-forward PATH` fits the 14 September forward fold, scores that Parquet and writes
+`forward_predictions.parquet` plus `forward_smoke.json`; it computes no labels or metrics.
+
+`--ablation` stays validation/static-only and requires `config/training-static.json`; it compares
+the four calendar sets. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
+matching dataset build (default `artifacts/.cache/datasets`); reuse is allowed only on a clean tree,
+verifies every split hash and records the reuse key. Pass `--no-dataset-cache` for an independent
+build, and note that two clean builds are only independent when the dataset cache is disabled or
+pointed at a fresh directory. Each distinct dataset-code/config/source build can add about 92 MB
+to the dataset cache; delete `artifacts/.cache/datasets` to reclaim it.
+The report shows eligibility, label coverage, known limitations and the git/silver/config
+provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 
 The label is the **next-day fare**: the journey chain's fare at the route-day check closest to
 `t + 24 h` inside 20-28 h, before departure. A row is eligible when that check scrape exists; the

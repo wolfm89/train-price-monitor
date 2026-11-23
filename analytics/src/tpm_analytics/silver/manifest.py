@@ -25,6 +25,8 @@ BUILD_ID_PATTERN = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 
 @dataclass(frozen=True)
 class BuildFile:
+    """One file written by a silver build."""
+
     key: str
     bytes: int
 
@@ -55,15 +57,18 @@ class BuildManifest:
 
     @property
     def total_bytes(self) -> int:
+        """Return the total size of the build files in bytes."""
         return sum(file.bytes for file in self.files)
 
     def to_json(self) -> bytes:
+        """Serialise the value to JSON."""
         payload = asdict(self)
         payload["files"] = [asdict(file) for file in self.files]
         return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
     @classmethod
     def from_json(cls, data: bytes) -> BuildManifest:
+        """Build an instance from JSON data."""
         payload = json.loads(data)
         version = payload.get("manifest_version")
         if version != MANIFEST_VERSION:
@@ -76,19 +81,24 @@ class BuildManifest:
 
 @dataclass(frozen=True)
 class Pointer:
+    """The current-build pointer stored beside the build prefix."""
+
     build_id: str
     manifest: str
     updated_at: str
 
     def to_json(self) -> bytes:
+        """Serialise the value to JSON."""
         return (json.dumps(asdict(self), indent=2, sort_keys=True) + "\n").encode("utf-8")
 
     @classmethod
     def from_json(cls, data: bytes) -> Pointer:
+        """Build an instance from JSON data."""
         return cls(**json.loads(data))
 
 
 def utc_now() -> datetime:
+    """Return the current UTC timestamp in ISO 8601 form."""
     return datetime.now(UTC)
 
 
@@ -103,12 +113,15 @@ def timestamp_of(build_id: str) -> str:
 
 
 def build_prefix(prefix: str, build_id: str) -> str:
+    """Build and return prefix."""
     return f"{prefix}/{BUILD_ROOT}/{build_id}"
 
 
 def manifest_key(prefix: str, build_id: str) -> str:
+    """Return the object key for a build manifest."""
     return f"{build_prefix(prefix, build_id)}/{MANIFEST_NAME}"
 
 
 def pointer_key(prefix: str) -> str:
+    """Return the object key for the current-build pointer."""
     return f"{prefix}/{POINTER_NAME}"

@@ -40,7 +40,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
-from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, band_labels, ttd_band
+from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, band_labels
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
 from tpm_analytics.training.identity import berlin_week_sql
@@ -55,6 +55,8 @@ class ModelError(RuntimeError):
 
 @dataclass(frozen=True)
 class TabularData:
+    """A row-aligned training panel with features, labels and provenance columns."""
+
     features: dict[str, Array]
     y: Array
     series: Array
@@ -71,12 +73,15 @@ class TabularData:
     price_cents: Array | None = None
     check_price_cents: Array | None = None
     check_price_2024: Array | None = None
+    label_window_end: Array | None = None
     chain: Array | None = None
 
     def __len__(self) -> int:
+        """Return the number of rows in the panel."""
         return len(self.y)
 
     def subset(self, indices: Array) -> TabularData:
+        """Return a row subset of the panel."""
         return TabularData(
             features={name: values[indices] for name, values in self.features.items()},
             y=self.y[indices],
@@ -87,6 +92,7 @@ class TabularData:
             price_cents=self.price_cents[indices] if self.price_cents is not None else None,
             check_price_cents=(self.check_price_cents[indices] if self.check_price_cents is not None else None),
             check_price_2024=self.check_price_2024[indices] if self.check_price_2024 is not None else None,
+            label_window_end=self.label_window_end[indices] if self.label_window_end is not None else None,
             future_max=self.future_max[indices],
             future_observations=self.future_observations[indices],
             headroom=self.headroom[indices],
@@ -98,6 +104,7 @@ class TabularData:
         )
 
     def select(self, names: tuple[str, ...]) -> TabularData:
+        """Return the panel with the selected feature columns."""
         return TabularData(
             features={name: self.features[name] for name in names},
             y=self.y,
@@ -108,6 +115,7 @@ class TabularData:
             price_cents=self.price_cents,
             check_price_cents=self.check_price_cents,
             check_price_2024=self.check_price_2024,
+            label_window_end=self.label_window_end,
             future_max=self.future_max,
             future_observations=self.future_observations,
             headroom=self.headroom,
@@ -117,6 +125,43 @@ class TabularData:
             observation_week=self.observation_week,
             chain=self.chain,
         )
+
+
+def concat_tabular(parts: list[TabularData]) -> TabularData:
+    """Concatenate split panels into one row-aligned table for a multi-fold run."""
+    if not parts:
+        raise ModelError("cannot concatenate an empty panel list")
+    features = {name: np.concatenate([part.features[name] for part in parts]) for name in parts[0].features}
+
+    def array(name: str) -> Array:
+        """Concatenate one column across all parts."""
+        return np.concatenate([getattr(part, name) for part in parts])
+
+    def optional(name: str) -> Array | None:
+        """Concatenate an optional column across all parts."""
+        values = [getattr(part, name) for part in parts]
+        return None if any(value is None for value in values) else np.concatenate(values)
+
+    return TabularData(
+        features=features,
+        y=array("y"),
+        series=array("series"),
+        route_day=array("route_day"),
+        price=array("price"),
+        check_price=array("check_price"),
+        future_max=array("future_max"),
+        future_observations=array("future_observations"),
+        headroom=array("headroom"),
+        departure_date=array("departure_date"),
+        snapshot_at=array("snapshot_at"),
+        observation_era=array("observation_era"),
+        observation_week=array("observation_week"),
+        price_cents=optional("price_cents"),
+        check_price_cents=optional("check_price_cents"),
+        check_price_2024=optional("check_price_2024"),
+        label_window_end=optional("label_window_end"),
+        chain=optional("chain"),
+    )
 
 
 def _train_prevalence(train: TabularData) -> float:
@@ -133,18 +178,21 @@ def _bss_train(brier: float | None, labels: Array, train_rate: float) -> float |
 
 
 def _filled(values: Any, fill: float) -> Array:
+    """Convert a nullable numeric column to float64 with a fill value."""
     if isinstance(values, np.ma.MaskedArray):
         return np.asarray(values.astype(np.float32).filled(fill), dtype=np.float32)
     return np.asarray(values, dtype=np.float32)
 
 
 def _filled64(values: Any, fill: float) -> Array:
+    """Convert a nullable column to float64 with a fill value."""
     if isinstance(values, np.ma.MaskedArray):
         return np.asarray(values.astype(np.float64).filled(fill), dtype=np.float64)
     return np.asarray(values, dtype=np.float64)
 
 
 def _categorical(values: Any) -> Array:
+    """Convert categorical values to strings, mapping missing to a sentinel."""
     if isinstance(values, np.ma.MaskedArray):
         values = values.astype(object).filled("__missing__")
     array = np.asarray(values, dtype=object)
@@ -155,57 +203,71 @@ def _categorical(values: Any) -> Array:
     return np.asarray(flat, dtype=object).reshape(array.shape)
 
 
-def load_split(path: Path, spec: FeatureSpec) -> TabularData:
-    """Load a Parquet split into numpy arrays, preserving nulls as NaN/missing categories.
+def _encode_text(values: Any) -> Array:
+    """Encode strings as fixed-width UTF-8 bytes."""
+    flat = [("" if value is None else str(value)).encode("utf-8") for value in np.asarray(values, dtype=object).ravel()]
+    width = max((len(value) for value in flat), default=1)
+    return np.asarray(flat, dtype=f"S{width}")
 
-    Only rows whose next-day check fare is known are loaded: the training, calibration and
-    evaluation populations are identical. The stored label is verified against the shared
-    integer-cent definition, so a SQL/Python drift fails the run instead of training silently.
-    """
-    columns = ", ".join(
-        (
-            *spec.names,
-            "breached_next_day",
-            "price_cents",
-            "check_price_cents",
-            "series_key",
-            "chain_id",
-            "route_id || '|' || CAST(departure_date AS VARCHAR) AS route_day",
-            "price_eur",
-            "check_price_eur",
-            "check_price_2024_eur",
-            "future_max_fare_24h",
-            "future_observations",
-            "headroom_pct",
-            "departure_date",
-            "snapshot_at",
-            "observation_era",
-            f"{berlin_week_sql('snapshot_at')} AS observation_week",
-            "bin_regime",
-            "bin_index",
+
+def _compact_text(values: Any) -> Array:
+    """Store string ids as fixed-width UTF-8 bytes, which cost a quarter of Python str objects."""
+    return _encode_text(values)
+
+
+def _compact_category(values: Any) -> Array:
+    """Encode categorical strings as UTF-8 bytes."""
+    return _encode_text(_categorical(values))
+
+
+def _compact_datetime(values: Any, unit: str) -> Array:
+    """Convert values to a compact datetime dtype."""
+    return np.asarray(values, dtype=f"datetime64[{unit}]")
+
+
+def _split_columns(spec: FeatureSpec) -> str:
+    """Return the ordered columns loaded from a split Parquet."""
+    return ", ".join(
+        dict.fromkeys(
+            (
+                *spec.names,
+                "breached_next_day",
+                "price_cents",
+                "check_price_cents",
+                "series_key",
+                "chain_id",
+                "route_id || '|' || CAST(departure_date AS VARCHAR) AS route_day",
+                "price_eur",
+                "check_price_eur",
+                "check_price_2024_eur",
+                "label_window_end",
+                "future_max_fare_24h",
+                "future_observations",
+                "headroom_pct",
+                "departure_date",
+                "snapshot_at",
+                "observation_era",
+                f"{berlin_week_sql('snapshot_at')} AS observation_week",
+                "bin_regime",
+                "bin_index",
+            )
         )
     )
-    connection = duckdb.connect()
-    try:
-        rows = connection.execute(
-            f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') "
-            "WHERE label_observed "
-            "ORDER BY series_key, snapshot_at, bin_regime, bin_index"
-        ).fetchnumpy()
-    finally:
-        connection.close()
+
+
+def _tabular(rows: dict[str, Any], spec: FeatureSpec, *, compact: bool, source: str) -> TabularData:
+    """Build a training panel from DuckDB result columns."""
     if len(rows["breached_next_day"]) == 0:
-        raise ModelError(f"{path} has no labelled rows")
+        raise ModelError(f"{source} has no labelled rows")
     features: dict[str, Array] = {}
     for feature in spec.features:
         values = rows[feature.name]
         if feature.kind == CATEGORICAL:
-            features[feature.name] = _categorical(values)
+            features[feature.name] = _compact_category(values) if compact else _categorical(values)
         elif feature.kind == BOOLEAN:
             features[feature.name] = _filled(values, 0.0)
         else:
             features[feature.name] = _filled(values, np.nan)
-    # The within-24 h maximum is a diagnostic, not the target; sparse eras may not have one.
     future_max = _filled64(rows["future_max_fare_24h"], np.nan)
     price_cents = cents(rows["price_eur"])
     check_price_cents = cents(rows["check_price_eur"])
@@ -214,29 +276,79 @@ def load_split(path: Path, spec: FeatureSpec) -> TabularData:
     actual = np.asarray(rows["breached_next_day"], dtype=np.int8)
     if not np.array_equal(expected, actual):
         mismatches = int(np.sum(expected != actual))
-        raise ModelError(f"{path} has {mismatches} label rows that disagree with the integer-cent definition")
+        raise ModelError(f"{source} has {mismatches} label rows that disagree with the integer-cent definition")
     return TabularData(
         features=features,
         y=actual,
-        series=np.asarray(rows["series_key"], dtype=str),
-        route_day=np.asarray(rows["route_day"], dtype=str),
+        series=_compact_text(rows["series_key"]) if compact else np.asarray(rows["series_key"], dtype=str),
+        route_day=_compact_text(rows["route_day"]) if compact else np.asarray(rows["route_day"], dtype=str),
         price=_filled64(rows["price_eur"], np.nan),
         price_cents=price_cents,
         check_price=_filled64(rows["check_price_eur"], np.nan),
         check_price_cents=check_price_cents,
         check_price_2024=_filled64(rows["check_price_2024_eur"], np.nan),
+        label_window_end=(
+            _compact_datetime(rows["label_window_end"], "ms")
+            if compact
+            else np.asarray(rows["label_window_end"], dtype=str)
+        ),
         future_max=future_max,
         future_observations=np.asarray(rows["future_observations"], dtype=np.int16),
         headroom=headroom,
-        departure_date=np.asarray(rows["departure_date"], dtype=str),
-        snapshot_at=np.asarray(rows["snapshot_at"], dtype=str),
-        observation_era=_categorical(rows["observation_era"]),
-        observation_week=_categorical(rows["observation_week"]),
-        chain=np.asarray(rows["chain_id"], dtype=str),
+        departure_date=(
+            _compact_datetime(rows["departure_date"], "D") if compact else np.asarray(rows["departure_date"], dtype=str)
+        ),
+        snapshot_at=(
+            _compact_datetime(rows["snapshot_at"], "ms") if compact else np.asarray(rows["snapshot_at"], dtype=str)
+        ),
+        observation_era=_compact_category(rows["observation_era"])
+        if compact
+        else _categorical(rows["observation_era"]),
+        observation_week=(
+            _compact_category(rows["observation_week"]) if compact else _categorical(rows["observation_week"])
+        ),
+        chain=_compact_text(rows["chain_id"]) if compact else np.asarray(rows["chain_id"], dtype=str),
     )
 
 
+def load_splits(paths: list[Path], spec: FeatureSpec) -> TabularData:
+    """Load the four splits in one query into the compact backtest panel."""
+    columns = _split_columns(spec)
+    selects = [
+        f"SELECT {columns}, {index} AS split_order FROM read_parquet('{sql_string(path.as_posix())}') "
+        "WHERE label_observed"
+        for index, path in enumerate(paths)
+    ]
+    query = " UNION ALL ".join(selects) + " ORDER BY split_order, series_key, snapshot_at, bin_regime, bin_index"
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(query).fetchnumpy()
+    finally:
+        connection.close()
+    return _tabular(rows, spec, compact=True, source="panel")
+
+
+def load_split(path: Path, spec: FeatureSpec) -> TabularData:
+    """Load a Parquet split into numpy arrays, preserving nulls as NaN/missing categories.
+
+    Only rows whose next-day check fare is known are loaded: the training, calibration and
+    evaluation populations are identical. The stored label is verified against the shared
+    integer-cent definition, so a SQL/Python drift fails the run instead of training silently.
+    """
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(
+            f"SELECT {_split_columns(spec)} FROM read_parquet('{sql_string(path.as_posix())}') "
+            "WHERE label_observed "
+            "ORDER BY series_key, snapshot_at, bin_regime, bin_index"
+        ).fetchnumpy()
+    finally:
+        connection.close()
+    return _tabular(rows, spec, compact=False, source=str(path))
+
+
 def _cat_matrix(data: TabularData, spec: FeatureSpec) -> Array:
+    """Stack categorical feature columns for the encoder."""
     categories = [data.features[feature.name] for feature in spec.features if feature.kind == CATEGORICAL]
     if not categories:
         raise ModelError("the feature spec has no categorical columns")
@@ -244,6 +356,7 @@ def _cat_matrix(data: TabularData, spec: FeatureSpec) -> Array:
 
 
 def fit_encoder(data: TabularData, spec: FeatureSpec) -> OrdinalEncoder:
+    """Fit the ordinal encoder on the training panel."""
     encoder = OrdinalEncoder(
         handle_unknown="use_encoded_value",
         unknown_value=-1,
@@ -254,6 +367,7 @@ def fit_encoder(data: TabularData, spec: FeatureSpec) -> OrdinalEncoder:
 
 
 def _matrix(data: TabularData, spec: FeatureSpec, encoder: OrdinalEncoder, headroom: int | None = None) -> Array:
+    """Build the numeric model matrix, optionally overriding headroom."""
     cat = encoder.transform(_cat_matrix(data, spec)).astype(np.float32) + 1.0
     cat[cat < 1] = 0.0
     cat_lookup = {
@@ -274,6 +388,7 @@ def _matrix(data: TabularData, spec: FeatureSpec, encoder: OrdinalEncoder, headr
 
 
 def _indices(spec: FeatureSpec, kinds: tuple[str, ...]) -> list[int]:
+    """Return feature positions for the requested kinds."""
     return [index for index, feature in enumerate(spec.features) if feature.kind in kinds]
 
 
@@ -289,7 +404,7 @@ def _usable_columns(
     for index in range(matrix.shape[1]):
         column = matrix[:, index]
         values = column if index in categorical_set else column[~np.isnan(column)]
-        if np.unique(values).size >= 2:
+        if values.size >= 2 and np.any(values != values[0]):
             usable.append(index)
         else:
             dropped.append(names[index])
@@ -298,6 +413,8 @@ def _usable_columns(
 
 @dataclass
 class FittedModel:
+    """A fitted estimator together with its feature encoder and selected columns."""
+
     name: str
     estimator: Any
     encoder: OrdinalEncoder
@@ -305,25 +422,66 @@ class FittedModel:
     selected: tuple[int, ...] | None = None
     dropped: tuple[str, ...] = ()
 
-    def predict(self, data: TabularData, headroom: int | None = None) -> Array:
-        matrix = _matrix(data, self.spec, self.encoder, headroom)
+    def transform(self, data: TabularData) -> Array:
+        """Build the model matrix for the panel."""
+        matrix = _matrix(data, self.spec, self.encoder)
         if self.selected is not None:
             matrix = matrix[:, list(self.selected)]
+        return matrix
+
+    def with_headroom(self, matrix: Array, headroom: int) -> Array:
+        """Return a copy of the matrix with a different headroom column."""
+        index = next(
+            (position for position, feature in enumerate(self.spec.features) if feature.name == "headroom_pct"),
+            None,
+        )
+        if index is None:
+            return matrix
+        if self.selected is not None:
+            if index not in self.selected:
+                return matrix
+            index = self.selected.index(index)
+        adjusted = matrix.copy()
+        adjusted[:, index] = float(headroom)
+        return adjusted
+
+    def predict_matrix(self, matrix: Array) -> Array:
+        """Return probabilities for an already encoded matrix."""
         probabilities = self.estimator.predict_proba(matrix)[:, 1]
         return np.asarray(probabilities, dtype=np.float64)
 
+    def predict(self, data: TabularData, headroom: int | None = None) -> Array:
+        """Return model probabilities for the supplied rows."""
+        matrix = _matrix(data, self.spec, self.encoder, headroom)
+        if self.selected is not None:
+            matrix = matrix[:, list(self.selected)]
+        return self.predict_matrix(matrix)
+
 
 class BaseRateModel:
+    """A constant-probability baseline."""
+
     def __init__(self, rate: float) -> None:
+        """Initialise the instance."""
         self.rate = float(rate)
 
     def predict_proba(self, matrix: Array) -> Array:
+        """Return class probabilities for the supplied matrix."""
         return np.column_stack([np.full(len(matrix), 1.0 - self.rate), np.full(len(matrix), self.rate)])
 
 
-def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: TrainingConfig) -> FittedModel:
-    encoder = fit_encoder(data, spec)
-    matrix = _matrix(data, spec, encoder)
+def fit_candidate(
+    name: str,
+    data: TabularData,
+    spec: FeatureSpec,
+    config: TrainingConfig,
+    *,
+    encoder: OrdinalEncoder | None = None,
+    matrix: Array | None = None,
+) -> FittedModel:
+    """Fit one candidate model on the training panel."""
+    encoder = fit_encoder(data, spec) if encoder is None else encoder
+    matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
         estimator: Any = BaseRateModel(float(np.mean(data.y)))
     elif name == "logistic":
@@ -421,57 +579,95 @@ class ClimatologyModel:
     global_rate: float
 
     def predict(self, data: TabularData, headroom: int | None = None) -> Array:
+        """Return model probabilities for the supplied rows."""
         hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
-        bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
-        heads = data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16)
+        heads = np.asarray(
+            data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16),
+            dtype=np.int64,
+        )
         classes = np.asarray(data.features["service_class"], dtype=str)
-        values = np.empty(len(data), dtype=np.float64)
-        for index, (band, head, service_class) in enumerate(zip(bands, heads, classes, strict=True)):
-            key = (band, int(head), str(service_class))
-            values[index] = self.cells.get(
-                key,
-                self.band_headroom.get(
-                    (band, int(head)),
-                    self.headroom.get(int(head), self.global_rate),
-                ),
+        labels = np.asarray([band[0] for band in CLIMATOLOGY_BANDS], dtype=object)
+        band_positions = {str(label): index for index, label in enumerate(labels)}
+        max_head = max(100, int(heads.max()) if len(heads) else 100)
+        head_values = np.full(max_head + 1, self.global_rate, dtype=np.float64)
+        for head, rate in self.headroom.items():
+            if 0 <= head <= max_head:
+                head_values[head] = rate
+        band_head_values = np.repeat(head_values[None, :], len(labels), axis=0)
+        for (band, head), rate in self.band_headroom.items():
+            if band in band_positions and 0 <= head <= max_head:
+                band_head_values[band_positions[band], head] = rate
+        class_labels, class_inverse = np.unique(classes, return_inverse=True)
+        cell_values = np.repeat(band_head_values[:, :, None], len(class_labels) + 1, axis=2)
+        class_positions = {str(label): index for index, label in enumerate(class_labels)}
+        for (band, head, service_class), rate in self.cells.items():
+            if band in band_positions and 0 <= head <= max_head and service_class in class_positions:
+                cell_values[band_positions[band], head, class_positions[service_class]] = rate
+        band_index = _band_index(hours, CLIMATOLOGY_BANDS)
+        clipped_bands = np.clip(band_index, 0, len(labels) - 1)
+        clipped_heads = np.clip(heads, 0, max_head)
+        values = cell_values[clipped_bands, clipped_heads, class_inverse]
+        valid = (
+            np.isfinite(hours) & (hours >= float(CLIMATOLOGY_BANDS[0][1])) & (hours <= float(CLIMATOLOGY_BANDS[-1][2]))
+        )
+        if not np.all(valid):
+            fallback = np.asarray(
+                [
+                    self.band_headroom.get(
+                        ("unknown", int(head)),
+                        self.headroom.get(int(head), self.global_rate),
+                    )
+                    for head in heads[~valid]
+                ],
+                dtype=np.float64,
             )
+            values[~valid] = fallback
         return values
 
 
 def fit_climatology(data: TabularData, *, strength: float = 50.0) -> ClimatologyModel:
     """Fit a hierarchical prevalence baseline with a Beta-style prior on thin cells."""
     hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
-    bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
+    bands = _band_labels(hours, CLIMATOLOGY_BANDS)
     heads = np.asarray(data.headroom, dtype=np.int64)
     classes = np.asarray(data.features["service_class"], dtype=str)
     global_count = len(data)
     global_positives = int(np.sum(data.y))
     global_rate = (global_positives + 1.0) / (global_count + 2.0)
-    head_counts: dict[int, list[int]] = {}
-    band_counts: dict[tuple[str, int], list[int]] = {}
-    cell_counts: dict[tuple[str, int, str], list[int]] = {}
-    for band, head, service_class, target in zip(bands, heads, classes, data.y, strict=True):
-        head_counts.setdefault(int(head), [0, 0])
-        head_counts[int(head)][0] += 1
-        head_counts[int(head)][1] += int(target)
-        band_counts.setdefault((band, int(head)), [0, 0])
-        band_counts[(band, int(head))][0] += 1
-        band_counts[(band, int(head))][1] += int(target)
-        cell_counts.setdefault((band, int(head), str(service_class)), [0, 0])
-        cell_counts[(band, int(head), str(service_class))][0] += 1
-        cell_counts[(band, int(head), str(service_class))][1] += int(target)
+
+    head_keys, head_inverse = np.unique(heads, return_inverse=True)
+    head_counts = np.bincount(head_inverse, minlength=len(head_keys))
+    head_positives = np.bincount(head_inverse, weights=data.y, minlength=len(head_keys))
     head_rate = {
-        head: (positive + strength * global_rate) / (count + strength)
-        for head, (count, positive) in head_counts.items()
+        int(key): (int(positive) + strength * global_rate) / (int(count) + strength)
+        for key, count, positive in zip(head_keys, head_counts, head_positives, strict=True)
     }
-    band_rate = {
-        key: (positive + strength * head_rate.get(key[1], global_rate)) / (count + strength)
-        for key, (count, positive) in band_counts.items()
-    }
-    cell_rate = {
-        key: (positive + strength * band_rate.get((key[0], key[1]), global_rate)) / (count + strength)
-        for key, (count, positive) in cell_counts.items()
-    }
+
+    band_values, band_inverse = np.unique(bands, return_inverse=True)
+    band_head = band_inverse * len(head_keys) + head_inverse
+    band_counts = np.bincount(band_head, minlength=len(band_values) * len(head_keys))
+    band_positives = np.bincount(band_head, weights=data.y, minlength=len(band_values) * len(head_keys))
+    band_rate: dict[tuple[str, int], float] = {}
+    for band_position, band in enumerate(band_values):
+        for head_position, head in enumerate(head_keys):
+            index = band_position * len(head_keys) + head_position
+            band_rate[(str(band), int(head))] = (int(band_positives[index]) + strength * head_rate[int(head)]) / (
+                int(band_counts[index]) + strength
+            )
+
+    class_labels, class_inverse = np.unique(classes, return_inverse=True)
+    cell = (band_inverse * len(head_keys) + head_inverse) * len(class_labels) + class_inverse
+    cell_counts = np.bincount(cell, minlength=len(band_values) * len(head_keys) * len(class_labels))
+    cell_positives = np.bincount(cell, weights=data.y, minlength=len(band_values) * len(head_keys) * len(class_labels))
+    cell_rate: dict[tuple[str, int, str], float] = {}
+    for band_position, band in enumerate(band_values):
+        for head_position, head in enumerate(head_keys):
+            for class_position, service_class in enumerate(class_labels):
+                index = (band_position * len(head_keys) + head_position) * len(class_labels) + class_position
+                cell_rate[(str(band), int(head), str(service_class))] = (
+                    int(cell_positives[index]) + strength * band_rate[(str(band), int(head))]
+                ) / (int(cell_counts[index]) + strength)
+
     return ClimatologyModel(
         cells=cell_rate,
         band_headroom=band_rate,
@@ -484,11 +680,13 @@ class ScoreCalibrator:
     """A calibrator over raw probabilities, fitted on a held-out slice."""
 
     def __init__(self, method: str, model: Any, temperature: float | None = None) -> None:
+        """Initialise the instance."""
         self.method = method
         self.model = model
         self.temperature = temperature
 
     def predict(self, raw: Array) -> Array:
+        """Return model probabilities for the supplied rows."""
         clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
         if self.method == "constant":
             return np.full(len(clipped), float(self.model), dtype=np.float64)
@@ -505,6 +703,7 @@ class ScoreCalibrator:
 
 
 def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
+    """Fit and return a probability calibrator."""
     clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
     if len(np.unique(y)) < 2:
         return ScoreCalibrator("constant", float(np.mean(y)))
@@ -523,6 +722,7 @@ def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> 
         logits = np.log(clipped / (1.0 - clipped))
 
         def loss(log_temperature: float) -> float:
+            """Return the calibration loss for one temperature."""
             probabilities = np.clip(expit(logits / np.exp(log_temperature)), 1e-9, 1.0 - 1e-9)
             return float(-np.mean(y * np.log(probabilities) + (1 - y) * np.log(1.0 - probabilities)))
 
@@ -532,10 +732,12 @@ def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> 
 
 
 def _metric_value(value: float | None, default: float = 1.0) -> float:
+    """Return a metric value, or a fallback for None."""
     return default if value is None else float(value)
 
 
 def _metrics(y: Array, probabilities: Array) -> dict[str, float | None]:
+    """Compute Brier, log loss, skill, AUC and AP."""
     clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
     both = len(np.unique(y)) == 2
     brier = float(brier_score_loss(y, clipped))
@@ -581,11 +783,14 @@ def _cross_fitted_with_folds(
 
 
 def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: TrainingConfig) -> Array:
+    """Return out-of-fold calibrated predictions by group."""
     return _cross_fitted_with_folds(raw, y, groups, method, config)[0]
 
 
 @dataclass(frozen=True)
 class Evaluation:
+    """The fitted model, calibration and evaluation diagnostics for the static path."""
+
     chosen_model: str
     calibration_method: str
     threshold: float
@@ -638,6 +843,7 @@ class Evaluation:
     prediction_split: str = field(default="", repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serialisable dictionary representation."""
         return {
             "chosen_model": self.chosen_model,
             "calibration_method": self.calibration_method,
@@ -682,6 +888,7 @@ class Evaluation:
 
 
 def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, bool]:
+    """Choose a threshold meeting the precision floor or maximising F1."""
     classes = np.unique(y)
     if len(classes) < 2:
         return (0.0, True) if classes[0] == 1 else (0.5, False)
@@ -697,6 +904,7 @@ def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, boo
 
 
 def _decision_metrics(y: Array, probabilities: Array, threshold: float) -> dict[str, float]:
+    """Compute precision and recall at a threshold."""
     predicted = probabilities >= threshold
     true_positive = int(np.sum((predicted == 1) & (y == 1)))
     false_positive = int(np.sum((predicted == 1) & (y == 0)))
@@ -801,9 +1009,32 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
     }
 
 
+def _band_index(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
+    """Return the TTD band index for each duration."""
+    edges = np.asarray([band[1] for band in bands], dtype=np.float64)
+    return np.searchsorted(edges, hours, side="right") - 1
+
+
+def _band_labels(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
+    """Return TTD band labels, marking out-of-domain durations unknown."""
+    index = _band_index(hours, bands)
+    labels = np.asarray([band[0] for band in bands], dtype=object)
+    valid = (
+        np.isfinite(hours)
+        & (hours >= float(bands[0][1]))
+        & (hours <= float(bands[-1][2]))
+        & (index >= 0)
+        & (index < len(bands))
+    )
+    result = np.full(len(hours), "unknown", dtype=object)
+    result[valid] = labels[index[valid]]
+    return result
+
+
 def _ttd_array(data: TabularData) -> Array:
+    """Return the headline TTD band for each row."""
     hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
-    return np.asarray([ttd_band(float(value)) for value in hours], dtype=str)
+    return _band_labels(hours, HEADLINE_BANDS).astype(str)
 
 
 def _calibration_stats(y: Array, probabilities: Array, bins: int) -> dict[str, float | None]:
@@ -824,13 +1055,45 @@ def _calibration_stats(y: Array, probabilities: Array, bins: int) -> dict[str, f
     return {"slope": slope, "intercept": intercept, "ece": ece}
 
 
+def _bootstrap_replicate(
+    y: Array,
+    probabilities: Array,
+    clusters: list[Array],
+    sampled: Array,
+    threshold: float | Array,
+) -> tuple[float, float, float, float, float, float, float]:
+    """Bootstrap replicate."""
+    indices = np.concatenate([clusters[index] for index in sampled])
+    yy = y[indices]
+    pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
+    both = len(np.unique(yy)) == 2
+    brier = float(brier_score_loss(yy, pp))
+    base = float(np.mean(yy))
+    bss = 1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan
+    predicted = pp >= float(threshold) if np.isscalar(threshold) else pp >= np.asarray(threshold)[indices]
+    true_positive = int(np.sum(predicted & (yy == 1)))
+    false_positive = int(np.sum(predicted & (yy == 0)))
+    false_negative = int(np.sum(~predicted & (yy == 1)))
+    precision = true_positive / max(true_positive + false_positive, 1)
+    recall = true_positive / max(true_positive + false_negative, 1)
+    return (
+        brier,
+        float(log_loss(yy, pp, labels=[0, 1])),
+        bss,
+        float(roc_auc_score(yy, pp)) if both else np.nan,
+        float(average_precision_score(yy, pp)) if both else np.nan,
+        float(precision),
+        float(recall),
+    )
+
+
 def _bootstrap_metrics(
     y: Array,
     probabilities: Array,
     groups: Array,
     replicates: int,
     seed: int,
-    threshold: float,
+    threshold: float | Array,
 ) -> dict[str, list[float]]:
     """Cluster bootstrap for the headline metrics that cannot use sufficient statistics."""
     unique, inverse = np.unique(groups, return_inverse=True)
@@ -838,25 +1101,20 @@ def _bootstrap_metrics(
         return {}
     clusters = [np.flatnonzero(inverse == index) for index in range(len(unique))]
     rng = np.random.default_rng(seed)
+    samples = [rng.integers(0, len(unique), size=len(unique)) for _ in range(replicates)]
+    workers = min(6, joblib.cpu_count() or 1)
+    if replicates < 8 or workers == 1:
+        rows = [_bootstrap_replicate(y, probabilities, clusters, sampled, threshold) for sampled in samples]
+    else:
+        rows = joblib.Parallel(n_jobs=workers, prefer="threads")(
+            joblib.delayed(_bootstrap_replicate)(y, probabilities, clusters, sampled, threshold) for sampled in samples
+        )
     collected: dict[str, list[float]] = {
         key: [] for key in ("brier", "log_loss", "bss", "roc_auc", "average_precision", "precision", "recall")
     }
-    for _ in range(replicates):
-        sampled = rng.integers(0, len(unique), size=len(unique))
-        indices = np.concatenate([clusters[index] for index in sampled])
-        yy = y[indices]
-        pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
-        both = len(np.unique(yy)) == 2
-        brier = float(brier_score_loss(yy, pp))
-        base = float(np.mean(yy))
-        collected["brier"].append(brier)
-        collected["log_loss"].append(float(log_loss(yy, pp, labels=[0, 1])))
-        collected["bss"].append(1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan)
-        collected["roc_auc"].append(float(roc_auc_score(yy, pp)) if both else np.nan)
-        collected["average_precision"].append(float(average_precision_score(yy, pp)) if both else np.nan)
-        decisions = _decision_metrics(yy, pp, threshold)
-        collected["precision"].append(decisions["precision_at_threshold"])
-        collected["recall"].append(decisions["recall_at_threshold"])
+    for row in rows:
+        for key, value in zip(collected, row, strict=True):
+            collected[key].append(value)
     result: dict[str, list[float]] = {}
     for key, values in collected.items():
         if key in {"brier", "log_loss"}:
@@ -893,6 +1151,7 @@ def _bootstrap_paired(
 
 
 def _cluster_mean_ci(values: Array, groups: Array, replicates: int, seed: int) -> list[float]:
+    """Return a cluster-bootstrap interval for a mean."""
     unique, inverse = np.unique(groups, return_inverse=True)
     if len(unique) < 2 or len(values) == 0:
         return []
@@ -910,6 +1169,7 @@ def _cluster_mean_ci(values: Array, groups: Array, replicates: int, seed: int) -
 
 
 def _stratum_metrics(y: Array, probabilities: Array, train_y: Array, threshold: float) -> dict[str, float | None]:
+    """Compute metrics for one report stratum."""
     metrics = _metrics(y, probabilities)
     train_rate = float(np.mean(train_y)) if len(train_y) else float("nan")
     metrics["bss_train"] = _bss_train(metrics["brier"], y, train_rate) if np.isfinite(train_rate) else None
@@ -1064,6 +1324,7 @@ def _pooled_decision_value_rows(
 
 
 def _canonical(data: TabularData) -> TabularData:
+    """Return rows in canonical series and time order."""
     identity = data.chain if data.chain is not None else data.series
     order = np.lexsort(
         (
@@ -1080,6 +1341,7 @@ def _fit_candidates(
     spec: FeatureSpec,
     config: TrainingConfig,
 ) -> tuple[dict[str, FittedModel], dict[str, dict[str, float | None]], dict[str, dict[str, float | None]]]:
+    """Fit all configured candidates on the static training split."""
     candidates: dict[str, FittedModel] = {}
     metrics: dict[str, dict[str, float | None]] = {}
     train_metrics: dict[str, dict[str, float | None]] = {}
@@ -1100,6 +1362,7 @@ def _fit_candidates(
 
 
 def _choose_candidate(candidate_metrics: dict[str, dict[str, float | None]]) -> str:
+    """Choose a candidate using Brier and a logistic tie-break."""
     logistic = candidate_metrics.get("logistic")
     best = min(candidate_metrics, key=lambda name: _metric_value(candidate_metrics[name]["brier"]))
     chosen = best
@@ -1124,6 +1387,7 @@ def _fit_final_calibration(
     validation_calibrate: TabularData,
     config: TrainingConfig,
 ) -> tuple[TabularData, ScoreCalibrator, str, bool, dict[str, Array], float, bool]:
+    """Cross-fit, choose and fit the final static calibrator."""
     cal_data = validation_calibrate
     raw_cal = model.predict(cal_data)
     method_scores: dict[str, dict[str, float | None]] = {}
@@ -1131,7 +1395,13 @@ def _fit_final_calibration(
     for method in config.calibration.methods:
         oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
         method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
-    requested = min(method_scores, key=lambda name: float(method_scores[name]["brier"] or 1.0))
+
+    def _brier_key(name: str) -> float:
+        """Return the Brier score used to rank calibration methods."""
+        value = method_scores[name]["brier"]
+        return 1.0 if value is None else float(value)
+
+    requested = min(method_scores, key=_brier_key)
     calibrator = fit_calibrator(
         raw_cal,
         cal_data.y,
@@ -1197,6 +1467,7 @@ def _headroom_diagnostics(
     list[Array],
     list[Array],
 ]:
+    """Headroom diagnostics."""
     headroom: list[dict[str, Any]] = []
     headroom_ttd: list[dict[str, Any]] = []
     probabilities_by_headroom: list[Array] = []
@@ -1301,6 +1572,7 @@ def _calibration_groups(
     bands_eval: Array,
     config: TrainingConfig,
 ) -> list[dict[str, Any]]:
+    """Calibration groups."""
     rows: list[dict[str, Any]] = []
     for value_index, value in enumerate(config.label.headroom_pct):
         for band in band_labels():
@@ -1340,6 +1612,7 @@ def _strata_comparison(
     train_eval: TabularData,
     threshold: float,
 ) -> list[dict[str, Any]]:
+    """Strata comparison."""
     validation = {
         (item["dimension"], item["value"]): item
         for item in _strata_rows(cal_data, oof_predictions, train_eval, threshold)

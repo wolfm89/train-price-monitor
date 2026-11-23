@@ -23,6 +23,8 @@ class SourceError(ValueError):
 
 @dataclass(frozen=True)
 class SourceSpec:
+    """A resolved Parquet source and its provenance."""
+
     glob: str
     label: str
     build_id: str | None
@@ -31,10 +33,12 @@ class SourceSpec:
 
 
 def _sha256(data: bytes) -> str:
+    """Return the SHA-256 of bytes."""
     return hashlib.sha256(data).hexdigest()
 
 
 def _pointer_from(data: bytes) -> Pointer:
+    """Build a source spec from a resolved pointer."""
     try:
         return Pointer.from_json(data)
     except (TypeError, ValueError, KeyError) as error:
@@ -42,6 +46,7 @@ def _pointer_from(data: bytes) -> Pointer:
 
 
 def _s3_source(uri: str) -> SourceSpec:
+    """Resolve an S3 pointer into a source spec."""
     parsed = urlparse(uri)
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
@@ -70,6 +75,7 @@ def _s3_source(uri: str) -> SourceSpec:
 
 
 def _local_pointer(path: Path) -> SourceSpec:
+    """Resolve a local _latest.json pointer."""
     pointer = _pointer_from(path.read_bytes())
     build_root = path.parent / "builds" / pointer.build_id
     if not build_root.is_dir():

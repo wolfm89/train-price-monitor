@@ -44,6 +44,8 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PublishResult:
+    """The outcome of publishing a build."""
+
     manifest: BuildManifest
     uploaded_bytes: int
     deleted_builds: tuple[str, ...]
@@ -51,6 +53,7 @@ class PublishResult:
 
 
 def normalise_prefix(prefix: str) -> str:
+    """Normalise a prefix to a trailing-slash form."""
     normalised = prefix.strip("/")
     if not normalised:
         raise ValueError("prefix must not be empty")
@@ -58,6 +61,7 @@ def normalise_prefix(prefix: str) -> str:
 
 
 def validate_build_id(build_id: str) -> None:
+    """Validate this configuration section. build id."""
     if not BUILD_ID_PATTERN.fullmatch(build_id):
         raise ValueError(f"invalid build id {build_id!r}")
 
@@ -271,6 +275,7 @@ def publish(
 
 
 def _delete_quietly(store: ObjectStore, keys: list[str]) -> None:
+    """Delete keys, ignoring missing keys."""
     if not keys:
         return
     try:
@@ -280,6 +285,7 @@ def _delete_quietly(store: ObjectStore, keys: list[str]) -> None:
 
 
 def _build_time(build_id: str) -> datetime:
+    """Build and return time."""
     return datetime.strptime(build_id[:16], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
 
 

@@ -18,6 +18,7 @@ from tpm_analytics.training.model import Evaluation
 
 
 def _fmt(value: Any, digits: int = 4) -> str:
+    """Format a report value."""
     if value is None:
         return "—"
     if isinstance(value, float):
@@ -26,6 +27,7 @@ def _fmt(value: Any, digits: int = 4) -> str:
 
 
 def _table(headers: list[str], rows: list[list[Any]]) -> str:
+    """Render a Markdown table from headers and rows."""
     if any(len(row) != len(headers) for row in rows):
         raise ValueError("table row width does not match the header width")
     lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
@@ -59,6 +61,7 @@ def _gated_dataset_payload(stats: DatasetStats, evaluation_on_test: bool) -> dic
 
 
 def _warnings(stats: DatasetStats, evaluation: Evaluation) -> list[str]:
+    """Return report warning rows for the dataset and evaluation."""
     warning_items = list(stats.warnings)
     positives = float(evaluation.metrics.get("positive_rate") or 0.0)
     if not evaluation.metrics.get("precision_floor_met_on_evaluation"):
@@ -109,6 +112,7 @@ def _report(
     ablation: dict[str, Any] | None = None,
     provenance_lines: str = "",
 ) -> str:
+    """Render the backtest report as Markdown."""
     total_chains = sum(item.chains for item in stats.splits)
     split_rows = [
         [
@@ -157,14 +161,17 @@ def _report(
     ]
 
     def _p(value: Any) -> str:
+        """Format a probability as a percentage."""
         return "—" if value is None else f"{float(value):.1%}"
 
     def _share(numerator: Any, denominator: Any) -> str:
+        """Format a share as a percentage or em dash."""
         if numerator is None or not denominator:
             return "—"
         return _p(float(numerator) / float(denominator))
 
     def _ci(values: Any, digits: int = 2) -> str:
+        """Format a two-sided interval."""
         if not isinstance(values, list) or len(values) != 2:
             return "—"
         return f"{_fmt(values[0], digits)}..{_fmt(values[1], digits)}"
@@ -1484,6 +1491,7 @@ def write_report(
     build_config: dict[str, Any] | None = None,
     runtime: dict[str, Any] | None = None,
 ) -> None:
+    """Write the static evaluation report and return its summary."""
     out_dir.mkdir(parents=True, exist_ok=True)
     dataset_manifest = json.loads((out_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
     digests = ", ".join(
