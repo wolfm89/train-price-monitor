@@ -42,7 +42,8 @@ calling DB for `DB_BREAKER_COOLDOWN_MS`; hammering a throttled IP only extends t
 Decodo key the request falls back to Decodo; without one it throws `DbThrottledError` and the poller
 ends its batch.
 
-**Decodo fallback (backend only).** The API and refresher have `DECODO_API_KEY_PARAM` and use
+**Decodo fallback (backend only).** The API and refresher use the Navigator profile directly and
+fall back to Decodo when the direct path is throttled. They have `DECODO_API_KEY_PARAM` and use
 Decodo's `/scrape` (premium pool; the standard pool cannot send custom headers and is refused) when
 the direct path is throttled. The poller has no key on purpose: bulk work must never spend the free
 allowance (5K calls/month). `DB_TRANSPORT=decodo` forces the fallback. The key lives in an SSM

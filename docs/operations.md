@@ -75,7 +75,7 @@ then.
 ### DB throttling or `403 OPS_BLOCKED`
 
 1. Check the `TPM-App-UsingDecodoFallback` alarm and the poller transport counters.
-2. The backend uses the direct TLS transport first and Decodo as fallback when
+2. The backend uses the DB Navigator API over the direct TLS transport and falls back to Decodo when
    `DECODO_API_KEY_PARAM` resolves. If Decodo is unavailable, interactive search degrades.
 3. The poller has no Decodo key. On throttling it ends the batch; untouched targets are retried by
    the next run. Do not raise `SCRAPER_BATCH_SIZE` while the transport counters are dirty.

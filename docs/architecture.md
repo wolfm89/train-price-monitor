@@ -183,8 +183,8 @@ The transport sends only the minimal headers DB accepts; db-vendo-client's own U
 correlation headers turn an accepted request into a 403. Pacing is measured too: 6 parallel calls
 were fine, 60 at concurrency 6 got an IP a `429` for minutes, and 24 calls one at a time with 2.5 s
 gaps passed. The shared module spaces request starts and caps in-flight requests; after repeated
-failures the breaker stops calling DB for a cooldown. The backend has a Decodo fallback; the poller
-deliberately has no key.
+failures the breaker stops calling DB for a cooldown. The backend and poller use the Navigator profile;
+the backend has a Decodo fallback, the poller deliberately has no key.
 
 Fingerprints get blocked once popular (db-vendo-client#46 reports days to weeks; the 2026-10-20
 Chrome order was blocked on 2026-10-21), so the transport rotates firefox → safari → chrome → tls13
@@ -193,11 +193,11 @@ Chrome order was blocked on 2026-10-21), so the transport rotates firefox → sa
 On 2026-11-23 the bahn.de web booking API (`/web/api/angebote/*`) began refusing every AWS Lambda
 egress IP tested — six fresh eu-central-1 environments plus eu-west-1 and us-east-1 — with
 `403 OPS_BLOCKED` on every TLS profile, while German residential egress still returned 201. The
-caller cannot choose a Lambda egress IP, and no tested region was accepted. The scraper therefore
-uses the DB Navigator API (`app.services-bahn.de`, `dbnav` profile), which returned 200 from the
-same Lambda egress and serves the same `tagesbestPreisIntervalle`; the backend keeps the web API
-plus the Decodo fallback. This is an egress/IP restriction, not a fingerprint problem: when every
-profile fails, another profile or Lambda IP will not help.
+caller cannot choose a Lambda egress IP, and no tested region was accepted. The scraper and backend
+therefore use the DB Navigator API (`app.services-bahn.de`, `dbnav` profile), which returned 200
+from the same Lambda egress and serves the same `tagesbestPreisIntervalle`; Decodo remains the
+backend's fallback if the direct path fails. This is an egress/IP restriction, not a fingerprint
+problem: when every profile fails, another profile or Lambda IP will not help.
 
 ## Design decisions
 
