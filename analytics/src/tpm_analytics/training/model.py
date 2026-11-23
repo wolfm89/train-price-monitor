@@ -471,15 +471,24 @@ class FittedModel:
 
 
 class BaseRateModel:
-    """A constant-probability baseline."""
+    """A per-headroom prevalence baseline."""
 
-    def __init__(self, rate: float) -> None:
-        """Initialise the instance."""
-        self.rate = float(rate)
+    def __init__(self, rates: dict[int, float], global_rate: float, headroom_index: int) -> None:
+        """Initialise the instance with a rate per headroom and a global fallback."""
+        self.rates = {int(head): float(rate) for head, rate in rates.items()}
+        self.global_rate = float(global_rate)
+        self.headroom_index = int(headroom_index)
 
     def predict_proba(self, matrix: Array) -> Array:
-        """Return class probabilities for the supplied matrix."""
-        return np.column_stack([np.full(len(matrix), 1.0 - self.rate), np.full(len(matrix), self.rate)])
+        """Return class probabilities for the supplied matrix's headroom column."""
+        heads = np.rint(np.asarray(matrix[:, self.headroom_index], dtype=np.float64)).astype(np.int64)
+        top = max([*self.rates, int(heads.max()) if len(heads) else 0, 100])
+        table = np.full(top + 1, self.global_rate, dtype=np.float64)
+        for head, rate in self.rates.items():
+            if 0 <= head <= top:
+                table[head] = rate
+        values = table[np.clip(heads, 0, top)]
+        return np.column_stack([1.0 - values, values])
 
 
 class LogisticPrep(BaseEstimator, TransformerMixin):
@@ -577,14 +586,40 @@ def _holdout_mask(snapshot_at: Array) -> Array | None:
     return holdout
 
 
+def _non_empty_columns(matrix: Array, rows: Array) -> tuple[int, ...]:
+    """Return columns with at least one non-NaN value in the selected rows."""
+    view = matrix[rows]
+    return tuple(index for index in range(view.shape[1]) if not np.all(np.isnan(view[:, index])))
+
+
+def _hgb_settings(
+    settings: dict[str, Any],
+    *,
+    iterations: int,
+    monotonic: list[int],
+    categorical: list[int],
+) -> HistGradientBoostingClassifier:
+    """Build one HGB estimator with the shared settings."""
+    return HistGradientBoostingClassifier(
+        max_iter=iterations,
+        early_stopping=False,
+        categorical_features=categorical,
+        monotonic_cst=monotonic,
+        **settings,
+    )
+
+
 def _fit_hgb_with_early_stopping(
-    matrix: Array,
+    refit_matrix: Array,
+    probe_matrix: Array,
     y: Array,
     snapshot_at: Array,
     *,
     estimator_settings: dict[str, Any],
-    monotonic: list[int],
-    categorical: list[int],
+    refit_monotonic: list[int],
+    refit_categorical: list[int],
+    probe_monotonic: list[int],
+    probe_categorical: list[int],
     max_iter: int,
 ) -> tuple[Any, dict[str, Any]]:
     """Fit HGB on all but the last training week, pick the iteration, then refit on all rows."""
@@ -592,39 +627,36 @@ def _fit_hgb_with_early_stopping(
     limit = min(EARLY_STOPPING_MAX_ITER, int(max_iter))
     holdout = _holdout_mask(snapshot_at)
     if holdout is None or len(np.unique(y[holdout])) < 2:
-        empty = np.zeros(len(matrix), dtype=bool)
-        estimator = HistGradientBoostingClassifier(
-            max_iter=limit,
-            early_stopping=False,
-            categorical_features=categorical,
-            monotonic_cst=monotonic,
-            **estimator_settings,
-        ).fit(matrix, y)
+        estimator = _hgb_settings(
+            estimator_settings,
+            iterations=limit,
+            monotonic=refit_monotonic,
+            categorical=refit_categorical,
+        ).fit(refit_matrix, y)
         return estimator, {
             "fallback": True,
             "iterations": limit,
-            "holdout_rows": int(empty.sum() if holdout is None else holdout.sum()),
+            "holdout_rows": int(holdout.sum()) if holdout is not None else 0,
             "fit_seconds": round(time.perf_counter() - started, 3),
             "refit_seconds": 0.0,
+            "capped": bool(limit < int(max_iter)),
         }
-    probe = HistGradientBoostingClassifier(
-        max_iter=limit,
-        early_stopping=False,
-        categorical_features=categorical,
-        monotonic_cst=monotonic,
-        **estimator_settings,
-    ).fit(matrix[~holdout], y[~holdout])
+    probe = _hgb_settings(
+        estimator_settings,
+        iterations=limit,
+        monotonic=probe_monotonic,
+        categorical=probe_categorical,
+    ).fit(probe_matrix[~holdout], y[~holdout])
     fit_seconds = time.perf_counter() - started
-    losses = [_log_loss_at(y[holdout], stage[:, 1]) for stage in probe.staged_predict_proba(matrix[holdout])]
+    losses = [_log_loss_at(y[holdout], stage[:, 1]) for stage in probe.staged_predict_proba(probe_matrix[holdout])]
     best, stop = _early_stopping_plan(losses)
     refit_started = time.perf_counter()
-    estimator = HistGradientBoostingClassifier(
-        max_iter=best,
-        early_stopping=False,
-        categorical_features=categorical,
-        monotonic_cst=monotonic,
-        **estimator_settings,
-    ).fit(matrix, y)
+    estimator = _hgb_settings(
+        estimator_settings,
+        iterations=best,
+        monotonic=refit_monotonic,
+        categorical=refit_categorical,
+    ).fit(refit_matrix, y)
     refit_seconds = time.perf_counter() - refit_started
     return estimator, {
         "fallback": False,
@@ -632,9 +664,10 @@ def _fit_hgb_with_early_stopping(
         "stop_iteration": stop,
         "holdout_rows": int(holdout.sum()),
         "holdout_log_loss": float(losses[best - 1]),
-        "train_log_loss": _log_loss_at(y, estimator.predict_proba(matrix)[:, 1]),
+        "train_log_loss": _log_loss_at(y, estimator.predict_proba(refit_matrix)[:, 1]),
         "fit_seconds": round(fit_seconds, 3),
         "refit_seconds": round(refit_seconds, 3),
+        "capped": bool(limit < int(max_iter)),
     }
 
 
@@ -653,7 +686,10 @@ def fit_candidate(
     encoder = fit_encoder(data, spec) if encoder is None else encoder
     matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
-        estimator: Any = BaseRateModel(float(np.mean(data.y)))
+        headroom_index = spec.names.index("headroom_pct")
+        heads = np.asarray(data.headroom, dtype=np.int64)
+        rates = {int(head): float(np.mean(data.y[heads == head])) for head in np.unique(heads)}
+        estimator: Any = BaseRateModel(rates, float(np.mean(data.y)), headroom_index)
     elif name == "logistic":
         estimator = Pipeline(
             [
@@ -670,25 +706,29 @@ def fit_candidate(
         estimator.fit(matrix, data.y)
     elif name == "hist_gradient_boosting":
         categorical = _indices(spec, (CATEGORICAL,))
+        categorical_set = set(categorical)
         selected, dropped = _usable_columns(matrix, categorical, spec.names)
         if not selected:
             raise ModelError("no feature has two distinct values")
-        remapped = [position for position, index in enumerate(selected) if index in set(categorical)]
-        holdout = _holdout_mask(data.snapshot_at)
-        if holdout is not None:
-            probe_selected, _ = _usable_columns(matrix, categorical, spec.names, rows=~holdout)
-            keep = set(probe_selected)
-            selected = tuple(index for index in selected if index in keep)
-            if not selected:
-                raise ModelError("no feature has two distinct values")
-            dropped = tuple(name for index, name in enumerate(spec.names) if index not in set(selected))
-        remapped = [position for position, index in enumerate(selected) if index in set(categorical)]
-        monotonic = [0] * len(selected)
+        refit_categorical = [position for position, index in enumerate(selected) if index in categorical_set]
+        refit_monotonic = [0] * len(selected)
         headroom_index = spec.names.index("headroom_pct")
         if headroom_index in selected:
-            monotonic[selected.index(headroom_index)] = -1
+            refit_monotonic[selected.index(headroom_index)] = -1
+        holdout = _holdout_mask(data.snapshot_at)
+        probe_selected = selected
+        if holdout is not None:
+            non_empty = set(_non_empty_columns(matrix, ~holdout))
+            probe_selected = tuple(index for index in selected if index in non_empty)
+            if not probe_selected:
+                probe_selected = selected
+        probe_categorical = [position for position, index in enumerate(probe_selected) if index in categorical_set]
+        probe_monotonic = [0] * len(probe_selected)
+        if headroom_index in probe_selected:
+            probe_monotonic[probe_selected.index(headroom_index)] = -1
         estimator, early_stopping = _fit_hgb_with_early_stopping(
             matrix[:, list(selected)],
+            matrix[:, list(probe_selected)],
             data.y,
             data.snapshot_at,
             estimator_settings={
@@ -696,8 +736,10 @@ def fit_candidate(
                 "max_leaf_nodes": config.model.max_leaf_nodes,
                 "random_state": config.model.random_state,
             },
-            monotonic=monotonic,
-            categorical=remapped,
+            refit_monotonic=refit_monotonic,
+            refit_categorical=refit_categorical,
+            probe_monotonic=probe_monotonic,
+            probe_categorical=probe_categorical,
             max_iter=config.model.max_iter,
         )
         return FittedModel(
@@ -822,9 +864,10 @@ def fit_climatology(data: TabularData, *, strength: float = 50.0) -> Climatology
 
 
 CALIBRATION_EPS = 1e-6
-# The static legacy path keeps its three original methods so its byte-identity check stays valid;
-# the covariate calibrator is a backtest candidate only.
+# The static legacy path keeps its three original methods and its 1e-3 output clip so its reference
+# predictions stay byte-identical; the covariate calibrator is a backtest candidate only.
 STATIC_CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
+STATIC_CALIBRATION_EPS = 1e-3
 _COVARIATE_BANDS = tuple(label for label, _, _ in HEADLINE_BANDS)
 
 
@@ -846,6 +889,8 @@ class CovariateCalibrator:
         """Return the covariate design matrix."""
         score = _logit(raw)
         bands = _band_labels(np.asarray(hours, dtype=np.float64), HEADLINE_BANDS)
+        if np.any(bands == "unknown"):
+            raise ModelError("the covariate calibrator only supports the 24 h-30 d TTD domain")
         dummies = np.column_stack([bands == label for label in _COVARIATE_BANDS[1:]]).astype(np.float64)
         head = np.full(len(score), np.nan) if headroom is None else np.asarray(headroom, dtype=np.float64)
         return np.column_stack(
@@ -868,30 +913,18 @@ class CovariateCalibrator:
         return np.asarray(self.model.predict_proba(self.design(raw, hours, headroom))[:, 1], dtype=np.float64)
 
 
-def _band_midpoints() -> dict[str, float]:
-    """Return one representative hour value for every headline band."""
-    return {label: (low + high) / 2.0 for label, low, high in HEADLINE_BANDS}
-
-
-def _covariate_constraints(calibrator: CovariateCalibrator, headroom: Array) -> tuple[bool, str]:
-    """Check monotonicity in score per band and non-increase in headroom."""
-    heads = np.asarray(headroom, dtype=np.float64)
-    reference_head = float(np.median(heads)) if len(heads) else 5.0
-    scores = np.linspace(0.01, 0.99, 41)
-    for label, hours in _band_midpoints().items():
-        values = calibrator.predict(scores, np.full(len(scores), hours), np.full(len(scores), reference_head))
-        if np.any(np.diff(values) < -1e-9):
+def _covariate_constraints(calibrator: CovariateCalibrator) -> tuple[bool, str]:
+    """Check the fitted coefficient signs: score slope >= 0 per band, headroom slope <= 0."""
+    coefficients = np.asarray(calibrator.model.coef_, dtype=np.float64).ravel()
+    if len(coefficients) != 2 * (len(_COVARIATE_BANDS) - 1) + 2:
+        raise ModelError("the covariate calibrator has an unexpected design width")
+    base = float(coefficients[0])
+    for index, label in enumerate(_COVARIATE_BANDS):
+        slope = base if index == 0 else base + float(coefficients[(len(_COVARIATE_BANDS) - 1) + index])
+        if slope < 0.0:
             return False, f"not monotone in score in band {label}"
-    steps = np.asarray([1.0, 5.0, 10.0, 20.0, 30.0])
-    reference_score = float(np.median(scores))
-    for label, hours in _band_midpoints().items():
-        values = calibrator.predict(
-            np.full(len(steps), reference_score),
-            np.full(len(steps), hours),
-            steps,
-        )
-        if np.any(np.diff(values) > 1e-9):
-            return False, f"not non-increasing in headroom in band {label}"
+    if float(coefficients[-1]) > 0.0:
+        return False, "not non-increasing in headroom"
     return True, ""
 
 
@@ -907,6 +940,7 @@ class ScoreCalibrator:
         requested: str | None = None,
         fallback: bool = False,
         fallback_reason: str | None = None,
+        epsilon: float = CALIBRATION_EPS,
     ) -> None:
         """Initialise the instance."""
         self.method = method
@@ -915,6 +949,7 @@ class ScoreCalibrator:
         self.requested = requested or method
         self.fallback = fallback
         self.fallback_reason = fallback_reason
+        self.epsilon = float(epsilon)
 
     def predict(self, raw: Array, *, hours: Array | None = None, headroom: Array | None = None) -> Array:
         """Return calibrated probabilities for the supplied rows."""
@@ -933,7 +968,7 @@ class ScoreCalibrator:
             values = self.model.predict(clipped, np.asarray(hours, dtype=np.float64), headroom)
         else:
             values = self.model.predict_proba(clipped.reshape(-1, 1))[:, 1]
-        return np.asarray(np.clip(values, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS), dtype=np.float64)
+        return np.asarray(np.clip(values, self.epsilon, 1.0 - self.epsilon), dtype=np.float64)
 
 
 def fit_calibrator(
@@ -944,6 +979,7 @@ def fit_calibrator(
     min_positives: int,
     hours: Array | None = None,
     headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
 ) -> ScoreCalibrator:
     """Fit and return a probability calibrator with the requested and fitted method."""
     clipped = np.clip(raw, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
@@ -955,6 +991,7 @@ def fit_calibrator(
             requested=requested,
             fallback=True,
             fallback_reason="single-class calibration block",
+            epsilon=epsilon,
         )
     positives = int(np.sum(y))
     if method == "isotonic" and positives < min_positives:
@@ -973,7 +1010,7 @@ def fit_calibrator(
     if method == "isotonic":
         model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         model.fit(clipped, y)
-        return ScoreCalibrator("isotonic", model, requested=requested)
+        return ScoreCalibrator("isotonic", model, requested=requested, epsilon=epsilon)
     if method == "temperature":
         logits = _logit(clipped)
 
@@ -983,12 +1020,23 @@ def fit_calibrator(
             return float(-np.mean(y * np.log(probabilities) + (1 - y) * np.log(1.0 - probabilities)))
 
         result = minimize_scalar(loss, bounds=(-3.0, 3.0), method="bounded")
-        return ScoreCalibrator("temperature", None, float(np.exp(result.x)), requested=requested)
+        return ScoreCalibrator("temperature", None, float(np.exp(result.x)), requested=requested, epsilon=epsilon)
     if method == "covariate":
         if hours is None or headroom is None:
             raise ModelError("the covariate calibrator needs hours_to_departure and headroom")
+        if positives < min_positives:
+            model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+            model.fit(clipped.reshape(-1, 1), y)
+            return ScoreCalibrator(
+                "sigmoid",
+                model,
+                requested=requested,
+                fallback=True,
+                fallback_reason=f"covariate needs {min_positives} positives, got {positives}",
+                epsilon=epsilon,
+            )
         calibrator = CovariateCalibrator().fit(clipped, y, hours, headroom)
-        monotone, reason = _covariate_constraints(calibrator, np.asarray(headroom, dtype=np.float64))
+        monotone, reason = _covariate_constraints(calibrator)
         if not monotone:
             model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
             model.fit(clipped, y)
@@ -998,8 +1046,9 @@ def fit_calibrator(
                 requested=requested,
                 fallback=True,
                 fallback_reason=reason,
+                epsilon=epsilon,
             )
-        return ScoreCalibrator("covariate", calibrator, requested=requested)
+        return ScoreCalibrator("covariate", calibrator, requested=requested, epsilon=epsilon)
     raise ModelError(f"unknown calibration method {method!r}")
 
 
@@ -1034,6 +1083,7 @@ def _cross_fitted_detailed(
     *,
     hours: Array | None = None,
     headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
 ) -> tuple[Array, Array, tuple[dict[str, Any], ...]]:
     """Fit the calibrator out-of-fold and return predictions, fold ids and fitted methods."""
     unique = np.unique(groups)
@@ -1052,6 +1102,7 @@ def _cross_fitted_detailed(
             min_positives=config.calibration.min_positives,
             hours=None if hours is None else hours[fit_idx],
             headroom=None if headroom is None else headroom[fit_idx],
+            epsilon=epsilon,
         )
         predicted[predict_idx] = calibrator.predict(
             raw[predict_idx],
@@ -1082,9 +1133,12 @@ def _cross_fitted_with_folds(
     *,
     hours: Array | None = None,
     headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
 ) -> tuple[Array, Array]:
     """Fit the calibrator out-of-fold and return predictions plus fold ids."""
-    predicted, fold_ids, _ = _cross_fitted_detailed(raw, y, groups, method, config, hours=hours, headroom=headroom)
+    predicted, fold_ids, _ = _cross_fitted_detailed(
+        raw, y, groups, method, config, hours=hours, headroom=headroom, epsilon=epsilon
+    )
     return predicted, fold_ids
 
 
@@ -1097,9 +1151,63 @@ def _cross_fitted(
     *,
     hours: Array | None = None,
     headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
 ) -> Array:
     """Return out-of-fold calibrated predictions by group."""
-    return _cross_fitted_with_folds(raw, y, groups, method, config, hours=hours, headroom=headroom)[0]
+    return _cross_fitted_with_folds(raw, y, groups, method, config, hours=hours, headroom=headroom, epsilon=epsilon)[0]
+
+
+def _cross_fitted_at_headroom(
+    fit_raw: Array,
+    fit_y: Array,
+    groups: Array,
+    apply_raw: Array,
+    method: str,
+    config: TrainingConfig,
+    *,
+    hours: Array,
+    fit_headroom: Array,
+    predict_headroom: Array,
+) -> tuple[Array, tuple[dict[str, Any], ...]]:
+    """Cross-fit on the assigned headroom, then predict the same rows at a fixed headroom.
+
+    This keeps the threshold on the same calibrator scale that scores the test rows: the fold's
+    calibrator is fitted on the calibration block's assigned-headroom rows and applied to the
+    relabelled scores at ``predict_headroom``.
+    """
+    unique = np.unique(groups)
+    folds = min(config.calibration.folds, len(unique))
+    if folds < 2:
+        raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
+    splitter = GroupKFold(n_splits=folds)
+    predicted = np.full(len(apply_raw), np.nan, dtype=np.float64)
+    methods: list[dict[str, Any]] = []
+    for fold, (fit_idx, predict_idx) in enumerate(splitter.split(fit_raw, fit_y, groups)):
+        calibrator = fit_calibrator(
+            fit_raw[fit_idx],
+            fit_y[fit_idx],
+            method,
+            min_positives=config.calibration.min_positives,
+            hours=hours[fit_idx],
+            headroom=fit_headroom[fit_idx],
+        )
+        predicted[predict_idx] = calibrator.predict(
+            apply_raw[predict_idx],
+            hours=hours[predict_idx],
+            headroom=predict_headroom[predict_idx],
+        )
+        methods.append(
+            {
+                "fold": fold,
+                "requested": calibrator.requested,
+                "fitted": calibrator.method,
+                "fallback": calibrator.fallback,
+                "fallback_reason": calibrator.fallback_reason,
+            }
+        )
+    if np.isnan(predicted).any():
+        raise ModelError("cross-fitted calibration left rows without a prediction")
+    return predicted, tuple(methods)
 
 
 def _hours(data: TabularData) -> Array:
@@ -1250,13 +1358,11 @@ def _cell_threshold(
     sorted_labels = labels[order]
     # Every distinct score is a candidate cut; ties enter together so the result is deterministic.
     boundaries = np.flatnonzero(np.r_[sorted_scores[1:] != sorted_scores[:-1], True])
-    true_positive = 0
-    false_positive = 0
+    cumulative = np.cumsum(sorted_labels)
     best: tuple[float, float, int, float, float] | None = None
     for index in boundaries:
-        true_positive = int(np.sum(sorted_labels[: index + 1] == 1))
-        false_positive = int(index + 1 - true_positive)
-        alerts = true_positive + false_positive
+        alerts = int(index + 1)
+        true_positive = int(cumulative[index])
         if alerts < min_alerts:
             continue
         precision = true_positive / alerts
@@ -1777,7 +1883,14 @@ def _fit_candidates(
         else:
             metrics[name] = _metrics(
                 validation_select.y,
-                _cross_fitted(raw, validation_select.y, validation_select.route_day, calibration_method, config),
+                _cross_fitted(
+                    raw,
+                    validation_select.y,
+                    validation_select.route_day,
+                    calibration_method,
+                    config,
+                    epsilon=STATIC_CALIBRATION_EPS,
+                ),
             )
     return candidates, metrics, train_metrics
 
@@ -1816,7 +1929,14 @@ def _fit_final_calibration(
     for method in config.calibration.methods:
         if method not in STATIC_CALIBRATION_METHODS:
             continue
-        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
+        oof_predictions[method] = _cross_fitted(
+            raw_cal,
+            cal_data.y,
+            cal_data.route_day,
+            method,
+            config,
+            epsilon=STATIC_CALIBRATION_EPS,
+        )
         method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
 
     def _brier_key(name: str) -> float:
@@ -1830,6 +1950,7 @@ def _fit_final_calibration(
         cal_data.y,
         requested,
         min_positives=config.calibration.min_positives,
+        epsilon=STATIC_CALIBRATION_EPS,
     )
     # Preserve the requested method only for the single-class constant calibrator; otherwise
     # record the effective method (for example an isotonic-to-sigmoid fallback) and use its
@@ -1837,7 +1958,14 @@ def _fit_final_calibration(
     calibration_constant = calibrator.method == "constant"
     method = requested if calibration_constant else calibrator.method
     if method not in oof_predictions:
-        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
+        oof_predictions[method] = _cross_fitted(
+            raw_cal,
+            cal_data.y,
+            cal_data.route_day,
+            method,
+            config,
+            epsilon=STATIC_CALIBRATION_EPS,
+        )
     threshold, threshold_met = _threshold(
         cal_data.y,
         oof_predictions[method],
@@ -1862,9 +1990,17 @@ def _calibrated_scores(
             fit_y,
             method,
             min_positives=config.calibration.min_positives,
+            epsilon=STATIC_CALIBRATION_EPS,
         )
         return calibrator.predict(apply_raw), np.full(len(apply_raw), -1, dtype=np.int16), "full"
-    predicted, folds = _cross_fitted_with_folds(fit_raw, fit_y, groups, method, config)
+    predicted, folds = _cross_fitted_with_folds(
+        fit_raw,
+        fit_y,
+        groups,
+        method,
+        config,
+        epsilon=STATIC_CALIBRATION_EPS,
+    )
     if len(apply_raw) != len(predicted):
         raise ModelError("out-of-fold calibration applied to a different population")
     return predicted, folds, "oof"

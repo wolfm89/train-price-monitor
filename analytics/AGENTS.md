@@ -119,9 +119,11 @@ v2-only and mixed-schema input.
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
   for backtest scoring. `--ablation` requires `config/training-static.json`. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
-  checkpoints hold report state only, never the train or calibration panels. A cache-free 5 %
-  backtest peaks near 6.47 GB (4.03 GB with the dataset cache); 10 % has not been measured, so
-  raise memory before scaling.
+  checkpoints hold report state plus the fitted model and calibrator that permutation importance
+  needs, never the train or calibration panels. A cache-free 5 % backtest peaked at 6.30 GiB in
+  PR 6; the dataset build sets the peak. PR 5's cold runs recorded 11.0-11.5 GB under concurrent
+  load, so treat any single figure as per-phase and measure before scaling; 10 % has not been
+  measured.
 - **Recipe selection is development-only.** `training/selection.py` performs a joint search over
   every model x calibration pair on the development folds and refuses any other role. Comparison
   is a paired departure-date cluster bootstrap (2,000 replicates) on delta log loss (primary) and
@@ -136,7 +138,8 @@ v2-only and mixed-schema input.
   falls back to isotonic and the requested/fitted methods are recorded per fold. All outputs are
   clipped to `[1e-6, 1 - 1e-6]`. Per-headroom tables use the selected calibrator at each headroom;
   the per-headroom isotonic is a diagnostic column. The static path keeps its three legacy
-  methods so its reference run stays byte-identical.
+  methods and its 1e-3 output clip; its split digests, validation predictions and `calibration.csv`
+  stay byte-identical to `pr4-final`, while new config fields change the recorded config hash.
 - **Thresholds.** One per headroom x TTD band on the calibration block's out-of-fold scores: the
   highest recall whose one-sided 95 % Wilson lower bound on precision is at least
   `threshold_precision_floor` with at least `threshold_min_alerts` (30) alerts. A cell with no

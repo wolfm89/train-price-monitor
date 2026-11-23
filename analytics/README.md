@@ -395,7 +395,11 @@ entirely above zero. Complexity order is base rate < logistic < HGB and
 sigmoid = temperature < isotonic < covariate. The full selection table is in `recipe.json`; the
 fitted table is not hashed, only the rule settings are. Evaluation and sparse-era folds are scored
 only with `--evaluate-test`; development folds are always reported. The static splits remain available through
-`config/training-static.json`; their digests and metrics must match the static reference run exactly.
+`config/training-static.json`; their four split digests, validation predictions and
+`calibration.csv` must match the static reference run byte for byte, and the static metrics
+(Brier 0.0911551, threshold 0.4844156) must not move. Model serialisation, provenance files and
+the report's config hash differ because the config gained fields and the unvalidated risk-band
+sentence was removed.
 A series may span a cutoff because labels are purged and every feature is past-only. Backtest
 mode still requires the static `splits` block: it bounds the panel at `test_end`, but those splits
 are not used for scoring. Long backtests
@@ -403,8 +407,9 @@ can resume with `--cache-dir`: finished folds and the frozen recipe are checkpoi
 by the config, dataset digest and a fit-code hash, and the checkpoints keep report state rather
 than the training panels. A dirty tree disables reuse. Delete the cache directory to force a clean refit.
 
-A fresh cache-free 5 % backtest peaks at about 6.47 GB; a run that reuses the dataset cache peaks
-near 4.03 GB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
+A cache-free 5 % development run peaked at 6.30 GiB in PR 6, with the dataset build setting the
+peak; PR 5's cold full runs recorded 11.0-11.5 GB under concurrent load, so measure the phase you
+care about. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
 
 Calibration offers sigmoid, temperature, isotonic and a **covariate** calibrator: a logistic model
 on logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom), one model for
@@ -425,7 +430,8 @@ Decision value uses the primary 20-28 h `check_at`: an alert means book now and 
 wait one day. It reports the saving against waiting (the current product, primary) and against
 booking now, each with a departure-date cluster interval, a random alert at the same share, both
 perfect-breach oracles, perfect timing against booking now and the mean cost of waiting. Grouped
-permutation importance covers six families on the pooled development test blocks.
+permutation importance covers up to six families on the pooled development test blocks (the
+calendar family is empty when `calendar.feature_set` is `none`).
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the

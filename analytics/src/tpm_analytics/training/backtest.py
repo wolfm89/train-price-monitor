@@ -41,6 +41,7 @@ from tpm_analytics.training.model import (
     _cell_threshold,
     _compact_category,
     _cross_fitted,
+    _cross_fitted_at_headroom,
     _cross_fitted_detailed,
     _decision_metrics,
     _decision_row,
@@ -63,7 +64,7 @@ from tpm_analytics.training.protocol import (
     fold_slices,
     scored_folds,
 )
-from tpm_analytics.training.selection import select_outcome, selection_settings
+from tpm_analytics.training.selection import select_outcome, selection_settings, table_sha256
 
 MIN_CELL_ROWS = 20
 _LOGGER = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class Recipe:
     calibration_min_positives: int = 1000
     threshold_min_alerts: int = 30
     selection_settings: dict[str, Any] = field(default_factory=dict)
+    selection_table: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def payload(self) -> dict[str, Any]:
         """Return the recipe as a JSON-serialisable payload.
@@ -169,7 +171,9 @@ class BacktestResult:
     threshold_cells: list[dict[str, Any]] = field(default_factory=list)
     development_threshold_cells: list[dict[str, Any]] = field(default_factory=list)
     pr_curves: list[dict[str, Any]] = field(default_factory=list)
+    development_pr_curves: list[dict[str, Any]] = field(default_factory=list)
     threshold_hold_rate: dict[str, Any] = field(default_factory=dict)
+    development_threshold_hold_rate: dict[str, Any] = field(default_factory=dict)
     development_decision_value: list[dict[str, Any]] = field(default_factory=list)
     importance: list[dict[str, Any]] = field(default_factory=list)
     warnings: tuple[str, ...] = ()
@@ -457,6 +461,7 @@ def select_recipe_bundle(
         calibration_min_positives=config.calibration.min_positives,
         threshold_min_alerts=config.report.threshold_min_alerts,
         selection_settings=selection_settings(outcome.table),
+        selection_table=outcome.table,
     )
     return recipe, outcome.models, outcome.table
 
@@ -566,20 +571,24 @@ def fit_fold(
     labels: dict[int, Array] = {}
     isotonic_probabilities: dict[int, Array] = {}
     cell_thresholds: dict[tuple[int, str], dict[str, Any]] = {}
+    headroom_methods: list[dict[str, Any]] = []
     bands_cal = _ttd_array(calibrate)
     for headroom in config.label.headroom_pct:
         raw_cal_headroom = model.predict_matrix(model.with_headroom(cal_matrix, headroom))
         y_cal = breach(calibrate.price_cents, calibrate.check_price_cents, headroom)
         raw_headroom = model.predict_matrix(model.with_headroom(test_matrix, headroom))
-        oof_headroom, _, _ = _cross_fitted_detailed(
-            raw_cal_headroom,
-            y_cal,
+        oof_headroom, methods = _cross_fitted_at_headroom(
+            raw_cal,
+            calibrate.y,
             calibrate.departure_date,
+            raw_cal_headroom,
             recipe.calibration,
             fold_config,
             hours=hours_cal,
-            headroom=np.full(len(calibrate), headroom, dtype=np.int16),
+            fit_headroom=calibrate.headroom,
+            predict_headroom=np.full(len(calibrate), headroom, dtype=np.int16),
         )
+        headroom_methods.extend({**item, "headroom_pct": headroom} for item in methods)
         for band in band_labels():
             mask = bands_cal == band
             if int(mask.sum()) == 0:
@@ -606,7 +615,7 @@ def fit_fold(
             raw_cal_headroom,
             y_cal,
             "isotonic",
-            min_positives=recipe.calibration_min_positives,
+            min_positives=0,
         )
         isotonic_probabilities[headroom] = diagnostic.predict(raw_headroom)
         climate_by_headroom[headroom] = climatology.predict(test, headroom=headroom)
@@ -614,6 +623,19 @@ def fit_fold(
     ordered = [probabilities[headroom] for headroom in config.label.headroom_pct]
     headroom_monotonic = bool(all(np.all(left >= right) for left, right in itertools.pairwise(ordered)))
     calibration_stats = _calibration_stats(test.y, calibrated, config.report.calibration_bins)
+    bands_test = _ttd_array(test)
+    thresholds = np.full(len(test), np.nan, dtype=np.float64)
+    for (headroom, band), entry in cell_thresholds.items():
+        mask = (test.headroom == headroom) & (bands_test == band)
+        if entry["qualified"]:
+            thresholds[mask] = float(entry["threshold"])
+    cell_alert = np.isfinite(thresholds) & (calibrated >= thresholds)
+    cell_true = int(np.sum(cell_alert & (test.y == 1)))
+    cell_alerts = int(cell_alert.sum())
+    cell_positives = int(np.sum(test.y))
+    metrics["cell_threshold_alerts"] = cell_alerts
+    metrics["cell_threshold_precision"] = cell_true / cell_alerts if cell_alerts else None
+    metrics["cell_threshold_recall"] = cell_true / cell_positives if cell_positives else None
     return FoldResult(
         fold=fold,
         train_rows=len(train),
@@ -637,7 +659,17 @@ def fit_fold(
         calibration_stats=calibration_stats,
         headroom_monotonic=headroom_monotonic,
         early_stopping=model.early_stopping,
-        calibration_methods=calibration_methods,
+        calibration_methods=(
+            *calibration_methods,
+            *headroom_methods,
+            {
+                "fold": "applied",
+                "requested": calibrator.requested,
+                "fitted": calibrator.method,
+                "fallback": calibrator.fallback,
+                "fallback_reason": calibrator.fallback_reason,
+            },
+        ),
         isotonic_probabilities=isotonic_probabilities,
         cell_thresholds=cell_thresholds,
         model=model,
@@ -783,18 +815,22 @@ def _threshold_cells(
             calibration_positives = 0
             calibration_true_positives = 0.0
             qualifying_folds = 0
+            thresholds: list[float] = []
             total_alerts = 0
             true_positives = 0
             positives = 0
             test_rows = 0
             for fold in folds:
                 entry = fold.cell_thresholds.get((headroom, band))
-                if entry is not None and entry["qualified"]:
-                    qualifying_folds += 1
-                    calibration_alerts += int(entry["alerts"])
-                    calibration_true += float(entry["precision"]) * int(entry["alerts"])
-                    calibration_true_positives += float(entry["recall"]) * int(entry["positives"])
+                if entry is not None:
                     calibration_positives += int(entry["positives"])
+                    if entry["qualified"]:
+                        qualifying_folds += 1
+                        calibration_alerts += int(entry["alerts"])
+                        calibration_true += float(entry["precision"]) * int(entry["alerts"])
+                        calibration_true_positives += float(entry["recall"]) * int(entry["positives"])
+                        if entry["threshold"] is not None:
+                            thresholds.append(float(entry["threshold"]))
                 bands = _ttd_array(fold.test)
                 mask = bands == band
                 if int(mask.sum()) == 0:
@@ -817,6 +853,8 @@ def _threshold_cells(
                     "ttd_band": band,
                     "qualifying_folds": qualifying_folds,
                     "folds": len(folds),
+                    "thresholds": sorted(thresholds),
+                    "threshold": (min(thresholds) + max(thresholds)) / 2.0 if thresholds else None,
                     "calibration_alerts": calibration_alerts,
                     "calibration_precision": calibration_precision,
                     "calibration_recall": calibration_recall,
@@ -859,7 +897,11 @@ def _pooled_cell_metrics(folds: tuple[FoldResult, ...], config: TrainingConfig) 
             mask = (fold.test.headroom == headroom) & (bands == band)
             thresholds[mask] = float(entry["threshold"])
         valid = np.isfinite(thresholds)
-        alert = valid & (fold.calibrated >= thresholds)
+        probabilities = np.zeros(len(fold.test), dtype=np.float64)
+        for headroom in config.label.headroom_pct:
+            mask = fold.test.headroom == headroom
+            probabilities[mask] = fold.probabilities[headroom][mask]
+        alert = valid & (probabilities >= thresholds)
         alerts += int(alert.sum())
         true_positives += int(np.sum(alert & (fold.test.y == 1)))
         positives += int(np.sum(fold.test.y))
@@ -965,7 +1007,6 @@ def _permuted_features(features: dict[str, Array], names: tuple[str, ...], order
 
 def _importance_loss(
     samples: list[tuple[FoldResult, Array, Array]],
-    pooled_sample: TabularData,
     overrides: dict[str, Array] | None,
 ) -> float:
     """Mean log loss for the sampled rows, optionally with permuted feature columns."""
@@ -1005,16 +1046,17 @@ def _grouped_importance(
         return []
     pooled = concat_tabular([fold.test for fold in folds])
     rng = np.random.default_rng(seed)
-    dates = np.unique(np.asarray(pooled.departure_date, dtype=str))
+    departure = np.asarray(pooled.departure_date, dtype=str)
+    dates = np.unique(departure)
     rng.shuffle(dates)
     chosen: set[str] = set()
     count = 0
     for value in dates:
         chosen.add(str(value))
-        count += int(np.sum(np.asarray(pooled.departure_date, dtype=str) == value))
+        count += int(np.sum(departure == value))
         if count >= sample:
             break
-    selected = np.flatnonzero(np.isin(np.asarray(pooled.departure_date, dtype=str), list(chosen)))
+    selected = np.flatnonzero(np.isin(departure, list(chosen)))
     if len(selected) == 0:
         return []
     samples: list[tuple[FoldResult, Array, Array]] = []
@@ -1025,7 +1067,7 @@ def _grouped_importance(
         samples.append((fold, positions, selected[positions] - start))
         start = end
     pooled_sample = pooled.subset(selected)
-    baseline = _importance_loss(samples, pooled_sample, None)
+    baseline = _importance_loss(samples, None)
     families = {
         family: tuple(name for name in names if name in spec.names) for family, names in family_members().items()
     }
@@ -1039,7 +1081,7 @@ def _grouped_importance(
         for _ in range(repeats):
             order = rng.permutation(len(selected))
             overrides = _permuted_features(pooled_sample.features, names, order)
-            deltas.append(_importance_loss(samples, pooled_sample, overrides) - baseline)
+            deltas.append(_importance_loss(samples, overrides) - baseline)
         values = np.asarray(deltas, dtype=np.float64)
         rows.append(
             {
@@ -1115,16 +1157,20 @@ def _load_cached_recipe(
         return None
     if payload.get("fit_code_sha") != fit_code_sha:
         return None
-    return Recipe(
-        model=payload["model"],
-        calibration=payload["calibration"],
-        threshold_floor=float(payload["threshold_floor"]),
-        model_settings=payload["model_settings"],
-        calibration_folds=int(payload.get("calibration_folds", config.calibration.folds)),
-        calibration_min_positives=int(payload.get("calibration_min_positives", config.calibration.min_positives)),
-        threshold_min_alerts=int(payload.get("threshold_min_alerts", config.report.threshold_min_alerts)),
-        selection_settings=payload.get("selection_settings") or {},
-    )
+    try:
+        return Recipe(
+            model=payload["model"],
+            calibration=payload["calibration"],
+            threshold_floor=float(payload["threshold_floor"]),
+            model_settings=payload["model_settings"],
+            calibration_folds=int(payload.get("calibration_folds", config.calibration.folds)),
+            calibration_min_positives=int(payload.get("calibration_min_positives", config.calibration.min_positives)),
+            threshold_min_alerts=int(payload.get("threshold_min_alerts", config.report.threshold_min_alerts)),
+            selection_settings=payload.get("selection_settings") or {},
+            selection_table=payload.get("selection") or {},
+        )
+    except KeyError, TypeError, ValueError:
+        return None
 
 
 def _save_cached_recipe(
@@ -1134,8 +1180,9 @@ def _save_cached_recipe(
     dataset_sha256: str | None,
     code_sha: str | None,
     fit_code_sha: str,
+    selection_table: dict[str, Any],
 ) -> None:
-    """Persist cached recipe."""
+    """Persist the cached recipe and its fitted selection table."""
     if cache_dir is None:
         return
     payload = {
@@ -1144,6 +1191,7 @@ def _save_cached_recipe(
         "dataset_sha256": dataset_sha256,
         "code_sha": code_sha,
         "fit_code_sha": fit_code_sha,
+        "selection": selection_table,
     }
     path = _recipe_cache_path(cache_dir)
     tmp = path.with_suffix(".tmp")
@@ -1308,11 +1356,12 @@ def run_backtest(
     if cached_recipe is not None:
         _LOGGER.info("backtest: using cached recipe %s / %s", cached_recipe.model, cached_recipe.calibration)
         recipe = cached_recipe
+        selection_table = recipe.selection_table
         development_models: dict[str, FittedModel] = {}
     else:
         _LOGGER.info("backtest: selecting recipe on development folds")
         recipe, development_models, selection_table = select_recipe_bundle(panel, config, spec)
-        _save_cached_recipe(active_cache, config, recipe, dataset_sha256, code_sha, fit_code_sha)
+        _save_cached_recipe(active_cache, config, recipe, dataset_sha256, code_sha, fit_code_sha, selection_table)
         _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
     for fold in folds:
@@ -1362,9 +1411,14 @@ def run_backtest(
             "alert_share": item.metrics.get("alert_share"),
             "precision_at_threshold": item.metrics.get("precision_at_threshold"),
             "recall_at_threshold": item.metrics.get("recall_at_threshold"),
+            "cell_threshold_alerts": item.metrics.get("cell_threshold_alerts"),
+            "cell_threshold_precision": item.metrics.get("cell_threshold_precision"),
+            "cell_threshold_recall": item.metrics.get("cell_threshold_recall"),
             "headroom_monotonic": item.headroom_monotonic,
             "calibration_stats": item.calibration_stats,
             "early_stopping": item.early_stopping,
+            "dropped_features": list(item.model.dropped) if item.model is not None else [],
+            "calibration_methods": [dict(item) for item in item.calibration_methods],
             "cell_thresholds": [
                 dict(row) for _, row in sorted(item.cell_thresholds.items(), key=lambda pair: (pair[0][0], pair[0][1]))
             ],
@@ -1439,7 +1493,9 @@ def run_backtest(
         threshold_cells=threshold_cells,
         development_threshold_cells=development_threshold_cells,
         pr_curves=_pr_curves(evaluation),
+        development_pr_curves=_pr_curves(development_results),
         threshold_hold_rate=_threshold_hold_rate(threshold_cells),
+        development_threshold_hold_rate=_threshold_hold_rate(development_threshold_cells),
         decision_value=decision_value,
         development_decision_value=development_decision_value,
         importance=importance,
@@ -1726,6 +1782,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             [
                 "headroom %",
                 "TTD band",
+                "operating point",
+                "threshold",
                 "folds",
                 "cal alerts",
                 "cal precision",
@@ -1740,6 +1798,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                 [
                     item["headroom_pct"],
                     item["ttd_band"],
+                    _yes(item.get("operating_point")),
+                    _ci(item.get("thresholds")),
                     f"{item['qualifying_folds']}/{item['folds']}",
                     item["calibration_alerts"],
                     _fmt(item.get("calibration_precision")),
@@ -1761,6 +1821,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             [
                 "headroom %",
                 "TTD band",
+                "operating point",
+                "threshold",
                 "folds",
                 "cal alerts",
                 "cal precision",
@@ -1775,6 +1837,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                 [
                     item["headroom_pct"],
                     item["ttd_band"],
+                    _yes(item.get("operating_point")),
+                    _ci(item.get("thresholds")),
                     f"{item['qualifying_folds']}/{item['folds']}",
                     item["calibration_alerts"],
                     _fmt(item.get("calibration_precision")),
@@ -1795,7 +1859,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     feature_importance = [row for row in result.importance if row["kind"] == "feature"]
     importance_table = (
         _table(
-            ["group", "features", "delta log loss", "std", "min", "max", "rows"],
+            ["group", "features", "delta log loss", "std", "min", "max", "rows", "departures"],
             [
                 [
                     row["name"],
@@ -1805,6 +1869,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     _fmt(row["min"], 5),
                     _fmt(row["max"], 5),
                     row["rows"],
+                    row["departures"],
                 ]
                 for row in family_importance
             ],
@@ -1814,7 +1879,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     )
     feature_importance_table = (
         _table(
-            ["feature", "delta log loss", "std", "min", "max"],
+            ["feature", "delta log loss", "std", "min", "max", "departures"],
             [
                 [
                     row["name"],
@@ -1822,6 +1887,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     _fmt(row["std"], 5),
                     _fmt(row["min"], 5),
                     _fmt(row["max"], 5),
+                    row["departures"],
                 ]
                 for row in feature_importance[:15]
             ],
@@ -1830,6 +1896,35 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         else "Development folds were not scored."
     )
     pr_targets = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+
+    def _pr_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
+        """Render precision at fixed recall targets."""
+        return [
+            [
+                item["band"],
+                item["rows"],
+                _fmt(item.get("average_precision")),
+                *[
+                    _fmt(
+                        next(
+                            (point["precision"] for point in item["points"] if abs(point["recall"] - target) < 1e-9),
+                            None,
+                        )
+                    )
+                    for target in pr_targets
+                ],
+            ]
+            for item in items
+        ]
+
+    development_pr_table = (
+        _table(
+            ["TTD band", "rows", "AP", *[f"P@R{int(target * 100)}" for target in pr_targets]],
+            _pr_rows(result.development_pr_curves),
+        )
+        if result.development_pr_curves
+        else "Development folds were not scored."
+    )
     pr_table = (
         _table(
             ["TTD band", "rows", "AP", *[f"P@R{int(target * 100)}" for target in pr_targets]],
@@ -1859,16 +1954,26 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         else "Evaluation folds were not scored."
     )
     hold_rate = result.threshold_hold_rate or {}
+    development_hold_rate = result.development_threshold_hold_rate or {}
     hold_note = (
         f"{hold_rate.get('test_floor_met', 0)} of {hold_rate.get('with_operating_point', 0)} cells with an "
         f"operating point held the {result.recipe.threshold_floor:g} test precision floor "
         f"({_p(hold_rate.get('hold_rate'))})."
-        if hold_rate
-        else ""
+        if hold_rate.get("with_operating_point", 0) > 0
+        else "No evaluation cell has an operating point."
+    )
+    development_hold_note = (
+        f"{development_hold_rate.get('test_floor_met', 0)} of "
+        f"{development_hold_rate.get('with_operating_point', 0)} development cells with an operating "
+        f"point held the {result.recipe.threshold_floor:g} floor "
+        f"({_p(development_hold_rate.get('hold_rate'))})."
+        if development_hold_rate.get("with_operating_point", 0) > 0
+        else "No development cell has an operating point."
     )
     decision_headers = [
         "headroom %",
         "TTD band",
+        "operating point",
         "rows",
         "alert share",
         "saving vs wait EUR",
@@ -1888,6 +1993,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             [
                 item.get("headroom_pct"),
                 item.get("band"),
+                _yes(item.get("operating_point")),
                 item.get("rows"),
                 _p(item.get("alert_share")),
                 _fmt(item.get("saving_vs_always_wait_eur"), 2),
@@ -1953,7 +2059,51 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     warnings = "\n".join(f"- {warning}" for warning in all_warnings) or "- none"
     recipe_line = (
         f"- Recipe: model `{result.recipe.model}`, calibration `{result.recipe.calibration}`, "
-        f"threshold floor {result.recipe.threshold_floor}"
+        f"threshold floor {result.recipe.threshold_floor} with at least "
+        f"{result.recipe.threshold_min_alerts} alerts"
+    )
+    calibration_records = [record for row in result.per_fold for record in row.get("calibration_methods", [])]
+    applied_methods = sorted(
+        {str(record.get("fitted")) for record in calibration_records if record.get("fold") == "applied"}
+    )
+    fallback_records = [record for record in calibration_records if record.get("fallback")]
+    fallback_reasons = sorted(
+        {str(record.get("fallback_reason")) for record in fallback_records if record.get("fallback_reason")}
+    )
+    calibration_line = (
+        f"- Fitted calibration: {', '.join(applied_methods) or result.recipe.calibration}; "
+        f"fallback folds: {len(fallback_records)}" + (f" ({'; '.join(fallback_reasons)})" if fallback_reasons else "")
+    )
+    selection = result.selection
+    selection_rows = selection.get("rows", []) if selection else []
+    selection_table = (
+        _table(
+            ["model", "calibration", "fitted", "fallbacks", "rows", "Brier", "log loss", "BSS", "AUC", "AP"],
+            [
+                [
+                    row["model"],
+                    row["calibration"],
+                    ", ".join(row.get("fitted_methods", [row["calibration"]])),
+                    row.get("fallback_folds", 0),
+                    row["rows"],
+                    _fmt(row.get("brier")),
+                    _fmt(row.get("log_loss")),
+                    _fmt(row.get("bss")),
+                    _fmt(row.get("roc_auc")),
+                    _fmt(row.get("average_precision")),
+                ]
+                for row in selection_rows
+            ],
+        )
+        if selection_rows
+        else "Selection was served from the recipe cache without a table."
+    )
+    selection_note = (
+        f"Chosen: `{selection.get('chosen', {}).get('model')}` / "
+        f"`{selection.get('chosen', {}).get('calibration')}`. The paired intervals and every "
+        "comparison are in `recipe.json`."
+        if selection
+        else ""
     )
     development = result.development_pooled
     development_table = (
@@ -1967,6 +2117,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                 ["BSS climatology", _fmt(development.get("bss_climatology"))],
                 ["ROC-AUC", _fmt(development.get("roc_auc"))],
                 ["average precision", _fmt(development.get("average_precision"))],
+                ["cell-threshold precision", _fmt(development.get("cell_threshold_precision"))],
+                ["cell-threshold recall", _fmt(development.get("cell_threshold_recall"))],
                 ["prevalence", _p(development.get("positive_rate"))],
             ],
         )
@@ -2112,6 +2264,12 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             for row in result.per_fold
         ],
     )
+    dropped = sorted({name for row in result.per_fold for name in row.get("dropped_features", [])})
+    dropped_note = (
+        f"Dropped constant or all-null features in at least one fold: {', '.join(dropped)}."
+        if dropped
+        else "No feature was dropped in any fold."
+    )
     fold_table = _table(
         [
             "fold",
@@ -2152,6 +2310,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 - Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
 - Protocol: `backtest`; embargo {config.protocol.embargo_hours} h; block {config.protocol.block_days} d
 {recipe_line}
+{calibration_line}
 - Recipe hash: `{result.recipe.sha256()}`
 - Evaluated blocks: {", ".join(result.evaluated_blocks)}
 - Cache: {result.cache_dir or "none"}; enabled: {result.cache_enabled}
@@ -2179,6 +2338,8 @@ protocols from the static validation split; a higher Brier here is not a model r
 
 {diagnostics_table}
 
+{dropped_note}
+
 {spread_note}
 
 {precision_note}
@@ -2187,12 +2348,21 @@ protocols from the static validation split; a higher Brier here is not a model r
 
 ## Development folds
 
-Development folds choose the recipe and are the only folds the next selection step may use. Their
-tables use the same per-headroom diagnostic calibration as the evaluation tables.
+Development folds choose the recipe and are the only folds the next selection step may use. The
+selection table below is the joint model x calibration search; the full paired intervals are in
+`recipe.json`. Their metric tables apply the selected calibrator at each headroom, like the
+evaluation tables.
+
+{selection_note}
+
+{selection_table}
 
 {development_table}
 
 ### Development per-headroom
+
+`Brier isotonic` is the old per-headroom isotonic fit kept as a diagnostic. The main columns use
+the selected calibrator at each headroom, so tables and headline share one model.
 
 {development_headroom_table}
 
@@ -2201,9 +2371,6 @@ tables use the same per-headroom diagnostic calibration as the evaluation tables
 {development_headroom_ttd_table}
 
 ### Development calibration cells (headroom x TTD band x era)
-
-`Brier isotonic` is the old per-headroom isotonic fit kept as a diagnostic. The main columns use
-the selected calibrator at each headroom, so tables and headline share one model.
 
 {development_cells_table}
 
@@ -2217,8 +2384,8 @@ the selected calibrator at each headroom, so tables and headline share one model
 
 ## Per-headroom
 
-Per-headroom rows relabel each test row at a fixed headroom and fit a separate calibration for
-it; they are not directly comparable with the pooled-calibrator headline. `BSS clim CI` uses 400
+Per-headroom rows relabel each test row at a fixed headroom and apply the selected calibrator at
+that headroom; `Brier isotonic` stays as the old per-headroom diagnostic. `BSS clim CI` uses 400
 departure-date cluster-bootstrap replicates.
 
 {headroom_table}
@@ -2241,6 +2408,8 @@ point; the precision and recall columns pool every fold at its own threshold. {h
 
 ### Development thresholds
 
+{development_hold_note}
+
 {development_threshold_table}
 
 ### Evaluation thresholds
@@ -2249,14 +2418,25 @@ point; the precision and recall columns pool every fold at its own threshold. {h
 
 ### Precision-recall by TTD band
 
+`P@Rxx` is the best precision at or above recall `xx`, pooled over the assigned-headroom scores
+(not a single cell threshold).
+
+#### Development
+
+{development_pr_table}
+
+#### Evaluation
+
 {pr_table}
 
 ## Development importance
 
 Grouped permutation importance on the pooled development test blocks with each fold's own model
-and calibrator: {result.importance[0]["rows"] if result.importance else 0} rows sampled by
-departure date, five repeats, delta log loss. The spread columns are the minimum, maximum and
-standard deviation across repeats.
+and calibrator: whole departure dates are sampled until at least 20,000 rows are reached
+({result.importance[0]["rows"] if result.importance else 0} rows from
+{result.importance[0]["departures"] if result.importance else 0} of the pooled dates here), five
+repeats, delta log loss. The spread columns are the minimum, maximum and standard deviation
+(ddof=0) across repeats; the date count is the real sampling uncertainty.
 
 ### Feature families
 
@@ -2285,8 +2465,10 @@ The primary comparison is **waiting** (the current product notifies only once th
 limit). The oracle columns show the ceiling: a perfect breach alert beats booking now by only a few
 euros near departure, and perfect timing is not reachable.
 
-For a user who is already waiting, the alert saves about EUR 4-5 per snapshot at 1-5 days. "Book
-now" stays out of reach for any breach alert because fares near departure mostly rise.
+A perfect breach alert still beats booking now by only a small margin near departure (see the
+oracle columns); no realistic breach alert does, because fares near departure mostly rise. The
+alert is protection against crossing the limit, not a buy-or-wait oracle. Read the euro columns in
+the tables below rather than a fixed headline number.
 
 ### Development decision value
 
@@ -2343,6 +2525,7 @@ def write_backtest_artifacts(
         **result.recipe.payload(),
         "sha256": result.recipe.sha256(),
         "selection": result.selection,
+        "selection_table_sha256": table_sha256(result.selection) if result.selection else None,
     }
     (out_dir / "recipe.json").write_text(json.dumps(recipe_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     backtest_payload = {
@@ -2370,7 +2553,9 @@ def write_backtest_artifacts(
         "threshold_cells": result.threshold_cells,
         "development_threshold_cells": result.development_threshold_cells,
         "threshold_hold_rate": result.threshold_hold_rate,
+        "development_threshold_hold_rate": result.development_threshold_hold_rate,
         "pr_curves": result.pr_curves,
+        "development_pr_curves": result.development_pr_curves,
         "selection": result.selection,
         "decision_value": result.decision_value,
         "development_decision_value": result.development_decision_value,

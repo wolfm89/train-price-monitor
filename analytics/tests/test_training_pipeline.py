@@ -21,8 +21,13 @@ from tpm_analytics.training.backtest import (
     Recipe,
     _bss_paired_ci,
     _check_fold_gates,
+    _decision_value_cells,
     _grouped_importance,
     _permuted_features,
+    _pooled_cell_metrics,
+    _pr_curves,
+    _threshold_cells,
+    _threshold_hold_rate,
     fit_fold,
     fit_forward_scorer,
     load_forward,
@@ -2938,6 +2943,11 @@ def test_calibrator_outputs_are_bounded() -> None:
     extreme = constant.predict(np.array([0.0, 1.0]))
     assert np.all(extreme > 0.0)
     assert np.all(extreme < 1.0)
+    # The static legacy path keeps its 1e-3 clip so its reference predictions stay byte-identical.
+    legacy = fit_calibrator(raw, np.zeros(len(raw), dtype=np.int8), "sigmoid", min_positives=1, epsilon=1e-3)
+    assert np.allclose(legacy.predict(np.array([0.0, 1.0])), 1e-3)
+    modern = fit_calibrator(raw, np.zeros(len(raw), dtype=np.int8), "sigmoid", min_positives=1)
+    assert np.allclose(modern.predict(np.array([0.0, 1.0])), 1e-6)
 
 
 def test_load_model_rejects_wrong_hash(tmp_path: Path) -> None:
@@ -3143,7 +3153,7 @@ def test_fit_fold_uses_the_frozen_recipe(tmp_path: Path) -> None:
     higher_floor = fit_fold(replace(recipe, threshold_floor=0.9), fold, train, calibrate, test, config, spec)
     assert higher_floor.threshold != small.threshold
     base = fit_fold(replace(recipe, model="base_rate"), fold, train, calibrate, test, config, spec)
-    assert np.allclose(base.raw, base.raw[0])
+    assert np.unique(base.raw).size <= len(config.label.headroom_pct)
 
 
 def test_calibration_cross_fit_uses_departure_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3168,18 +3178,43 @@ def test_calibration_cross_fit_uses_departure_date(tmp_path: Path, monkeypatch: 
         },
     )
     captured: list[np.ndarray] = []
+    threshold_inputs: list[np.ndarray] = []
     original = backtest_module._cross_fitted_detailed
+    original_headroom = backtest_module._cross_fitted_at_headroom
+    original_cell = backtest_module._cell_threshold
 
     def spy(raw: Any, y: Any, groups: Any, method: str, cfg: Any, **kwargs: Any) -> Any:
         captured.append(np.asarray(groups).copy())
         return original(raw, y, groups, method, cfg, **kwargs)
 
+    def headroom_spy(
+        fit_raw: Any,
+        fit_y: Any,
+        groups: Any,
+        apply_raw: Any,
+        method: str,
+        cfg: Any,
+        **kwargs: Any,
+    ) -> Any:
+        captured.append(np.asarray(groups).copy())
+        predicted, methods = original_headroom(fit_raw, fit_y, groups, apply_raw, method, cfg, **kwargs)
+        return np.full(len(predicted), 0.25), methods
+
+    def cell_spy(y: Any, probabilities: Any, floor: float, min_alerts: int) -> Any:
+        threshold_inputs.append(np.asarray(probabilities).copy())
+        return original_cell(y, probabilities, floor, min_alerts)
+
     monkeypatch.setattr(backtest_module, "_cross_fitted_detailed", spy)
+    monkeypatch.setattr(backtest_module, "_cross_fitted_at_headroom", headroom_spy)
+    monkeypatch.setattr(backtest_module, "_cell_threshold", cell_spy)
     result = fit_fold(recipe, fold, train, calibrate, test, config, spec)
     assert captured
     assert all(np.array_equal(groups, calibrate.departure_date) for groups in captured)
     # One cross-fit for the pooled calibrator and one per headroom for the cell thresholds.
     assert len(captured) == 1 + len(config.label.headroom_pct)
+    # The threshold must see the out-of-fold scores, never the in-fold raw scores.
+    assert threshold_inputs
+    assert all(np.allclose(values, 0.25) for values in threshold_inputs)
     assert 0 < len(result.cell_thresholds) <= len(config.label.headroom_pct) * len(HEADLINE_BANDS)
     assert all(headroom in config.label.headroom_pct for headroom, _ in result.cell_thresholds)
     assert all(band in {label for label, _, _ in HEADLINE_BANDS} for _, band in result.cell_thresholds)
@@ -3412,6 +3447,9 @@ def test_clean_fold_cache_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert second.fold_cache_hits == 1
     assert first.pooled == second.pooled
     assert first.folds[0].metrics == second.folds[0].metrics
+    assert first.selection == second.selection
+    assert first.selection
+    assert first.recipe.sha256() == second.recipe.sha256()
     monkeypatch.setattr(backtest_module, "_code_identity", lambda: ("other-head", False))
     third = run_backtest(panel, config, spec, evaluate_test=False, cache_dir=cache, dataset_sha256="data")
     assert third.fold_cache_hits == 1
@@ -3422,6 +3460,82 @@ def test_clean_fold_cache_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyP
     fifth = run_backtest(panel, config, spec, evaluate_test=False, cache_dir=cache, dataset_sha256="data")
     assert fifth.fold_cache_hits == 0
     assert fifth.folds[0].metrics == first.folds[0].metrics
+
+
+def test_recipe_hash_records_the_rule_not_the_fitted_table() -> None:
+    settings = {"max_iter": 400}
+    rule = {"replicates": 2000, "alpha": 0.05, "cluster": "departure_date"}
+    first = Recipe(
+        "hist_gradient_boosting",
+        "temperature",
+        0.7,
+        settings,
+        selection_settings=rule,
+        selection_table={"chosen": {"model": "hist_gradient_boosting", "calibration": "temperature"}},
+    )
+    second = Recipe(
+        "hist_gradient_boosting",
+        "temperature",
+        0.7,
+        settings,
+        selection_settings=rule,
+        selection_table={"chosen": {"model": "base_rate", "calibration": "sigmoid"}},
+    )
+    assert first.sha256() == second.sha256()
+    assert "selection_table" not in first.payload()
+    other = Recipe(
+        "hist_gradient_boosting",
+        "temperature",
+        0.7,
+        settings,
+        selection_settings={**rule, "replicates": 1000},
+    )
+    assert other.sha256() != first.sha256()
+
+
+def test_replacement_rule_needs_both_intervals() -> None:
+    accepted, reason = replacement_rule({"log_loss": [-2.0, -1.0]})
+    assert accepted is False
+    assert "incomplete" in reason
+    accepted, reason = replacement_rule({"log_loss": [-2.0, -1.0], "brier": [0.1, 0.2]})
+    assert accepted is False
+    assert "Brier" in reason
+
+
+def test_base_rate_is_per_headroom() -> None:
+    spec = feature_spec("none")
+    count = 40
+    features: dict[str, Any] = {}
+    for feature in spec.features:
+        if feature.kind == "categorical":
+            features[feature.name] = np.array(["a", "b"] * (count // 2), dtype=object)
+        else:
+            features[feature.name] = np.full(count, 1.0, dtype=np.float32)
+    headroom = np.array([1] * 20 + [30] * 20, dtype=np.int16)
+    features["headroom_pct"] = headroom.astype(np.float32)
+    y = np.array([1] * 15 + [0] * 5 + [1] * 5 + [0] * 15, dtype=np.int8)
+    data = TabularData(
+        features=features,
+        y=y,
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=headroom,
+        departure_date=np.full(count, "2026-07-01", dtype=object),
+        snapshot_at=np.full(count, "2026-07-01T00:00:00", dtype=object),
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W27", dtype=object),
+    )
+    config = load_config(DEFAULT_CONFIG_PATH)
+    model = fit_candidate("base_rate", data, spec, config)
+    probabilities = model.predict(data)
+    assert probabilities[:20].tolist() == pytest.approx([0.75] * 20)
+    assert probabilities[20:].tolist() == pytest.approx([0.25] * 20)
+    at_30 = model.predict(data, headroom=30)
+    assert at_30.tolist() == pytest.approx([0.25] * count)
 
 
 def test_dataset_cache_round_trip(tmp_path: Path) -> None:
@@ -3686,10 +3800,17 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     assert len(scored.threshold_cells) == 5 * len(HEADLINE_BANDS)
     assert all("operating_point" in row and "floor_met" in row for row in scored.threshold_cells)
     assert scored.threshold_hold_rate["cells"] == 5 * len(HEADLINE_BANDS)
-    assert scored.threshold_hold_rate["with_operating_point"] <= scored.threshold_hold_rate["cells"]
+    assert scored.threshold_hold_rate["with_operating_point"] == sum(
+        row["operating_point"] for row in scored.threshold_cells
+    )
+    assert scored.development_threshold_hold_rate["with_operating_point"] == sum(
+        row["operating_point"] for row in scored.development_threshold_cells
+    )
     assert scored.pr_curves
     assert all(point["precision"] >= 0.0 for curve in scored.pr_curves for point in curve["points"])
     assert all(row["cell_thresholds"] for row in scored.per_fold)
+    assert all(row["calibration_methods"] for row in scored.per_fold)
+    assert all(any(item["fold"] == "applied" for item in row["calibration_methods"]) for row in scored.per_fold)
     assert 0 < len(scored.development_decision_value) <= 5 * len(HEADLINE_BANDS)
     assert 0 < len(scored.decision_value) <= 5 * len(HEADLINE_BANDS)
     required_oracle = {"perfect_breach_vs_wait_eur", "perfect_breach_vs_book_eur", "perfect_timing_vs_book_eur"}
@@ -3782,6 +3903,7 @@ def test_selection_joint_search_and_deterministic_table(tmp_path: Path) -> None:
     pairs = {(row["model"], row["calibration"]) for row in first.table["rows"]}
     assert pairs == {
         ("base_rate", "sigmoid"),
+        ("base_rate", "covariate"),
         ("logistic", "sigmoid"),
         ("logistic", "isotonic"),
         ("logistic", "temperature"),
@@ -3797,6 +3919,8 @@ def test_selection_joint_search_and_deterministic_table(tmp_path: Path) -> None:
     assert all("beats_climatology" in row for row in first.table["rows"] if row.get("selectable", True))
     assert first.table["rule"]["cluster"] == "departure_date"
     assert first.table["rule"]["replicates"] == 200
+    expected_rows = sum(int(fold_masks(panel, fold, protocol).test.sum()) for fold in protocol.cutoffs)
+    assert {row["rows"] for row in first.table["rows"]} == {expected_rows}
 
 
 def test_early_stopping_plan_uses_patience_and_tolerance() -> None:
@@ -3938,6 +4062,9 @@ def test_covariate_calibrator_is_monotone_and_uses_the_band() -> None:
     raw, y, hours, headroom, _ = _calibration_fixture()
     calibrator = fit_calibrator(raw, y, "covariate", min_positives=100, hours=hours, headroom=headroom)
     assert calibrator.method == "covariate"
+    assert calibrator.model.model.coef_.shape == (1, 10)
+    design = calibrator.model.design(np.array([0.5]), np.array([48.0]), np.array([5.0]))
+    assert design.shape == (1, 10)
     scores = np.linspace(0.01, 0.99, 41)
     for _, low, high in HEADLINE_BANDS:
         values = calibrator.predict(
@@ -3962,9 +4089,7 @@ def test_covariate_calibrator_is_monotone_and_uses_the_band() -> None:
 
 def test_covariate_fallback_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
     raw, y, hours, headroom, _ = _calibration_fixture()
-    monkeypatch.setattr(
-        tpm_training_model, "_covariate_constraints", lambda calibrator, values: (False, "forced violation")
-    )
+    monkeypatch.setattr(tpm_training_model, "_covariate_constraints", lambda calibrator: (False, "forced violation"))
     calibrator = fit_calibrator(raw, y, "covariate", min_positives=100, hours=hours, headroom=headroom)
     assert calibrator.method == "isotonic"
     assert calibrator.requested == "covariate"
@@ -3974,6 +4099,10 @@ def test_covariate_fallback_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None
     assert few.method == "sigmoid"
     assert few.fallback is True
     assert "positive" in (few.fallback_reason or "")
+    thin = fit_calibrator(raw, y, "covariate", min_positives=10_000, hours=hours, headroom=headroom)
+    assert thin.method == "sigmoid"
+    assert thin.requested == "covariate"
+    assert thin.fallback is True
 
 
 def test_fit_fold_uses_the_selected_calibrator_for_headroom_tables(tmp_path: Path) -> None:
@@ -4091,6 +4220,47 @@ def test_permuting_a_family_changes_only_that_family() -> None:
     assert features["c"].tolist() == [100.0, 200.0, 300.0]
     # The within-family row correspondence survives the shared permutation.
     assert (permuted["a"] / permuted["b"]).tolist() == [10.0, 10.0, 10.0]
+
+
+def test_threshold_and_decision_helpers_agree_with_the_fold_state(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    protocol = ProtocolConfig("backtest", (fold,))
+    config = replace(config, protocol=protocol)
+    masks = fold_masks(panel, fold, protocol)
+    train, calibrate, test = fold_slices(panel, masks)
+    recipe = Recipe(
+        "base_rate",
+        "sigmoid",
+        0.4,
+        {
+            "max_iter": config.model.max_iter,
+            "learning_rate": config.model.learning_rate,
+            "max_leaf_nodes": config.model.max_leaf_nodes,
+            "random_state": config.model.random_state,
+        },
+        threshold_min_alerts=10,
+    )
+    result = fit_fold(recipe, fold, train, calibrate, test, config, spec)
+    rows = _threshold_cells((result,), config, floor=0.4, min_alerts=10)
+    assert len(rows) == 5 * len(HEADLINE_BANDS)
+    assert all("thresholds" in row and "operating_point" in row for row in rows)
+    hold = _threshold_hold_rate(rows)
+    assert hold["cells"] == len(rows)
+    assert hold["with_operating_point"] == sum(row["operating_point"] for row in rows)
+    pooled = _pooled_cell_metrics((result,), config)
+    assert pooled["cell_threshold_rows"] == len(test)
+    decisions = _decision_value_cells((result,), config, replicates=20, seed=4)
+    assert decisions
+    assert all("operating_point" in row for row in decisions)
+    assert all("perfect_breach_vs_wait_eur" in row for row in decisions)
+    curves = _pr_curves((result,))
+    assert curves
+    assert all("points" in curve for curve in curves)
+    assert all(item["fold"] == "applied" for item in result.calibration_methods if item["fold"] == "applied")
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:
@@ -4288,10 +4458,14 @@ def test_change_to_evaluation_calibration_labels_does_not_change_recipe(tmp_path
         ),
     )
     config = replace(config, protocol=protocol)
-    frozen = select_recipe(panel, config, spec).sha256()
+    frozen = select_outcome(panel, config, spec, replicates=200)
     mask = fold_masks(panel, protocol.cutoffs[1], protocol).calibrate
     mutated = replace(panel, y=np.where(mask, 1 - panel.y, panel.y).astype(np.int8))
-    assert select_recipe(mutated, config, spec).sha256() == frozen
+    changed = select_outcome(mutated, config, spec, replicates=200)
+    assert changed.model == frozen.model
+    assert changed.calibration == frozen.calibration
+    assert table_sha256(changed.table) == table_sha256(frozen.table)
+    assert frozen.table["folds"] == ["dev"]
 
 
 def test_sparse_era_fold_keeps_all_bands_in_train() -> None:
@@ -4758,10 +4932,10 @@ def test_decision_value_sign_convention() -> None:
 
 
 def test_decision_row_pins_the_oracle_columns() -> None:
-    saving = np.array([10.0, 10.0, -10.0, -10.0])
-    price = np.full(4, 100.0)
+    saving = np.array([10.0, -20.0, -5.0, -10.0])
+    price = np.array([100.0, 120.0, 80.0, 100.0])
     alert = np.array([True, True, False, False])
-    labels = np.array([1, 1, 0, 0], dtype=np.int8)
+    labels = np.array([1, 0, 1, 0], dtype=np.int8)
     groups = np.array(["2026-07-01", "2026-07-02", "2026-07-03", "2026-07-04"], dtype=object)
     row = _decision_row(
         band="1-3d",
@@ -4775,14 +4949,14 @@ def test_decision_row_pins_the_oracle_columns() -> None:
         labels=labels,
     )
     assert row["alert_share"] == pytest.approx(0.5)
-    assert row["saving_vs_always_wait_eur"] == pytest.approx(5.0)
-    assert row["saving_vs_always_book_eur"] == pytest.approx(5.0)
-    assert row["random_alert_saving_vs_wait_eur"] == pytest.approx(0.0)
-    assert row["cost_of_waiting_eur"] == pytest.approx(0.0)
-    assert row["conditional_saving_when_alert_eur"] == pytest.approx(10.0)
-    assert row["perfect_breach_vs_wait_eur"] == pytest.approx(5.0)
-    assert row["perfect_breach_vs_book_eur"] == pytest.approx(5.0)
-    assert row["perfect_timing_vs_book_eur"] == pytest.approx(5.0)
+    assert row["saving_vs_always_wait_eur"] == pytest.approx(-2.5)
+    assert row["saving_vs_always_book_eur"] == pytest.approx(3.75)
+    assert row["random_alert_saving_vs_wait_eur"] == pytest.approx(-3.125)
+    assert row["cost_of_waiting_eur"] == pytest.approx(-6.25)
+    assert row["conditional_saving_when_alert_eur"] == pytest.approx(-5.0)
+    assert row["perfect_breach_vs_wait_eur"] == pytest.approx(1.25)
+    assert row["perfect_breach_vs_book_eur"] == pytest.approx(7.5)
+    assert row["perfect_timing_vs_book_eur"] == pytest.approx(8.75)
     assert row["perfect_breach_rows"] == 2
 
 

@@ -8,6 +8,7 @@ part of the recipe hash.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Iterable
@@ -23,9 +24,9 @@ from tpm_analytics.training.model import (
     FittedModel,
     ModelError,
     TabularData,
-    _cross_fitted,
     _matrix,
     _metrics,
+    fit_calibrator,
     fit_candidate,
     fit_climatology,
     fit_encoder,
@@ -125,8 +126,10 @@ def paired_bootstrap(
 
 def replacement_rule(interval: dict[str, Any]) -> tuple[bool, str]:
     """Apply the frozen replacement rule to a paired interval."""
-    log_loss = interval.get("log_loss") or [0.0, 0.0]
-    brier = interval.get("brier") or [0.0, 0.0]
+    if "log_loss" not in interval or "brier" not in interval:
+        return False, "paired interval is incomplete"
+    log_loss = interval["log_loss"]
+    brier = interval["brier"]
     if float(log_loss[1]) >= 0.0:
         return False, "log-loss interval is not entirely below zero"
     if float(brier[0]) > 0.0:
@@ -243,6 +246,9 @@ def select_outcome(
     methods = tuple(config.calibration.methods)
     models = tuple(config.model.candidates)
     grouped_scores: dict[tuple[str, str], list[Array]] = {(name, method): [] for name in models for method in methods}
+    calibrator_outcomes: dict[tuple[str, str], list[str]] = {
+        (name, method): [] for name in models for method in methods
+    }
     labels: list[Array] = []
     clusters: list[Array] = []
     climatology_scores: list[Array] = []
@@ -252,30 +258,35 @@ def select_outcome(
         assert_purged(panel, fold, config.protocol, masks)
         train = panel.subset(masks.train)
         calibrate = panel.subset(masks.calibrate)
+        test = panel.subset(masks.test)
         encoder = fit_encoder(train, spec)
         matrix = _matrix(train, spec, encoder)
-        labels.append(calibrate.y)
-        clusters.append(calibrate.departure_date)
-        hours = np.asarray(calibrate.features["hours_to_departure"], dtype=np.float64)
-        climatology_scores.append(fit_climatology(train).predict(calibrate))
+        labels.append(test.y)
+        clusters.append(test.departure_date)
+        hours_cal = np.asarray(calibrate.features["hours_to_departure"], dtype=np.float64)
+        hours_test = np.asarray(test.features["hours_to_departure"], dtype=np.float64)
+        climatology_scores.append(fit_climatology(train).predict(test))
         for name in models:
             model = fit_candidate(name, train, spec, config, encoder=encoder, matrix=matrix)
             fitted[(fold.name, name)] = model
-            raw = model.predict(calibrate)
+            raw_cal = model.predict(calibrate)
+            raw_test = model.predict(test)
             for method in methods:
-                if name == "base_rate" and method != "sigmoid":
-                    # Calibrating a constant score is a no-op; keep one row per model.
+                if name == "base_rate" and method in {"isotonic", "temperature"}:
+                    # These reduce a per-headroom constant score to the same constant; the
+                    # covariate calibrator still varies by band and headroom and stays in the grid.
                     continue
+                calibrator = fit_calibrator(
+                    raw_cal,
+                    calibrate.y,
+                    method,
+                    min_positives=config.calibration.min_positives,
+                    hours=hours_cal,
+                    headroom=calibrate.headroom,
+                )
+                calibrator_outcomes[(name, method)].append(calibrator.method)
                 grouped_scores[(name, method)].append(
-                    _cross_fitted(
-                        raw,
-                        calibrate.y,
-                        calibrate.departure_date,
-                        method,
-                        config,
-                        hours=hours,
-                        headroom=calibrate.headroom,
-                    )
+                    calibrator.predict(raw_test, hours=hours_test, headroom=test.headroom)
                 )
     pooled_labels = np.concatenate(labels)
     pooled_clusters = np.concatenate(clusters)
@@ -287,7 +298,18 @@ def select_outcome(
         pooled = np.concatenate(parts)
         pooled_scores[(name, method)] = pooled
         metrics = _metrics(pooled_labels, pooled)
-        rows.append({"model": name, "calibration": method, "rows": len(pooled_labels), **metrics})
+        rows.append(
+            {
+                "model": name,
+                "calibration": method,
+                "fitted_methods": sorted(set(calibrator_outcomes[(name, method)])),
+                "fallback_folds": sum(
+                    1 for fitted_method in calibrator_outcomes[(name, method)] if fitted_method != method
+                ),
+                "rows": len(pooled_labels),
+                **metrics,
+            }
+        )
     climate_metrics = _metrics(pooled_labels, np.concatenate(climatology_scores))
     rows.append(
         {
@@ -304,10 +326,29 @@ def select_outcome(
             row["beats_climatology"] = bool((row["log_loss"] or 0.0) < climate_log_loss)
     calibration_choice: dict[str, str] = {}
     calibration_compare: dict[str, list[dict[str, Any]]] = {}
+    excluded: dict[str, dict[str, str]] = {}
     for index, name in enumerate(models):
         scores = {method: pooled for (candidate, method), pooled in pooled_scores.items() if candidate == name}
+        available = tuple(
+            method
+            for method in methods
+            if method in scores
+            and any(fitted_method == method for fitted_method in calibrator_outcomes[(name, method)])
+        )
+        excluded[name] = {
+            method: (
+                "fell back to "
+                + ", ".join(sorted(set(calibrator_outcomes[(name, method)])))
+                + " in every development fold"
+            )
+            for method in methods
+            if method in scores and method not in available
+        }
+        if name == "base_rate":
+            for method in ("isotonic", "temperature"):
+                excluded[name].setdefault(method, "constant score is a no-op for this calibrator")
         chosen, compare = _calibration_selection(
-            methods,
+            available,
             pooled_labels,
             scores,
             pooled_clusters,
@@ -327,19 +368,25 @@ def select_outcome(
         seed=config.seed + 101,
         alpha=alpha,
     )
+    chosen_row = next(
+        row for row in rows if row["model"] == chosen_model and row["calibration"] == calibration_choice[chosen_model]
+    )
+    if not chosen_row.get("beats_climatology", False):
+        raise ModelError(f"the selected {chosen_model} / {calibration_choice[chosen_model]} does not beat climatology")
     table = {
         "rule": {
             "replicates": int(replicates),
             "alpha": float(alpha),
             "cluster": SELECTION_CLUSTER,
-            "model_order": list(models),
-            "calibration_order": list(methods),
+            "model_order": list(_ranked(models)),
+            "calibration_order": sorted(methods, key=lambda method: (CALIBRATION_RANK.get(method, 99), method)),
             "calibration_rank": {method: CALIBRATION_RANK.get(method, 99) for method in methods},
         },
         "folds": [fold.name for fold in folds],
         "rows": sorted(rows, key=lambda row: (str(row["model"]), str(row["calibration"]))),
         "calibration_choice": calibration_choice,
         "calibration_comparisons": calibration_compare,
+        "excluded": excluded,
         "model_choice": chosen_model,
         "model_comparisons": model_compare,
         "chosen": {"model": chosen_model, "calibration": calibration_choice[chosen_model]},
@@ -355,16 +402,20 @@ def select_outcome(
 def selection_settings(table: dict[str, Any]) -> dict[str, Any]:
     """Return the hashed rule settings (never the fitted selection table)."""
     rule = table.get("rule", {})
-    return {
-        "replicates": rule.get("replicates"),
-        "alpha": rule.get("alpha"),
-        "cluster": rule.get("cluster"),
-        "model_order": rule.get("model_order"),
-        "calibration_order": rule.get("calibration_order"),
-        "calibration_rank": rule.get("calibration_rank"),
-    }
+    return copy.deepcopy(
+        {
+            "replicates": rule.get("replicates"),
+            "alpha": rule.get("alpha"),
+            "cluster": rule.get("cluster"),
+            "model_order": rule.get("model_order"),
+            "calibration_order": rule.get("calibration_order"),
+            "calibration_rank": rule.get("calibration_rank"),
+        }
+    )
 
 
 def table_sha256(table: dict[str, Any]) -> str:
     """Return a deterministic hash of a selection table for reproducibility checks."""
-    return hashlib.sha256(json.dumps(table, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(table, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()

@@ -156,6 +156,8 @@ class ModelConfig:
         unknown = set(self.candidates) - set(MODEL_NAMES)
         if unknown:
             raise ConfigError(f"unknown model candidates: {sorted(unknown)}")
+        if len(set(self.candidates)) != len(self.candidates):
+            raise ConfigError("model.candidates must be unique")
         if self.max_iter < 1 or self.max_leaf_nodes < 2:
             raise ConfigError("model iteration and leaf counts must be positive")
         if not 0 < self.learning_rate <= 1:
@@ -174,6 +176,8 @@ class CalibrationConfig:
         """Validate this configuration section."""
         if not self.methods or set(self.methods) - set(CALIBRATION_METHODS):
             raise ConfigError(f"calibration.methods must be a subset of {CALIBRATION_METHODS}")
+        if len(set(self.methods)) != len(self.methods):
+            raise ConfigError("calibration.methods must be unique")
         if self.min_positives < 1:
             raise ConfigError("calibration positive thresholds must be positive")
         if not 2 <= self.folds <= 10:
