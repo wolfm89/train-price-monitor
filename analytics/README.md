@@ -370,7 +370,7 @@ uploaded and no AWS resource is created. Downloaded silver belongs under the ign
 uv sync --group train
 mise run //analytics:train -- --source .data/silver/<build> --profile   # profile only
 mise run //analytics:train -- --source .data/silver/<build>
-mise run //analytics:train:ablation -- --source .data/silver/<build>
+mise run //analytics:train:ablation -- --config config/training-static.json --source .data/silver/<build>
 ```
 
 `--source` accepts an S3 pointer, a Parquet glob, a single file, a local directory or a local
@@ -398,13 +398,22 @@ can resume with `--cache-dir`: finished folds and the frozen recipe are checkpoi
 by the config and recipe hashes, and the checkpoints keep report state rather than the training
 panels. Delete the cache directory to force a clean refit.
 
-A cache-free 5 % backtest peaks at about 11.5 GB; 10 % is near the 17.6 GB host ceiling, so raise
-the memory limit before scaling the sample. The warm cached run peaks near 7.2 GB.
+A fresh cache-free 5 % backtest peaks at about 6.65 GB; a run that reuses the dataset cache peaks
+near 4.03 GB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
-all-route build exceeds the 5 % memory ceiling; a later sample-scale run raises it for scoring.
-`--ablation` stays validation/static-only and compares the four calendar sets. Two clean builds write order-independent digests to `dataset_manifest.json` and must match.
+all-route build exceeds the host memory ceiling; a later sample-scale run raises it for scoring.
+`--score-forward PATH` fits the 14 September forward fold, scores that Parquet and writes
+`forward_predictions.parquet` plus `forward_smoke.json`; it computes no labels or metrics.
+
+`--ablation` stays validation/static-only and requires `config/training-static.json`; it compares
+the four calendar sets. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
+matching dataset build (default `artifacts/.cache/datasets`); reuse is allowed only on a clean tree,
+verifies every split hash and records the reuse key. Pass `--no-dataset-cache` for an independent
+build, and note that two clean builds are only independent when the dataset cache is disabled or
+pointed at a fresh directory. Each code SHA and source build can add about 92 MB to the dataset
+cache; delete `artifacts/.cache/datasets` to reclaim it.
 The report shows eligibility, label coverage, known limitations and the git/silver/config
 provenance; artifacts stay in the ignored `analytics/artifacts/<run_id>/`.
 

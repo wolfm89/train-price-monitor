@@ -1793,10 +1793,11 @@ def build_dataset(
         )
         domain_route_days = _scalar(
             connection,
-            """
+            f"""
             SELECT count(DISTINCT route_id || '|' || CAST(departure_date AS VARCHAR))
             FROM base_all
-            WHERE hours_to_departure >= 24 AND hours_to_departure <= 168
+            WHERE hours_to_departure BETWEEN {config.protocol.forward_min_hours_to_departure}
+                AND {config.protocol.forward_max_hours_to_departure}
             """,
         )
         departure_dates = _scalar(connection, "SELECT count(DISTINCT departure_date) FROM sampled")

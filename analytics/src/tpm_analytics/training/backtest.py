@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pickle
+import shutil
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -26,7 +27,7 @@ from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import HEADLINE_BANDS
 from tpm_analytics.training.config import FoldConfig, ProtocolConfig, TrainingConfig
 from tpm_analytics.training.dataset import DatasetError, _git_state
-from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, FeatureSpec
+from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS, FeatureSpec
 from tpm_analytics.training.labels import breach
 from tpm_analytics.training.model import (
     Array,
@@ -39,6 +40,7 @@ from tpm_analytics.training.model import (
     _choose_candidate,
     _compact_category,
     _cross_fitted,
+    _decision_metrics,
     _filled,
     _metrics,
     _pooled_decision_value_rows,
@@ -156,6 +158,15 @@ def load_forward(path: Path, spec: FeatureSpec) -> TabularData:
     )
     connection = duckdb.connect()
     try:
+        available = {
+            row[0]
+            for row in connection.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{sql_string(path.as_posix())}')"
+            ).fetchall()
+        }
+        forbidden = set(LABEL_COLUMNS) - {"eligible", "check_at", "check_lag_h"}
+        if forbidden & available:
+            raise ModelError(f"forward Parquet contains label columns: {sorted(forbidden & available)}")
         rows = connection.execute(
             f"SELECT {columns} FROM read_parquet('{sql_string(path.as_posix())}') ORDER BY series_key, snapshot_at"
         ).fetchnumpy()
@@ -262,13 +273,25 @@ def score_forward_artifact(
     if not np.all(np.isfinite(probabilities)):
         raise ModelError("forward scoring produced non-finite probabilities")
     predictions_path = out_dir / "forward_predictions.parquet"
+    input_copy = out_dir / "forward_input.parquet"
+    shutil.copy2(forward_path, input_copy)
+    snapshot_text = (
+        _text(forward.snapshot_at)
+        if np.issubdtype(forward.snapshot_at.dtype, np.datetime64)
+        else _snapshot_strings(forward.snapshot_at)
+    )
+    departure_text = (
+        _dates(forward.departure_date)
+        if np.issubdtype(forward.departure_date.dtype, np.datetime64)
+        else np.asarray(forward.departure_date, dtype=str).tolist()
+    )
     table = pa.table(
         {
             "fold": [fold.name] * len(forward),
             "series_key": np.asarray(forward.series, dtype=str),
             "chain_id": np.asarray(forward.chain if forward.chain is not None else forward.series, dtype=str),
-            "snapshot_at": np.asarray(forward.snapshot_at, dtype=str),
-            "departure_date": np.asarray(forward.departure_date, dtype=str),
+            "snapshot_at": snapshot_text,
+            "departure_date": departure_text,
             "headroom_pct": forward.headroom.astype(np.int16),
             "score": probabilities,
             "threshold": np.full(len(forward), scorer.threshold, dtype=np.float64),
@@ -276,18 +299,27 @@ def score_forward_artifact(
     )
     pq.write_table(table, predictions_path, compression="zstd")
     sibling = forward_path.parent / "forward_manifest.json"
-    missingness: dict[str, float] = {}
+    manifest_payload: dict[str, Any] = {}
     if sibling.is_file():
-        missingness = json.loads(sibling.read_text(encoding="utf-8")).get("feature_missingness", {})
+        manifest_payload = json.loads(sibling.read_text(encoding="utf-8"))
+    missingness = manifest_payload.get("feature_missingness", {})
     smoke = {
         "fold": fold.name,
+        "forward_input": str(forward_path),
+        "forward_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
+        "forward_manifest_sha256": (hashlib.sha256(sibling.read_bytes()).hexdigest() if sibling.is_file() else None),
+        "forward_artifact_sha256": manifest_payload.get("artifact_sha256"),
+        "forward_sample_rate": manifest_payload.get("forward_sample_rate"),
+        "forward_coverage": manifest_payload.get("coverage"),
+        "forward_departure_bounds": manifest_payload.get("departure_bounds"),
+        "forward_missing_departure_dates": manifest_payload.get("missing_departure_dates"),
+        "feature_missingness": missingness,
         "rows": len(forward),
         "min_score": float(probabilities.min()),
         "max_score": float(probabilities.max()),
         "finite": bool(np.all(np.isfinite(probabilities))),
         "threshold": scorer.threshold,
         "recipe_sha256": recipe.sha256(),
-        "feature_missingness": missingness,
         "labels": False,
         "metrics": False,
     }
@@ -450,6 +482,7 @@ def fit_fold(
     metrics["threshold"] = threshold
     metrics["threshold_met"] = float(threshold_met)
     metrics["alert_share"] = float(np.mean(calibrated >= threshold))
+    metrics.update(_decision_metrics(test.y, calibrated, threshold))
     probabilities: dict[int, Array] = {}
     raw_probabilities: dict[int, Array] = {}
     climate_by_headroom: dict[int, Array] = {}
@@ -598,7 +631,10 @@ def _load_cached_recipe(
     path = _recipe_cache_path(cache_dir)
     if not path.is_file():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError, TypeError:
+        return None
     if payload.get("config_sha256") != config.hash():
         return None
     if dataset_sha256 is not None and payload.get("dataset_sha256") != dataset_sha256:
@@ -651,15 +687,21 @@ def _load_cached_fold(
     data_path, meta_path = _cache_paths(cache_dir, fold)
     if not data_path.is_file() or not meta_path.is_file():
         return None
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except OSError, ValueError, TypeError:
+        return None
     if meta.get("recipe_sha256") != recipe.sha256() or meta.get("config_sha256") != config.hash():
         return None
     if dataset_sha256 is not None and meta.get("dataset_sha256") != dataset_sha256:
         return None
     if code_sha is None or code_dirty is not False or meta.get("code_sha") != code_sha:
         return None
-    with data_path.open("rb") as handle:
-        loaded = pickle.load(handle)
+    try:
+        with data_path.open("rb") as handle:
+            loaded = pickle.load(handle)
+    except OSError, EOFError, pickle.UnpicklingError, ValueError:
+        return None
     # Older checkpoints stored the full train/calibrate panels; drop them from the report state.
     return replace(loaded, train=None, calibrate=None, from_cache=True)
 
@@ -680,7 +722,8 @@ def _save_cached_fold(
     with tmp_path.open("wb") as handle:
         pickle.dump(result, handle)
     os.replace(tmp_path, data_path)
-    meta_path.write_text(
+    meta_tmp = meta_path.with_suffix(".tmp")
+    meta_tmp.write_text(
         json.dumps(
             {
                 "fold": fold.name,
@@ -695,6 +738,7 @@ def _save_cached_fold(
         + "\n",
         encoding="utf-8",
     )
+    os.replace(meta_tmp, meta_path)
 
 
 def _pooled_summary(
@@ -796,6 +840,8 @@ def run_backtest(
             "threshold": item.threshold,
             "threshold_met": item.threshold_met,
             "alert_share": item.metrics.get("alert_share"),
+            "precision_at_threshold": item.metrics.get("precision_at_threshold"),
+            "recall_at_threshold": item.metrics.get("recall_at_threshold"),
             "runtime_seconds": item.runtime_seconds,
             "from_cache": item.from_cache,
         }
@@ -808,38 +854,8 @@ def run_backtest(
     headroom_rows: list[dict[str, Any]] = []
     headroom_ttd: list[dict[str, Any]] = []
     decision_value: list[dict[str, Any]] = []
-    pooled: TabularData | None = None
     if evaluation:
-        pooled = concat_tabular([item.test for item in evaluation])
-        calibrated = np.concatenate([item.calibrated for item in evaluation])
-        climatology = np.concatenate([item.climatology for item in evaluation])
-        train_rate = np.concatenate([np.full(len(item.test), item.train_rate, dtype=np.float64) for item in evaluation])
-        pooled_metrics.update(_metrics(pooled.y, calibrated))
-        reference = float(np.mean((pooled.y - climatology) ** 2))
-        pooled_metrics["bss_climatology"] = (
-            1.0 - float(pooled_metrics["brier"] or 0.0) / reference if reference > 0 else None
-        )
-        reference_train = float(np.mean((pooled.y - train_rate) ** 2))
-        pooled_metrics["bss_train"] = (
-            1.0 - float(pooled_metrics["brier"] or 0.0) / reference_train if reference_train > 0 else None
-        )
-        pooled_metrics["bootstrap_clusters"] = len(np.unique(pooled.departure_date))
-        pooled_metrics["bootstrap"] = _bootstrap(
-            pooled.y,
-            calibrated,
-            pooled.departure_date,
-            config.report.bootstrap_replicates,
-            config.seed,
-        )
-        pooled_metrics["intervals"] = _bootstrap_metrics(
-            pooled.y,
-            calibrated,
-            pooled.departure_date,
-            config.report.metric_bootstrap_replicates,
-            config.seed + 1,
-            float(np.mean([item.threshold for item in evaluation])),
-        )
-        headroom_rows, headroom_ttd = _headroom_rows(pooled, evaluation, config)
+        pooled_metrics, headroom_rows, headroom_ttd = _pooled_summary(evaluation, config)
         for item in evaluation:
             decision_value.extend(
                 {
@@ -919,9 +935,25 @@ def _text(values: Array) -> list[str]:
     if values.dtype.kind == "U":
         return values.tolist()
     if np.issubdtype(values.dtype, np.datetime64):
-        text = np.datetime_as_string(values, unit="s").astype(str)
-        return np.char.replace(text, "T", " ").tolist()
+        text = np.datetime_as_string(values, unit="ms").astype(str)
+        cleaned: list[str] = []
+        for item in text:
+            value = item.replace("T", " ")
+            base, _, fraction = value.partition(".")
+            fraction = fraction.rstrip("0")
+            cleaned.append(f"{base}.{fraction}" if fraction else base)
+        return cleaned
     return values.tolist()
+
+
+def _snapshot_strings(values: Array) -> list[str]:
+    cleaned: list[str] = []
+    for value in values:
+        item = str(value).replace("T", " ")
+        base, _, fraction = item.partition(".")
+        fraction = fraction.rstrip("0")
+        cleaned.append(f"{base}.{fraction}" if fraction else base)
+    return cleaned
 
 
 def _dates(values: Array) -> list[str]:
@@ -1019,7 +1051,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                 ["BSS climatology", _fmt(pooled.get("bss_climatology"))],
                 ["BSS train", _fmt(pooled.get("bss_train"))],
                 ["ROC-AUC", _fmt(pooled.get("roc_auc"))],
-                ["average precision", _fmt(pooled.get("average_precision"))],
+                ["Average Precision (AP)", _fmt(pooled.get("average_precision"))],
                 ["prevalence", _p(pooled.get("positive_rate"))],
             ],
         )
@@ -1089,6 +1121,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                 "saving vs wait EUR",
                 "95 % CI vs wait",
                 "saving vs book EUR",
+                "95 % CI vs book",
             ],
             [
                 [
@@ -1099,6 +1132,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     _fmt(item.get("saving_vs_always_wait_eur"), 2),
                     _ci(item.get("ci_saving_vs_wait_eur")),
                     _fmt(item.get("saving_vs_always_book_eur"), 2),
+                    _ci(item.get("ci_saving_vs_book_eur")),
                 ]
                 for item in result.decision_value
             ],
@@ -1243,6 +1277,15 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             f"Brier {_range('brier')}, BSS {_range('bss')}, AUC {_range('roc_auc')}, "
             f"AP {_range('average_precision')}, prevalence {_range('positive_rate', percent=True)}."
         )
+    test_precision = [
+        float(row["precision_at_threshold"]) for row in result.per_fold if row.get("precision_at_threshold") is not None
+    ]
+    precision_note = (
+        f"Test precision at each fold's threshold ranges {min(test_precision):.3f}-{max(test_precision):.3f}; "
+        "the 0.7 floor is selected on the calibration block, not guaranteed on test."
+        if test_precision
+        else ""
+    )
     fold_table = _table(
         [
             "fold",
@@ -1274,7 +1317,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 - Runner: `{dataset_manifest.get("runner", "local")}`
 - Git: `{dataset_manifest.get("git_sha")}` (dirty: {dataset_manifest.get("git_dirty")})
 - Silver build: `{dataset_manifest.get("silver_build_id")}`
-- Dataset reused: {dataset_manifest.get("dataset_reused", False)} (key: {dataset_manifest.get("dataset_reuse_key")})
+- Dataset cache: {dataset_manifest.get("dataset_cache_key")}; reused: {dataset_manifest.get("dataset_reused", False)}
 - Sample: {config.sample.sample_rate:.0%} of route-days (all rows on a sampled route-day)
 - Protocol: `backtest`; embargo {config.protocol.embargo_hours} h; block {config.protocol.block_days} d
 {recipe_line}
@@ -1294,7 +1337,9 @@ was chosen with them in view. They are a fair yardstick for choices made from th
 The October-November forward set is the only untouched data. These are different populations and
 protocols from the static validation split; a higher Brier here is not a model regression.
 
-> `BSS` is 1 - Brier / base-rate Brier; `BSS clim` is 1 - model Brier / fold-climatology Brier.
+> `BSS` is 1 - Brier / base-rate Brier; `BSS clim` is 1 - model Brier / fold-climatology Brier;
+> `BSS train` uses each fold's train prevalence. The BSS interval re-estimates prevalence in each
+> resample.
 
 ## Folds
 
@@ -1302,10 +1347,12 @@ protocols from the static validation split; a higher Brier here is not a model r
 
 {spread_note}
 
+{precision_note}
+
 ## Development folds
 
-Development folds choose the recipe and are the only folds PR 6 may select on. Their tables use
-the same per-headroom diagnostic calibration as the evaluation tables.
+Development folds choose the recipe and are the only folds the next selection step may use. Their
+tables use the same per-headroom diagnostic calibration as the evaluation tables.
 
 {development_table}
 
@@ -1328,7 +1375,8 @@ the same per-headroom diagnostic calibration as the evaluation tables.
 ## Per-headroom
 
 Per-headroom rows relabel each test row at a fixed headroom and fit a separate calibration for
-it; they are not directly comparable with the pooled-calibrator headline.
+it; they are not directly comparable with the pooled-calibrator headline. `BSS clim CI` uses 400
+departure-date cluster-bootstrap replicates.
 
 {headroom_table}
 
@@ -1341,11 +1389,11 @@ it; they are not directly comparable with the pooled-calibrator headline.
 {sparse_table}
 
 Sparse-era folds cover 24 h-7 d and are thin at the 5 % sample; read them as point estimates.
-The 3-6 September snapshot gap is why sparse-0907 has fewer rows and very few 5-7 d test
-positives.
+The 3-6 September snapshot gap truncates sparse-0831's calibration window; sparse-0907's test
+window starts on 15 September and is thin at the 5 % sample.
 
-The cutoffs straddle the late-July scrape-cadence ramp and the 14-21 July outage, so
-{train_note} The 20 July cutoff is excluded by rule.
+The cutoffs straddle the late-July scrape-cadence ramp and the 13-21 July outage, so
+{train_note} The fixed cutoff list excludes 20 July; gates never skip a fold.
 
 ## Decision value
 
@@ -1388,6 +1436,7 @@ def write_backtest_artifacts(
         "silver_build_id": dataset_manifest.get("silver_build_id"),
         "dataset_reused": dataset_manifest.get("reused", False),
         "dataset_reuse_key": dataset_manifest.get("reuse_key"),
+        "dataset_cache_key": dataset_manifest.get("dataset_cache_key"),
         "warnings": dataset_manifest.get("warnings", []),
     }
     recipe_payload = {**result.recipe.payload(), "sha256": result.recipe.sha256()}
@@ -1450,6 +1499,7 @@ def write_backtest_artifacts(
         "git_dirty_end": dataset_manifest.get("git_dirty_end"),
         "dataset_reused": dataset_manifest.get("reused", False),
         "dataset_reuse_key": dataset_manifest.get("reuse_key"),
+        "dataset_cache_key": dataset_manifest.get("dataset_cache_key"),
         "artifacts": {
             path.relative_to(out_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts
         },

@@ -214,27 +214,29 @@ def _compact_datetime(values: Any, unit: str) -> Array:
 
 def _split_columns(spec: FeatureSpec) -> str:
     return ", ".join(
-        (
-            *spec.names,
-            "breached_next_day",
-            "price_cents",
-            "check_price_cents",
-            "series_key",
-            "chain_id",
-            "route_id || '|' || CAST(departure_date AS VARCHAR) AS route_day",
-            "price_eur",
-            "check_price_eur",
-            "check_price_2024_eur",
-            "label_window_end",
-            "future_max_fare_24h",
-            "future_observations",
-            "headroom_pct",
-            "departure_date",
-            "snapshot_at",
-            "observation_era",
-            f"{berlin_week_sql('snapshot_at')} AS observation_week",
-            "bin_regime",
-            "bin_index",
+        dict.fromkeys(
+            (
+                *spec.names,
+                "breached_next_day",
+                "price_cents",
+                "check_price_cents",
+                "series_key",
+                "chain_id",
+                "route_id || '|' || CAST(departure_date AS VARCHAR) AS route_day",
+                "price_eur",
+                "check_price_eur",
+                "check_price_2024_eur",
+                "label_window_end",
+                "future_max_fare_24h",
+                "future_observations",
+                "headroom_pct",
+                "departure_date",
+                "snapshot_at",
+                "observation_era",
+                f"{berlin_week_sql('snapshot_at')} AS observation_week",
+                "bin_regime",
+                "bin_index",
+            )
         )
     )
 
@@ -271,7 +273,7 @@ def _tabular(rows: dict[str, Any], spec: FeatureSpec, *, compact: bool, source: 
         check_price_cents=check_price_cents,
         check_price_2024=_filled64(rows["check_price_2024_eur"], np.nan),
         label_window_end=(
-            _compact_datetime(rows["label_window_end"], "s")
+            _compact_datetime(rows["label_window_end"], "ms")
             if compact
             else np.asarray(rows["label_window_end"], dtype=str)
         ),
@@ -282,7 +284,7 @@ def _tabular(rows: dict[str, Any], spec: FeatureSpec, *, compact: bool, source: 
             _compact_datetime(rows["departure_date"], "D") if compact else np.asarray(rows["departure_date"], dtype=str)
         ),
         snapshot_at=(
-            _compact_datetime(rows["snapshot_at"], "s") if compact else np.asarray(rows["snapshot_at"], dtype=str)
+            _compact_datetime(rows["snapshot_at"], "ms") if compact else np.asarray(rows["snapshot_at"], dtype=str)
         ),
         observation_era=_compact_category(rows["observation_era"])
         if compact

@@ -246,6 +246,9 @@ class ProtocolConfig:
         dates = [item.cutoff for item in self.cutoffs]
         if dates != sorted(set(dates)):
             raise ConfigError("protocol.cutoffs must be sorted and unique")
+        names = [item.name for item in self.cutoffs]
+        if len(names) != len(set(names)):
+            raise ConfigError("protocol.cutoffs must have unique names")
         ranks = [FOLD_ROLE_ORDER[item.role] for item in self.cutoffs]
         if ranks != sorted(ranks):
             raise ConfigError("protocol.cutoffs must follow role order: development, evaluation, sparse_era, forward")

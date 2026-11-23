@@ -14,7 +14,7 @@ import numpy as np
 from tpm_analytics.training.config import FoldConfig, ProtocolConfig
 from tpm_analytics.training.model import Array, ModelError, TabularData
 
-DATETIME = "datetime64[s]"
+DATETIME = "datetime64[ms]"
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ def _datetime(values: Array) -> Array:
 
 
 def _at(value: datetime) -> np.datetime64:
-    return np.datetime64(value, "s")
+    return np.datetime64(value, "ms")
 
 
 def fold_masks(panel: TabularData, fold: FoldConfig, protocol: ProtocolConfig) -> FoldMasks:
@@ -47,11 +47,15 @@ def fold_masks(panel: TabularData, fold: FoldConfig, protocol: ProtocolConfig) -
     train = label_end <= cutoff - embargo
     calibrate = (snapshot >= cutoff) & (label_end <= cutoff + block)
     test = (snapshot >= cutoff + block + embargo) & (label_end <= cutoff + 2 * block + embargo)
-    if fold.role == "sparse_era":
-        # Train on the dense era at every lead time; calibrate and score the forward-like 1-7 d domain.
-        domain = np.asarray(panel.features["hours_to_departure"], dtype=np.float64) < float(
-            protocol.sparse_era_max_hours_to_departure
-        )
+    if fold.role in {"sparse_era", "forward"}:
+        # Train on the dense era at every lead time; calibrate and score only the short-lead domain.
+        hours = np.asarray(panel.features["hours_to_departure"], dtype=np.float64)
+        if fold.role == "forward":
+            lower = float(protocol.forward_min_hours_to_departure)
+            upper = float(protocol.forward_max_hours_to_departure)
+            domain = (hours >= lower) & (hours <= upper)
+        else:
+            domain = (hours >= 24.0) & (hours < float(protocol.sparse_era_max_hours_to_departure))
         calibrate &= domain
         test &= domain
     return FoldMasks(train=train, calibrate=calibrate, test=test)

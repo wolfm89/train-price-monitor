@@ -74,27 +74,58 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="reuse a matching dataset build from this directory when the code is clean",
     )
+    parser.add_argument(
+        "--no-dataset-cache",
+        action="store_true",
+        help="always build a fresh dataset, even when a matching cached build exists",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
 
-def _dataset_cache_key(config: TrainingConfig, source_uri: str, code_sha: str) -> str:
+def _dataset_cache_key(
+    config: TrainingConfig,
+    source_uri: str,
+    code_sha: str,
+    strict_chains: bool,
+    source: Any,
+) -> str:
     payload = {
-        "version": 1,
+        "version": 2,
         "code_sha": code_sha,
         "config_sha256": config.hash(),
         "source": source_uri,
+        "strict_chains": strict_chains,
+        "source_build_id": getattr(source, "build_id", None),
+        "source_manifest_sha256": getattr(source, "manifest_sha256", None),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _restore_dataset(cache_root: Path, key: str, work_dir: Path) -> DatasetStats | None:
+def _restore_dataset(
+    cache_root: Path,
+    key: str,
+    work_dir: Path,
+    *,
+    run_id: str,
+    cli_argv: tuple[str, ...],
+    strict_chains: bool,
+    source: Any,
+) -> DatasetStats | None:
     entry = cache_root / key
     manifest_path = entry / "dataset_manifest.json"
     profile_path = entry / "profile.json"
-    if not manifest_path.is_file() or not profile_path.is_file():
+    if not manifest_path.is_file() or not profile_path.is_file() or not (entry / "DONE").is_file():
         return None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not manifest.get("dataset_files"):
+        return None
+    if manifest.get("strict_chains") != strict_chains:
+        return None
+    if manifest.get("silver_build_id") != getattr(source, "build_id", None):
+        return None
+    if manifest.get("silver_manifest_sha256") != getattr(source, "manifest_sha256", None):
+        return None
     for item in manifest.get("dataset_files", []):
         path = entry / item["path"]
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
@@ -104,8 +135,12 @@ def _restore_dataset(cache_root: Path, key: str, work_dir: Path) -> DatasetStats
         source = entry / name
         if source.is_file():
             shutil.copy2(source, work_dir / name)
+    manifest["original_run_id"] = manifest.get("run_id")
+    manifest["run_id"] = run_id
+    manifest["cli_argv"] = list(cli_argv)
     manifest["reused"] = True
     manifest["reuse_key"] = key
+    manifest["dataset_cache_key"] = key
     (work_dir / "dataset_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
@@ -114,10 +149,19 @@ def _restore_dataset(cache_root: Path, key: str, work_dir: Path) -> DatasetStats
     return DatasetStats(**payload, splits=splits)
 
 
+def _mark_dataset_cache(work_dir: Path, key: str) -> None:
+    path = work_dir / "dataset_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["dataset_cache_key"] = key
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+
+
 def _store_dataset(cache_root: Path, key: str, work_dir: Path) -> None:
     entry = cache_root / key
-    if entry.exists():
+    if entry.exists() and (entry / "DONE").is_file():
         return
+    if entry.exists():
+        shutil.rmtree(entry)
     entry.mkdir(parents=True, exist_ok=True)
     shutil.copytree(work_dir / "dataset", entry / "dataset", dirs_exist_ok=True)
     for name in ("dataset_manifest.json", "profile.json", "column_roles.json"):
@@ -192,6 +236,12 @@ def main(argv: list[str] | None = None) -> int:
             config = replace(config, calendar=replace(config.calendar, feature_set=args.calendar_features))
         if args.ablation and args.evaluate_test:
             raise ValueError("--ablation is validation-only; do not combine it with --evaluate-test")
+        if args.ablation and config.protocol.kind != "static_split":
+            raise ValueError("--ablation requires the static config (config/training-static.json)")
+        if args.score_forward is not None and config.protocol.kind != "backtest":
+            raise ValueError("--score-forward requires a backtest config")
+        if args.cache_dir is not None and config.protocol.kind != "backtest":
+            raise ValueError("--cache-dir requires a backtest config")
         primary_set = config.calendar.feature_set
         build_set = "full" if args.ablation else primary_set
         build_config = replace(config, calendar=replace(config.calendar, feature_set=build_set))
@@ -219,10 +269,25 @@ def main(argv: list[str] | None = None) -> int:
         dataset_reused = False
         stats: DatasetStats | None = None
         cache_root: Path | None = None
-        if not args.profile and not args.forward and code_sha is not None and code_dirty is False:
+        if (
+            not args.profile
+            and not args.forward
+            and not args.no_dataset_cache
+            and code_sha is not None
+            and code_dirty is False
+            and (getattr(source, "build_id", None) or getattr(source, "manifest_sha256", None))
+        ):
             cache_root = args.dataset_cache_dir or (DEFAULT_CONFIG_PATH.parent.parent / "artifacts/.cache/datasets")
-            dataset_key = _dataset_cache_key(build_config, source_uri, code_sha)
-            stats = _restore_dataset(cache_root, dataset_key, work_dir)
+            dataset_key = _dataset_cache_key(build_config, source_uri, code_sha, args.strict_chains, source)
+            stats = _restore_dataset(
+                cache_root,
+                dataset_key,
+                work_dir,
+                run_id=run_id,
+                cli_argv=tuple(sys.argv),
+                strict_chains=args.strict_chains,
+                source=source,
+            )
             dataset_reused = stats is not None
         connection = connect(
             temp_directory=temp_dir,
@@ -247,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
                     forward=args.forward,
                 )
                 if cache_root is not None and dataset_key is not None and not args.profile and not args.forward:
+                    _mark_dataset_cache(work_dir, dataset_key)
                     _store_dataset(cache_root, dataset_key, work_dir)
         finally:
             connection.close()
@@ -281,11 +347,14 @@ def main(argv: list[str] | None = None) -> int:
                     spec,
                     args.score_forward,
                 )
+            total_seconds = round(time.perf_counter() - run_started, 3)
             runtime = {
-                "wall_seconds": round(time.perf_counter() - run_started, 3),
+                "wall_seconds": total_seconds,
+                "dataset_seconds": stats.duration_seconds,
+                "fit_seconds": round(max(0.0, total_seconds - stats.duration_seconds), 3),
                 "peak_rss_kb": _peak_rss_kb(),
             }
-            result.runtime_seconds = round(time.perf_counter() - run_started, 3)
+            result.runtime_seconds = total_seconds
             result.peak_rss_kb = int(runtime["peak_rss_kb"])
             summary = backtest_protocol.write_backtest_artifacts(
                 work_dir,
