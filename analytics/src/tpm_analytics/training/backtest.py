@@ -42,6 +42,7 @@ from tpm_analytics.training.model import (
     _cross_fitted,
     _decision_metrics,
     _filled,
+    _matrix,
     _metrics,
     _pooled_decision_value_rows,
     _threshold,
@@ -50,6 +51,7 @@ from tpm_analytics.training.model import (
     fit_calibrator,
     fit_candidate,
     fit_climatology,
+    fit_encoder,
     load_splits,
 )
 from tpm_analytics.training.protocol import (
@@ -138,6 +140,7 @@ class BacktestResult:
     cache_enabled: bool = False
     code_sha: str | None = None
     code_dirty: bool | None = None
+    fit_code_sha: str | None = None
     recipe_from_cache: bool = False
     fold_cache_hits: int = 0
     folds_refit: int = 0
@@ -370,8 +373,10 @@ def select_recipe_bundle(
     fitted: dict[tuple[str, str], FittedModel] = {}
     for fold in development:
         _, train, calibrate, _ = _fold_slices(panel, fold, config)
+        encoder = fit_encoder(train, spec)
+        matrix = _matrix(train, spec, encoder)
         for name in config.model.candidates:
-            model = fit_candidate(name, train, spec, config)
+            model = fit_candidate(name, train, spec, config, encoder=encoder, matrix=matrix)
             fitted[(fold.name, name)] = model
             raw = model.predict(calibrate)
             if name == "base_rate":
@@ -614,6 +619,25 @@ def _code_identity() -> tuple[str | None, bool | None]:
     return sha, dirty
 
 
+def _fit_code_hash() -> str:
+    root = Path(__file__).resolve().parents[1]
+    files = [
+        root / "training" / "backtest.py",
+        root / "training" / "model.py",
+        root / "training" / "protocol.py",
+        root / "training" / "config.py",
+        root / "training" / "labels.py",
+        root / "training" / "features.py",
+        root / "training" / "bands.py",
+    ]
+    digest = hashlib.sha256()
+    for path in files:
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def _recipe_cache_path(cache_dir: Path) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "recipe.json"
@@ -625,6 +649,7 @@ def _load_cached_recipe(
     dataset_sha256: str | None,
     code_sha: str | None,
     code_dirty: bool | None,
+    fit_code_sha: str,
 ) -> Recipe | None:
     if cache_dir is None:
         return None
@@ -641,6 +666,8 @@ def _load_cached_recipe(
         return None
     if code_sha is None or code_dirty is not False or payload.get("code_sha") != code_sha:
         return None
+    if payload.get("fit_code_sha") != fit_code_sha:
+        return None
     return Recipe(
         model=payload["model"],
         calibration=payload["calibration"],
@@ -655,6 +682,7 @@ def _save_cached_recipe(
     recipe: Recipe,
     dataset_sha256: str | None,
     code_sha: str | None,
+    fit_code_sha: str,
 ) -> None:
     if cache_dir is None:
         return
@@ -663,6 +691,7 @@ def _save_cached_recipe(
         "config_sha256": config.hash(),
         "dataset_sha256": dataset_sha256,
         "code_sha": code_sha,
+        "fit_code_sha": fit_code_sha,
     }
     _recipe_cache_path(cache_dir).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -681,6 +710,7 @@ def _load_cached_fold(
     dataset_sha256: str | None,
     code_sha: str | None,
     code_dirty: bool | None,
+    fit_code_sha: str,
 ) -> FoldResult | None:
     if cache_dir is None:
         return None
@@ -696,6 +726,8 @@ def _load_cached_fold(
     if dataset_sha256 is not None and meta.get("dataset_sha256") != dataset_sha256:
         return None
     if code_sha is None or code_dirty is not False or meta.get("code_sha") != code_sha:
+        return None
+    if meta.get("fit_code_sha") != fit_code_sha:
         return None
     try:
         with data_path.open("rb") as handle:
@@ -714,6 +746,7 @@ def _save_cached_fold(
     result: FoldResult,
     dataset_sha256: str | None,
     code_sha: str | None,
+    fit_code_sha: str,
 ) -> None:
     if cache_dir is None:
         return
@@ -731,6 +764,7 @@ def _save_cached_fold(
                 "config_sha256": config.hash(),
                 "dataset_sha256": dataset_sha256,
                 "code_sha": code_sha,
+                "fit_code_sha": fit_code_sha,
             },
             indent=2,
             sort_keys=True,
@@ -780,12 +814,13 @@ def run_backtest(
 ) -> BacktestResult:
     started = time.perf_counter()
     code_sha, code_dirty = _code_identity()
+    fit_code_sha = _fit_code_hash()
     cache_enabled = cache_dir is not None and code_sha is not None and code_dirty is False
     active_cache = cache_dir if cache_enabled else None
     folds = scored_folds(config.protocol, evaluate_test=evaluate_test)
     if not folds:
         raise ModelError("no scored folds")
-    cached_recipe = _load_cached_recipe(active_cache, config, dataset_sha256, code_sha, code_dirty)
+    cached_recipe = _load_cached_recipe(active_cache, config, dataset_sha256, code_sha, code_dirty, fit_code_sha)
     recipe_from_cache = cached_recipe is not None
     if cached_recipe is not None:
         _LOGGER.info("backtest: using cached recipe %s / %s", cached_recipe.model, cached_recipe.calibration)
@@ -794,11 +829,13 @@ def run_backtest(
     else:
         _LOGGER.info("backtest: selecting recipe on development folds")
         recipe, development_models = select_recipe_bundle(panel, config, spec)
-        _save_cached_recipe(active_cache, config, recipe, dataset_sha256, code_sha)
+        _save_cached_recipe(active_cache, config, recipe, dataset_sha256, code_sha, fit_code_sha)
         _LOGGER.info("backtest: recipe %s / %s", recipe.model, recipe.calibration)
     results: list[FoldResult] = []
     for fold in folds:
-        cached = _load_cached_fold(active_cache, fold, recipe, config, dataset_sha256, code_sha, code_dirty)
+        cached = _load_cached_fold(
+            active_cache, fold, recipe, config, dataset_sha256, code_sha, code_dirty, fit_code_sha
+        )
         if cached is not None:
             _LOGGER.info("backtest: using cached %s", fold.name)
             results.append(cached)
@@ -815,7 +852,7 @@ def run_backtest(
             spec,
             fitted_model=development_models.get(fold.name),
         )
-        _save_cached_fold(active_cache, fold, recipe, config, result, dataset_sha256, code_sha)
+        _save_cached_fold(active_cache, fold, recipe, config, result, dataset_sha256, code_sha, fit_code_sha)
         results.append(result)
         _LOGGER.info("backtest: finished %s", fold.name)
     development = tuple(item for item in results if item.fold.role == "development")
@@ -899,6 +936,7 @@ def run_backtest(
         cache_enabled=cache_enabled,
         code_sha=code_sha,
         code_dirty=code_dirty,
+        fit_code_sha=fit_code_sha,
         recipe_from_cache=recipe_from_cache,
         fold_cache_hits=sum(1 for item in results if item.from_cache),
         folds_refit=sum(1 for item in results if not item.from_cache),
@@ -1492,6 +1530,7 @@ def write_backtest_artifacts(
             "enabled": result.cache_enabled,
             "code_sha": result.code_sha,
             "code_dirty": result.code_dirty,
+            "fit_code_sha": result.fit_code_sha,
             "recipe_from_cache": result.recipe_from_cache,
             "fold_cache_hits": result.fold_cache_hits,
             "folds_refit": result.folds_refit,

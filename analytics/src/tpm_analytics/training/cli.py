@@ -83,6 +83,21 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _dataset_code_hash() -> str:
+    root = Path(__file__).resolve().parents[1]
+    excluded = {"backtest.py", "cli.py", "model.py", "report.py", "__init__.py"}
+    files = sorted(path for path in (root / "training").glob("*.py") if path.name not in excluded)
+    files.extend(sorted((root / "calendar").glob("*.py")))
+    lock = root.parent.parent / "uv.lock"
+    if lock.is_file():
+        files.append(lock)
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(root.parent.parent).as_posix().encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def _dataset_cache_key(
     config: TrainingConfig,
     source_uri: str,
@@ -92,7 +107,7 @@ def _dataset_cache_key(
 ) -> str:
     payload = {
         "version": 2,
-        "code_sha": code_sha,
+        "dataset_code_sha": code_sha,
         "config_sha256": config.hash(),
         "source": source_uri,
         "strict_chains": strict_chains,
@@ -278,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             and (getattr(source, "build_id", None) or getattr(source, "manifest_sha256", None))
         ):
             cache_root = args.dataset_cache_dir or (DEFAULT_CONFIG_PATH.parent.parent / "artifacts/.cache/datasets")
-            dataset_key = _dataset_cache_key(build_config, source_uri, code_sha, args.strict_chains, source)
+            dataset_key = _dataset_cache_key(build_config, source_uri, _dataset_code_hash(), args.strict_chains, source)
             stats = _restore_dataset(
                 cache_root,
                 dataset_key,

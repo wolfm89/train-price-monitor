@@ -40,7 +40,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
-from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, band_labels, ttd_band
+from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, band_labels
 from tpm_analytics.training.config import TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
 from tpm_analytics.training.identity import berlin_week_sql
@@ -441,9 +441,17 @@ class BaseRateModel:
         return np.column_stack([np.full(len(matrix), 1.0 - self.rate), np.full(len(matrix), self.rate)])
 
 
-def fit_candidate(name: str, data: TabularData, spec: FeatureSpec, config: TrainingConfig) -> FittedModel:
-    encoder = fit_encoder(data, spec)
-    matrix = _matrix(data, spec, encoder)
+def fit_candidate(
+    name: str,
+    data: TabularData,
+    spec: FeatureSpec,
+    config: TrainingConfig,
+    *,
+    encoder: OrdinalEncoder | None = None,
+    matrix: Array | None = None,
+) -> FittedModel:
+    encoder = encoder or fit_encoder(data, spec)
+    matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
         estimator: Any = BaseRateModel(float(np.mean(data.y)))
     elif name == "logistic":
@@ -542,56 +550,80 @@ class ClimatologyModel:
 
     def predict(self, data: TabularData, headroom: int | None = None) -> Array:
         hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
-        bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
-        heads = data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16)
+        heads = np.asarray(
+            data.headroom if headroom is None else np.full(len(data), int(headroom), dtype=np.int16),
+            dtype=np.int64,
+        )
         classes = np.asarray(data.features["service_class"], dtype=str)
-        values = np.empty(len(data), dtype=np.float64)
-        for index, (band, head, service_class) in enumerate(zip(bands, heads, classes, strict=True)):
-            key = (band, int(head), str(service_class))
-            values[index] = self.cells.get(
-                key,
-                self.band_headroom.get(
-                    (band, int(head)),
-                    self.headroom.get(int(head), self.global_rate),
-                ),
-            )
+        labels = np.asarray([band[0] for band in CLIMATOLOGY_BANDS], dtype=object)
+        band_positions = {str(label): index for index, label in enumerate(labels)}
+        max_head = max(100, int(heads.max()) if len(heads) else 100)
+        head_values = np.full(max_head + 1, self.global_rate, dtype=np.float64)
+        for head, rate in self.headroom.items():
+            if 0 <= head <= max_head:
+                head_values[head] = rate
+        band_head_values = np.repeat(head_values[None, :], len(labels), axis=0)
+        for (band, head), rate in self.band_headroom.items():
+            if band in band_positions and 0 <= head <= max_head:
+                band_head_values[band_positions[band], head] = rate
+        class_labels, class_inverse = np.unique(classes, return_inverse=True)
+        cell_values = np.repeat(band_head_values[:, :, None], len(class_labels) + 1, axis=2)
+        class_positions = {str(label): index for index, label in enumerate(class_labels)}
+        for (band, head, service_class), rate in self.cells.items():
+            if band in band_positions and 0 <= head <= max_head and service_class in class_positions:
+                cell_values[band_positions[band], head, class_positions[service_class]] = rate
+        band_index = _band_index(hours, CLIMATOLOGY_BANDS)
+        clipped_bands = np.clip(band_index, 0, len(labels) - 1)
+        clipped_heads = np.clip(heads, 0, max_head)
+        values = cell_values[clipped_bands, clipped_heads, class_inverse]
+        valid = np.isfinite(hours) & (band_index >= 0) & (band_index < len(labels))
+        values[~valid] = self.global_rate
         return values
 
 
 def fit_climatology(data: TabularData, *, strength: float = 50.0) -> ClimatologyModel:
     """Fit a hierarchical prevalence baseline with a Beta-style prior on thin cells."""
     hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
-    bands = [ttd_band(float(value), CLIMATOLOGY_BANDS) for value in hours]
+    bands = _band_labels(hours, CLIMATOLOGY_BANDS)
     heads = np.asarray(data.headroom, dtype=np.int64)
     classes = np.asarray(data.features["service_class"], dtype=str)
     global_count = len(data)
     global_positives = int(np.sum(data.y))
     global_rate = (global_positives + 1.0) / (global_count + 2.0)
-    head_counts: dict[int, list[int]] = {}
-    band_counts: dict[tuple[str, int], list[int]] = {}
-    cell_counts: dict[tuple[str, int, str], list[int]] = {}
-    for band, head, service_class, target in zip(bands, heads, classes, data.y, strict=True):
-        head_counts.setdefault(int(head), [0, 0])
-        head_counts[int(head)][0] += 1
-        head_counts[int(head)][1] += int(target)
-        band_counts.setdefault((band, int(head)), [0, 0])
-        band_counts[(band, int(head))][0] += 1
-        band_counts[(band, int(head))][1] += int(target)
-        cell_counts.setdefault((band, int(head), str(service_class)), [0, 0])
-        cell_counts[(band, int(head), str(service_class))][0] += 1
-        cell_counts[(band, int(head), str(service_class))][1] += int(target)
+
+    head_keys, head_inverse = np.unique(heads, return_inverse=True)
+    head_counts = np.bincount(head_inverse, minlength=len(head_keys))
+    head_positives = np.bincount(head_inverse, weights=data.y, minlength=len(head_keys))
     head_rate = {
-        head: (positive + strength * global_rate) / (count + strength)
-        for head, (count, positive) in head_counts.items()
+        int(key): (int(positive) + strength * global_rate) / (int(count) + strength)
+        for key, count, positive in zip(head_keys, head_counts, head_positives, strict=True)
     }
-    band_rate = {
-        key: (positive + strength * head_rate.get(key[1], global_rate)) / (count + strength)
-        for key, (count, positive) in band_counts.items()
-    }
-    cell_rate = {
-        key: (positive + strength * band_rate.get((key[0], key[1]), global_rate)) / (count + strength)
-        for key, (count, positive) in cell_counts.items()
-    }
+
+    band_labels, band_inverse = np.unique(bands, return_inverse=True)
+    band_head = band_inverse * len(head_keys) + head_inverse
+    band_counts = np.bincount(band_head, minlength=len(band_labels) * len(head_keys))
+    band_positives = np.bincount(band_head, weights=data.y, minlength=len(band_labels) * len(head_keys))
+    band_rate: dict[tuple[str, int], float] = {}
+    for band_position, band in enumerate(band_labels):
+        for head_position, head in enumerate(head_keys):
+            index = band_position * len(head_keys) + head_position
+            band_rate[(str(band), int(head))] = (int(band_positives[index]) + strength * head_rate[int(head)]) / (
+                int(band_counts[index]) + strength
+            )
+
+    class_labels, class_inverse = np.unique(classes, return_inverse=True)
+    cell = (band_inverse * len(head_keys) + head_inverse) * len(class_labels) + class_inverse
+    cell_counts = np.bincount(cell, minlength=len(band_labels) * len(head_keys) * len(class_labels))
+    cell_positives = np.bincount(cell, weights=data.y, minlength=len(band_labels) * len(head_keys) * len(class_labels))
+    cell_rate: dict[tuple[str, int, str], float] = {}
+    for band_position, band in enumerate(band_labels):
+        for head_position, head in enumerate(head_keys):
+            for class_position, service_class in enumerate(class_labels):
+                index = (band_position * len(head_keys) + head_position) * len(class_labels) + class_position
+                cell_rate[(str(band), int(head), str(service_class))] = (
+                    int(cell_positives[index]) + strength * band_rate[(str(band), int(head))]
+                ) / (int(cell_counts[index]) + strength)
+
     return ClimatologyModel(
         cells=cell_rate,
         band_headroom=band_rate,
@@ -921,9 +953,23 @@ def _bootstrap(y: Array, probabilities: Array, groups: Array, replicates: int, s
     }
 
 
+def _band_index(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
+    edges = np.asarray([band[1] for band in bands], dtype=np.float64)
+    return np.searchsorted(edges, hours, side="right") - 1
+
+
+def _band_labels(hours: Array, bands: tuple[tuple[str, int, int], ...]) -> Array:
+    index = _band_index(hours, bands)
+    labels = np.asarray([band[0] for band in bands], dtype=object)
+    valid = np.isfinite(hours) & (index >= 0) & (index < len(bands))
+    result = np.full(len(hours), "unknown", dtype=object)
+    result[valid] = labels[index[valid]]
+    return result
+
+
 def _ttd_array(data: TabularData) -> Array:
     hours = np.asarray(data.features["hours_to_departure"], dtype=np.float64)
-    return np.asarray([ttd_band(float(value)) for value in hours], dtype=str)
+    return _band_labels(hours, HEADLINE_BANDS).astype(str)
 
 
 def _calibration_stats(y: Array, probabilities: Array, bins: int) -> dict[str, float | None]:
@@ -944,6 +990,32 @@ def _calibration_stats(y: Array, probabilities: Array, bins: int) -> dict[str, f
     return {"slope": slope, "intercept": intercept, "ece": ece}
 
 
+def _bootstrap_replicate(
+    y: Array,
+    probabilities: Array,
+    clusters: list[Array],
+    sampled: Array,
+    threshold: float,
+) -> tuple[float, float, float, float, float, float, float]:
+    indices = np.concatenate([clusters[index] for index in sampled])
+    yy = y[indices]
+    pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
+    both = len(np.unique(yy)) == 2
+    brier = float(brier_score_loss(yy, pp))
+    base = float(np.mean(yy))
+    bss = 1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan
+    decisions = _decision_metrics(yy, pp, threshold)
+    return (
+        brier,
+        float(log_loss(yy, pp, labels=[0, 1])),
+        bss,
+        float(roc_auc_score(yy, pp)) if both else np.nan,
+        float(average_precision_score(yy, pp)) if both else np.nan,
+        decisions["precision_at_threshold"],
+        decisions["recall_at_threshold"],
+    )
+
+
 def _bootstrap_metrics(
     y: Array,
     probabilities: Array,
@@ -958,25 +1030,20 @@ def _bootstrap_metrics(
         return {}
     clusters = [np.flatnonzero(inverse == index) for index in range(len(unique))]
     rng = np.random.default_rng(seed)
+    samples = [rng.integers(0, len(unique), size=len(unique)) for _ in range(replicates)]
+    workers = min(6, joblib.cpu_count() or 1)
+    if replicates < 8 or workers == 1:
+        rows = [_bootstrap_replicate(y, probabilities, clusters, sampled, threshold) for sampled in samples]
+    else:
+        rows = joblib.Parallel(n_jobs=workers, prefer="threads")(
+            joblib.delayed(_bootstrap_replicate)(y, probabilities, clusters, sampled, threshold) for sampled in samples
+        )
     collected: dict[str, list[float]] = {
         key: [] for key in ("brier", "log_loss", "bss", "roc_auc", "average_precision", "precision", "recall")
     }
-    for _ in range(replicates):
-        sampled = rng.integers(0, len(unique), size=len(unique))
-        indices = np.concatenate([clusters[index] for index in sampled])
-        yy = y[indices]
-        pp = np.clip(probabilities[indices], 1e-9, 1.0 - 1e-9)
-        both = len(np.unique(yy)) == 2
-        brier = float(brier_score_loss(yy, pp))
-        base = float(np.mean(yy))
-        collected["brier"].append(brier)
-        collected["log_loss"].append(float(log_loss(yy, pp, labels=[0, 1])))
-        collected["bss"].append(1.0 - brier / (base * (1.0 - base)) if 0.0 < base < 1.0 else np.nan)
-        collected["roc_auc"].append(float(roc_auc_score(yy, pp)) if both else np.nan)
-        collected["average_precision"].append(float(average_precision_score(yy, pp)) if both else np.nan)
-        decisions = _decision_metrics(yy, pp, threshold)
-        collected["precision"].append(decisions["precision_at_threshold"])
-        collected["recall"].append(decisions["recall_at_threshold"])
+    for row in rows:
+        for key, value in zip(collected, row, strict=True):
+            collected[key].append(value)
     result: dict[str, list[float]] = {}
     for key, values in collected.items():
         if key in {"brier", "log_loss"}:
