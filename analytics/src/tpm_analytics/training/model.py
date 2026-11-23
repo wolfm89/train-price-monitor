@@ -8,7 +8,6 @@ selection slice or the test set.
 from __future__ import annotations
 
 import hashlib
-import importlib
 import itertools
 import json
 from dataclasses import dataclass, field
@@ -41,7 +40,7 @@ from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, band_labels
-from tpm_analytics.training.config import TrainingConfig
+from tpm_analytics.training.config import MODEL_NAMES, TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
 from tpm_analytics.training.identity import berlin_week_sql
 from tpm_analytics.training.labels import breach, cents
@@ -480,6 +479,8 @@ def fit_candidate(
     matrix: Array | None = None,
 ) -> FittedModel:
     """Fit one candidate model on the training panel."""
+    if name not in MODEL_NAMES:
+        raise ModelError(f"unknown model {name!r}; supported: {', '.join(MODEL_NAMES)}")
     encoder = fit_encoder(data, spec) if encoder is None else encoder
     matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
@@ -547,23 +548,6 @@ def fit_candidate(
             selected=selected,
             dropped=dropped,
         )
-    elif name == "lightgbm":
-        try:
-            lightgbm = importlib.import_module("lightgbm")
-        except ImportError as error:
-            raise ModelError(
-                "lightgbm is not installed; install it separately, it is not in the train group"
-            ) from error
-        LGBMClassifier = lightgbm.LGBMClassifier
-        estimator = LGBMClassifier(
-            n_estimators=config.model.max_iter,
-            learning_rate=config.model.learning_rate,
-            num_leaves=config.model.max_leaf_nodes,
-            random_state=config.model.random_state,
-            monotone_constraints=[-1 if feature.name == "headroom_pct" else 0 for feature in spec.features],
-            verbosity=-1,
-        )
-        estimator.fit(matrix, data.y)
     else:
         raise ModelError(f"unknown model {name!r}")
     return FittedModel(name=name, estimator=estimator, encoder=encoder, spec=spec)
