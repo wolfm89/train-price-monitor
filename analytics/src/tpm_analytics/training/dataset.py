@@ -111,6 +111,24 @@ def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
     return int(row[0])
 
 
+def _validate_source_schema(connection: duckdb.DuckDBPyConnection, source: SourceSpec) -> None:
+    """Raise DatasetError when the source files do not share one Parquet schema."""
+    try:
+        rows = connection.execute(
+            f"SELECT file_name, name, type FROM parquet_schema('{sql_string(source.glob)}') WHERE name <> 'schema'"
+        ).fetchall()
+    except duckdb.Error as error:
+        raise DatasetError(f"source {source.label} has no readable Parquet schema: {error}") from error
+    schemas: dict[str, list[tuple[str, str]]] = {}
+    for file_name, name, type_name in rows:
+        schemas.setdefault(str(file_name), []).append((str(name), str(type_name)))
+    distinct = {tuple(columns) for columns in schemas.values()}
+    if len(distinct) > 1:
+        raise DatasetError(
+            f"source {source.label} mixes Parquet schemas across {len(schemas)} files; rebuild or narrow the source"
+        )
+
+
 def _source_count(connection: duckdb.DuckDBPyConnection, source_sql: str) -> int:
     """Return the number of rows in the source relation."""
     return _scalar(connection, f"SELECT count(*) FROM {source_sql}")
@@ -1757,6 +1775,7 @@ def build_dataset(
     dataset_dir = out_dir / "dataset"
     calendar_set = config.calendar.feature_set
     spec = feature_spec(calendar_set)
+    _validate_source_schema(connection, source)
     source_sql = read_parquet(source.glob, union_by_name=False)
     source_rows = _source_count(connection, source_sql)
     if source_rows == 0:

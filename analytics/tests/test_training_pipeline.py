@@ -223,6 +223,26 @@ def _build(tmp_path: Path) -> tuple[DatasetStats, Path]:
     return stats, tmp_path / "run"
 
 
+def test_mixed_schema_glob_raises_dataset_error(tmp_path: Path) -> None:
+    first = tmp_path / "a.parquet"
+    second = tmp_path / "b.parquet"
+    pq.write_table(pa.table({"a": [1]}), first)
+    pq.write_table(pa.table({"a": [1], "b": [2]}), second)
+    config = load_config(_config(tmp_path))
+    connection = duckdb.connect()
+    try:
+        with pytest.raises(DatasetError, match="mixes Parquet schemas"):
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(tmp_path / "*.parquet"), label="mixed", build_id="mixed", manifest_sha256=None),
+                config,
+                tmp_path / "mixed-run",
+                run_id="mixed",
+            )
+    finally:
+        connection.close()
+
+
 def test_dataset_contract_and_null_handoff(tmp_path: Path) -> None:
     stats, out = _build(tmp_path)
     assert stats.rows > 0
