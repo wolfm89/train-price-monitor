@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ import pyarrow.parquet as pq
 from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from scipy.special import expit
-from sklearn.compose import ColumnTransformer
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
@@ -36,12 +37,12 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, SplineTransformer, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, band_labels
 from tpm_analytics.training.config import MODEL_NAMES, TrainingConfig
-from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
+from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, FeatureSpec
 from tpm_analytics.training.identity import berlin_week_sql
 from tpm_analytics.training.labels import breach, cents
 
@@ -395,19 +396,30 @@ def _usable_columns(
     matrix: Array,
     categorical: list[int],
     names: tuple[str, ...],
+    *,
+    rows: Array | None = None,
 ) -> tuple[tuple[int, ...], tuple[str, ...]]:
     """Drop columns with no usable split; HistGB cannot bin a constant/all-null feature."""
     usable: list[int] = []
     dropped: list[str] = []
     categorical_set = set(categorical)
-    for index in range(matrix.shape[1]):
-        column = matrix[:, index]
+    view = matrix if rows is None else matrix[rows]
+    for index in range(view.shape[1]):
+        column = view[:, index]
         values = column if index in categorical_set else column[~np.isnan(column)]
         if values.size >= 2 and np.any(values != values[0]):
             usable.append(index)
         else:
             dropped.append(names[index])
     return tuple(usable), tuple(dropped)
+
+
+EARLY_STOPPING_DAYS = 7
+EARLY_STOPPING_MAX_ITER = 400
+EARLY_STOPPING_PATIENCE = 50
+EARLY_STOPPING_TOLERANCE = 1e-4
+LOGISTIC_RELATIVE_FEATURES = ("price_change_24h", "price_velocity_24h")
+LOGISTIC_SPLINE_KNOTS = 6
 
 
 @dataclass
@@ -420,6 +432,7 @@ class FittedModel:
     spec: FeatureSpec
     selected: tuple[int, ...] | None = None
     dropped: tuple[str, ...] = ()
+    early_stopping: dict[str, Any] | None = None
 
     def transform(self, data: TabularData) -> Array:
         """Build the model matrix for the panel."""
@@ -469,6 +482,162 @@ class BaseRateModel:
         return np.column_stack([np.full(len(matrix), 1.0 - self.rate), np.full(len(matrix), self.rate)])
 
 
+class LogisticPrep(BaseEstimator, TransformerMixin):
+    """Numeric transforms and categorical encoding for the upgraded logistic candidate.
+
+    The headroom enters as ``log(1 + headroom)``, hours to departure as a natural spline, and the
+    absolute 24 h fare changes as fractions of the current fare. Median imputation with missing
+    indicators and one-hot categories follow the shared matrix.
+    """
+
+    def __init__(self, spec: FeatureSpec) -> None:
+        """Initialise the transformer for one feature specification."""
+        self.spec = spec
+
+    def _numeric(self, matrix: Array) -> Array:
+        """Build the numeric block, expanding the spline and relative fares."""
+        blocks: list[Array] = []
+        price_index = self.spec.names.index("price_eur") if "price_eur" in self.spec.names else None
+        price = matrix[:, price_index].astype(np.float64) if price_index is not None else None
+        for index in self.numeric_:
+            name = self.spec.names[index]
+            column = np.asarray(matrix[:, index], dtype=np.float64)
+            if index == self.hours_index_:
+                blocks.append(np.asarray(self.spline_.transform(column.reshape(-1, 1)), dtype=np.float64))
+            elif name == "headroom_pct":
+                blocks.append(np.log1p(np.clip(column, 0.0, None)).reshape(-1, 1))
+            elif name in LOGISTIC_RELATIVE_FEATURES and price is not None:
+                relative = np.full(len(column), np.nan, dtype=np.float64)
+                valid = np.isfinite(column) & np.isfinite(price) & (price > 0)
+                relative[valid] = column[valid] / price[valid]
+                blocks.append(relative.reshape(-1, 1))
+            else:
+                blocks.append(column.reshape(-1, 1))
+        if not blocks:
+            return np.empty((len(matrix), 0), dtype=np.float64)
+        return np.column_stack(blocks)
+
+    def fit(self, matrix: Array, y: Array | None = None) -> LogisticPrep:
+        """Fit the spline, imputer, scaler and category encoder."""
+        self.numeric_ = [index for index, feature in enumerate(self.spec.features) if feature.kind != CATEGORICAL]
+        self.categorical_ = [index for index, feature in enumerate(self.spec.features) if feature.kind == CATEGORICAL]
+        self.hours_index_ = self.spec.names.index("hours_to_departure")
+        self.spline_ = SplineTransformer(
+            n_knots=LOGISTIC_SPLINE_KNOTS,
+            degree=3,
+            include_bias=False,
+            extrapolation="linear",
+        )
+        self.spline_.fit(np.asarray(matrix[:, self.hours_index_], dtype=np.float64).reshape(-1, 1))
+        numeric = self._numeric(matrix)
+        self.imputer_ = SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True)
+        self.scaler_ = StandardScaler()
+        self.scaler_.fit(self.imputer_.fit_transform(numeric))
+        self.encoder_ = OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32)
+        self.encoder_.fit(np.asarray(matrix[:, self.categorical_], dtype=np.float64))
+        return self
+
+    def transform(self, matrix: Array) -> Array:
+        """Apply the fitted transforms and return a dense matrix."""
+        numeric = self.scaler_.transform(self.imputer_.transform(self._numeric(matrix)))
+        parts = [numeric]
+        if self.categorical_:
+            categories = np.asarray(matrix[:, self.categorical_], dtype=np.float64)
+            parts.append(self.encoder_.transform(categories))
+        return np.asarray(np.hstack(parts), dtype=np.float32)
+
+
+def _log_loss_at(y: Array, probabilities: Array) -> float:
+    """Return the clipped binary log loss for one probability vector."""
+    clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
+    return float(-np.mean(y * np.log(clipped) + (1.0 - y) * np.log(1.0 - clipped)))
+
+
+def _early_stopping_plan(losses: list[float]) -> tuple[int, int]:
+    """Return the best iteration and the iteration where patience would stop."""
+    if not losses:
+        return 1, 1
+    best = int(np.argmin(losses)) + 1
+    stop = len(losses)
+    for index in range(best - 1, len(losses)):
+        if index + 1 - best >= EARLY_STOPPING_PATIENCE and losses[index] > losses[best - 1] - EARLY_STOPPING_TOLERANCE:
+            stop = index + 1
+            break
+    return best, stop
+
+
+def _holdout_mask(snapshot_at: Array) -> Array | None:
+    """Return the last training week's rows, or None when it is too small to judge."""
+    snapshot = np.asarray(snapshot_at, dtype="datetime64[ms]")
+    if len(snapshot) < 200:
+        return None
+    holdout = snapshot > snapshot.max() - np.timedelta64(EARLY_STOPPING_DAYS, "D")
+    if int(holdout.sum()) < 100 or int((~holdout).sum()) < 100:
+        return None
+    return holdout
+
+
+def _fit_hgb_with_early_stopping(
+    matrix: Array,
+    y: Array,
+    snapshot_at: Array,
+    *,
+    estimator_settings: dict[str, Any],
+    monotonic: list[int],
+    categorical: list[int],
+    max_iter: int,
+) -> tuple[Any, dict[str, Any]]:
+    """Fit HGB on all but the last training week, pick the iteration, then refit on all rows."""
+    started = time.perf_counter()
+    limit = min(EARLY_STOPPING_MAX_ITER, int(max_iter))
+    holdout = _holdout_mask(snapshot_at)
+    if holdout is None or len(np.unique(y[holdout])) < 2:
+        empty = np.zeros(len(matrix), dtype=bool)
+        estimator = HistGradientBoostingClassifier(
+            max_iter=limit,
+            early_stopping=False,
+            categorical_features=categorical,
+            monotonic_cst=monotonic,
+            **estimator_settings,
+        ).fit(matrix, y)
+        return estimator, {
+            "fallback": True,
+            "iterations": limit,
+            "holdout_rows": int(empty.sum() if holdout is None else holdout.sum()),
+            "fit_seconds": round(time.perf_counter() - started, 3),
+            "refit_seconds": 0.0,
+        }
+    probe = HistGradientBoostingClassifier(
+        max_iter=limit,
+        early_stopping=False,
+        categorical_features=categorical,
+        monotonic_cst=monotonic,
+        **estimator_settings,
+    ).fit(matrix[~holdout], y[~holdout])
+    fit_seconds = time.perf_counter() - started
+    losses = [_log_loss_at(y[holdout], stage[:, 1]) for stage in probe.staged_predict_proba(matrix[holdout])]
+    best, stop = _early_stopping_plan(losses)
+    refit_started = time.perf_counter()
+    estimator = HistGradientBoostingClassifier(
+        max_iter=best,
+        early_stopping=False,
+        categorical_features=categorical,
+        monotonic_cst=monotonic,
+        **estimator_settings,
+    ).fit(matrix, y)
+    refit_seconds = time.perf_counter() - refit_started
+    return estimator, {
+        "fallback": False,
+        "iterations": best,
+        "stop_iteration": stop,
+        "holdout_rows": int(holdout.sum()),
+        "holdout_log_loss": float(losses[best - 1]),
+        "train_log_loss": _log_loss_at(y, estimator.predict_proba(matrix)[:, 1]),
+        "fit_seconds": round(fit_seconds, 3),
+        "refit_seconds": round(refit_seconds, 3),
+    }
+
+
 def fit_candidate(
     name: str,
     data: TabularData,
@@ -486,30 +655,9 @@ def fit_candidate(
     if name == "base_rate":
         estimator: Any = BaseRateModel(float(np.mean(data.y)))
     elif name == "logistic":
-        numeric = _indices(spec, (NUMERIC, BOOLEAN))
-        categorical = _indices(spec, (CATEGORICAL,))
-        preprocess = ColumnTransformer(
-            [
-                (
-                    "numeric",
-                    Pipeline(
-                        [
-                            ("impute", SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True)),
-                            ("scale", StandardScaler()),
-                        ]
-                    ),
-                    numeric,
-                ),
-                (
-                    "categorical",
-                    OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32),
-                    categorical,
-                ),
-            ]
-        )
         estimator = Pipeline(
             [
-                ("preprocess", preprocess),
+                ("preprocess", LogisticPrep(spec)),
                 (
                     "classifier",
                     LogisticRegression(
@@ -526,20 +674,32 @@ def fit_candidate(
         if not selected:
             raise ModelError("no feature has two distinct values")
         remapped = [position for position, index in enumerate(selected) if index in set(categorical)]
+        holdout = _holdout_mask(data.snapshot_at)
+        if holdout is not None:
+            probe_selected, _ = _usable_columns(matrix, categorical, spec.names, rows=~holdout)
+            keep = set(probe_selected)
+            selected = tuple(index for index in selected if index in keep)
+            if not selected:
+                raise ModelError("no feature has two distinct values")
+            dropped = tuple(name for index, name in enumerate(spec.names) if index not in set(selected))
+        remapped = [position for position, index in enumerate(selected) if index in set(categorical)]
         monotonic = [0] * len(selected)
         headroom_index = spec.names.index("headroom_pct")
         if headroom_index in selected:
             monotonic[selected.index(headroom_index)] = -1
-        estimator = HistGradientBoostingClassifier(
+        estimator, early_stopping = _fit_hgb_with_early_stopping(
+            matrix[:, list(selected)],
+            data.y,
+            data.snapshot_at,
+            estimator_settings={
+                "learning_rate": config.model.learning_rate,
+                "max_leaf_nodes": config.model.max_leaf_nodes,
+                "random_state": config.model.random_state,
+            },
+            monotonic=monotonic,
+            categorical=remapped,
             max_iter=config.model.max_iter,
-            learning_rate=config.model.learning_rate,
-            max_leaf_nodes=config.model.max_leaf_nodes,
-            early_stopping=False,
-            categorical_features=remapped,
-            monotonic_cst=monotonic,
-            random_state=config.model.random_state,
         )
-        estimator.fit(matrix[:, list(selected)], data.y)
         return FittedModel(
             name=name,
             estimator=estimator,
@@ -547,6 +707,7 @@ def fit_candidate(
             spec=spec,
             selected=selected,
             dropped=dropped,
+            early_stopping=early_stopping,
         )
     else:
         raise ModelError(f"unknown model {name!r}")

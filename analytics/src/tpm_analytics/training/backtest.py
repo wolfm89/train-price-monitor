@@ -134,6 +134,7 @@ class FoldResult:
     calibrate: TabularData | None = None
     calibration_stats: dict[str, float | None] = field(default_factory=dict)
     headroom_monotonic: bool = True
+    early_stopping: dict[str, Any] | None = None
 
 
 @dataclass
@@ -555,6 +556,7 @@ def fit_fold(
         fit_included=fitted_model is None,
         calibration_stats=calibration_stats,
         headroom_monotonic=headroom_monotonic,
+        early_stopping=model.early_stopping,
     )
 
 
@@ -948,6 +950,7 @@ def run_backtest(
             "recall_at_threshold": item.metrics.get("recall_at_threshold"),
             "headroom_monotonic": item.headroom_monotonic,
             "calibration_stats": item.calibration_stats,
+            "early_stopping": item.early_stopping,
             "runtime_seconds": item.runtime_seconds,
             "from_cache": item.from_cache,
             "fit_included": item.fit_included,
@@ -1427,13 +1430,15 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         else ""
     )
     diagnostics_table = _table(
-        ["fold", "headroom monotonic", "calibration slope", "ECE"],
+        ["fold", "headroom monotonic", "calibration slope", "ECE", "HGB iterations", "holdout log loss"],
         [
             [
                 row["fold"],
                 _yes(row.get("headroom_monotonic")),
                 _fmt((row.get("calibration_stats") or {}).get("slope")),
                 _fmt((row.get("calibration_stats") or {}).get("ece")),
+                _fmt((row.get("early_stopping") or {}).get("iterations"), 0),
+                _fmt((row.get("early_stopping") or {}).get("holdout_log_loss")),
             ]
             for row in result.per_fold
         ],

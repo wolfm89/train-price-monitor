@@ -55,6 +55,7 @@ from tpm_analytics.training.labels import breach, breach_sql, cents
 from tpm_analytics.training.model import (
     Evaluation,
     FittedModel,
+    LogisticPrep,
     ModelError,
     TabularData,
     _band_labels,
@@ -68,13 +69,18 @@ from tpm_analytics.training.model import (
     _compact_datetime,
     _cross_fitted_with_folds,
     _decision_value_rows,
+    _early_stopping_plan,
     _encode_text,
     _fit_final_calibration,
+    _holdout_mask,
+    _matrix,
     _pooled_decision_value_rows,
     _strata_rows,
     _train_prevalence,
     fit_calibrator,
+    fit_candidate,
     fit_climatology,
+    fit_encoder,
     load_model,
     load_split,
     train_and_evaluate,
@@ -3117,6 +3123,11 @@ def test_fit_fold_uses_the_frozen_recipe(tmp_path: Path) -> None:
         spec,
     )
     assert not np.allclose(small.raw, large.raw)
+    assert small.early_stopping is not None
+    assert small.early_stopping["iterations"] <= 2
+    assert large.early_stopping is not None
+    assert large.early_stopping["iterations"] <= 80
+    assert small.early_stopping["holdout_rows"] > 0
     sigmoid = fit_fold(replace(recipe, calibration="sigmoid"), fold, train, calibrate, test, config, spec)
     assert not np.allclose(small.calibrated, sigmoid.calibrated)
     higher_floor = fit_fold(replace(recipe, threshold_floor=0.9), fold, train, calibrate, test, config, spec)
@@ -3743,6 +3754,120 @@ def test_selection_joint_search_and_deterministic_table(tmp_path: Path) -> None:
     assert all("beats_climatology" in row for row in first.table["rows"] if row.get("selectable", True))
     assert first.table["rule"]["cluster"] == "departure_date"
     assert first.table["rule"]["replicates"] == 200
+
+
+def test_early_stopping_plan_uses_patience_and_tolerance() -> None:
+    losses = [0.5 - 0.001 * index for index in range(1, 151)] + [0.35] * 250
+    best, stop = _early_stopping_plan(losses)
+    assert best == 150
+    assert stop == 150 + 50
+    never = [0.5 - 0.001 * index for index in range(1, 401)]
+    assert _early_stopping_plan(never) == (400, 400)
+    flat = [0.4] * 400
+    assert _early_stopping_plan(flat) == (1, 51)
+
+
+def test_holdout_is_the_last_training_week() -> None:
+    days = np.arange(40, dtype="timedelta64[D]") + np.datetime64("2026-01-01T00:00:00", "ms")
+    snapshot = np.repeat(days, 20)
+    holdout = _holdout_mask(snapshot)
+    assert holdout is not None
+    selected = snapshot[holdout]
+    assert selected.min() > snapshot.max() - np.timedelta64(7, "D")
+    assert selected.max() == snapshot.max()
+    assert holdout.sum() == 7 * 20
+    assert _holdout_mask(snapshot[:100]) is None
+
+
+def test_logistic_prep_transforms_headroom_and_relative_fares() -> None:
+    spec = feature_spec("none")
+    count = 30
+    rng = np.random.default_rng(5)
+    features: dict[str, Any] = {}
+    for feature in spec.features:
+        if feature.kind == "categorical":
+            features[feature.name] = np.array(["a", "b", "c"] * 10, dtype=object)
+        elif feature.name in {"price_eur", "headroom_pct"}:
+            features[feature.name] = np.full(count, 100.0, dtype=np.float32)
+        else:
+            features[feature.name] = rng.normal(size=count).astype(np.float32)
+    features["price_change_24h"] = np.full(count, 10.0, dtype=np.float32)
+    features["price_velocity_24h"] = np.full(count, 1.0, dtype=np.float32)
+    data = TabularData(
+        features=features,
+        y=np.tile(np.array([0, 1], dtype=np.int8), count // 2),
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 5, dtype=np.int16),
+        departure_date=np.full(count, "2026-07-01", dtype=object),
+        snapshot_at=np.full(count, "2026-07-01T00:00:00", dtype=object),
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W27", dtype=object),
+    )
+    encoder = fit_encoder(data, spec)
+    matrix = _matrix(data, spec, encoder)
+    prep = LogisticPrep(spec).fit(matrix)
+    numeric = prep._numeric(matrix)
+    spline_width = numeric.shape[1] - (len(prep.numeric_) - 1)
+    # Six knots with a cubic basis give seven columns in place of the raw hours column.
+    assert spline_width == 7
+
+    headroom_index = spec.names.index("headroom_pct")
+    raised = matrix.copy()
+    raised[:, headroom_index] = 30.0
+    difference = prep._numeric(raised) - numeric
+    changed = np.flatnonzero(np.any(np.abs(difference) > 1e-9, axis=0))
+    assert len(changed) == 1
+    assert np.allclose(difference[:, changed[0]], np.log1p(30.0) - np.log1p(100.0))
+
+    change_index = spec.names.index("price_change_24h")
+    cheaper = matrix.copy()
+    cheaper[:, change_index] = 5.0
+    relative = prep._numeric(cheaper) - numeric
+    changed = np.flatnonzero(np.any(np.abs(relative) > 1e-9, axis=0))
+    assert len(changed) == 1
+    assert np.allclose(relative[:, changed[0]], 5.0 / 100.0 - 10.0 / 100.0)
+
+
+def test_hgb_early_stopping_refits_with_the_chosen_iteration_count() -> None:
+    spec = feature_spec("none")
+    count = 600
+    rng = np.random.default_rng(9)
+    features: dict[str, Any] = {}
+    for feature in spec.features:
+        if feature.kind == "categorical":
+            features[feature.name] = np.array(["a", "b"] * (count // 2), dtype=object)
+        else:
+            features[feature.name] = rng.normal(size=count).astype(np.float32)
+    y = (features["price_eur"] > 0).astype(np.int8)
+    data = TabularData(
+        features=features,
+        y=y,
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 5, dtype=np.int16),
+        departure_date=np.full(count, "2026-07-01", dtype=object),
+        snapshot_at=(np.datetime64("2026-05-01T00:00:00", "ms") + np.arange(count).astype("timedelta64[h]")),
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W18", dtype=object),
+    )
+    config = load_config(DEFAULT_CONFIG_PATH)
+    model = fit_candidate("hist_gradient_boosting", data, spec, config)
+    assert model.early_stopping is not None
+    record = model.early_stopping
+    assert record["fallback"] is False
+    assert record["holdout_rows"] == 168
+    assert record["iterations"] == model.estimator.max_iter
+    assert 1 <= record["iterations"] <= 400
+    assert record["holdout_log_loss"] <= 1.0
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:
