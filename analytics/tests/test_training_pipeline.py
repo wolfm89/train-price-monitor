@@ -66,6 +66,7 @@ from tpm_analytics.training.model import (
     _bss_train,
     _calibration_curve,
     _calibration_stats,
+    _cell_threshold,
     _cluster_mean_ci,
     _compact_datetime,
     _cross_fitted_with_folds,
@@ -78,6 +79,7 @@ from tpm_analytics.training.model import (
     _pooled_decision_value_rows,
     _strata_rows,
     _train_prevalence,
+    _wilson_lower,
     fit_calibrator,
     fit_candidate,
     fit_climatology,
@@ -3170,9 +3172,14 @@ def test_calibration_cross_fit_uses_departure_date(tmp_path: Path, monkeypatch: 
         return original(raw, y, groups, method, cfg, **kwargs)
 
     monkeypatch.setattr(backtest_module, "_cross_fitted_detailed", spy)
-    fit_fold(recipe, fold, train, calibrate, test, config, spec)
+    result = fit_fold(recipe, fold, train, calibrate, test, config, spec)
     assert captured
     assert all(np.array_equal(groups, calibrate.departure_date) for groups in captured)
+    # One cross-fit for the pooled calibrator and one per headroom for the cell thresholds.
+    assert len(captured) == 1 + len(config.label.headroom_pct)
+    assert 0 < len(result.cell_thresholds) <= len(config.label.headroom_pct) * len(HEADLINE_BANDS)
+    assert all(headroom in config.label.headroom_pct for headroom, _ in result.cell_thresholds)
+    assert all(band in {label for label, _, _ in HEADLINE_BANDS} for _, band in result.cell_thresholds)
 
 
 def test_protocol_boundaries_are_inclusive() -> None:
@@ -3672,6 +3679,14 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     required = {"headroom_pct", "ttd_band", "era", "rows", "slope", "intercept", "ece"}
     assert all(required <= set(row) for row in scored.calibration_cells)
     assert all(row["rows"] >= 20 for row in scored.calibration_cells)
+    assert len(scored.development_threshold_cells) == 5 * len(HEADLINE_BANDS)
+    assert len(scored.threshold_cells) == 5 * len(HEADLINE_BANDS)
+    assert all("operating_point" in row and "floor_met" in row for row in scored.threshold_cells)
+    assert scored.threshold_hold_rate["cells"] == 5 * len(HEADLINE_BANDS)
+    assert scored.threshold_hold_rate["with_operating_point"] <= scored.threshold_hold_rate["cells"]
+    assert scored.pr_curves
+    assert all(point["precision"] >= 0.0 for curve in scored.pr_curves for point in curve["points"])
+    assert all(row["cell_thresholds"] for row in scored.per_fold)
 
 
 def test_selection_rejects_a_non_development_fold() -> None:
@@ -3978,6 +3993,60 @@ def test_fit_fold_uses_the_selected_calibrator_for_headroom_tables(tmp_path: Pat
     for values in result.probabilities.values():
         assert np.all(values >= 1e-6)
         assert np.all(values <= 1.0 - 1e-6)
+
+
+def test_wilson_lower_matches_the_one_sided_bound() -> None:
+    assert _wilson_lower(0, 10) == pytest.approx(0.0)
+    assert _wilson_lower(7, 10) == pytest.approx(0.4417, abs=1e-4)
+    assert _wilson_lower(70, 100) == pytest.approx(0.6202, abs=1e-4)
+    assert _wilson_lower(80, 100) == pytest.approx(0.7267, abs=1e-4)
+    assert _wilson_lower(30, 30) == pytest.approx(0.9173, abs=1e-4)
+    assert _wilson_lower(0, 0) == 0.0
+
+
+def test_cell_threshold_respects_the_wilson_boundary() -> None:
+    y = np.array([1] * 80 + [0] * 20, dtype=np.int8)
+    probabilities = np.full(100, 0.9)
+    qualifying = _cell_threshold(y, probabilities, 0.7266961911903833, 100)
+    assert qualifying["qualified"] is True
+    assert qualifying["threshold"] == pytest.approx(0.9)
+    assert qualifying["precision"] == pytest.approx(0.8)
+    rejected = _cell_threshold(y, probabilities, 0.727, 100)
+    assert rejected["qualified"] is False
+    assert rejected["threshold"] is None
+
+
+def test_cell_threshold_enforces_minimum_alerts_and_the_none_path() -> None:
+    y = np.array([1] * 30 + [0] * 100, dtype=np.int8)
+    probabilities = np.concatenate([np.full(30, 0.9), np.full(100, 0.8)])
+    small = _cell_threshold(y, probabilities, 0.7, 30)
+    assert small["qualified"] is True
+    assert small["alerts"] == 30
+    assert small["precision"] == pytest.approx(1.0)
+    larger = _cell_threshold(y, probabilities, 0.7, 31)
+    assert larger["qualified"] is False
+    assert larger["threshold"] is None
+    empty = _cell_threshold(np.zeros(10, dtype=np.int8), np.full(10, 0.5), 0.7, 1)
+    assert empty["qualified"] is False
+    assert empty["positives"] == 0
+
+
+def test_cell_threshold_handles_ties_and_prefers_recall() -> None:
+    tied = _cell_threshold(
+        np.array([1] * 80 + [0] * 20, dtype=np.int8),
+        np.full(100, 0.9),
+        0.7,
+        30,
+    )
+    assert tied["qualified"] is True
+    assert tied["threshold"] == pytest.approx(0.9)
+    assert tied["alerts"] == 100
+    assert tied["recall"] == pytest.approx(1.0)
+    y = np.array([1] * 30, dtype=np.int8)
+    probabilities = np.concatenate([np.full(10, 0.9), np.full(20, 0.8)])
+    recall_first = _cell_threshold(y, probabilities, 0.7, 10)
+    assert recall_first["threshold"] == pytest.approx(0.8)
+    assert recall_first["recall"] == pytest.approx(1.0)
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:

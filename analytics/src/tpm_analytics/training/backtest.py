@@ -38,6 +38,7 @@ from tpm_analytics.training.model import (
     _bootstrap,
     _bootstrap_metrics,
     _calibration_stats,
+    _cell_threshold,
     _compact_category,
     _cross_fitted,
     _cross_fitted_detailed,
@@ -46,6 +47,7 @@ from tpm_analytics.training.model import (
     _hours,
     _metrics,
     _pooled_decision_value_rows,
+    _pr_curve_points,
     _threshold,
     _ttd_array,
     concat_tabular,
@@ -86,6 +88,7 @@ class Recipe:
     model_settings: dict[str, Any]
     calibration_folds: int = 5
     calibration_min_positives: int = 1000
+    threshold_min_alerts: int = 30
     selection_settings: dict[str, Any] = field(default_factory=dict)
 
     def payload(self) -> dict[str, Any]:
@@ -100,6 +103,7 @@ class Recipe:
             "model_settings": self.model_settings,
             "calibration_folds": self.calibration_folds,
             "calibration_min_positives": self.calibration_min_positives,
+            "threshold_min_alerts": self.threshold_min_alerts,
             "selection_settings": self.selection_settings,
         }
 
@@ -139,6 +143,7 @@ class FoldResult:
     early_stopping: dict[str, Any] | None = None
     calibration_methods: tuple[dict[str, Any], ...] = ()
     isotonic_probabilities: dict[int, Array] = field(default_factory=dict)
+    cell_thresholds: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -159,6 +164,10 @@ class BacktestResult:
     development_headroom_ttd: list[dict[str, Any]] = field(default_factory=list)
     calibration_cells: list[dict[str, Any]] = field(default_factory=list)
     development_calibration_cells: list[dict[str, Any]] = field(default_factory=list)
+    threshold_cells: list[dict[str, Any]] = field(default_factory=list)
+    development_threshold_cells: list[dict[str, Any]] = field(default_factory=list)
+    pr_curves: list[dict[str, Any]] = field(default_factory=list)
+    threshold_hold_rate: dict[str, Any] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     runtime_seconds: float = 0.0
     peak_rss_kb: int = 0
@@ -442,6 +451,7 @@ def select_recipe_bundle(
         model_settings=_model_settings(config),
         calibration_folds=config.calibration.folds,
         calibration_min_positives=config.calibration.min_positives,
+        threshold_min_alerts=config.report.threshold_min_alerts,
         selection_settings=selection_settings(outcome.table),
     )
     return recipe, outcome.models, outcome.table
@@ -551,10 +561,35 @@ def fit_fold(
     climate_by_headroom: dict[int, Array] = {}
     labels: dict[int, Array] = {}
     isotonic_probabilities: dict[int, Array] = {}
+    cell_thresholds: dict[tuple[int, str], dict[str, Any]] = {}
+    bands_cal = _ttd_array(calibrate)
     for headroom in config.label.headroom_pct:
         raw_cal_headroom = model.predict_matrix(model.with_headroom(cal_matrix, headroom))
         y_cal = breach(calibrate.price_cents, calibrate.check_price_cents, headroom)
         raw_headroom = model.predict_matrix(model.with_headroom(test_matrix, headroom))
+        oof_headroom, _, _ = _cross_fitted_detailed(
+            raw_cal_headroom,
+            y_cal,
+            calibrate.departure_date,
+            recipe.calibration,
+            fold_config,
+            hours=hours_cal,
+            headroom=np.full(len(calibrate), headroom, dtype=np.int16),
+        )
+        for band in band_labels():
+            mask = bands_cal == band
+            if int(mask.sum()) == 0:
+                continue
+            cell_thresholds[(headroom, band)] = {
+                "headroom_pct": headroom,
+                "ttd_band": band,
+                **_cell_threshold(
+                    y_cal[mask],
+                    oof_headroom[mask],
+                    recipe.threshold_floor,
+                    recipe.threshold_min_alerts,
+                ),
+            }
         raw_probabilities[headroom] = raw_headroom
         # The report tables use the selected calibrator at this headroom; the old per-headroom
         # isotonic stays as a diagnostic column only.
@@ -600,6 +635,7 @@ def fit_fold(
         early_stopping=model.early_stopping,
         calibration_methods=calibration_methods,
         isotonic_probabilities=isotonic_probabilities,
+        cell_thresholds=cell_thresholds,
     )
 
 
@@ -723,6 +759,137 @@ def _calibration_cells(folds: tuple[FoldResult, ...], config: TrainingConfig) ->
     return rows
 
 
+def _threshold_cells(
+    folds: tuple[FoldResult, ...],
+    config: TrainingConfig,
+    *,
+    floor: float,
+    min_alerts: int,
+) -> list[dict[str, Any]]:
+    """Pool per-fold cell thresholds into one row per headroom x TTD band."""
+    rows: list[dict[str, Any]] = []
+    if not folds:
+        return rows
+    for headroom in config.label.headroom_pct:
+        for band in band_labels():
+            calibration_alerts = 0
+            calibration_true = 0.0
+            calibration_positives = 0
+            calibration_true_positives = 0.0
+            qualifying_folds = 0
+            total_alerts = 0
+            true_positives = 0
+            positives = 0
+            test_rows = 0
+            for fold in folds:
+                entry = fold.cell_thresholds.get((headroom, band))
+                if entry is not None and entry["qualified"]:
+                    qualifying_folds += 1
+                    calibration_alerts += int(entry["alerts"])
+                    calibration_true += float(entry["precision"]) * int(entry["alerts"])
+                    calibration_true_positives += float(entry["recall"]) * int(entry["positives"])
+                    calibration_positives += int(entry["positives"])
+                bands = _ttd_array(fold.test)
+                mask = bands == band
+                if int(mask.sum()) == 0:
+                    continue
+                test_rows += int(mask.sum())
+                labels = fold.labels[headroom][mask]
+                positives += int(np.sum(labels))
+                if entry is None or not entry["qualified"]:
+                    continue
+                alert = fold.probabilities[headroom][mask] >= float(entry["threshold"])
+                total_alerts += int(alert.sum())
+                true_positives += int(np.sum(alert & (labels == 1)))
+            precision = true_positives / total_alerts if total_alerts else None
+            recall = true_positives / positives if positives else None
+            calibration_precision = calibration_true / calibration_alerts if calibration_alerts else None
+            calibration_recall = calibration_true_positives / calibration_positives if calibration_positives else None
+            rows.append(
+                {
+                    "headroom_pct": headroom,
+                    "ttd_band": band,
+                    "qualifying_folds": qualifying_folds,
+                    "folds": len(folds),
+                    "calibration_alerts": calibration_alerts,
+                    "calibration_precision": calibration_precision,
+                    "calibration_recall": calibration_recall,
+                    "test_rows": test_rows,
+                    "test_alerts": total_alerts,
+                    "test_precision": precision,
+                    "test_recall": recall,
+                    "test_positives": positives,
+                    "floor_met": bool(precision is not None and precision >= floor and total_alerts >= min_alerts),
+                    "operating_point": qualifying_folds > 0,
+                }
+            )
+    return rows
+
+
+def _threshold_hold_rate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise how many cells with an operating point held the floor on test."""
+    with_point = [row for row in rows if row["operating_point"]]
+    met = [row for row in with_point if row["floor_met"]]
+    return {
+        "cells": len(rows),
+        "with_operating_point": len(with_point),
+        "test_floor_met": len(met),
+        "hold_rate": (len(met) / len(with_point)) if with_point else None,
+    }
+
+
+def _pooled_cell_metrics(folds: tuple[FoldResult, ...], config: TrainingConfig) -> dict[str, Any]:
+    """Pooled precision and recall using each row's own fold and cell threshold."""
+    alerts = 0
+    true_positives = 0
+    positives = 0
+    rows = 0
+    for fold in folds:
+        bands = _ttd_array(fold.test)
+        thresholds = np.full(len(fold.test), np.nan, dtype=np.float64)
+        for (headroom, band), entry in fold.cell_thresholds.items():
+            if entry is None or not entry["qualified"]:
+                continue
+            mask = (fold.test.headroom == headroom) & (bands == band)
+            thresholds[mask] = float(entry["threshold"])
+        valid = np.isfinite(thresholds)
+        alert = valid & (fold.calibrated >= thresholds)
+        alerts += int(alert.sum())
+        true_positives += int(np.sum(alert & (fold.test.y == 1)))
+        positives += int(np.sum(fold.test.y))
+        rows += len(fold.test)
+    return {
+        "cell_threshold_rows": rows,
+        "cell_threshold_alerts": alerts,
+        "cell_threshold_precision": (true_positives / alerts) if alerts else None,
+        "cell_threshold_recall": (true_positives / positives) if positives else None,
+    }
+
+
+def _pr_curves(folds: tuple[FoldResult, ...]) -> list[dict[str, Any]]:
+    """Precision at fixed recall targets per TTD band for the pooled rows."""
+    if not folds:
+        return []
+    pooled = concat_tabular([item.test for item in folds])
+    probabilities = np.concatenate([item.calibrated for item in folds])
+    bands = _ttd_array(pooled)
+    targets = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+    curves: list[dict[str, Any]] = []
+    for band in band_labels():
+        mask = bands == band
+        if int(mask.sum()) < MIN_CELL_ROWS:
+            continue
+        curves.append(
+            {
+                "band": band,
+                "rows": int(mask.sum()),
+                "average_precision": _metrics(pooled.y[mask], probabilities[mask])["average_precision"],
+                "points": _pr_curve_points(pooled.y[mask], probabilities[mask], targets),
+            }
+        )
+    return curves
+
+
 def _code_identity() -> tuple[str | None, bool | None]:
     """Return the current git SHA and dirty flag."""
     try:
@@ -787,6 +954,7 @@ def _load_cached_recipe(
         model_settings=payload["model_settings"],
         calibration_folds=int(payload.get("calibration_folds", config.calibration.folds)),
         calibration_min_positives=int(payload.get("calibration_min_positives", config.calibration.min_positives)),
+        threshold_min_alerts=int(payload.get("threshold_min_alerts", config.report.threshold_min_alerts)),
         selection_settings=payload.get("selection_settings") or {},
     )
 
@@ -937,6 +1105,7 @@ def _pooled_summary(
         np.concatenate([np.full(len(item.test), item.threshold) for item in folds]),
     )
     headroom, headroom_ttd = _headroom_rows(pooled, folds, config)
+    metrics.update(_pooled_cell_metrics(folds, config))
     return metrics, headroom, headroom_ttd
 
 
@@ -1028,6 +1197,9 @@ def run_backtest(
             "headroom_monotonic": item.headroom_monotonic,
             "calibration_stats": item.calibration_stats,
             "early_stopping": item.early_stopping,
+            "cell_thresholds": [
+                dict(row) for _, row in sorted(item.cell_thresholds.items(), key=lambda pair: (pair[0][0], pair[0][1]))
+            ],
             "runtime_seconds": item.runtime_seconds,
             "from_cache": item.from_cache,
             "fit_included": item.fit_included,
@@ -1068,6 +1240,18 @@ def run_backtest(
         development_pooled, development_headroom, development_headroom_ttd = _pooled_summary(
             development_results, config
         )
+    threshold_cells = _threshold_cells(
+        evaluation,
+        config,
+        floor=recipe.threshold_floor,
+        min_alerts=recipe.threshold_min_alerts,
+    )
+    development_threshold_cells = _threshold_cells(
+        development_results,
+        config,
+        floor=recipe.threshold_floor,
+        min_alerts=recipe.threshold_min_alerts,
+    )
     return BacktestResult(
         recipe=recipe,
         folds=tuple(results),
@@ -1081,6 +1265,10 @@ def run_backtest(
         development_headroom_ttd=development_headroom_ttd,
         calibration_cells=_calibration_cells(evaluation, config),
         development_calibration_cells=_calibration_cells(development_results, config),
+        threshold_cells=threshold_cells,
+        development_threshold_cells=development_threshold_cells,
+        pr_curves=_pr_curves(evaluation),
+        threshold_hold_rate=_threshold_hold_rate(threshold_cells),
         decision_value=decision_value,
         evaluated_blocks=tuple(item.fold.name for item in results),
         warnings=tuple(warnings),
@@ -1267,6 +1455,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                 ["BSS train", _fmt(pooled.get("bss_train"))],
                 ["ROC-AUC", _fmt(pooled.get("roc_auc"))],
                 ["Average Precision (AP)", _fmt(pooled.get("average_precision"))],
+                ["cell-threshold precision", _fmt(pooled.get("cell_threshold_precision"))],
+                ["cell-threshold recall", _fmt(pooled.get("cell_threshold_recall"))],
                 ["prevalence", _p(pooled.get("positive_rate"))],
             ],
         )
@@ -1357,6 +1547,113 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         )
         if result.calibration_cells
         else "Evaluation folds were not scored."
+    )
+    development_threshold_table = (
+        _table(
+            [
+                "headroom %",
+                "TTD band",
+                "folds",
+                "cal alerts",
+                "cal precision",
+                "cal recall",
+                "test rows",
+                "test alerts",
+                "test precision",
+                "test recall",
+                "floor met",
+            ],
+            [
+                [
+                    item["headroom_pct"],
+                    item["ttd_band"],
+                    f"{item['qualifying_folds']}/{item['folds']}",
+                    item["calibration_alerts"],
+                    _fmt(item.get("calibration_precision")),
+                    _fmt(item.get("calibration_recall")),
+                    item["test_rows"],
+                    item["test_alerts"],
+                    _fmt(item.get("test_precision")),
+                    _fmt(item.get("test_recall")),
+                    _yes(item.get("floor_met")),
+                ]
+                for item in result.development_threshold_cells
+            ],
+        )
+        if result.development_threshold_cells
+        else "Development folds were not scored."
+    )
+    threshold_table = (
+        _table(
+            [
+                "headroom %",
+                "TTD band",
+                "folds",
+                "cal alerts",
+                "cal precision",
+                "cal recall",
+                "test rows",
+                "test alerts",
+                "test precision",
+                "test recall",
+                "floor met",
+            ],
+            [
+                [
+                    item["headroom_pct"],
+                    item["ttd_band"],
+                    f"{item['qualifying_folds']}/{item['folds']}",
+                    item["calibration_alerts"],
+                    _fmt(item.get("calibration_precision")),
+                    _fmt(item.get("calibration_recall")),
+                    item["test_rows"],
+                    item["test_alerts"],
+                    _fmt(item.get("test_precision")),
+                    _fmt(item.get("test_recall")),
+                    _yes(item.get("floor_met")),
+                ]
+                for item in result.threshold_cells
+            ],
+        )
+        if result.threshold_cells
+        else "Evaluation folds were not scored."
+    )
+    pr_targets = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+    pr_table = (
+        _table(
+            ["TTD band", "rows", "AP", *[f"P@R{int(target * 100)}" for target in pr_targets]],
+            [
+                [
+                    item["band"],
+                    item["rows"],
+                    _fmt(item.get("average_precision")),
+                    *[
+                        _fmt(
+                            next(
+                                (
+                                    point["precision"]
+                                    for point in item["points"]
+                                    if abs(point["recall"] - target) < 1e-9
+                                ),
+                                None,
+                            )
+                        )
+                        for target in pr_targets
+                    ],
+                ]
+                for item in result.pr_curves
+            ],
+        )
+        if result.pr_curves
+        else "Evaluation folds were not scored."
+    )
+    hold_rate = result.threshold_hold_rate or {}
+    hold_note = (
+        f"{hold_rate.get('test_floor_met', 0)} of {hold_rate.get('with_operating_point', 0)} cells with an "
+        f"operating point held the {result.recipe.threshold_floor:g} test precision floor "
+        f"({_p(hold_rate.get('hold_rate'))})."
+        if hold_rate
+        else ""
     )
     decision_table = (
         _table(
@@ -1705,6 +2002,26 @@ departure-date cluster-bootstrap replicates.
 
 {calibration_cells_table}
 
+## Thresholds
+
+Thresholds are chosen per headroom x TTD band on the calibration block's out-of-fold scores: the
+highest recall whose one-sided 95 % Wilson lower bound on precision is at least
+{result.recipe.threshold_floor:g}, with at least {result.recipe.threshold_min_alerts} alerts. A cell
+with no qualifying operating point does not alert. `folds` counts the folds with an operating
+point; the precision and recall columns pool every fold at its own threshold. {hold_note}
+
+### Development thresholds
+
+{development_threshold_table}
+
+### Evaluation thresholds
+
+{threshold_table}
+
+### Precision-recall by TTD band
+
+{pr_table}
+
 ## Sparse-era folds
 
 {sparse_table}
@@ -1794,6 +2111,10 @@ def write_backtest_artifacts(
         "development_headroom_ttd": result.development_headroom_ttd,
         "calibration_cells": result.calibration_cells,
         "development_calibration_cells": result.development_calibration_cells,
+        "threshold_cells": result.threshold_cells,
+        "development_threshold_cells": result.development_threshold_cells,
+        "threshold_hold_rate": result.threshold_hold_rate,
+        "pr_curves": result.pr_curves,
         "selection": result.selection,
         "decision_value": result.decision_value,
         "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],

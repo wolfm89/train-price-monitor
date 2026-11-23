@@ -1207,6 +1207,83 @@ class Evaluation:
         }
 
 
+WILSON_ONE_SIDED_Z = 1.6448536269514722
+
+
+def _wilson_lower(successes: int, total: int, z: float = WILSON_ONE_SIDED_Z) -> float:
+    """Return the one-sided Wilson lower bound of a proportion."""
+    if total <= 0:
+        return 0.0
+    proportion = successes / total
+    denominator = 1.0 + z * z / total
+    centre = proportion + z * z / (2.0 * total)
+    margin = z * np.sqrt(proportion * (1.0 - proportion) / total + z * z / (4.0 * total * total))
+    return float(max(0.0, (centre - margin) / denominator))
+
+
+def _cell_threshold(
+    y: Array,
+    probabilities: Array,
+    floor: float,
+    min_alerts: int,
+) -> dict[str, Any]:
+    """Choose the highest-recall threshold whose Wilson lower bound meets the precision floor."""
+    labels = np.asarray(y, dtype=np.int8)
+    scores = np.asarray(probabilities, dtype=np.float64)
+    positives = int(np.sum(labels))
+    row: dict[str, Any] = {
+        "threshold": None,
+        "alerts": 0,
+        "precision": None,
+        "recall": None,
+        "wilson_lower": None,
+        "qualified": False,
+        "rows": len(labels),
+        "positives": positives,
+        "floor": float(floor),
+        "min_alerts": int(min_alerts),
+    }
+    if len(labels) == 0 or positives == 0:
+        return row
+    order = np.argsort(-scores, kind="stable")
+    sorted_scores = scores[order]
+    sorted_labels = labels[order]
+    # Every distinct score is a candidate cut; ties enter together so the result is deterministic.
+    boundaries = np.flatnonzero(np.r_[sorted_scores[1:] != sorted_scores[:-1], True])
+    true_positive = 0
+    false_positive = 0
+    best: tuple[float, float, int, float, float] | None = None
+    for index in boundaries:
+        true_positive = int(np.sum(sorted_labels[: index + 1] == 1))
+        false_positive = int(index + 1 - true_positive)
+        alerts = true_positive + false_positive
+        if alerts < min_alerts:
+            continue
+        precision = true_positive / alerts
+        lower = _wilson_lower(true_positive, alerts)
+        recall = true_positive / positives
+        if lower < floor:
+            continue
+        threshold = float(sorted_scores[index])
+        candidate = (recall, threshold, alerts, precision, lower)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    if best is None:
+        return row
+    recall, threshold, alerts, precision, lower = best
+    row.update(
+        {
+            "threshold": float(threshold),
+            "alerts": int(alerts),
+            "precision": float(precision),
+            "recall": float(recall),
+            "wilson_lower": float(lower),
+            "qualified": True,
+        }
+    )
+    return row
+
+
 def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, bool]:
     """Choose a threshold meeting the precision floor or maximising F1."""
     classes = np.unique(y)
@@ -1232,6 +1309,18 @@ def _decision_metrics(y: Array, probabilities: Array, threshold: float) -> dict[
     precision = true_positive / max(true_positive + false_positive, 1)
     recall = true_positive / max(true_positive + false_negative, 1)
     return {"precision_at_threshold": float(precision), "recall_at_threshold": float(recall)}
+
+
+def _pr_curve_points(y: Array, probabilities: Array, targets: tuple[float, ...]) -> list[dict[str, float]]:
+    """Return the best precision at or above every recall target."""
+    precision, recall, _ = precision_recall_curve(y, probabilities)
+    points: list[dict[str, float]] = []
+    for target in targets:
+        mask = recall >= target
+        if not mask.any():
+            continue
+        points.append({"recall": float(target), "precision": float(np.max(precision[mask]))})
+    return points
 
 
 def _calibration_curve(y: Array, probabilities: Array, bins: int) -> tuple[Array, Array, Array]:

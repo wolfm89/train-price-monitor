@@ -188,6 +188,7 @@ class ReportConfig:
     metric_bootstrap_replicates: int
     bootstrap_cluster: str
     threshold_precision_floor: float
+    threshold_min_alerts: int
     calibration_bins: int
     min_eligible_rows: int
     min_split_positives: int
@@ -207,6 +208,8 @@ class ReportConfig:
             raise ConfigError("report.bootstrap_cluster must be departure_date or route_day")
         if not 0 <= self.threshold_precision_floor <= 1:
             raise ConfigError("report.threshold_precision_floor must be in [0, 1]")
+        if self.threshold_min_alerts < 1:
+            raise ConfigError("report.threshold_min_alerts must be positive")
         if not 2 <= self.calibration_bins <= 50:
             raise ConfigError("report.calibration_bins must be between 2 and 50")
         if self.min_eligible_rows < 0:
@@ -496,6 +499,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             metric_bootstrap_replicates=_int(report_raw, "metric_bootstrap_replicates", minimum=1, default=400),
             bootstrap_cluster=_str(report_raw, "bootstrap_cluster"),
             threshold_precision_floor=_float(report_raw, "threshold_precision_floor"),
+            threshold_min_alerts=_int(report_raw, "threshold_min_alerts", minimum=1, default=30),
             calibration_bins=_int(report_raw, "calibration_bins", minimum=2),
             min_eligible_rows=_int(report_raw, "min_eligible_rows", minimum=0),
             min_split_positives=_int(report_raw, "min_split_positives", minimum=0),
