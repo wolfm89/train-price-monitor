@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from tpm_analytics.training import backtest as backtest_module
+from tpm_analytics.training import model as tpm_training_model
 from tpm_analytics.training.backtest import (
     Recipe,
     _bss_paired_ci,
@@ -2926,8 +2927,12 @@ def test_calibrator_outputs_are_bounded() -> None:
     y = rng.integers(0, 2, size=1000)
     calibrator = fit_calibrator(raw, y, "isotonic", min_positives=1)
     probabilities = calibrator.predict(raw)
-    assert probabilities.min() >= 1e-3
-    assert probabilities.max() <= 1.0 - 1e-3
+    assert probabilities.min() >= 1e-6
+    assert probabilities.max() <= 1.0 - 1e-6
+    constant = fit_calibrator(raw, np.ones(len(raw), dtype=np.int8), "sigmoid", min_positives=1)
+    extreme = constant.predict(np.array([0.0, 1.0]))
+    assert np.all(extreme > 0.0)
+    assert np.all(extreme < 1.0)
 
 
 def test_load_model_rejects_wrong_hash(tmp_path: Path) -> None:
@@ -3158,13 +3163,13 @@ def test_calibration_cross_fit_uses_departure_date(tmp_path: Path, monkeypatch: 
         },
     )
     captured: list[np.ndarray] = []
-    original = backtest_module._cross_fitted
+    original = backtest_module._cross_fitted_detailed
 
-    def spy(raw: Any, y: Any, groups: Any, method: str, cfg: Any) -> Any:
+    def spy(raw: Any, y: Any, groups: Any, method: str, cfg: Any, **kwargs: Any) -> Any:
         captured.append(np.asarray(groups).copy())
-        return original(raw, y, groups, method, cfg)
+        return original(raw, y, groups, method, cfg, **kwargs)
 
-    monkeypatch.setattr(backtest_module, "_cross_fitted", spy)
+    monkeypatch.setattr(backtest_module, "_cross_fitted_detailed", spy)
     fit_fold(recipe, fold, train, calibrate, test, config, spec)
     assert captured
     assert all(np.array_equal(groups, calibrate.departure_date) for groups in captured)
@@ -3662,6 +3667,11 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     evaluation = tuple(item for item in scored.folds if item.fold.role == "evaluation")
     expected_clusters = len(np.unique(np.concatenate([item.test.departure_date for item in evaluation])))
     assert scored.pooled["bootstrap_clusters"] == expected_clusters
+    assert scored.development_calibration_cells
+    assert scored.calibration_cells
+    required = {"headroom_pct", "ttd_band", "era", "rows", "slope", "intercept", "ece"}
+    assert all(required <= set(row) for row in scored.calibration_cells)
+    assert all(row["rows"] >= 20 for row in scored.calibration_cells)
 
 
 def test_selection_rejects_a_non_development_fold() -> None:
@@ -3744,9 +3754,11 @@ def test_selection_joint_search_and_deterministic_table(tmp_path: Path) -> None:
         ("logistic", "sigmoid"),
         ("logistic", "isotonic"),
         ("logistic", "temperature"),
+        ("logistic", "covariate"),
         ("hist_gradient_boosting", "sigmoid"),
         ("hist_gradient_boosting", "isotonic"),
         ("hist_gradient_boosting", "temperature"),
+        ("hist_gradient_boosting", "covariate"),
         ("climatology", "none"),
     }
     assert first.table["folds"] == ["dev", "dev2"]
@@ -3868,6 +3880,104 @@ def test_hgb_early_stopping_refits_with_the_chosen_iteration_count() -> None:
     assert record["iterations"] == model.estimator.max_iter
     assert 1 <= record["iterations"] <= 400
     assert record["holdout_log_loss"] <= 1.0
+
+
+def _calibration_fixture(size: int = 3000) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(17)
+    raw = rng.random(size)
+    hours = rng.uniform(24.0, 720.0, size)
+    headroom = rng.choice([1, 5, 10, 20, 30], size)
+    y = (rng.random(size) < (0.1 + 0.8 * raw)).astype(np.int8)
+    return raw, y, hours, headroom, raw
+
+
+@pytest.mark.parametrize("method", ["sigmoid", "isotonic", "temperature", "covariate"])
+def test_fit_calibrator_supports_every_method(method: str) -> None:
+    raw, y, hours, headroom, _ = _calibration_fixture()
+    calibrator = fit_calibrator(raw, y, method, min_positives=100, hours=hours, headroom=headroom)
+    probabilities = calibrator.predict(raw, hours=hours, headroom=headroom)
+    assert len(probabilities) == len(raw)
+    assert np.all(probabilities >= 1e-6)
+    assert np.all(probabilities <= 1.0 - 1e-6)
+    assert calibrator.requested == method
+    assert calibrator.fallback is False
+
+
+def test_covariate_calibrator_is_monotone_and_uses_the_band() -> None:
+    raw, y, hours, headroom, _ = _calibration_fixture()
+    calibrator = fit_calibrator(raw, y, "covariate", min_positives=100, hours=hours, headroom=headroom)
+    assert calibrator.method == "covariate"
+    scores = np.linspace(0.01, 0.99, 41)
+    for _, low, high in HEADLINE_BANDS:
+        values = calibrator.predict(
+            scores,
+            hours=np.full(len(scores), (low + high) / 2.0),
+            headroom=np.full(len(scores), 5),
+        )
+        assert np.all(np.diff(values) >= -1e-9)
+    steps = np.array([1.0, 5.0, 10.0, 20.0, 30.0])
+    for _, low, high in HEADLINE_BANDS:
+        values = calibrator.predict(
+            np.full(len(steps), 0.7),
+            hours=np.full(len(steps), (low + high) / 2.0),
+            headroom=steps,
+        )
+        assert np.all(np.diff(values) <= 1e-9)
+    same_score = np.full(2, 0.7)
+    near = calibrator.predict(same_score, hours=np.array([40.0, 40.0]), headroom=np.array([5.0, 5.0]))
+    far = calibrator.predict(same_score, hours=np.array([600.0, 600.0]), headroom=np.array([5.0, 5.0]))
+    assert not np.allclose(near, far)
+
+
+def test_covariate_fallback_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw, y, hours, headroom, _ = _calibration_fixture()
+    monkeypatch.setattr(
+        tpm_training_model, "_covariate_constraints", lambda calibrator, values: (False, "forced violation")
+    )
+    calibrator = fit_calibrator(raw, y, "covariate", min_positives=100, hours=hours, headroom=headroom)
+    assert calibrator.method == "isotonic"
+    assert calibrator.requested == "covariate"
+    assert calibrator.fallback is True
+    assert calibrator.fallback_reason == "forced violation"
+    few = fit_calibrator(raw, y, "isotonic", min_positives=10_000, hours=hours, headroom=headroom)
+    assert few.method == "sigmoid"
+    assert few.fallback is True
+    assert "positive" in (few.fallback_reason or "")
+
+
+def test_fit_fold_uses_the_selected_calibrator_for_headroom_tables(tmp_path: Path) -> None:
+    _, out = _build(tmp_path)
+    spec = feature_spec("full")
+    panel = load_panel(out, spec)
+    config = load_config(_config(tmp_path))
+    fold = FoldConfig(date(2026, 7, 6), "development", "dev")
+    protocol = ProtocolConfig("backtest", (fold,))
+    config = replace(config, protocol=protocol)
+    masks = fold_masks(panel, fold, protocol)
+    train, calibrate, test = fold_slices(panel, masks)
+    recipe = Recipe(
+        "logistic",
+        "covariate",
+        0.7,
+        {
+            "max_iter": config.model.max_iter,
+            "learning_rate": config.model.learning_rate,
+            "max_leaf_nodes": config.model.max_leaf_nodes,
+            "random_state": config.model.random_state,
+        },
+    )
+    result = fit_fold(recipe, fold, train, calibrate, test, config, spec)
+    assert result.calibration_methods
+    assert all(item["requested"] == "covariate" for item in result.calibration_methods)
+    assert set(result.isotonic_probabilities) == set(config.label.headroom_pct)
+    assert set(result.probabilities) == set(config.label.headroom_pct)
+    assert not np.allclose(
+        result.probabilities[5],
+        result.isotonic_probabilities[5],
+    )
+    for values in result.probabilities.values():
+        assert np.all(values >= 1e-6)
+        assert np.all(values <= 1.0 - 1e-6)
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:

@@ -25,7 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from tpm_analytics.silver._duck import sql_string
-from tpm_analytics.training.bands import HEADLINE_BANDS
+from tpm_analytics.training.bands import HEADLINE_BANDS, band_labels
 from tpm_analytics.training.config import MODEL_NAMES, FoldConfig, ProtocolConfig, TrainingConfig
 from tpm_analytics.training.dataset import DatasetError, _git_state
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS, FeatureSpec
@@ -40,8 +40,10 @@ from tpm_analytics.training.model import (
     _calibration_stats,
     _compact_category,
     _cross_fitted,
+    _cross_fitted_detailed,
     _decision_metrics,
     _filled,
+    _hours,
     _metrics,
     _pooled_decision_value_rows,
     _threshold,
@@ -135,6 +137,8 @@ class FoldResult:
     calibration_stats: dict[str, float | None] = field(default_factory=dict)
     headroom_monotonic: bool = True
     early_stopping: dict[str, Any] | None = None
+    calibration_methods: tuple[dict[str, Any], ...] = ()
+    isotonic_probabilities: dict[int, Array] = field(default_factory=dict)
 
 
 @dataclass
@@ -153,6 +157,8 @@ class BacktestResult:
     development_pooled: dict[str, Any] = field(default_factory=dict)
     development_headroom: list[dict[str, Any]] = field(default_factory=list)
     development_headroom_ttd: list[dict[str, Any]] = field(default_factory=list)
+    calibration_cells: list[dict[str, Any]] = field(default_factory=list)
+    development_calibration_cells: list[dict[str, Any]] = field(default_factory=list)
     warnings: tuple[str, ...] = ()
     runtime_seconds: float = 0.0
     peak_rss_kb: int = 0
@@ -253,13 +259,24 @@ def fit_forward_scorer(
     )
     fold_config = replace(config, model=model_config, calibration=calibration_config)
     model = fit_candidate(recipe.model, train, spec, fold_config)
+    hours_cal = _hours(calibrate)
     raw_cal = model.predict(calibrate)
-    oof = _cross_fitted(raw_cal, calibrate.y, calibrate.departure_date, recipe.calibration, fold_config)
+    oof = _cross_fitted(
+        raw_cal,
+        calibrate.y,
+        calibrate.departure_date,
+        recipe.calibration,
+        fold_config,
+        hours=hours_cal,
+        headroom=calibrate.headroom,
+    )
     calibrator = fit_calibrator(
         raw_cal,
         calibrate.y,
         recipe.calibration,
         min_positives=recipe.calibration_min_positives,
+        hours=hours_cal,
+        headroom=calibrate.headroom,
     )
     threshold, _ = _threshold(calibrate.y, oof, recipe.threshold_floor)
     return ForwardScorer(
@@ -271,7 +288,11 @@ def fit_forward_scorer(
 
 def score_forward(forward: TabularData, scorer: ForwardScorer) -> Array:
     """Return the calibrated forward probability at each row's assigned headroom."""
-    return scorer.calibrator.predict(scorer.model.predict(forward))
+    return scorer.calibrator.predict(
+        scorer.model.predict(forward),
+        hours=_hours(forward),
+        headroom=forward.headroom,
+    )
 
 
 def forward_fold(protocol: ProtocolConfig) -> FoldConfig:
@@ -495,17 +516,29 @@ def fit_fold(
     climatology = fit_climatology(train)
     cal_matrix = model.transform(calibrate)
     test_matrix = model.transform(test)
+    hours_cal = _hours(calibrate)
+    hours_test = _hours(test)
     raw_cal = model.predict_matrix(cal_matrix)
-    oof_cal = _cross_fitted(raw_cal, calibrate.y, calibrate.departure_date, recipe.calibration, fold_config)
+    oof_cal, _, calibration_methods = _cross_fitted_detailed(
+        raw_cal,
+        calibrate.y,
+        calibrate.departure_date,
+        recipe.calibration,
+        fold_config,
+        hours=hours_cal,
+        headroom=calibrate.headroom,
+    )
     calibrator = fit_calibrator(
         raw_cal,
         calibrate.y,
         recipe.calibration,
         min_positives=recipe.calibration_min_positives,
+        hours=hours_cal,
+        headroom=calibrate.headroom,
     )
     threshold, threshold_met = _threshold(calibrate.y, oof_cal, recipe.threshold_floor)
     raw = model.predict_matrix(test_matrix)
-    calibrated = calibrator.predict(raw)
+    calibrated = calibrator.predict(raw, hours=hours_test, headroom=test.headroom)
     climate = climatology.predict(test)
     train_rate = float(np.mean(train.y))
     metrics = _fold_metrics(test, calibrated, climate, train_rate)
@@ -517,18 +550,26 @@ def fit_fold(
     raw_probabilities: dict[int, Array] = {}
     climate_by_headroom: dict[int, Array] = {}
     labels: dict[int, Array] = {}
+    isotonic_probabilities: dict[int, Array] = {}
     for headroom in config.label.headroom_pct:
         raw_cal_headroom = model.predict_matrix(model.with_headroom(cal_matrix, headroom))
         y_cal = breach(calibrate.price_cents, calibrate.check_price_cents, headroom)
-        calibrator_headroom = fit_calibrator(
-            raw_cal_headroom,
-            y_cal,
-            recipe.calibration,
-            min_positives=recipe.calibration_min_positives,
-        )
         raw_headroom = model.predict_matrix(model.with_headroom(test_matrix, headroom))
         raw_probabilities[headroom] = raw_headroom
-        probabilities[headroom] = calibrator_headroom.predict(raw_headroom)
+        # The report tables use the selected calibrator at this headroom; the old per-headroom
+        # isotonic stays as a diagnostic column only.
+        probabilities[headroom] = calibrator.predict(
+            raw_headroom,
+            hours=hours_test,
+            headroom=np.full(len(test), headroom, dtype=np.int16),
+        )
+        diagnostic = fit_calibrator(
+            raw_cal_headroom,
+            y_cal,
+            "isotonic",
+            min_positives=recipe.calibration_min_positives,
+        )
+        isotonic_probabilities[headroom] = diagnostic.predict(raw_headroom)
         climate_by_headroom[headroom] = climatology.predict(test, headroom=headroom)
         labels[headroom] = breach(test.price_cents, test.check_price_cents, headroom)
     ordered = [probabilities[headroom] for headroom in config.label.headroom_pct]
@@ -557,6 +598,8 @@ def fit_fold(
         calibration_stats=calibration_stats,
         headroom_monotonic=headroom_monotonic,
         early_stopping=model.early_stopping,
+        calibration_methods=calibration_methods,
+        isotonic_probabilities=isotonic_probabilities,
     )
 
 
@@ -614,6 +657,8 @@ def _headroom_rows(
         item: dict[str, Any] = _metrics(labels, probabilities)
         reference = float(np.mean((labels - climatology) ** 2))
         item["bss_climatology"] = 1.0 - float(item["brier"] or 0.0) / reference if reference > 0 else None
+        isotonic = np.concatenate([fold.isotonic_probabilities[headroom] for fold in folds])
+        item["brier_isotonic"] = _metrics(labels, isotonic)["brier"]
         item["headroom_pct"] = headroom
         item["bss_ci"] = _bss_paired_ci(
             labels,
@@ -644,6 +689,38 @@ def _headroom_rows(
             cell["ttd_band"] = band
             headroom_ttd.append(cell)
     return headroom_rows, headroom_ttd
+
+
+def _calibration_cells(folds: tuple[FoldResult, ...], config: TrainingConfig) -> list[dict[str, Any]]:
+    """Calibration slope, intercept and ECE per headroom x TTD band x era."""
+    if not folds:
+        return []
+    pooled = concat_tabular([item.test for item in folds])
+    bands = _ttd_array(pooled)
+    eras = np.asarray(pooled.observation_era, dtype=str)
+    rows: list[dict[str, Any]] = []
+    for headroom in config.label.headroom_pct:
+        labels = np.concatenate([item.labels[headroom] for item in folds])
+        probabilities = np.concatenate([item.probabilities[headroom] for item in folds])
+        for band in band_labels():
+            for era in sorted(set(eras.tolist())):
+                mask = (bands == band) & (eras == era)
+                if int(mask.sum()) < MIN_CELL_ROWS:
+                    continue
+                stats = _calibration_stats(labels[mask], probabilities[mask], config.report.calibration_bins)
+                rows.append(
+                    {
+                        "headroom_pct": headroom,
+                        "ttd_band": band,
+                        "era": era,
+                        "rows": int(mask.sum()),
+                        "prevalence": float(np.mean(labels[mask])),
+                        "slope": stats["slope"],
+                        "intercept": stats["intercept"],
+                        "ece": stats["ece"],
+                    }
+                )
+    return rows
 
 
 def _code_identity() -> tuple[str | None, bool | None]:
@@ -1002,6 +1079,8 @@ def run_backtest(
         development_pooled=development_pooled,
         development_headroom=development_headroom,
         development_headroom_ttd=development_headroom_ttd,
+        calibration_cells=_calibration_cells(evaluation, config),
+        development_calibration_cells=_calibration_cells(development_results, config),
         decision_value=decision_value,
         evaluated_blocks=tuple(item.fold.name for item in results),
         warnings=tuple(warnings),
@@ -1195,12 +1274,24 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         pooled_table = "Evaluation folds were not scored."
     headroom_table = (
         _table(
-            ["headroom %", "prevalence", "Brier", "log loss", "BSS", "BSS clim", "BSS clim CI", "AUC", "AP"],
+            [
+                "headroom %",
+                "prevalence",
+                "Brier",
+                "Brier isotonic",
+                "log loss",
+                "BSS",
+                "BSS clim",
+                "BSS clim CI",
+                "AUC",
+                "AP",
+            ],
             [
                 [
                     item["headroom_pct"],
                     _p(item.get("positive_rate")),
                     _fmt(item.get("brier")),
+                    _fmt(item.get("brier_isotonic")),
                     _fmt(item.get("log_loss")),
                     _fmt(item.get("bss")),
                     _fmt(item.get("bss_climatology")),
@@ -1245,6 +1336,26 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             ],
         )
         if result.headroom_ttd
+        else "Evaluation folds were not scored."
+    )
+    calibration_cells_table = (
+        _table(
+            ["headroom %", "TTD band", "era", "rows", "prevalence", "slope", "intercept", "ECE"],
+            [
+                [
+                    item["headroom_pct"],
+                    item["ttd_band"],
+                    item["era"],
+                    item["rows"],
+                    _p(item.get("prevalence")),
+                    _fmt(item.get("slope")),
+                    _fmt(item.get("intercept")),
+                    _fmt(item.get("ece")),
+                ]
+                for item in result.calibration_cells
+            ],
+        )
+        if result.calibration_cells
         else "Evaluation folds were not scored."
     )
     decision_table = (
@@ -1338,12 +1449,24 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     )
     development_headroom_table = (
         _table(
-            ["headroom %", "prevalence", "Brier", "log loss", "BSS", "BSS clim", "BSS clim CI", "AUC", "AP"],
+            [
+                "headroom %",
+                "prevalence",
+                "Brier",
+                "Brier isotonic",
+                "log loss",
+                "BSS",
+                "BSS clim",
+                "BSS clim CI",
+                "AUC",
+                "AP",
+            ],
             [
                 [
                     item["headroom_pct"],
                     _p(item.get("positive_rate")),
                     _fmt(item.get("brier")),
+                    _fmt(item.get("brier_isotonic")),
                     _fmt(item.get("log_loss")),
                     _fmt(item.get("bss")),
                     _fmt(item.get("bss_climatology")),
@@ -1355,6 +1478,26 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             ],
         )
         if result.development_headroom
+        else "Development folds were not scored."
+    )
+    development_cells_table = (
+        _table(
+            ["headroom %", "TTD band", "era", "rows", "prevalence", "slope", "intercept", "ECE"],
+            [
+                [
+                    item["headroom_pct"],
+                    item["ttd_band"],
+                    item["era"],
+                    item["rows"],
+                    _p(item.get("prevalence")),
+                    _fmt(item.get("slope")),
+                    _fmt(item.get("intercept")),
+                    _fmt(item.get("ece")),
+                ]
+                for item in result.development_calibration_cells
+            ],
+        )
+        if result.development_calibration_cells
         else "Development folds were not scored."
     )
     development_headroom_ttd_table = (
@@ -1531,6 +1674,13 @@ tables use the same per-headroom diagnostic calibration as the evaluation tables
 
 {development_headroom_ttd_table}
 
+### Development calibration cells (headroom x TTD band x era)
+
+`Brier isotonic` is the old per-headroom isotonic fit kept as a diagnostic. The main columns use
+the selected calibrator at each headroom, so tables and headline share one model.
+
+{development_cells_table}
+
 ## Pooled evaluation
 
 {pooled_table}
@@ -1550,6 +1700,10 @@ departure-date cluster-bootstrap replicates.
 ## Per-headroom x TTD band
 
 {headroom_ttd_table}
+
+## Evaluation calibration cells (headroom x TTD band x era)
+
+{calibration_cells_table}
 
 ## Sparse-era folds
 
@@ -1638,6 +1792,8 @@ def write_backtest_artifacts(
         "development_pooled": result.development_pooled,
         "development_headroom": result.development_headroom,
         "development_headroom_ttd": result.development_headroom_ttd,
+        "calibration_cells": result.calibration_cells,
+        "development_calibration_cells": result.development_calibration_cells,
         "selection": result.selection,
         "decision_value": result.decision_value,
         "warnings": [*result.warnings, *dataset_manifest.get("warnings", [])],

@@ -41,7 +41,7 @@
     "random_state": 42
   },
   "calibration": {
-    "methods": ["sigmoid", "isotonic", "temperature"],
+    "methods": ["sigmoid", "isotonic", "temperature", "covariate"],
     "min_positives": 1000,
     "folds": 5
   },

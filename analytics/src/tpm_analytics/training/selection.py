@@ -256,6 +256,7 @@ def select_outcome(
         matrix = _matrix(train, spec, encoder)
         labels.append(calibrate.y)
         clusters.append(calibrate.departure_date)
+        hours = np.asarray(calibrate.features["hours_to_departure"], dtype=np.float64)
         climatology_scores.append(fit_climatology(train).predict(calibrate))
         for name in models:
             model = fit_candidate(name, train, spec, config, encoder=encoder, matrix=matrix)
@@ -266,7 +267,15 @@ def select_outcome(
                     # Calibrating a constant score is a no-op; keep one row per model.
                     continue
                 grouped_scores[(name, method)].append(
-                    _cross_fitted(raw, calibrate.y, calibrate.departure_date, method, config)
+                    _cross_fitted(
+                        raw,
+                        calibrate.y,
+                        calibrate.departure_date,
+                        method,
+                        config,
+                        hours=hours,
+                        headroom=calibrate.headroom,
+                    )
                 )
     pooled_labels = np.concatenate(labels)
     pooled_clusters = np.concatenate(clusters)

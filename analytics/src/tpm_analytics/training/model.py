@@ -821,50 +821,161 @@ def fit_climatology(data: TabularData, *, strength: float = 50.0) -> Climatology
     )
 
 
+CALIBRATION_EPS = 1e-6
+# The static legacy path keeps its three original methods so its byte-identity check stays valid;
+# the covariate calibrator is a backtest candidate only.
+STATIC_CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
+_COVARIATE_BANDS = tuple(label for label, _, _ in HEADLINE_BANDS)
+
+
+def _logit(values: Array) -> Array:
+    """Return the logit of clipped probabilities."""
+    clipped = np.clip(np.asarray(values, dtype=np.float64), CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
+    return np.log(clipped / (1.0 - clipped))
+
+
+class CovariateCalibrator:
+    """A logistic calibrator on the score, the TTD band and the headroom.
+
+    The score enters as a logit, the band as dummies (the first band is the reference) with
+    band x logit interactions, and the headroom as ``log(1 + headroom)``. One calibrator therefore
+    serves every headroom and every distance to departure.
+    """
+
+    def design(self, raw: Array, hours: Array, headroom: Array) -> Array:
+        """Return the covariate design matrix."""
+        score = _logit(raw)
+        bands = _band_labels(np.asarray(hours, dtype=np.float64), HEADLINE_BANDS)
+        dummies = np.column_stack([bands == label for label in _COVARIATE_BANDS[1:]]).astype(np.float64)
+        head = np.full(len(score), np.nan) if headroom is None else np.asarray(headroom, dtype=np.float64)
+        return np.column_stack(
+            [
+                score,
+                dummies,
+                dummies * score[:, None],
+                np.log1p(np.clip(head, 0.0, None)),
+            ]
+        )
+
+    def fit(self, raw: Array, y: Array, hours: Array, headroom: Array) -> CovariateCalibrator:
+        """Fit the logistic regression on the calibration block."""
+        self.model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+        self.model.fit(self.design(raw, hours, headroom), y)
+        return self
+
+    def predict(self, raw: Array, hours: Array, headroom: Array) -> Array:
+        """Return calibrated probabilities for the supplied rows."""
+        return np.asarray(self.model.predict_proba(self.design(raw, hours, headroom))[:, 1], dtype=np.float64)
+
+
+def _band_midpoints() -> dict[str, float]:
+    """Return one representative hour value for every headline band."""
+    return {label: (low + high) / 2.0 for label, low, high in HEADLINE_BANDS}
+
+
+def _covariate_constraints(calibrator: CovariateCalibrator, headroom: Array) -> tuple[bool, str]:
+    """Check monotonicity in score per band and non-increase in headroom."""
+    heads = np.asarray(headroom, dtype=np.float64)
+    reference_head = float(np.median(heads)) if len(heads) else 5.0
+    scores = np.linspace(0.01, 0.99, 41)
+    for label, hours in _band_midpoints().items():
+        values = calibrator.predict(scores, np.full(len(scores), hours), np.full(len(scores), reference_head))
+        if np.any(np.diff(values) < -1e-9):
+            return False, f"not monotone in score in band {label}"
+    steps = np.asarray([1.0, 5.0, 10.0, 20.0, 30.0])
+    reference_score = float(np.median(scores))
+    for label, hours in _band_midpoints().items():
+        values = calibrator.predict(
+            np.full(len(steps), reference_score),
+            np.full(len(steps), hours),
+            steps,
+        )
+        if np.any(np.diff(values) > 1e-9):
+            return False, f"not non-increasing in headroom in band {label}"
+    return True, ""
+
+
 class ScoreCalibrator:
     """A calibrator over raw probabilities, fitted on a held-out slice."""
 
-    def __init__(self, method: str, model: Any, temperature: float | None = None) -> None:
+    def __init__(
+        self,
+        method: str,
+        model: Any,
+        temperature: float | None = None,
+        *,
+        requested: str | None = None,
+        fallback: bool = False,
+        fallback_reason: str | None = None,
+    ) -> None:
         """Initialise the instance."""
         self.method = method
         self.model = model
         self.temperature = temperature
+        self.requested = requested or method
+        self.fallback = fallback
+        self.fallback_reason = fallback_reason
 
-    def predict(self, raw: Array) -> Array:
-        """Return model probabilities for the supplied rows."""
-        clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+    def predict(self, raw: Array, *, hours: Array | None = None, headroom: Array | None = None) -> Array:
+        """Return calibrated probabilities for the supplied rows."""
+        clipped = np.clip(raw, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
         if self.method == "constant":
-            return np.full(len(clipped), float(self.model), dtype=np.float64)
-        if self.method == "temperature":
+            values = np.full(len(clipped), float(self.model), dtype=np.float64)
+        elif self.method == "temperature":
             if self.temperature is None:
                 raise ModelError("temperature calibrator has no fitted temperature")
-            logits = np.log(clipped / (1.0 - clipped))
-            values = expit(logits / float(self.temperature))
+            values = expit(_logit(clipped) / float(self.temperature))
         elif self.method == "isotonic":
             values = self.model.predict(clipped)
+        elif self.method == "covariate":
+            if hours is None or headroom is None:
+                raise ModelError("the covariate calibrator needs hours_to_departure and headroom")
+            values = self.model.predict(clipped, np.asarray(hours, dtype=np.float64), headroom)
         else:
             values = self.model.predict_proba(clipped.reshape(-1, 1))[:, 1]
-        return np.asarray(np.clip(values, 1e-3, 1.0 - 1e-3), dtype=np.float64)
+        return np.asarray(np.clip(values, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS), dtype=np.float64)
 
 
-def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
-    """Fit and return a probability calibrator."""
-    clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+def fit_calibrator(
+    raw: Array,
+    y: Array,
+    method: str,
+    *,
+    min_positives: int,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+) -> ScoreCalibrator:
+    """Fit and return a probability calibrator with the requested and fitted method."""
+    clipped = np.clip(raw, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
+    requested = method
     if len(np.unique(y)) < 2:
-        return ScoreCalibrator("constant", float(np.mean(y)))
+        return ScoreCalibrator(
+            "constant",
+            float(np.mean(y)),
+            requested=requested,
+            fallback=True,
+            fallback_reason="single-class calibration block",
+        )
     positives = int(np.sum(y))
     if method == "isotonic" and positives < min_positives:
         method = "sigmoid"
+        fallback = True
+        fallback_reason = f"isotonic needs {min_positives} positives, got {positives}"
+    else:
+        fallback = False
+        fallback_reason = None
     if method == "sigmoid":
         model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
         model.fit(clipped.reshape(-1, 1), y)
-        return ScoreCalibrator("sigmoid", model)
+        return ScoreCalibrator(
+            "sigmoid", model, requested=requested, fallback=fallback, fallback_reason=fallback_reason
+        )
     if method == "isotonic":
         model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         model.fit(clipped, y)
-        return ScoreCalibrator("isotonic", model)
+        return ScoreCalibrator("isotonic", model, requested=requested)
     if method == "temperature":
-        logits = np.log(clipped / (1.0 - clipped))
+        logits = _logit(clipped)
 
         def loss(log_temperature: float) -> float:
             """Return the calibration loss for one temperature."""
@@ -872,7 +983,23 @@ def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> 
             return float(-np.mean(y * np.log(probabilities) + (1 - y) * np.log(1.0 - probabilities)))
 
         result = minimize_scalar(loss, bounds=(-3.0, 3.0), method="bounded")
-        return ScoreCalibrator("temperature", None, float(np.exp(result.x)))
+        return ScoreCalibrator("temperature", None, float(np.exp(result.x)), requested=requested)
+    if method == "covariate":
+        if hours is None or headroom is None:
+            raise ModelError("the covariate calibrator needs hours_to_departure and headroom")
+        calibrator = CovariateCalibrator().fit(clipped, y, hours, headroom)
+        monotone, reason = _covariate_constraints(calibrator, np.asarray(headroom, dtype=np.float64))
+        if not monotone:
+            model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+            model.fit(clipped, y)
+            return ScoreCalibrator(
+                "isotonic",
+                model,
+                requested=requested,
+                fallback=True,
+                fallback_reason=reason,
+            )
+        return ScoreCalibrator("covariate", calibrator, requested=requested)
     raise ModelError(f"unknown calibration method {method!r}")
 
 
@@ -898,14 +1025,17 @@ def _metrics(y: Array, probabilities: Array) -> dict[str, float | None]:
     }
 
 
-def _cross_fitted_with_folds(
+def _cross_fitted_detailed(
     raw: Array,
     y: Array,
     groups: Array,
     method: str,
     config: TrainingConfig,
-) -> tuple[Array, Array]:
-    """Fit the calibrator out-of-fold and return predictions plus fold ids."""
+    *,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+) -> tuple[Array, Array, tuple[dict[str, Any], ...]]:
+    """Fit the calibrator out-of-fold and return predictions, fold ids and fitted methods."""
     unique = np.unique(groups)
     folds = min(config.calibration.folds, len(unique))
     if folds < 2:
@@ -913,23 +1043,68 @@ def _cross_fitted_with_folds(
     splitter = GroupKFold(n_splits=folds)
     predicted = np.full(len(raw), np.nan, dtype=np.float64)
     fold_ids = np.full(len(raw), -1, dtype=np.int16)
+    methods: list[dict[str, Any]] = []
     for fold, (fit_idx, predict_idx) in enumerate(splitter.split(raw, y, groups)):
         calibrator = fit_calibrator(
             raw[fit_idx],
             y[fit_idx],
             method,
             min_positives=config.calibration.min_positives,
+            hours=None if hours is None else hours[fit_idx],
+            headroom=None if headroom is None else headroom[fit_idx],
         )
-        predicted[predict_idx] = calibrator.predict(raw[predict_idx])
+        predicted[predict_idx] = calibrator.predict(
+            raw[predict_idx],
+            hours=None if hours is None else hours[predict_idx],
+            headroom=None if headroom is None else headroom[predict_idx],
+        )
         fold_ids[predict_idx] = fold
+        methods.append(
+            {
+                "fold": fold,
+                "requested": calibrator.requested,
+                "fitted": calibrator.method,
+                "fallback": calibrator.fallback,
+                "fallback_reason": calibrator.fallback_reason,
+            }
+        )
     if np.isnan(predicted).any():
         raise ModelError("cross-fitted calibration left rows without a prediction")
+    return predicted, fold_ids, tuple(methods)
+
+
+def _cross_fitted_with_folds(
+    raw: Array,
+    y: Array,
+    groups: Array,
+    method: str,
+    config: TrainingConfig,
+    *,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+) -> tuple[Array, Array]:
+    """Fit the calibrator out-of-fold and return predictions plus fold ids."""
+    predicted, fold_ids, _ = _cross_fitted_detailed(raw, y, groups, method, config, hours=hours, headroom=headroom)
     return predicted, fold_ids
 
 
-def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: TrainingConfig) -> Array:
+def _cross_fitted(
+    raw: Array,
+    y: Array,
+    groups: Array,
+    method: str,
+    config: TrainingConfig,
+    *,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+) -> Array:
     """Return out-of-fold calibrated predictions by group."""
-    return _cross_fitted_with_folds(raw, y, groups, method, config)[0]
+    return _cross_fitted_with_folds(raw, y, groups, method, config, hours=hours, headroom=headroom)[0]
+
+
+def _hours(data: TabularData) -> Array:
+    """Return hours to departure as a float array."""
+    return np.asarray(data.features["hours_to_departure"], dtype=np.float64)
 
 
 @dataclass(frozen=True)
@@ -1538,6 +1713,8 @@ def _fit_final_calibration(
     method_scores: dict[str, dict[str, float | None]] = {}
     oof_predictions: dict[str, Array] = {}
     for method in config.calibration.methods:
+        if method not in STATIC_CALIBRATION_METHODS:
+            continue
         oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
         method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
 

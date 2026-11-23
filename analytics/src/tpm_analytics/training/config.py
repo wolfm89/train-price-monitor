@@ -20,7 +20,7 @@ PROTOCOL_KINDS = ("backtest", "static_split")
 FOLD_ROLE_ORDER = {"development": 0, "evaluation": 1, "sparse_era": 2, "forward": 3}
 FOLD_ROLES = ("development", "evaluation", "sparse_era", "forward")
 MODEL_NAMES = ("base_rate", "logistic", "hist_gradient_boosting")
-CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
+CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature", "covariate")
 
 
 class ConfigError(ValueError):
