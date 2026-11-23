@@ -190,6 +190,15 @@ Fingerprints get blocked once popular (db-vendo-client#46 reports days to weeks;
 Chrome order was blocked on 2026-10-21), so the transport rotates firefox → safari → chrome → tls13
 → tls12 → legacy and skips a blocked profile for 15 minutes.
 
+On 2026-11-23 the bahn.de web booking API (`/web/api/angebote/*`) began refusing every AWS Lambda
+egress IP tested — six fresh eu-central-1 environments plus eu-west-1 and us-east-1 — with
+`403 OPS_BLOCKED` on every TLS profile, while German residential egress still returned 201. The
+caller cannot choose a Lambda egress IP, and no tested region was accepted. The scraper therefore
+uses the DB Navigator API (`app.services-bahn.de`, `dbnav` profile), which returned 200 from the
+same Lambda egress and serves the same `tagesbestPreisIntervalle`; the backend keeps the web API
+plus the Decodo fallback. This is an egress/IP restriction, not a fingerprint problem: when every
+profile fails, another profile or Lambda IP will not help.
+
 ## Design decisions
 
 - **Serverless, no VPC.** Every workload is Lambda, API Gateway, DynamoDB, S3, SQS, SES or

@@ -26,10 +26,11 @@ ClientHello. The measured profiles and endpoint results are in
 order there; the transport must rotate on a block rather than pinning one profile. No browser,
 proxy, native module or vendor account.
 
-**Headers.** Only `Content-Type`/`Accept` plus `Origin`/`Referer` are sent. db-vendo-client's own
-User-Agent and correlation headers turn an accepted request into a 403, so the transport drops them.
-The backend and poller esbuild-`alias` `cross-fetch` to this module, so `db-vendo-client`'s request
-building and response parsing stay untouched.
+**Headers.** For the bahn.de web API only `Content-Type`/`Accept` plus `Origin`/`Referer` are sent;
+db-vendo-client's User-Agent and correlation headers turn an accepted web request into a 403. The
+DB Navigator API is the exception: its profile supplies `X-Correlation-ID`, which the transport
+forwards. The backend and poller esbuild-`alias` `cross-fetch` to this module, so
+`db-vendo-client`'s request building and response parsing stay untouched.
 
 **Pacing.** The module spaces request starts (`DB_MIN_GAP_MS`) and caps in-flight requests
 (`DB_MAX_IN_FLIGHT`); changing these defaults affects both runtimes. The poller's batch size and

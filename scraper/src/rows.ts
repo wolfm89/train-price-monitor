@@ -6,7 +6,9 @@ import { type ParquetRow } from './types.js';
 /** Bumped whenever the Parquet schema changes. v1 rows have no column at all. */
 export const SCHEMA_VERSION = 2;
 
-const SOURCE_PROFILE = 'dbweb';
+const SOURCE_PROFILE = 'dbnav';
+/** Rows written before the Navigator switch recorded the web profile. */
+const LEGACY_SOURCE_PROFILE = 'dbweb';
 const QUERY_MODE = 'bestprice';
 
 /** db-vendo-client adds this to `Line`; the shared types do not know it. */
@@ -293,7 +295,7 @@ export function fromParquetRecord(record: Record<string, unknown>): ParquetRow {
         : requiredNumber(storedOrdinal, 'load_factor_ordinal'),
     journey_id: storedJourneyId === undefined || storedJourneyId === null ? null : String(storedJourneyId),
     schema_version: schemaVersion,
-    source_profile: optionalString(record.source_profile, SOURCE_PROFILE),
+    source_profile: optionalString(record.source_profile, LEGACY_SOURCE_PROFILE),
     query_mode: optionalString(record.query_mode, QUERY_MODE),
   };
 }

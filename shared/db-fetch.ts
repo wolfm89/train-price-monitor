@@ -16,8 +16,10 @@
  * cooldown. No browser, no proxy, no vendor account.
  *
  * Measured constraints this file encodes:
- *  - Only `Content-Type`/`Accept` plus `Origin`/`Referer` may be sent. db-vendo's
- *    own User-Agent and correlation headers turn an accepted request into a 403.
+ *  - For the bahn.de web API, only `Content-Type`/`Accept` plus `Origin`/`Referer`
+ *    may be sent. db-vendo's own User-Agent and correlation headers turn an
+ *    accepted request into a 403. The DB Navigator API is the exception: it
+ *    requires `X-Correlation-ID`, which is forwarded when the profile supplies it.
  *  - Bursts get an IP throttled (429) for minutes: 6 parallel calls were fine,
  *    60 at concurrency 6 were not. Calls are therefore spaced and few are in flight.
  *  - Once an environment is throttled, hammering it only extends the ban. After a
@@ -347,7 +349,9 @@ function availableProfiles(): TlsProfile[] {
 }
 
 function isFingerprintBlocked(status: number, bodyText: string): boolean {
-  return status === 403 && /OPS_BLOCKED/.test(bodyText);
+  // The bahn.de web API answers 403; the DB Navigator API answers 452. Both use
+  // the same OPS_BLOCKED body and mean "this profile is refused, rotate".
+  return (status === 403 || status === 452) && /OPS_BLOCKED/.test(bodyText);
 }
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
@@ -380,8 +384,10 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
   };
   const contentType = pick(init.headers, 'content-type');
   const accept = pick(init.headers, 'accept');
+  const correlationId = pick(init.headers, 'x-correlation-id');
   if (contentType) headers['Content-Type'] = contentType;
   if (accept) headers.Accept = accept;
+  if (correlationId) headers['X-Correlation-ID'] = correlationId;
 
   return new Promise((resolve, reject) => {
     const request = https.request(
@@ -470,7 +476,11 @@ async function resolveDecodoKey(): Promise<string | null> {
   return decodoKeyRequest;
 }
 
-/** Executes one request through Decodo; a DB refusal is retried once because the egress is picked per request. */
+/**
+ * Executes one request through Decodo. Both a DB refusal and an empty result are
+ * retried: the vendor picks a new egress IP per request, and some of those IPs
+ * are refused by the target even though the next one would pass.
+ */
 async function decodoFetch(
   key: string,
   url: string,
@@ -484,12 +494,18 @@ async function decodoFetch(
     headers[name] = value;
   }
 
+  const MAX_ATTEMPTS = 2;
+  let lastNoResultError: Error | null = null;
+
   for (let attempt = 1; ; attempt++) {
     // Share one wall-clock budget with the direct path: the API Lambda lives
     // behind a 29 s gateway cap, so a late throttling response must not start
     // another full 18 s attempt.
     const remaining = deadline - Date.now();
-    if (remaining < 1_000) throw new Error('DB request budget exhausted before the fallback');
+    if (remaining < 1_000) {
+      if (lastNoResultError) throw lastNoResultError;
+      throw new Error('DB request budget exhausted before the fallback');
+    }
 
     const response = await globalThis.fetch(DECODO_SCRAPE_URL, {
       method: 'POST',
@@ -512,13 +528,22 @@ async function decodoFetch(
 
     const envelope = JSON.parse(text) as {
       results?: Array<{ content?: string; status_code?: number; headers?: Record<string, string> }>;
+      error?: unknown;
     };
     const result = envelope.results?.[0];
-    if (!result) throw new Error('Decodo returned no result');
+    if (!result) {
+      // HTTP 200 with an empty result set means the proxy IP Decodo picked was
+      // refused by the target (its error text says so). Retrying picks another
+      // IP; throwing here made the fallback fail on a single unlucky egress.
+      const vendorError = typeof envelope.error === 'string' ? envelope.error.slice(0, 200) : '';
+      lastNoResultError = new Error(`Decodo returned no result${vendorError ? `: ${vendorError}` : ''}`);
+      if (attempt < MAX_ATTEMPTS && deadline - Date.now() > 3_000) continue;
+      throw lastNoResultError;
+    }
 
     const status = result.status_code ?? 200;
     const bodyText = result.content ?? '';
-    if (isThrottled(status, bodyText) && attempt < 2 && deadline - Date.now() > 3_000) continue;
+    if (isThrottled(status, bodyText) && attempt < MAX_ATTEMPTS && deadline - Date.now() > 3_000) continue;
 
     return new FetchCompatibleResponse(status, '', bodyText, Object.entries(result.headers ?? {}));
   }

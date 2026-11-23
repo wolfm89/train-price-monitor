@@ -24,7 +24,8 @@ human-only AWS deploy (it builds the bundles first); the Floci deploy below is a
   ~8,400 items against a 5 WCU table and can exceed the 15-minute timeout unless capacity is raised.
 - **Poller** runs every 15 minutes. It queries each `ByDue` tier in NEAR → MID → FAR order
   (paginated, up to 5 pages per tier), up to 25 targets, makes two bestprice calls per target (first
-  and second class) and reschedules each target.
+  and second class) and reschedules each target. It uses the DB Navigator API (`dbnav`,
+  `app.services-bahn.de`), not the bahn.de web API, which refuses AWS Lambda egress.
 - `due_key` is `<tier rank>#<next_scrape_at>`; the index is `status` + `due_key`. Keep the prefix and
   the tier order when changing scheduling, otherwise near departures stop winning.
 - Targets whose departure day has passed are deleted instead of scraped.
