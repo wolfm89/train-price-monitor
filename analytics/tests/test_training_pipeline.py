@@ -223,6 +223,30 @@ def _build(tmp_path: Path) -> tuple[DatasetStats, Path]:
     return stats, tmp_path / "run"
 
 
+def test_uniform_multi_file_glob_builds(tmp_path: Path) -> None:
+    rows = _rows()
+    first = tmp_path / "a.parquet"
+    second = tmp_path / "b.parquet"
+    midpoint = len(rows) // 2
+    _write_silver(first, rows[:midpoint])
+    _write_silver(second, rows[midpoint:])
+    table = pq.read_table(second)
+    pq.write_table(table.select(list(reversed(table.column_names))), second)
+    config = load_config(_config(tmp_path))
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(tmp_path / "*.parquet"), label="uniform", build_id="uniform", manifest_sha256=None),
+            config,
+            tmp_path / "uniform-run",
+            run_id="uniform",
+        )
+    finally:
+        connection.close()
+    assert stats.rows > 0
+
+
 def test_mixed_schema_glob_raises_dataset_error(tmp_path: Path) -> None:
     first = tmp_path / "a.parquet"
     second = tmp_path / "b.parquet"
@@ -3909,6 +3933,15 @@ def test_band_positives_gate_raises(tmp_path: Path) -> None:
             )
     finally:
         connection.close()
+
+
+def test_config_rejects_unknown_model_candidate(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["model"]["candidates"] = ["base_rate", "lightgbm"]
+    path = tmp_path / "unknown-candidate.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="unknown model candidates"):
+        load_config(path)
 
 
 def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:

@@ -40,7 +40,7 @@ from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, band_labels
-from tpm_analytics.training.config import TrainingConfig
+from tpm_analytics.training.config import MODEL_NAMES, TrainingConfig
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
 from tpm_analytics.training.identity import berlin_week_sql
 from tpm_analytics.training.labels import breach, cents
@@ -479,6 +479,8 @@ def fit_candidate(
     matrix: Array | None = None,
 ) -> FittedModel:
     """Fit one candidate model on the training panel."""
+    if name not in MODEL_NAMES:
+        raise ModelError(f"unknown model {name!r}; supported: {', '.join(MODEL_NAMES)}")
     encoder = fit_encoder(data, spec) if encoder is None else encoder
     matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":

@@ -26,7 +26,7 @@ import pyarrow.parquet as pq
 
 from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import HEADLINE_BANDS
-from tpm_analytics.training.config import FoldConfig, ProtocolConfig, TrainingConfig
+from tpm_analytics.training.config import MODEL_NAMES, FoldConfig, ProtocolConfig, TrainingConfig
 from tpm_analytics.training.dataset import DatasetError, _git_state
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS, FeatureSpec
 from tpm_analytics.training.labels import breach
@@ -729,6 +729,8 @@ def _load_cached_recipe(
     except OSError, ValueError, TypeError, KeyError, AttributeError:
         return None
     if not isinstance(payload, dict) or payload.get("config_sha256") != config.hash():
+        return None
+    if payload.get("model") not in MODEL_NAMES:
         return None
     if dataset_sha256 is None or payload.get("dataset_sha256") != dataset_sha256:
         return None

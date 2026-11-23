@@ -115,14 +115,15 @@ def _validate_source_schema(connection: duckdb.DuckDBPyConnection, source: Sourc
     """Raise DatasetError when the source files do not share one Parquet schema."""
     try:
         rows = connection.execute(
-            f"SELECT file_name, name, type FROM parquet_schema('{sql_string(source.glob)}') WHERE name <> 'schema'"
+            f"SELECT file_name, name, type FROM parquet_schema('{sql_string(source.glob)}')"
         ).fetchall()
     except duckdb.Error as error:
-        raise DatasetError(f"source {source.label} has no readable Parquet schema: {error}") from error
+        message = str(error).splitlines()[0]
+        raise DatasetError(f"could not read a Parquet schema for source {source.label}: {message}") from error
     schemas: dict[str, list[tuple[str, str]]] = {}
     for file_name, name, type_name in rows:
         schemas.setdefault(str(file_name), []).append((str(name), str(type_name)))
-    distinct = {tuple(columns) for columns in schemas.values()}
+    distinct = {tuple(sorted(columns)) for columns in schemas.values()}
     if len(distinct) > 1:
         raise DatasetError(
             f"source {source.label} mixes Parquet schemas across {len(schemas)} files; rebuild or narrow the source"
