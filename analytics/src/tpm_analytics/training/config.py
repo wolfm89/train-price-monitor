@@ -93,6 +93,8 @@ class LabelConfig:
             raise ConfigError("label.headroom_pct must be a non-empty list of positive integers")
         if tuple(sorted(set(self.headroom_pct))) != self.headroom_pct:
             raise ConfigError("label.headroom_pct must be strictly increasing and unique")
+        if max(self.headroom_pct) > 32767:
+            raise ConfigError("label.headroom_pct must fit the int16 headroom column (max 32767)")
 
 
 @dataclass(frozen=True)
@@ -327,6 +329,11 @@ class TrainingConfig:
         self.model.validate()
         self.calibration.validate()
         self.report.validate()
+        if self.protocol.kind == "static_split" and "covariate" in self.calibration.methods:
+            raise ConfigError(
+                "calibration.methods: covariate is backtest-only; the static path uses "
+                "sigmoid, isotonic and temperature"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a serialisable dictionary representation."""

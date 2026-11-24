@@ -134,7 +134,7 @@ def replacement_rule(interval: dict[str, Any]) -> tuple[bool, str]:
         return False, "log-loss interval is not entirely below zero"
     if float(brier[0]) > 0.0:
         return False, "Brier interval lies entirely above zero"
-    return True, "log loss improves and Brier does not worsen"
+    return True, "log loss improves and the Brier interval is not entirely above zero"
 
 
 def _ranked(models: tuple[str, ...]) -> tuple[str, ...]:

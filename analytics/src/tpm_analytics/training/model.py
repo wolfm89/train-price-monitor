@@ -478,13 +478,17 @@ class BaseRateModel:
 
     def predict_proba(self, matrix: Array) -> Array:
         """Return class probabilities for the supplied matrix's headroom column."""
-        heads = np.rint(np.asarray(matrix[:, self.headroom_index], dtype=np.float64)).astype(np.int64)
-        top = max([*self.rates, int(heads.max()) if len(heads) else 0, 100])
-        table = np.full(top + 1, self.global_rate, dtype=np.float64)
-        for head, rate in self.rates.items():
-            if 0 <= head <= top:
-                table[head] = rate
-        values = table[np.clip(heads, 0, top)]
+        raw = np.asarray(matrix[:, self.headroom_index], dtype=np.float64)
+        finite = np.isfinite(raw)
+        values = np.full(len(raw), self.global_rate, dtype=np.float64)
+        if finite.any():
+            heads = np.rint(raw[finite]).astype(np.int64)
+            top = max([*self.rates, int(heads.max()), 100])
+            table = np.full(top + 1, self.global_rate, dtype=np.float64)
+            for head, rate in self.rates.items():
+                if 0 <= head <= top:
+                    table[head] = rate
+            values[finite] = table[np.clip(heads, 0, top)]
         return np.column_stack([1.0 - values, values])
 
 
@@ -629,7 +633,7 @@ def _probe_train_mask(
 
 def _fit_hgb_with_early_stopping(
     refit_matrix: Array,
-    probe_matrix: Array,
+    probe_matrix: Array | None,
     y: Array,
     snapshot_at: Array,
     *,
@@ -647,7 +651,13 @@ def _fit_hgb_with_early_stopping(
     snapshot = np.asarray(snapshot_at, dtype="datetime64[ms]")
     holdout = _holdout_mask(snapshot_at)
     probe_train = _probe_train_mask(holdout, snapshot, label_window_end) if holdout is not None else None
-    if holdout is None or len(np.unique(y[holdout])) < 2 or probe_train is None or int(probe_train.sum()) < 100:
+    if (
+        holdout is None
+        or probe_matrix is None
+        or len(np.unique(y[holdout])) < 2
+        or probe_train is None
+        or int(probe_train.sum()) < 100
+    ):
         estimator = _hgb_settings(
             estimator_settings,
             iterations=limit,
@@ -662,8 +672,11 @@ def _fit_hgb_with_early_stopping(
             "fit_seconds": round(time.perf_counter() - started, 3),
             "refit_seconds": 0.0,
             "capped": bool(limit < int(max_iter)),
-            "hit_cap": False,
+            "hit_cap": bool(limit >= int(max_iter)),
+            "stop_iteration": limit,
         }
+    if probe_matrix is None or probe_train is None:
+        raise ModelError("probe matrix is missing after the early-stopping fallback")
     probe = _hgb_settings(
         estimator_settings,
         iterations=limit,
@@ -763,19 +776,19 @@ def fit_candidate(
                 dropped=dropped,
             )
         holdout = _holdout_mask(data.snapshot_at)
-        probe_selected = selected
+        probe_selected: tuple[int, ...] = ()
         if holdout is not None:
-            non_empty = set(_non_empty_columns(matrix, ~holdout))
+            snapshot = np.asarray(data.snapshot_at, dtype="datetime64[ms]")
+            probe_train = _probe_train_mask(holdout, snapshot, data.label_window_end)
+            non_empty = set(_non_empty_columns(matrix, probe_train))
             probe_selected = tuple(index for index in selected if index in non_empty)
-            if not probe_selected:
-                probe_selected = selected
         probe_categorical = [position for position, index in enumerate(probe_selected) if index in categorical_set]
         probe_monotonic = [0] * len(probe_selected)
         if headroom_index in probe_selected:
             probe_monotonic[probe_selected.index(headroom_index)] = -1
         estimator, early_stopping = _fit_hgb_with_early_stopping(
             matrix[:, list(selected)],
-            matrix[:, list(probe_selected)],
+            matrix[:, list(probe_selected)] if probe_selected else None,
             data.y,
             data.snapshot_at,
             label_window_end=data.label_window_end,
@@ -1232,6 +1245,8 @@ def _cross_fitted_at_headroom(
     folds = min(config.calibration.folds, len(unique))
     if folds < 2:
         raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
+    if len(apply_raw) != len(fit_raw):
+        raise ModelError("cross-fitted calibration applied to a different population")
     splitter = GroupKFold(n_splits=folds)
     predicted = np.full(len(apply_raw), np.nan, dtype=np.float64)
     methods: list[dict[str, Any]] = []
@@ -1391,6 +1406,10 @@ def _cell_threshold(
     """Choose the highest-recall threshold whose Wilson lower bound meets the precision floor."""
     labels = np.asarray(y, dtype=np.int8)
     scores = np.asarray(probabilities, dtype=np.float64)
+    finite = np.isfinite(scores)
+    if not np.all(finite):
+        labels = labels[finite]
+        scores = scores[finite]
     positives = int(np.sum(labels))
     row: dict[str, Any] = {
         "threshold": None,

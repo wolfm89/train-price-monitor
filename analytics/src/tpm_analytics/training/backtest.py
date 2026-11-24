@@ -893,11 +893,16 @@ def _threshold_hold_rate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Summarise how many cells with an operating point held the floor on test."""
     with_point = [row for row in rows if row["operating_point"]]
     met = [row for row in with_point if row["floor_met"]]
+    substantive = [row for row in with_point if row["test_alerts"] >= 100 and (row["test_recall"] or 0.0) >= 0.05]
+    substantive_met = [row for row in substantive if row["floor_met"]]
     return {
         "cells": len(rows),
         "with_operating_point": len(with_point),
         "test_floor_met": len(met),
         "hold_rate": (len(met) / len(with_point)) if with_point else None,
+        "substantive_cells": len(substantive),
+        "substantive_test_floor_met": len(substantive_met),
+        "substantive_hold_rate": (len(substantive_met) / len(substantive)) if substantive else None,
     }
 
 
@@ -1057,7 +1062,6 @@ def _importance_losses(
 
 def _grouped_importance(
     folds: tuple[FoldResult, ...],
-    config: TrainingConfig,
     spec: FeatureSpec,
     *,
     sample: int = 20_000,
@@ -1515,7 +1519,6 @@ def run_backtest(
     )
     importance = _grouped_importance(
         development_results,
-        config,
         spec,
         seed=config.seed + 4,
     )
@@ -1799,6 +1802,22 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         if result.headroom_ttd
         else "Evaluation folds were not scored."
     )
+    evaluation_eras = sorted({str(row["era"]) for row in result.calibration_cells})
+    development_eras = sorted({str(row["era"]) for row in result.development_calibration_cells})
+    if not evaluation_eras:
+        era_note = "Evaluation calibration cells were not scored."
+    elif evaluation_eras == ["dense"] and development_eras == ["dense"]:
+        era_note = (
+            "The evaluation folds are all dense; the era dimension is shown for completeness. The "
+            "development cells are dense as well, and the sparse-era folds are not pooled into "
+            "these tables."
+        )
+    else:
+        era_note = (
+            f"Evaluation eras present: {', '.join(evaluation_eras)}; development eras: "
+            f"{', '.join(development_eras) or 'none'}. The sparse-era folds are not pooled into "
+            "these tables."
+        )
     calibration_cells_table = (
         _table(
             ["headroom %", "TTD band", "era", "rows", "prevalence", "slope", "intercept", "ECE"],
@@ -2001,8 +2020,11 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     development_hold_rate = result.development_threshold_hold_rate or {}
     hold_note = (
         f"{hold_rate.get('test_floor_met', 0)} of {hold_rate.get('with_operating_point', 0)} cells with an "
-        f"operating point held the {result.recipe.threshold_floor:g} test precision floor "
-        f"({_p(hold_rate.get('hold_rate'))})."
+        f"operating point held the {result.recipe.threshold_floor:g} point-estimate test precision floor "
+        f"({_p(hold_rate.get('hold_rate'))}); among cells with at least 100 test alerts and 5 % recall, "
+        f"{hold_rate.get('substantive_test_floor_met', 0)} of {hold_rate.get('substantive_cells', 0)} held "
+        f"({_p(hold_rate.get('substantive_hold_rate'))}). The Wilson bound is nominal under "
+        "departure-date correlation; the hold rate is descriptive, not a 95 % guarantee."
         if hold_rate.get("with_operating_point", 0) > 0
         else "No evaluation cell has an operating point."
     )
@@ -2095,8 +2117,9 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         f"Intervals are a cluster bootstrap by departure date across folds: "
         f"{config.report.bootstrap_replicates} replicates for Brier and log loss, "
         f"{config.report.metric_bootstrap_replicates} for the other metrics, {clusters} clusters; "
-        "precision and recall use each row's own fold and cell threshold. The per-fold table's "
-        "`fold thr` columns are the legacy global rule, not the product rule."
+        "precision and recall use each row's own fold and cell threshold; these intervals are "
+        "conditional on the fitted thresholds and do not include threshold-selection variance. The "
+        "per-fold table's `fold thr` columns are the legacy global rule, not the candidate alert rule."
         if interval_rows
         else ""
     )
@@ -2367,9 +2390,9 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 departure, in the 24 h-30 d domain. Rows are the labelled subset; a missing check is censored
 (`not_listed`), not a negative.
 
-**What is clean:** the evaluation weeks were part of earlier development, and the current recipe
-was chosen with them in view. They are a fair yardstick for choices made from this protocol on.
-The October-November forward set is the only untouched data. These are different populations and
+**What is clean:** the evaluation weeks were inspected in PR 5 and earlier; these are a
+re-measurement on an inspected cohort, not an unbiased estimate for a new period. The
+October-November forward set is the only untouched data. These are different populations and
 protocols from the static validation split; a higher Brier here is not a model regression.
 
 > `BSS` is 1 - Brier / base-rate Brier; `BSS clim` is 1 - model Brier / fold-climatology Brier;
@@ -2382,8 +2405,8 @@ protocols from the static validation split; a higher Brier here is not a model r
 {fold_table}
 
 The per-fold `fold thr` and `floor met` columns use the legacy global threshold; the per-cell
-threshold table below is the product rule. PR 6 scored the evaluation folds in the cache-free run,
-the determinism twin and a report regeneration; the ledger records all three.
+threshold table below is the candidate alert rule evaluated here. The backend still alerts on the
+user's price limit; this rule is not shipped.
 
 {diagnostics_table}
 
@@ -2445,10 +2468,12 @@ departure-date cluster-bootstrap replicates.
 
 ## Evaluation calibration cells (headroom x TTD band x era)
 
-The evaluation folds are all dense; the era dimension is shown for completeness. The development
-cells are dense as well, and the sparse-era folds are not pooled into these tables.
+{era_note}
 
 {calibration_cells_table}
+
+ECE is prevalence-bounded; compare slope and intercept across cells, and read the intercept against
+the prevalence column because it is at logit(p)=0. Cells below `MIN_CELL_ROWS` are omitted.
 
 ## Thresholds
 
@@ -2457,9 +2482,13 @@ highest recall whose one-sided 95 % Wilson lower bound on precision is at least
 {result.recipe.threshold_floor:g}, with at least {result.recipe.threshold_min_alerts} alerts. A cell
 with no qualifying operating point does not alert. `folds` counts the folds with an operating
 point; the precision and recall columns pool every fold at its own threshold. The test `floor met`
-check uses point-estimate precision; the calibration rule used the Wilson lower bound. Cell rows
-relabel every test row at the cell's headroom; the pooled `cell-threshold` precision/recall use
-each row's assigned headroom. {hold_note}
+check uses point-estimate precision; the calibration rule used the Wilson lower bound. That bound
+is **nominal**: it assumes independent rows, while alerts within a departure date share the same
+fare movement. The measured design effect is 1.4-3.2x, and a boundary rule is expected to hold on
+roughly half of new cells. Treat the hold rate as descriptive; a departure-date cluster bound is
+the PR 7 replacement. Cells with fewer than 100 test alerts or under 5 % recall are nominal only.
+Cell rows relabel every test row at the cell's headroom; the pooled `cell-threshold`
+precision/recall use each row's assigned headroom. {hold_note}
 
 ### Development thresholds
 
@@ -2490,9 +2519,11 @@ Grouped permutation importance on the pooled development test blocks with each f
 and calibrator: up to 20,000 rows stratified across all development departure dates (about
 {result.importance[0]["rows"] if result.importance else 0} rows from
 {result.importance[0]["departures"] if result.importance else 0} dates here), five repeats, delta
-log loss. `std`/`min`/`max` are the permutation spread across repeats; `date std` is the spread of
-the per-date mean deltas. The `limit` family is the user's headroom, the label's own parameter;
-read it as a sanity check, not a market driver.
+log loss. The sample is allocated equally per departure date, so the mean is date-weighted, not
+the pooled-block mean; permutation is global across dates. `std`/`min`/`max` are the permutation
+spread across repeats; `date std` is the spread of the per-date mean deltas. The `limit` family is
+the user's headroom, the label's own parameter; read it as a sanity check, not a market driver.
+Within-date permutation and a date-level interval are PR 7 refinements.
 
 ### Feature families
 
@@ -2521,10 +2552,10 @@ The primary comparison is **waiting** (the current product notifies only once th
 limit). At low headroom and 1-3 d the policy is roughly break-even against booking now; its
 interval includes zero. From 20 % headroom up it loses several euros against booking now. Even the
 perfect breach oracle is negative against booking now from 20 % up near departure. A random alert
-at the same share captures most of the waiting value; the model's lift is the remaining part. The
-oracle columns are point estimates; the policy columns carry the cluster intervals. The alert is
-protection against crossing the limit, not a buy-or-wait oracle. Read the euro columns rather than
-a fixed headline number.
+at low headroom captures most of the waiting value; at 20-30 % headroom it captures only a
+minority. The model's lift is the remaining part. The oracle columns are point estimates; the
+policy columns carry the cluster intervals. The alert is protection against crossing the limit,
+not a buy-or-wait oracle. Read the euro columns rather than a fixed headline number.
 
 ### Development decision value
 

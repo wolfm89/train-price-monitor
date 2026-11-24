@@ -87,6 +87,7 @@ from tpm_analytics.training.model import (
     _pooled_decision_value_rows,
     _strata_rows,
     _train_prevalence,
+    _ttd_array,
     _wilson_lower,
     fit_calibrator,
     fit_candidate,
@@ -218,6 +219,7 @@ def _config(tmp_path: Path) -> Path:
     raw["splits"] = SPLITS
     raw["sample"]["sample_rate"] = 1.0
     raw["calendar"]["feature_set"] = "full"
+    raw["calibration"]["methods"] = ["sigmoid", "isotonic", "temperature"]
     raw["protocol"] = {"kind": "static_split"}
     raw["report"]["min_headroom_positives"] = 0
     raw["report"]["min_eligible_rows"] = 0
@@ -3551,6 +3553,24 @@ def test_base_rate_is_per_headroom() -> None:
     assert probabilities[20:].tolist() == pytest.approx([0.25] * 20)
     at_30 = model.predict(data, headroom=30)
     assert at_30.tolist() == pytest.approx([0.25] * count)
+    nan_headroom = TabularData(
+        features={**data.features, "headroom_pct": np.r_[np.nan, data.features["headroom_pct"][1:]]},
+        y=data.y,
+        series=data.series,
+        route_day=data.route_day,
+        price=data.price,
+        check_price=data.check_price,
+        future_max=data.future_max,
+        future_observations=data.future_observations,
+        headroom=data.headroom,
+        departure_date=data.departure_date,
+        snapshot_at=data.snapshot_at,
+        observation_era=data.observation_era,
+        observation_week=data.observation_week,
+    )
+    nan_probabilities = model.predict(nan_headroom)
+    assert np.all(np.isfinite(nan_probabilities))
+    assert nan_probabilities[0] == pytest.approx(0.5)
 
 
 def test_dataset_cache_round_trip(tmp_path: Path) -> None:
@@ -3836,16 +3856,18 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     assert {row["kind"] for row in scored.importance} == {"family", "feature"}
     assert all(np.isfinite(row["delta_log_loss"]) for row in scored.importance)
     assert all("date_std" in row for row in scored.importance)
-    if "precision" in scored.pooled.get("intervals", {}):
+    point = scored.pooled.get("cell_threshold_precision")
+    if "precision" in scored.pooled.get("intervals", {}) and point is not None:
         low, high = scored.pooled["intervals"]["precision"]
-        assert low <= scored.pooled["cell_threshold_precision"] <= high
+        assert low <= point <= high
     development = tuple(item for item in scored.folds if item.fold.role == "development")
-    small = _grouped_importance(development, config, spec, sample=400, repeats=1, seed=5)
+    small = _grouped_importance(development, spec, sample=400, repeats=1, seed=5)
     assert len([row for row in small if row["kind"] == "family"]) == 7
     assert len([row for row in small if row["kind"] == "feature"]) == len(spec.names)
     expected_dates = len(np.unique(np.concatenate([item.test.departure_date for item in development])))
     assert all(row["departures"] == expected_dates for row in small)
     assert all(row["rows"] <= 400 for row in small)
+    assert max(row["delta_log_loss"] for row in small if row["kind"] == "family") > 0.0
 
 
 def test_selection_rejects_a_non_development_fold() -> None:
@@ -3917,7 +3939,11 @@ def test_selection_joint_search_and_deterministic_table(tmp_path: Path) -> None:
             FoldConfig(date(2026, 7, 20), "development", "dev2"),
         ),
     )
-    config = replace(config, protocol=protocol)
+    config = replace(
+        config,
+        protocol=protocol,
+        calibration=replace(config.calibration, methods=("sigmoid", "isotonic", "temperature", "covariate")),
+    )
     first = select_outcome(panel, config, spec, replicates=200)
     second = select_outcome(panel, config, spec, replicates=200)
     assert table_sha256(first.table) == table_sha256(second.table)
@@ -4200,6 +4226,16 @@ def test_cell_threshold_enforces_minimum_alerts_and_the_none_path() -> None:
     assert empty["positives"] == 0
 
 
+def test_cell_threshold_ignores_non_finite_scores() -> None:
+    y = np.array([1] * 20 + [0] * 10, dtype=np.int8)
+    probabilities = np.array([0.9] * 20 + [0.1] * 8 + [np.nan, np.inf])
+    row = _cell_threshold(y, probabilities, 0.7, 20)
+    assert row["qualified"] is True
+    assert row["threshold"] is not None
+    assert np.isfinite(row["threshold"])
+    assert row["alerts"] == 20
+
+
 def test_cell_threshold_handles_ties_and_prefers_recall() -> None:
     tied = _cell_threshold(
         np.array([1] * 80 + [0] * 20, dtype=np.int8),
@@ -4247,6 +4283,46 @@ def test_permuting_a_family_changes_only_that_family() -> None:
     assert (permuted["a"] / permuted["b"]).tolist() == [10.0, 10.0, 10.0]
 
 
+def test_hgb_probe_drops_columns_empty_only_after_label_purge(tmp_path: Path) -> None:
+    spec = feature_spec("none")
+    count = 600
+    base = np.datetime64("2026-06-01T00:00:00", "ms")
+    snapshots = base + np.arange(count).astype("timedelta64[h]")
+    features: dict[str, Any] = {}
+    for feature in spec.features:
+        if feature.kind == "categorical":
+            features[feature.name] = np.array(["a"] * count, dtype=object)
+        else:
+            features[feature.name] = np.zeros(count, dtype=np.float32)
+    labels_end = snapshots + np.timedelta64(28, "h")
+    cutoff = snapshots.max() - np.timedelta64(7, "D")
+    purged = (snapshots <= cutoff) & (labels_end > cutoff)
+    features["price_rank_route_day"] = np.full(count, np.nan, dtype=np.float32)
+    features["price_rank_route_day"][purged] = np.linspace(0.1, 0.9, int(purged.sum())).astype(np.float32)
+    y = np.arange(count) % 2
+    data = TabularData(
+        features=features,
+        y=y.astype(np.int8),
+        series=np.array([f"s{i}" for i in range(count)], dtype=object),
+        route_day=np.arange(count, dtype=np.int64),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 100.0),
+        future_max=np.full(count, 100.0),
+        future_observations=np.full(count, 2, dtype=np.int16),
+        headroom=np.full(count, 5, dtype=np.int16),
+        departure_date=np.full(count, "2026-07-01", dtype=object),
+        snapshot_at=snapshots,
+        observation_era=np.full(count, "dense", dtype=object),
+        observation_week=np.full(count, "2026-W23", dtype=object),
+        label_window_end=labels_end,
+    )
+    config = load_config(DEFAULT_CONFIG_PATH)
+    model = fit_candidate("hist_gradient_boosting", data, spec, config)
+    assert model.early_stopping is not None
+    assert model.early_stopping["fallback"] is True
+    assert purged.any()
+
+
 def test_threshold_and_decision_helpers_agree_with_the_fold_state(tmp_path: Path) -> None:
     _, out = _build(tmp_path)
     spec = feature_spec("full")
@@ -4260,17 +4336,17 @@ def test_threshold_and_decision_helpers_agree_with_the_fold_state(tmp_path: Path
     recipe = Recipe(
         "base_rate",
         "sigmoid",
-        0.4,
+        0.2,
         {
             "max_iter": config.model.max_iter,
             "learning_rate": config.model.learning_rate,
             "max_leaf_nodes": config.model.max_leaf_nodes,
             "random_state": config.model.random_state,
         },
-        threshold_min_alerts=10,
+        threshold_min_alerts=5,
     )
     result = fit_fold(recipe, fold, train, calibrate, test, config, spec)
-    rows = _threshold_cells((result,), config, floor=0.4, min_alerts=10)
+    rows = _threshold_cells((result,), config, floor=0.2, min_alerts=5)
     assert len(rows) == 5 * len(HEADLINE_BANDS)
     assert all("thresholds" in row and "operating_point" in row for row in rows)
     assert all("threshold" not in row for row in rows)
@@ -4279,14 +4355,42 @@ def test_threshold_and_decision_helpers_agree_with_the_fold_state(tmp_path: Path
     assert hold["with_operating_point"] == sum(row["operating_point"] for row in rows)
     pooled = _pooled_cell_metrics((result,), config)
     assert pooled["cell_threshold_rows"] == len(test)
+    bands = _ttd_array(result.test)
+    chosen = next(
+        (key for key, entry in result.cell_thresholds.items() if entry["qualified"] and entry["alerts"] > 0),
+        None,
+    )
+    assert chosen is not None
+    headroom, band = chosen
+    entry = result.cell_thresholds[chosen]
+    mask = bands == band
+    alert = result.probabilities[headroom][mask] >= float(entry["threshold"])
+    row = next(item for item in rows if item["headroom_pct"] == headroom and item["ttd_band"] == band)
+    assert row["test_alerts"] == int(alert.sum())
+    assigned = np.full(len(test), np.inf)
+    for (value, label), cell in result.cell_thresholds.items():
+        if cell["qualified"]:
+            assigned[(test.headroom == value) & (bands == label)] = float(cell["threshold"])
+    assigned_alert = np.isfinite(assigned) & (result.calibrated >= assigned)
+    assert pooled["cell_threshold_alerts"] == int(assigned_alert.sum())
+    assert pooled["cell_threshold_precision"] == pytest.approx(
+        np.sum(assigned_alert & (test.y == 1)) / max(int(assigned_alert.sum()), 1)
+    )
     decisions = _decision_value_cells((result,), config, replicates=20, seed=4)
     assert decisions
     assert all("operating_point" in row for row in decisions)
     assert all("perfect_breach_vs_wait_eur" in row for row in decisions)
+    decision = next(item for item in decisions if item["headroom_pct"] == headroom and item["band"] == band)
+    check = np.asarray(test.check_price, dtype=np.float64)
+    price = np.asarray(test.price, dtype=np.float64)
+    valid = (bands == band) & np.isfinite(check) & np.isfinite(price) & (price > 0)
+    saving = check[valid] - price[valid]
+    expected = float(np.mean(np.where(result.probabilities[headroom][valid] >= float(entry["threshold"]), saving, 0.0)))
+    assert decision["saving_vs_always_wait_eur"] == pytest.approx(expected)
     curves = _pr_curves((result,))
     assert curves
     assert all("points" in curve for curve in curves)
-    assert all(item["fold"] == "applied" for item in result.calibration_methods if item["fold"] == "applied")
+    assert sum(item["fold"] == "applied" for item in result.calibration_methods) == 1
 
 
 def test_protocol_rejects_non_monday_and_unsorted_cutoffs(tmp_path: Path) -> None:
@@ -4588,6 +4692,25 @@ def test_config_rejects_unknown_model_candidate(tmp_path: Path) -> None:
     path = tmp_path / "unknown-candidate.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ConfigError, match="unknown model candidates"):
+        load_config(path)
+
+
+def test_config_rejects_covariate_in_static_mode(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["protocol"] = {"kind": "static_split"}
+    raw["calibration"]["methods"] = ["sigmoid", "covariate"]
+    path = tmp_path / "static-covariate.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="covariate is backtest-only"):
+        load_config(path)
+
+
+def test_config_rejects_out_of_range_headroom(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["label"]["headroom_pct"] = [1, 5, 40000]
+    path = tmp_path / "headroom.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="int16"):
         load_config(path)
 
 
