@@ -552,6 +552,7 @@ const SearchResult: React.FC<Props> = ({
             onKeyDown={handleKeyDown}
             error={limitError}
             helperText={limitError ? limitErrorMessage : limitHint}
+            sx={{ mt: 1 }}
             slotProps={{
               input: { startAdornment: <InputAdornment position="start">€</InputAdornment> },
               htmlInput: { enterKeyHint: 'done' },

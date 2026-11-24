@@ -153,12 +153,6 @@ export const theme = createTheme({
           '&.Mui-focused:not(.Mui-error) .MuiOutlinedInput-notchedOutline': {
             borderColor: INFO_MAIN,
           },
-          // An error field keeps the red border, and a focused error field gets
-          // a blue outline so focus remains distinguishable from the error.
-          '&.Mui-focused.Mui-error .MuiOutlinedInput-notchedOutline': {
-            outline: `2px solid ${INFO_MAIN}`,
-            outlineOffset: 1,
-          },
         },
       },
     },
