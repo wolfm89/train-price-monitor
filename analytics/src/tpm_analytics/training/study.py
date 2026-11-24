@@ -507,6 +507,7 @@ def _study_report(result: dict[str, Any]) -> str:
         "",
         "## Method",
         "",
+        f"- Run: {result.get('run_id') or '—'}",
         f"- Development folds: {', '.join(result['folds'])}",
         f"- Paired cluster bootstrap: {result['settings']['replicates']} replicates, "
         f"seed {result['settings']['seed']}, cluster {result['settings']['cluster']}",
@@ -606,6 +607,7 @@ def run_feature_study(
     *,
     coverage: dict[str, Any],
     forward: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the pre-registered feature study and return its JSON-serialisable result."""
     panel_spec = study_feature_spec(config.features.analog_departure_offsets_days)
@@ -709,6 +711,7 @@ def run_feature_study(
     targets, target_source = _stress_targets(forward, coverage, "analog_d1")
     return {
         "version": STUDY_VERSION,
+        "run_id": run_id,
         "folds": [fold.name for fold in config.protocol.cutoffs if fold.role == "development"],
         "settings": {
             "replicates": replicates,

@@ -454,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
                 config,
                 coverage=study_context["coverage"],
                 forward=study_context["forward"],
+                run_id=run_id,
             )
             total_seconds = round(time.perf_counter() - run_started, 3)
             summary = write_feature_study(work_dir, result)
