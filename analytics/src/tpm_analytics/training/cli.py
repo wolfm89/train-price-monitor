@@ -473,9 +473,11 @@ def main(argv: list[str] | None = None) -> int:
             forward = study_context["forward"]
             provenance = {
                 "run_id": run_id,
-                "git_sha": dataset_manifest.get("git_sha"),
-                "git_dirty": dataset_manifest.get("git_dirty"),
+                "git_sha": code_sha,
+                "git_dirty": code_dirty,
                 "git_untracked": dataset_manifest.get("git_untracked"),
+                "dataset_git_sha": dataset_manifest.get("git_sha"),
+                "dataset_git_dirty": dataset_manifest.get("git_dirty"),
                 "silver_build_id": dataset_manifest.get("silver_build_id"),
                 "silver_manifest_sha256": dataset_manifest.get("silver_manifest_sha256"),
                 "config_sha256": dataset_manifest.get("config_sha256"),
@@ -496,29 +498,16 @@ def main(argv: list[str] | None = None) -> int:
                 provenance=provenance,
             )
             total_seconds = round(time.perf_counter() - run_started, 3)
+            peak_rss_kb = _peak_rss_kb()
             summary = write_feature_study(work_dir, result)
-            summary.update(
-                {
-                    "out": str(out_dir),
-                    "run_id": run_id,
-                    "rows": stats.rows,
-                    "labelled_rows": stats.labelled_rows,
-                    "wall_seconds": total_seconds,
-                    "peak_rss_kb": _peak_rss_kb(),
-                    "dataset_reused": dataset_reused,
-                    "dataset_cache_key": dataset_key,
-                    "recipe_unchanged": result["recipe_unchanged"],
-                    "folds": result["folds"],
-                }
-            )
             (work_dir / "study_runtime.json").write_text(
                 json.dumps(
                     {
                         "wall_seconds": total_seconds,
-                        "peak_rss_kb": int(summary["peak_rss_kb"]),
+                        "peak_rss_kb": peak_rss_kb,
                         "run_id": run_id,
-                        "git_sha": provenance["git_sha"],
-                        "git_dirty": provenance["git_dirty"],
+                        "git_sha": code_sha,
+                        "git_dirty": code_dirty,
                         "dataset_seconds": (
                             original_build_seconds
                             if dataset_reused and original_build_seconds is not None
@@ -532,7 +521,23 @@ def main(argv: list[str] | None = None) -> int:
                 + "\n",
                 encoding="utf-8",
             )
+            # Publish the artifacts before the console summary, so a summary bug cannot delete a
+            # completed study.
             os.replace(work_dir, out_dir)
+            summary.update(
+                {
+                    "out": str(out_dir),
+                    "run_id": run_id,
+                    "rows": stats.rows,
+                    "labelled_rows": stats.labelled_rows,
+                    "wall_seconds": total_seconds,
+                    "peak_rss_kb": peak_rss_kb,
+                    "dataset_reused": dataset_reused,
+                    "dataset_cache_key": dataset_key,
+                    "no_family_added": result["no_family_added"],
+                    "folds": result["folds"],
+                }
+            )
             print(json.dumps(summary, indent=2, sort_keys=True, default=str))
             return 0
         analog_offsets = (
