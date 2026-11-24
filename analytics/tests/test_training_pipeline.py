@@ -5252,6 +5252,19 @@ def test_config_rejects_overlapping_splits(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_config_rejects_invalid_analog_offsets(tmp_path: Path) -> None:
+    raw = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [7, 1]}}
+    path = tmp_path / "analog-order.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="strictly increasing"):
+        load_config(path)
+    raw["features"] = {"analog_departures": {"enabled": "yes"}}
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="enabled must be a boolean"):
+        load_config(path)
+
+
 def test_label_window_sees_observations_under_24h_to_departure(tmp_path: Path) -> None:
     dates = [
         datetime(2026, 7, 5, 10, 0),

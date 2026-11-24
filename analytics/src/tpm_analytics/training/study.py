@@ -423,48 +423,71 @@ def forward_analog_availability(
     create_analog_features(connection, source_sql, "study_forward", offsets)
     price = " AND ".join(f"a.analog_d{offset}_price_ratio IS NOT NULL" for offset in offsets)
     rise = " AND ".join(f"a.analog_d{offset}_next_ratio IS NOT NULL" for offset in offsets)
+    extra = ""
+    if 1 in offsets and 7 in offsets:
+        extra = """,
+            avg(CASE WHEN a.analog_d1_price_ratio IS NOT NULL THEN 1.0 ELSE 0.0 END) AS d1_price,
+            avg(CASE WHEN a.analog_d1_next_ratio IS NOT NULL THEN 1.0 ELSE 0.0 END) AS d1_rise,
+            avg(CASE WHEN a.analog_d1_price_ratio IS NOT NULL
+                       AND a.analog_d7_price_ratio IS NOT NULL THEN 1.0 ELSE 0.0 END) AS d1d7_price,
+            avg(CASE WHEN a.analog_d1_next_ratio IS NOT NULL
+                       AND a.analog_d7_next_ratio IS NOT NULL THEN 1.0 ELSE 0.0 END) AS d1d7_rise"""
     rows = connection.execute(
         f"""
         SELECT
             f.ttd_band AS band,
             count(*) AS rows,
             avg(CASE WHEN {price} THEN 1.0 ELSE 0.0 END) AS price,
-            avg(CASE WHEN {rise} THEN 1.0 ELSE 0.0 END) AS rise
+            avg(CASE WHEN {rise} THEN 1.0 ELSE 0.0 END) AS rise{extra}
         FROM study_forward f
         JOIN analog_features a USING (series_key, snapshot_at, bin_regime, bin_index)
         GROUP BY f.ttd_band
         ORDER BY f.ttd_band
         """
     ).fetchall()
+    bands = []
+    for row in rows:
+        item: dict[str, Any] = {
+            "band": str(row[0]),
+            "rows": int(row[1]),
+            "price": float(row[2]),
+            "rise": float(row[3]),
+        }
+        if len(row) > 4:
+            item.update(
+                {
+                    "d1_price": float(row[4]),
+                    "d1_rise": float(row[5]),
+                    "d1d7_price": float(row[6]),
+                    "d1d7_rise": float(row[7]),
+                }
+            )
+        bands.append(item)
     return {
         "forward_path": str(forward_path),
         "rows": sum(int(row[1]) for row in rows),
-        "bands": [
-            {
-                "band": str(row[0]),
-                "rows": int(row[1]),
-                "price": float(row[2]),
-                "rise": float(row[3]),
-            }
-            for row in rows
-        ],
+        "bands": bands,
     }
 
 
 def _stress_targets(
-    forward: dict[str, Any] | None, coverage: dict[str, Any]
+    forward: dict[str, Any] | None, coverage: dict[str, Any], arm_name: str = "analog_d1"
 ) -> tuple[dict[str, dict[str, float]], str]:
-    """Return the per-band stress target and its source.
+    """Return the per-band stress target and its source for one analog arm.
 
     Prefer the forward set's actual analog availability: the grid-level coverage profile is an
-    upper bound and would understate the missingness the model sees in production.
+    upper bound and would understate the missingness the model sees in production. The D-1 arm
+    uses the D-1 availability; the combined arm uses the joint D-1 + D-7 availability.
     """
     if forward is not None:
-        targets = {
-            str(row["band"]): {"price": float(row["price"]), "rise": float(row["rise"])}
-            for row in forward.get("bands", [])
-            if row.get("price") is not None and row.get("rise") is not None
-        }
+        price_key = "d1d7_price" if arm_name == "analog_d1_d7" else "d1_price"
+        rise_key = "d1d7_rise" if arm_name == "analog_d1_d7" else "d1_rise"
+        targets = {}
+        for row in forward.get("bands", []):
+            price = row.get(price_key, row.get("price"))
+            rise = row.get(rise_key, row.get("rise"))
+            if price is not None and rise is not None:
+                targets[str(row["band"])] = {"price": float(price), "rise": float(rise)}
         if targets:
             return targets, "forward_set"
     targets = {
@@ -502,8 +525,8 @@ def _study_report(result: dict[str, Any]) -> str:
             "| {name} | {reference} | {ll} | {brier} | {rule} | {stress} | {decision} |".format(
                 name=item["name"],
                 reference=item.get("reference") or "—",
-                ll=_interval_text(interval.get("log_loss")),
-                brier=_interval_text(interval.get("brier")),
+                ll=_delta_text(interval, "log_loss"),
+                brier=_delta_text(interval, "brier"),
                 rule="pass" if item.get("rule_passed") else "fail",
                 stress=item.get("stress_status") or "—",
                 decision=item["decision"],
@@ -534,7 +557,20 @@ def _study_report(result: dict[str, Any]) -> str:
     lines.extend(["", "## Decisions", ""])
     for item in result["families"]:
         lines.append(f"- **{item['name']}:** {item['reason']}")
-    lines.extend(["", "The default recipe is unchanged." if result["recipe_unchanged"] else ""])
+    lines.extend(["", "## Verdict", ""])
+    analog = next((item for item in result["families"] if item["name"] == "analog_d1"), None)
+    if analog is not None and analog["rule_passed"] and analog["stress_status"] == "fail":
+        lines.append(
+            "I1 helps when yesterday's train was scraped at the same lead time; at today's coverage "
+            "it makes near-departure predictions worse, so it is off."
+        )
+    elif analog is not None and analog["decision"] == "keep":
+        lines.append("I1 passes both checks; add it to the recipe and run one evaluation scoring run.")
+    else:
+        lines.append("No analog family passes both checks; the PR 6 recipe stays.")
+    if result["recipe_unchanged"]:
+        lines.append("")
+        lines.append("The default recipe is unchanged.")
     return "\n".join(lines) + "\n"
 
 
@@ -543,6 +579,16 @@ def _interval_text(interval: Any) -> str:
     if not interval:
         return "—"
     return f"[{float(interval[0]):+.5f}, {float(interval[1]):+.5f}]"
+
+
+def _delta_text(comparison: dict[str, Any], metric: str) -> str:
+    """Format a mean delta next to its interval."""
+    interval = comparison.get(metric)
+    if not interval:
+        return "—"
+    mean = comparison.get(f"mean_{metric}")
+    prefix = f"{float(mean):+.5f} " if mean is not None else ""
+    return prefix + _interval_text(interval)
 
 
 def _pct(value: Any) -> str:
@@ -600,8 +646,8 @@ def run_feature_study(
             "stress": None,
             "stress_status": "not_applicable" if arm.kind == "calendar" else "not_run",
         }
-        if arm.kind == "analog" and arm.name == "analog_d1":
-            targets, target_source = _stress_targets(forward, coverage)
+        if arm.kind == "analog":
+            targets, target_source = _stress_targets(forward, coverage, arm.name)
             stressed = _masked_scores(fitted[arm.name], arm, targets, config)
             overall = _interval(
                 labels,
@@ -634,7 +680,9 @@ def run_feature_study(
         stress_ok = item["stress_status"] in {"pass", "not_applicable", "not_run"}
         keep = bool(item["rule_passed"] and stress_ok and item["stress_status"] != "not_run")
         item["decision"] = "keep" if keep else "drop"
-        if keep:
+        if keep and arm.kind == "calendar":
+            item["reason"] = "passes the PR 6 replacement rule; calendar features have no coverage skew"
+        elif keep:
             item["reason"] = "passes the PR 6 replacement rule and the coverage stress test"
         elif not item["rule_passed"]:
             item["reason"] = f"PR 6 rule failed: {rule_reason}"
@@ -654,7 +702,7 @@ def run_feature_study(
             "days": coverage.get("days"),
         },
     }
-    targets, target_source = _stress_targets(forward, coverage)
+    targets, target_source = _stress_targets(forward, coverage, "analog_d1")
     return {
         "version": STUDY_VERSION,
         "folds": [fold.name for fold in config.protocol.cutoffs if fold.role == "development"],

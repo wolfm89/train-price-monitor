@@ -408,12 +408,27 @@ def main(argv: list[str] | None = None) -> int:
                         _store_dataset(cache_root, dataset_key, work_dir)
                     except (OSError, ValueError, TypeError, KeyError) as error:
                         logging.getLogger(__name__).warning("dataset cache write skipped: %s", error)
-            if args.feature_study:
+        finally:
+            connection.close()
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        if args.feature_study:
+            # A fresh connection drops the build's temp tables before the coverage scans.
+            study_temp = work_dir / ".study-tmp"
+            study_temp.mkdir(parents=True, exist_ok=True)
+            context_connection = connect(
+                temp_directory=study_temp,
+                threads=threads,
+                memory_limit=os.environ.get("TRAIN_DUCKDB_MEMORY_LIMIT", "6GB"),
+                max_temp_size=os.environ.get("TRAIN_DUCKDB_MAX_TEMP_SIZE", "20GB"),
+                extensions=extensions,
+                secret=source.s3_secret,
+            )
+            try:
                 source_sql = read_parquet(source.glob, union_by_name=False)
-                coverage = coverage_profile(connection, source_sql)
+                coverage = coverage_profile(context_connection, source_sql)
                 forward = (
                     forward_analog_availability(
-                        connection,
+                        context_connection,
                         args.forward_availability,
                         source_sql,
                         study_offsets,
@@ -422,9 +437,9 @@ def main(argv: list[str] | None = None) -> int:
                     else None
                 )
                 study_context = {"coverage": coverage, "forward": forward}
-        finally:
-            connection.close()
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            finally:
+                context_connection.close()
+                shutil.rmtree(study_temp, ignore_errors=True)
         if args.profile or args.forward:
             os.replace(work_dir, out_dir)
             print(json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str))

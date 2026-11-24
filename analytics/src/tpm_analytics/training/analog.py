@@ -88,6 +88,8 @@ def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: 
             s.snapshot_at,
             s.bin_regime,
             s.bin_index,
+            s.route_id,
+            s.service_class,
             s.departure_planned,
             hour(s.departure_planned) * 60 + minute(s.departure_planned) AS snapshot_dep_min,
             a.observed_at AS analog_at,
@@ -140,7 +142,9 @@ def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: 
                 ) AS rn
             FROM analog_d{offset}_cand c
             JOIN analog_source n
-              ON n.train_number = c.analog_train
+              ON n.route_id = c.route_id
+             AND n.service_class = c.service_class
+             AND n.train_number = c.analog_train
              AND n.departure_planned = c.analog_departure
              AND n.observed_at BETWEEN c.analog_at + INTERVAL {next_low} HOUR
                                     AND c.analog_at + INTERVAL {next_high} HOUR
