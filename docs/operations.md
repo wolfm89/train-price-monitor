@@ -84,6 +84,9 @@ then.
    passed. The poller uses the DB Navigator API (`app.services-bahn.de`); a poller `OPS_BLOCKED`
    means that edge is refusing the egress too. Another profile, Lambda IP or AWS region will not
    help; pause the poller instead of re-probing every 15 minutes.
+5. On 2026-11-24 the Navigator API throttled the poller after ~22 h at 2.5 s spacing. The poller
+   now uses 3.5 s. If `PollerThrottled` returns near the same cumulative call count since UTC
+   midnight, treat it as a daily budget and reduce calls/day (batch size or cadence), not the gap.
 
 ### Poller not running / no prices
 
