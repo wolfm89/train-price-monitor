@@ -282,35 +282,54 @@ def mask_family(
     targets: dict[str, dict[str, float]],
     bands: Array,
     rng: np.random.Generator,
+    *,
+    joint: bool = False,
 ) -> TabularData:
     """Drop a family's columns at random per TTD band to match the target availability.
 
     ``names`` must be ordered as four columns per offset: price ratio, lead gap, next ratio and
-    rise lead gap. The price and rise pairs carry separate targets. The keep count is exact up to
-    rounding, so a fixture can assert the masked share within one percentage point.
+    rise lead gap. The price and rise pairs carry separate targets. With ``joint`` the later
+    offsets are kept only where the first offset is kept, and their targets are joint shares of
+    the band, so the realized all-offset presence matches the requested joint target. The rise
+    keep-set is always nested inside the price keep-set.
     """
     if len(names) % 4 != 0:
         raise ModelError("analog masking needs four columns per offset")
     features = dict(data.features)
-    for offset_index in range(len(names) // 4):
-        price_pair = names[offset_index * 4 : offset_index * 4 + 2]
-        rise_pair = names[offset_index * 4 + 2 : offset_index * 4 + 4]
-        for band, band_targets in targets.items():
-            band_mask = bands == band
-            if not band_mask.any():
-                continue
-            band_rows = int(band_mask.sum())
+    offsets = len(names) // 4
+    for band, band_targets in targets.items():
+        band_mask = bands == band
+        if not band_mask.any():
+            continue
+        band_rows = int(band_mask.sum())
+        last_price_keep: Array | None = None
+        last_rise_keep: Array | None = None
+        for offset_index in range(offsets):
+            price_pair = names[offset_index * 4 : offset_index * 4 + 2]
+            rise_pair = names[offset_index * 4 + 2 : offset_index * 4 + 4]
             present_price = _present(features[price_pair[0]]) & band_mask
             present_rise = _present(features[rise_pair[0]]) & band_mask
-            desired_price = min(round(float(band_targets["price"]) * band_rows), int(present_price.sum()))
+            if joint and offset_index > 0:
+                if last_price_keep is None or last_rise_keep is None:
+                    raise ModelError("joint masking needs the first offset's keep sets")
+                eligible_price = present_price & last_price_keep
+                eligible_rise = present_rise & last_rise_keep
+                desired_price = min(round(float(band_targets["joint_price"]) * band_rows), int(eligible_price.sum()))
+                desired_rise = min(round(float(band_targets["joint_rise"]) * band_rows), int(eligible_rise.sum()))
+            else:
+                eligible_price = present_price
+                eligible_rise = present_rise & (
+                    last_price_keep if joint and last_price_keep is not None else np.ones(len(data), dtype=bool)
+                )
+                desired_price = min(round(float(band_targets["price"]) * band_rows), int(eligible_price.sum()))
+                desired_rise = min(round(float(band_targets["rise"]) * band_rows), int(eligible_rise.sum()))
             keep_price = np.zeros(len(data), dtype=bool)
-            if desired_price > 0:
-                keep_price[rng.choice(np.flatnonzero(present_price), size=desired_price, replace=False)] = True
-            # The rise analog is chosen from the price candidates, so a rise row must also keep
-            # its price. Cap the rise target at the price keep set.
-            eligible_rise = present_rise & keep_price
-            desired_rise = min(round(float(band_targets["rise"]) * band_rows), int(eligible_rise.sum()))
+            if desired_price > 0 and int(eligible_price.sum()) > 0:
+                keep_price[rng.choice(np.flatnonzero(eligible_price), size=desired_price, replace=False)] = True
             keep_rise = np.zeros(len(data), dtype=bool)
+            # The rise keep-set must be a subset of the price keep-set for this offset.
+            eligible_rise = eligible_rise & keep_price
+            desired_rise = min(desired_rise, int(eligible_rise.sum()))
             if desired_rise > 0:
                 keep_rise[rng.choice(np.flatnonzero(eligible_rise), size=desired_rise, replace=False)] = True
             for name in price_pair:
@@ -323,6 +342,8 @@ def mask_family(
                 missing = b"__missing__" if values.dtype.kind == "S" else "__missing__"
                 values[present_rise & ~keep_rise] = np.nan if values.dtype.kind == "f" else missing
                 features[name] = values
+            last_price_keep = keep_price
+            last_rise_keep = keep_rise
     return replace(data, features=features)
 
 
@@ -338,7 +359,7 @@ def _masked_scores(
     for fold_index, (model, calibrator, test, spec) in enumerate(fitted):
         bands = _ttd_array(test)
         rng = np.random.default_rng(config.seed + STRESS_SEED_OFFSET + fold_index)
-        masked = mask_family(test, names, targets, bands, rng)
+        masked = mask_family(test, names, targets, bands, rng, joint=arm.name == "analog_d1_d7")
         scores.append(calibrator.predict(model.predict(masked.select(spec.names))))
     return np.concatenate(scores)
 
@@ -541,27 +562,39 @@ def _stress_targets(
     """Return the per-band stress target, its overall source and the per-band sources.
 
     The forward set supplies the 1-7 d actual analog availability; the coverage profile fills the
-    7-30 d bands the forward build does not contain. The D-1 arm uses the D-1 availability.
+    7-30 d bands the forward build does not contain. The D-1 arm uses the D-1 price and rise
+    availability. The combined arm uses the D-1 marginals plus the joint D-1 + D-7 availability;
+    the joint mask keeps D-7 only where D-1 is kept.
     """
     targets: dict[str, dict[str, float]] = {}
     sources: dict[str, str] = {}
+    combined = arm_name == "analog_d1_d7"
     if forward is not None:
-        price_key = "d1d7_price" if arm_name == "analog_d1_d7" else "d1_price"
-        rise_key = "d1d7_rise" if arm_name == "analog_d1_d7" else "d1_rise"
         for row in forward.get("bands", []):
-            price = row.get(price_key, row.get("price"))
-            rise = row.get(rise_key, row.get("rise"))
-            if price is not None and rise is not None:
-                band = str(row["band"])
-                targets[band] = {"price": float(price), "rise": float(rise)}
-                sources[band] = "forward_set"
+            d1_price = row.get("d1_price", row.get("price"))
+            d1_rise = row.get("d1_rise", row.get("rise"))
+            joint_price = row.get("d1d7_price", row.get("price"))
+            joint_rise = row.get("d1d7_rise", row.get("rise"))
+            if d1_price is None or d1_rise is None:
+                continue
+            band = str(row["band"])
+            item = {"price": float(d1_price), "rise": float(d1_rise)}
+            if combined and joint_price is not None and joint_rise is not None:
+                item["joint_price"] = float(joint_price)
+                item["joint_rise"] = float(joint_rise)
+            targets[band] = item
+            sources[band] = "forward_set"
     for row in coverage.get("bands", []):
         band = str(row["band"])
         if band in targets or band == "unknown":
             continue
         share_v1 = row.get("share_v1")
         share = float(share_v1 if share_v1 is not None else row["share"])
-        targets[band] = {"price": share, "rise": share}
+        item = {"price": share, "rise": share}
+        if combined:
+            item["joint_price"] = share
+            item["joint_rise"] = share
+        targets[band] = item
         sources[band] = "coverage_profile_v1" if share_v1 is not None else "coverage_profile"
     if not sources:
         return {}, "none", {}
@@ -799,7 +832,7 @@ def run_feature_study(
         }
         if arm.kind == "calendar":
             item["informative"] = arm.name != "calendar_public" or calendar_coverage["public_holiday_rows"] > 0
-        if arm.kind == "analog" and arm.name == "analog_d1":
+        if arm.kind == "analog":
             targets, target_source, target_sources = _stress_targets(forward, coverage, arm.name)
             forward_near = any(target_sources.get(band) == "forward_set" for band in ("1-3d", "3-5d", "5-7d"))
             stressed = _masked_scores(fitted[arm.name], arm, targets, config)
@@ -852,11 +885,6 @@ def run_feature_study(
             item["reason"] = f"PR 6 rule failed: {rule_reason}"
         elif item["stress_status"] == "fail":
             item["reason"] = "the coverage stress test is significantly worse at 1-7 d or overall"
-        elif arm.name == "analog_d1_d7":
-            item["reason"] = (
-                "combined D-1 + D-7 stress is not run; the nested arm fails the full-availability rule "
-                "or needs a D-7 fallback test in PR 7"
-            )
         else:
             item["reason"] = "no stress result"
         families.append(item)

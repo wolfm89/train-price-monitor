@@ -1114,6 +1114,55 @@ def test_mask_family_hits_the_target_share() -> None:
     assert np.isnan(masked.features["analog_d1_next_ratio"][~near]).all()
 
 
+def test_mask_family_joint_keeps_the_measured_joint_share() -> None:
+    count = 1000
+    band = np.array(["1-3d"] * count, dtype=object)
+    features = {
+        "analog_d1_price_ratio": np.full(count, 1.2),
+        "analog_d1_lead_gap_h": np.zeros(count),
+        "analog_d1_next_ratio": np.full(count, 1.1),
+        "analog_d1_rise_lead_gap_h": np.zeros(count),
+        "analog_d7_price_ratio": np.full(count, 1.2),
+        "analog_d7_lead_gap_h": np.zeros(count),
+        "analog_d7_next_ratio": np.full(count, 1.1),
+        "analog_d7_rise_lead_gap_h": np.zeros(count),
+    }
+    data = TabularData(
+        features=features,
+        y=np.zeros(count, dtype=np.int8),
+        series=np.array(["s"] * count, dtype=str),
+        route_day=np.array(["r"] * count, dtype=str),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 110.0),
+        future_max=np.full(count, 120.0),
+        future_observations=np.ones(count, dtype=np.int16),
+        headroom=np.ones(count, dtype=np.int16),
+        departure_date=np.array(["2026-07-10"] * count, dtype=str),
+        snapshot_at=np.array(["2026-07-08 10:00:00"] * count, dtype=str),
+        observation_era=np.array(["dense"] * count, dtype=str),
+        observation_week=np.array(["2026-W28"] * count, dtype=str),
+    )
+    names = tuple(features)
+    masked = mask_family(
+        data,
+        names,
+        {"1-3d": {"price": 0.6, "rise": 0.3, "joint_price": 0.25, "joint_rise": 0.1}},
+        band,
+        np.random.default_rng(9),
+        joint=True,
+    )
+    d1 = np.isfinite(masked.features["analog_d1_price_ratio"])
+    d7 = np.isfinite(masked.features["analog_d7_price_ratio"])
+    rise1 = np.isfinite(masked.features["analog_d1_next_ratio"])
+    rise7 = np.isfinite(masked.features["analog_d7_next_ratio"])
+    assert d1.sum() == 600
+    assert (d1 & d7).sum() == 250
+    assert not (d7 & ~d1).any()
+    assert rise1.sum() == 300
+    assert (rise1 & rise7).sum() == 100
+    assert not (rise7 & ~rise1).any()
+
+
 def test_study_arms_are_fixed_and_stress_prefers_the_forward_set() -> None:
     arms = study_arms((1, 7))
     assert [arm.name for arm in arms] == [
