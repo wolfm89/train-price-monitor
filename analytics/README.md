@@ -466,7 +466,9 @@ all-route build exceeds the host memory ceiling; a later sample-scale run raises
 
 `--feature-study` is the reproducible feature-family study. It builds one dataset with every
 candidate column (`calendar.feature_set = full` plus the I1 analog columns), fits the frozen
-HGB + temperature recipe on the development folds only and refuses `--evaluate-test`. The fixed
+HGB + temperature recipe on the development folds only and refuses `--evaluate-test`. It requires
+`--forward-availability`: the keep decision uses the measured forward-set analog availability,
+not the grid upper bound. The fixed
 arms are `analog_d1` vs base, `analog_d1 + analog_d7` vs `analog_d1`, and
 `calendar_public`, `calendar_public_school` and `calendar_full` vs base. It writes
 `feature_study.json` and `feature_study.md` with paired overall and per-band intervals,
@@ -474,18 +476,23 @@ availability by band/era, the coverage profile and a decision per family.
 
 The I1 analog switch is `features.analog_departures` (`enabled: false`, `offsets_days: [1, 7]` by
 default) and stays off. When enabled, the builder reads the analog route-days from the **full v1
-silver**, not the sampled panel. The analog is the same route, class and first-train number on
+silver**, not the sampled panel; enabling it in a normal build adds the columns to the model spec,
+but the study harness is the supported way to test them. The analog is the same route, class and first-train number on
 `D - k` with a planned departure within 15 minutes, observed at or before the snapshot. The price
 analog is the closest lead within 12 hours; the rise analog is the closest-lead observation whose
 own next-day point (20-28 hours later, closest to +24 hours) is also at or before the snapshot.
-The feature is exactly causal; tie-breaks are closest lead, larger lead, closest departure minute,
-lowest price, then series key. `--feature-study` forces the switch on for the study build; the
+The feature is exactly causal; departure times are compared on the circular Europe/Berlin
+time of day to the second. Tie-breaks are closest lead, larger lead, closest departure time,
+lowest price, then the analog's series key. `--feature-study` forces the switch on for the study build; the
 coverage profile measures the D-1 scrape grid over the latest 28 days of silver. A family is kept
 only if it passes the PR 6 replacement rule at full availability **and** the coverage stress test
-does not make it significantly worse overall or at 1-7 days. The stress target prefers the actual
-availability measured on `--forward-availability`; the grid-level profile is an upper bound.
-Rerun the study when the 1-7 day coverage reaches 80 % or after four weeks of lead-phase paired
-scrapes. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
+does not make it significantly worse overall or at 1-7 days, with a non-positive point estimate.
+The stress target uses the actual availability measured on `--forward-availability` for 1-7 days
+and fills the 7-30 day bands from the coverage profile; the grid-level profile is an
+observation-weighted v1+v2 upper bound, not the snapshot population. The analog source is v1-only:
+rerun the study when the **v1 actual** 1-7 day analog availability reaches 80 % or after four weeks
+of lead-phase paired scrapes, and port the analog builder to v2 before expecting the O8 v2 pairs to
+help. The study build needs `TRAIN_DUCKDB_MAX_TEMP_SIZE=64GB`; the 20 GB default is not enough. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
 matching dataset build (default `artifacts/.cache/datasets`); reuse is allowed only on a clean tree,
 verifies every split hash and records the reuse key. Pass `--no-dataset-cache` for an independent
 build, and note that two clean builds are only independent when the dataset cache is disabled or
@@ -537,7 +544,8 @@ disappearance is a corpus-level diagnostic that includes test departures.
 The profile also reports the causal chain link rate and incarnation count, the v2 `journey_id`
 overlap (split/merge rate), route-day scrape cadence, same-scrape duplicate keys and the
 cross-sections whose three-peer status depends on them. `column_roles.json` lists every output
-column as `features`, `labels` or `audit`; `observation_week` is the Europe/Berlin ISO week.
+column as `features`, `candidate_feature` (study-only), `labels` or `audit`;
+`observation_week` is the Europe/Berlin ISO week.
 
 ## Semantics the transform encodes
 

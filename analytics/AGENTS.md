@@ -31,8 +31,10 @@ Lambda image.
 
 The training CLI defaults to DuckDB `memory_limit=6GB` and `max_temp_size=20GB`; override them with
 `TRAIN_DUCKDB_MEMORY_LIMIT` and `TRAIN_DUCKDB_MAX_TEMP_SIZE`. Both effective values are recorded in
-`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for the 5 %
-route-day sample; raise it for the 10/25/50 % learning-curve runs.
+`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for a plain 5 %
+route-day build. The analog study build spills more than 20 GB; set
+`TRAIN_DUCKDB_MAX_TEMP_SIZE=64GB` for `--feature-study` and record the temp peak. Raise it for the
+10/25/50 % learning-curve runs.
 
 S3 credentials are frozen into a temporary DuckDB secret for the run. IAM Identity Center role
 sessions default to one hour; for a long scan, download the silver build to `analytics/.data/` and
@@ -118,7 +120,7 @@ v2-only and mixed-schema input.
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
-  for backtest scoring. `--feature-study` builds the superset panel and runs the fixed development-fold arms; it refuses `--evaluate-test` and never reads an evaluation or sparse-era fold. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
+  for backtest scoring. `--feature-study` builds the superset panel and runs the fixed development-fold arms; it refuses `--evaluate-test` and never reads an evaluation or sparse-era fold. The study requires `--forward-availability`; the keep decision uses the measured forward-set analog availability, not the grid upper bound. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
   checkpoints hold report state plus the fitted model and calibrator that permutation importance
   needs, never the train or calibration panels; verify `pkl_sha256` before reuse. The hash ships
   beside the file, so it proves integrity, not authenticity. A cache-free 5 % backtest peaked at
@@ -143,10 +145,13 @@ v2-only and mixed-schema input.
   analog whose own next-day point (20-28 h, closest to +24 h) is also at or before the snapshot.
   Keep a family only if the PR 6 replacement rule accepts it at full availability **and** the
   coverage stress test (columns masked to the measured availability by band) does not make it
-  significantly worse overall or at 1-7 days. The grid-level coverage profile is an upper bound;
-  prefer the actual forward-set availability. Rerun when 1-7 day coverage reaches 80 % or after
-  four weeks of lead-phase paired scrapes. `candidate_feature` marks study-only columns in
-  `column_roles.json`.
+  significantly worse overall or at 1-7 days. The stress target uses the forward-set availability
+  for 1-7 days and fills the 7-30 day bands from the coverage profile; the profile itself is an
+  observation-weighted v1+v2 grid upper bound, not the snapshot population. The decision also
+  requires the point estimate not to be positive. `candidate_feature` marks study-only columns in
+  `column_roles.json`. The switch builds the columns; only the study harness consumes the analog
+  family in its arms. The analog source is v1-only, so the revisit trigger must be measured on
+  v1 actual availability, not the v1+v2 grid, and the v2 port is a prerequisite for O8 pairs.
 - **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on
   logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom)). The covariate
   calibrator must be monotone in score in every band and non-increasing in headroom; otherwise it
@@ -251,8 +256,8 @@ v2-only and mixed-schema input.
   their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
   starts a new series. `price_rank_route_day` ranks every priced journey in
   the route-day x class x scrape cross-section before resampling; route-day sampling keeps the
-  whole cross-section. `column_roles.json` records which output columns are features, labels or
-  audit so a new diagnostic cannot quietly enter the model matrix.
+  whole cross-section. `column_roles.json` records which output columns are features, candidate
+  features (study-only), labels or audit so a new diagnostic cannot quietly enter the model matrix.
 - `observation_week` is the Europe/Berlin ISO week. `identity.berlin_week_sql` implements the EU
   DST rule directly because DuckDB's ICU timezone functions need `pytz` in the Python client.
 - `check_at` is the primary 20-28 h next-day check; `check_at_2024` is the crossed-back and
