@@ -388,18 +388,75 @@ snapshot time. A fold trains on labels that matured at least
 24 h before the cutoff, calibrates on the following 7 days and tests the week after that. The recipe
 (model family, settings, calibration method, threshold rule) is selected on the 22 and 29 June
 development folds, written to `recipe.json`, and refitted on each evaluation fold without any
-selection. Evaluation and sparse-era folds are scored only with `--evaluate-test`; development
-folds are always reported. The static splits remain available through
-`config/training-static.json`; their digests and metrics must match the static reference run exactly.
+selection. The selection is a joint search over every model x calibration pair: a paired
+departure-date cluster bootstrap (2,000 replicates) on delta log loss and delta Brier replaces a
+simpler choice only when the log-loss interval is entirely below zero and the Brier interval is not
+entirely above zero. Complexity order is base rate < logistic < HGB and
+sigmoid = temperature < isotonic < covariate. Each comparison uses a two-sided 95 % interval
+(an effective one-sided 2.5 % level) and the search runs four comparisons per model without a
+family-wise correction; model deltas are large, the calibration comparison is borderline. The full
+selection table is in `recipe.json` and is excluded from the recipe hash; its own
+`selection_table_sha256` is recorded. Evaluation and sparse-era folds are scored
+only with `--evaluate-test`; development folds are always reported. The static splits remain available through
+`config/training-static.json`; their four split digests, validation predictions and
+`calibration.csv` must match the static reference run byte for byte, and the static metrics
+(Brier 0.0911551, log loss 0.2975124, threshold 0.4844156, precision/recall) must not move. The pin
+covers the chosen model/calibrator, validation predictions, `calibration.csv`, the four split
+digests and those headline metrics. The base-rate/logistic candidate tables and the
+paired-vs-logistic interval are **not** pinned because PR 6 upgraded those candidates. Model
+serialisation, provenance files and the config hash differ; the hash changes because the config
+gained `threshold_min_alerts`, while the report also loses the risk-band sentence (which changes
+report bytes, not the config hash).
 A series may span a cutoff because labels are purged and every feature is past-only. Backtest
 mode still requires the static `splits` block: it bounds the panel at `test_end`, but those splits
 are not used for scoring. Long backtests
 can resume with `--cache-dir`: finished folds and the frozen recipe are checkpointed there, keyed
-by the config, dataset digest and a fit-code hash, and the checkpoints keep report state rather
-than the training panels. A dirty tree disables reuse. Delete the cache directory to force a clean refit.
+by the config, dataset digest and a fit-code hash. Checkpoints keep report state plus the fitted
+model and calibrator that permutation importance needs, never the training panels; verify a
+checkpoint's `pkl_sha256` before reusing it. A dirty tree disables reuse. Delete the cache
+directory to force a clean refit. Verify `pkl_sha256` before reuse; the hash ships in the same
+cache directory, so it proves integrity, not authenticity.
 
-A fresh cache-free 5 % backtest peaks at about 6.47 GB; a run that reuses the dataset cache peaks
-near 4.03 GB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
+A cache-free 5 % development run (`pr6-dev`) peaked at 6.30 GiB; an earlier twin reached 6.35 GiB;
+the final cold run (`pr6-final-r3`) reached 6.24 GiB. The dataset build sets the peak. PR 5's cold
+runs recorded 11.0-11.5 GiB under concurrent load, so measure the phase you care about. The review
+budget is 6.6 GiB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
+
+Calibration offers sigmoid, temperature, isotonic and a **covariate** calibrator: a logistic model
+on logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom), one model for
+every limit. It is checked for monotonicity in score in every band and for non-increase in
+headroom; a violation falls back to isotonic and the requested and fitted methods are recorded per
+fold. Every calibrator output is clipped to [1e-6, 1 - 1e-6]. The per-headroom tables use the
+selected calibrator at each headroom; the old per-headroom isotonic is the `Brier isotonic`
+diagnostic column. The static path keeps its three legacy methods.
+
+Thresholds are chosen per headroom x TTD band on the calibration block's out-of-fold calibrated
+scores: the highest recall whose one-sided 95 % Wilson lower bound on precision is at least
+`report.threshold_precision_floor` (0.70) with at least `report.threshold_min_alerts` (30) alerts.
+A cell with no qualifying operating point does not alert. The report shows calibration-block and
+test precision/recall, the share of cells that held the floor on test (point-estimate precision;
+the development and evaluation rates are both reported), and precision at fixed recalls per band.
+The Wilson bound is **nominal**: it assumes independent rows, while alerts within a departure date
+share the same fare movement. The measured design effect is 1.4-3.2x, a boundary rule is expected
+to hold on roughly half of new cells, and a departure-date cluster bound replaces this in PR 7.
+Treat the hold rate as descriptive; cells with fewer than 100 test alerts or under 5 % recall are
+nominal only. Pooled precision and recall use each row's own fold and cell threshold; the
+intervals are conditional on the fitted thresholds. Cell rows relabel every test row at the cell's
+headroom; the pooled cell-threshold figure uses each row's assigned headroom.
+`threshold_min_alerts` is backtest-only; the static path uses the legacy global threshold and does
+not enforce a minimum alert count.
+
+Decision value uses the primary 20-28 h `check_at`: an alert means book now and no alert means
+wait one day. It reports the saving against waiting (the current product, primary) and against
+booking now, each with a departure-date cluster interval, a random alert at the same share, both
+perfect-breach oracles, perfect timing against booking now and the mean cost of waiting. Near
+departure the policy is roughly break-even against booking now at low headroom and loses several
+euros at 20-30 % headroom; the oracle columns are point estimates. Grouped permutation importance
+covers up to seven families on the pooled development test blocks (the calendar family is empty
+when `calendar.feature_set` is `none`); the `limit` family is the label's own headroom parameter,
+not a market driver. The sample is allocated equally across all development departure dates, so
+the mean is date-weighted; permutation is global across dates. The date spread is reported next to
+the repeat spread; within-date permutation is a PR 7 refinement.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
@@ -445,14 +502,16 @@ One population is used for training, selection, calibration, threshold and evalu
 eligible row with a known next-day check fare. The future evidence tier is a diagnostic stratum,
 not a population.
 
-The report and `metrics.json` carry the evaluation diagnostics: eligibility and censoring, the
+The backtest writes `backtest.json`; the static path writes `metrics.json`. Both carry the
+evaluation diagnostics: eligibility and censoring, the
 route-day check grid (`check_at`, `check_lag_h`), the within-24 h diagnostic on R24-covered rows,
 bin collisions, history depth, missing-at-check shares, the scrape 10-16 h ahead profile, the
 climatology baseline, per-headroom x TTD metrics, strata, clustered intervals, calibration
-slope/intercept/ECE and a decision-value diagnostic with a random-alert lift. The decision-value
-diagnostic uses the 20-24 h check, inside the 24 h maximum. Each run also writes
-`predictions/<split>.parquet` and `model.joblib` locally; never load a model file you did not
-produce. Test-split label and model diagnostics are gated by `--evaluate-test`; journey
+slope/intercept/ECE per headroom x band x era, per-cell thresholds and decision value. The static
+report keeps its 20-24 h crossed-back decision-value diagnostic. The static path writes
+`predictions/<split>.parquet` and `model.joblib`; the backtest writes
+`predictions/backtest.parquet` and no model file. Never load a model file you did not produce.
+Test-split label and model diagnostics are gated by `--evaluate-test`; journey
 disappearance is a corpus-level diagnostic that includes test departures.
 
 The profile also reports the causal chain link rate and incarnation count, the v2 `journey_id`

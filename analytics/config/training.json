@@ -41,7 +41,7 @@
     "random_state": 42
   },
   "calibration": {
-    "methods": ["sigmoid", "isotonic", "temperature"],
+    "methods": ["sigmoid", "isotonic", "temperature", "covariate"],
     "min_positives": 1000,
     "folds": 5
   },
@@ -50,6 +50,7 @@
     "metric_bootstrap_replicates": 400,
     "bootstrap_cluster": "departure_date",
     "threshold_precision_floor": 0.7,
+    "threshold_min_alerts": 30,
     "calibration_bins": 10,
     "min_headroom_positives": 500,
     "r24_max_tail_hours": 4,

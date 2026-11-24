@@ -20,7 +20,7 @@ PROTOCOL_KINDS = ("backtest", "static_split")
 FOLD_ROLE_ORDER = {"development": 0, "evaluation": 1, "sparse_era": 2, "forward": 3}
 FOLD_ROLES = ("development", "evaluation", "sparse_era", "forward")
 MODEL_NAMES = ("base_rate", "logistic", "hist_gradient_boosting")
-CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
+CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature", "covariate")
 
 
 class ConfigError(ValueError):
@@ -93,6 +93,8 @@ class LabelConfig:
             raise ConfigError("label.headroom_pct must be a non-empty list of positive integers")
         if tuple(sorted(set(self.headroom_pct))) != self.headroom_pct:
             raise ConfigError("label.headroom_pct must be strictly increasing and unique")
+        if max(self.headroom_pct) > 32767:
+            raise ConfigError("label.headroom_pct must fit the int16 headroom column (max 32767)")
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,8 @@ class ModelConfig:
         unknown = set(self.candidates) - set(MODEL_NAMES)
         if unknown:
             raise ConfigError(f"unknown model candidates: {sorted(unknown)}")
+        if len(set(self.candidates)) != len(self.candidates):
+            raise ConfigError("model.candidates must be unique")
         if self.max_iter < 1 or self.max_leaf_nodes < 2:
             raise ConfigError("model iteration and leaf counts must be positive")
         if not 0 < self.learning_rate <= 1:
@@ -174,6 +178,8 @@ class CalibrationConfig:
         """Validate this configuration section."""
         if not self.methods or set(self.methods) - set(CALIBRATION_METHODS):
             raise ConfigError(f"calibration.methods must be a subset of {CALIBRATION_METHODS}")
+        if len(set(self.methods)) != len(self.methods):
+            raise ConfigError("calibration.methods must be unique")
         if self.min_positives < 1:
             raise ConfigError("calibration positive thresholds must be positive")
         if not 2 <= self.folds <= 10:
@@ -188,6 +194,7 @@ class ReportConfig:
     metric_bootstrap_replicates: int
     bootstrap_cluster: str
     threshold_precision_floor: float
+    threshold_min_alerts: int
     calibration_bins: int
     min_eligible_rows: int
     min_split_positives: int
@@ -207,6 +214,8 @@ class ReportConfig:
             raise ConfigError("report.bootstrap_cluster must be departure_date or route_day")
         if not 0 <= self.threshold_precision_floor <= 1:
             raise ConfigError("report.threshold_precision_floor must be in [0, 1]")
+        if self.threshold_min_alerts < 1:
+            raise ConfigError("report.threshold_min_alerts must be positive")
         if not 2 <= self.calibration_bins <= 50:
             raise ConfigError("report.calibration_bins must be between 2 and 50")
         if self.min_eligible_rows < 0:
@@ -320,6 +329,11 @@ class TrainingConfig:
         self.model.validate()
         self.calibration.validate()
         self.report.validate()
+        if self.protocol.kind == "static_split" and "covariate" in self.calibration.methods:
+            raise ConfigError(
+                "calibration.methods: covariate is backtest-only; the static path uses "
+                "sigmoid, isotonic and temperature"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a serialisable dictionary representation."""
@@ -496,6 +510,7 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             metric_bootstrap_replicates=_int(report_raw, "metric_bootstrap_replicates", minimum=1, default=400),
             bootstrap_cluster=_str(report_raw, "bootstrap_cluster"),
             threshold_precision_floor=_float(report_raw, "threshold_precision_floor"),
+            threshold_min_alerts=_int(report_raw, "threshold_min_alerts", minimum=1, default=30),
             calibration_bins=_int(report_raw, "calibration_bins", minimum=2),
             min_eligible_rows=_int(report_raw, "min_eligible_rows", minimum=0),
             min_split_positives=_int(report_raw, "min_split_positives", minimum=0),

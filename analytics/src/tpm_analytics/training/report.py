@@ -1084,7 +1084,6 @@ def _report(
         "precision",
         "recall",
     ]
-    risk_bands = "The threshold is a reporting choice, not a product decision."
     eval_label = "Test" if evaluation.evaluation_on_test else "Validation-calibrate"
     threshold_caveat = (
         "- Validation precision and recall use the same validation-calibrate rows that selected the "
@@ -1391,8 +1390,6 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 - Evaluation population: `{evaluation.evaluation_tier}` ({evaluation.evaluation_tier_rows:,} rows)
 - Precision floor met on evaluation: {evaluation.metrics.get("precision_floor_met_on_evaluation")}
 {metrics_all_line}
-
-{risk_bands}
 
 ### Bootstrap intervals and paired Brier differences
 

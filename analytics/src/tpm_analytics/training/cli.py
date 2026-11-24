@@ -88,7 +88,7 @@ def _parser() -> argparse.ArgumentParser:
 def _dataset_code_hash() -> str:
     """Dataset code hash."""
     root = Path(__file__).resolve().parents[1]
-    excluded = {"backtest.py", "cli.py", "model.py", "report.py", "__init__.py"}
+    excluded = {"backtest.py", "cli.py", "model.py", "report.py", "selection.py", "__init__.py"}
     files = sorted(
         path for path in (root / "training").glob("*.py") if path.name not in excluded and path.name != "protocol.py"
     )
