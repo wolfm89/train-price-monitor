@@ -30,6 +30,9 @@ from tpm_analytics.training.features import (
 )
 from tpm_analytics.training.identity import series_key_sql
 from tpm_analytics.training.model import (
+    EARLY_STOPPING_DAYS,
+    EARLY_STOPPING_PATIENCE,
+    EARLY_STOPPING_TOLERANCE,
     Array,
     FittedModel,
     ModelError,
@@ -877,6 +880,11 @@ def run_feature_study(
                 },
                 "calibration_folds": config.calibration.folds,
                 "calibration_min_positives": config.calibration.min_positives,
+                "early_stopping": {
+                    "days": EARLY_STOPPING_DAYS,
+                    "patience": EARLY_STOPPING_PATIENCE,
+                    "tolerance": EARLY_STOPPING_TOLERANCE,
+                },
             },
             "stress_target_source": target_source,
         },
