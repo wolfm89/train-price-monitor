@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Box, Chip, CircularProgress, IconButton, Link, Paper, Typography, Theme } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, IconButton, Paper, Typography, Theme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -469,7 +469,8 @@ function NoTrackBanner({ unavailable }: NoTrackBannerProps) {
         display: 'flex',
         alignItems: 'flex-start',
         gap: 1,
-        borderRadius: '0 0 8px 8px',
+        borderBottomLeftRadius: 'inherit',
+        borderBottomRightRadius: 'inherit',
       })}
     >
       <WarningAmberIcon sx={{ fontSize: 16, color: 'warning.main', mt: '1px', flexShrink: 0 }} />
@@ -579,34 +580,36 @@ export default function JourneyTicket({
         )}
 
         {ticketUrl && (
-          <Link
+          <Button
+            component="a"
             href={ticketUrl}
             target="_blank"
             rel="noopener noreferrer"
-            underline="none"
-            aria-label="Buy ticket on bahn.de (opens in new tab)"
+            fullWidth
+            endIcon={<OpenInNewIcon sx={{ fontSize: 16 }} />}
+            aria-label={`Buy ticket on bahn.de for ${from ?? 'unknown'} to ${to ?? 'unknown'} (opens in new tab)`}
             sx={(theme) => ({
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 1,
+              justifyContent: 'flex-start',
+              gap: 0.75,
               px: { xs: 1.5, sm: 2.5 },
-              py: 1.1,
+              py: { xs: 1.5, sm: 1.25 },
               borderTop: '1px solid',
               borderColor: 'divider',
+              borderRadius: 0,
+              borderBottomLeftRadius: 'inherit',
+              borderBottomRightRadius: 'inherit',
               color: 'primary.main',
               fontSize: 13,
               fontWeight: 600,
-              borderBottomLeftRadius: 'inherit',
-              borderBottomRightRadius: 'inherit',
+              textTransform: 'none',
               transition: 'background-color 0.15s',
-              '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) },
-              '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: '-2px' },
+              '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.08) },
+              '&:active': { backgroundColor: alpha(theme.palette.primary.main, 0.14) },
+              '&.Mui-focusVisible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: '-2px' },
             })}
           >
-            <span>Buy ticket on bahn.de</span>
-            <OpenInNewIcon sx={{ fontSize: 16 }} />
-          </Link>
+            Buy ticket on bahn.de
+          </Button>
         )}
       </Paper>
     </Box>

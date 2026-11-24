@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/react';
+import { ThemeProvider } from '@mui/material/styles';
 import { describe, expect, it, vi } from 'vitest';
 
 import JourneyTicket, { Journey } from './JourneyTicket';
+import { theme } from '../theme';
 
 const monitor: Journey = {
   id: 'j1',
@@ -25,13 +27,28 @@ const monitor: Journey = {
   },
 };
 
+function renderTicket(ticket: Journey) {
+  return render(
+    <ThemeProvider theme={theme}>
+      <JourneyTicket monitor={ticket} onOpenMenu={vi.fn()} loadingIds={new Set()} />
+    </ThemeProvider>
+  );
+}
+
+function getTicketLink(): HTMLElement {
+  return screen.getByRole('link', { name: /Buy ticket on bahn\.de for Berlin Hbf to München Hbf/ });
+}
+
 describe('JourneyTicket bahn.de link', () => {
   it('links to a prefilled bahn.de search in a new tab', () => {
-    render(<JourneyTicket monitor={monitor} onOpenMenu={vi.fn()} loadingIds={new Set()} />);
+    renderTicket(monitor);
 
-    const link = screen.getByRole('link', { name: 'Buy ticket on bahn.de (opens in new tab)' });
+    const link = getTicketLink();
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link).toHaveAccessibleName(/opens in new tab/);
+    expect(link).toHaveAttribute('href', expect.stringMatching(/^https:\/\/www\.bahn\.de\/buchung\/fahrplan\/suche#/));
+    expect(screen.getAllByRole('link')).toHaveLength(1);
 
     const params = new URLSearchParams(new URL(link.getAttribute('href')!).hash.slice(1));
     expect(params.get('so')).toBe('Berlin Hbf');
@@ -42,15 +59,35 @@ describe('JourneyTicket bahn.de link', () => {
     expect(params.get('zoei')).toBe('8000261');
   });
 
-  it('does not render a link when the journey snapshot is unavailable', () => {
-    render(
-      <JourneyTicket
-        monitor={{ ...monitor, unavailable: true, journey: null }}
-        onOpenMenu={vi.fn()}
-        loadingIds={new Set()}
-      />
-    );
+  it('keeps the link when the price is temporarily missing', () => {
+    renderTicket({ ...monitor, journey: { ...monitor.journey!, price: null } });
 
-    expect(screen.queryByRole('link', { name: 'Buy ticket on bahn.de (opens in new tab)' })).not.toBeInTheDocument();
+    expect(getTicketLink()).toBeInTheDocument();
+  });
+
+  it('keeps the link while the snapshot is flagged unavailable but still present', () => {
+    renderTicket({ ...monitor, unavailable: true });
+
+    expect(getTicketLink()).toBeInTheDocument();
+  });
+
+  it('falls back to the name-only station parameter without stored IDs', () => {
+    renderTicket({ ...monitor, fromId: null, toId: null });
+
+    const params = new URLSearchParams(new URL(getTicketLink().getAttribute('href')!).hash.slice(1));
+    expect(params.get('soid')).toBe('O=Berlin Hbf');
+    expect(params.get('zoid')).toBe('O=München Hbf');
+  });
+
+  it('does not render a link when there is no journey snapshot', () => {
+    renderTicket({ ...monitor, unavailable: true, journey: null });
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('does not render a link when the route or departure is missing', () => {
+    renderTicket({ ...monitor, from: null, to: null });
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 });
