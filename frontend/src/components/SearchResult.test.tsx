@@ -196,7 +196,7 @@ describe('SearchResult watch action', () => {
     const input = screen.getByRole('textbox', { name: 'Limit price' });
 
     fireEvent.change(input, { target: { value: 'abc1a2.345xyz' } });
-    expect(input).toHaveValue('12.34');
+    expect(input).toHaveValue('12345');
 
     fireEvent.change(input, { target: { value: '12.34.56' } });
     expect(input).toHaveValue('12.34');
@@ -220,6 +220,18 @@ describe('SearchResult watch action', () => {
     expect(input).toHaveValue('42.');
     await new Promise((resolve) => setTimeout(resolve, 450));
     expect(screen.queryByText(/Your limit must be above/)).not.toBeInTheDocument();
+  });
+
+  it('lets the user type a grouped amount without being blocked at two decimals', () => {
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+
+    for (const value of ['1', '1.', '1.2', '1.23', '1.234', '1234,', '1234,5', '1234,56']) {
+      fireEvent.change(input, { target: { value } });
+    }
+
+    expect(input).toHaveValue('1234,56');
   });
 
   it('submits with Enter once the amount is valid', async () => {

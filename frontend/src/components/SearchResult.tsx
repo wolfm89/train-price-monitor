@@ -118,11 +118,16 @@ function sanitizeLimitPrice(raw: string, fromPaste = false): string {
 
   const separator = cleaned[separatorIndex];
   const whole = cleaned.slice(0, separatorIndex).slice(0, MAX_INTEGER_DIGITS);
-  const fraction = cleaned
-    .slice(separatorIndex + 1)
-    .replace(/[.,]/g, '')
-    .slice(0, 2);
-  return `${whole}${separator}${fraction}`;
+  const rawFraction = cleaned.slice(separatorIndex + 1).replace(/[.,]/g, '');
+
+  // Typing "1.234" is the start of a grouped amount such as "1.234,56", not a
+  // three-decimal number. Promote the group so the user can continue with the
+  // decimal comma instead of being blocked at "1.23".
+  if (whole !== '' && Number(whole) !== 0 && rawFraction.length === 3) {
+    return `${whole}${rawFraction}`.slice(0, MAX_INTEGER_DIGITS);
+  }
+
+  return `${whole}${separator}${rawFraction.slice(0, 2)}`;
 }
 
 const SearchResult: React.FC<Props> = ({
