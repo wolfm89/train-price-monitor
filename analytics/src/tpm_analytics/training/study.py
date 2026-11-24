@@ -548,10 +548,16 @@ def forward_analog_availability(
                 }
             )
         bands.append(item)
+    bounds = connection.execute(
+        "SELECT min(departure_date), max(departure_date), string_agg(DISTINCT observation_era, ',') FROM study_forward"
+    ).fetchone()
     return {
         "forward_path": str(forward_path),
         "forward_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
         "rows": sum(int(row[1]) for row in rows),
+        "departure_start": None if bounds is None else str(bounds[0]),
+        "departure_end": None if bounds is None else str(bounds[1]),
+        "eras": None if bounds is None or bounds[2] is None else str(bounds[2]).split(","),
         "bands": sorted(bands, key=lambda item: _band_order(str(item["band"]))),
     }
 
@@ -622,6 +628,10 @@ def _study_report(result: dict[str, Any]) -> str:
         f"- Coverage window: {result['coverage']['window_start']} to {result['coverage']['window_end']} "
         f"({result['coverage']['days']} days, {result['coverage']['rows']} rows)",
         f"- Stress target: {result['stress']['target_source']} (seed offset {STRESS_SEED_OFFSET})",
+        f"- Departure-date clusters: {result['settings'].get('cluster_counts', {}).get('overall')} overall, "
+        f"{result['settings'].get('cluster_counts', {}).get('near_1_7d')} at 1-7 d",
+        "- Five primary comparisons use marginal 95 % intervals, not a family-wise correction; a",
+        "  non-significant result is a failure to demonstrate, not proof of no effect.",
         "- The coverage profile is a grid-level, observation-weighted upper bound over v1+v2; the",
         "  stress target prefers the actual forward-set analog availability and fills the missing",
         "  7-30 d bands from the coverage profile.",
@@ -794,6 +804,11 @@ def run_feature_study(
     scores = {name: np.concatenate(parts) for name, parts in raw_scores.items()}
     replicates = config.report.bootstrap_replicates
     seed = config.seed + 201
+    near = np.isin(bands, ["1-3d", "3-5d", "5-7d"])
+    cluster_counts = {
+        "overall": len(np.unique(clusters)),
+        "near_1_7d": len(np.unique(clusters[near])),
+    }
     families: list[dict[str, Any]] = []
     decisions: dict[str, str] = {}
     for index, arm in enumerate(arms):
@@ -926,6 +941,8 @@ def run_feature_study(
                 },
             },
             "stress_target_source": target_source,
+            "cluster_counts": cluster_counts,
+            "multiplicity": "five primary comparisons; intervals are marginal, not family-wise",
         },
         "coverage": coverage,
         "stress": {
