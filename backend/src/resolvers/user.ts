@@ -610,6 +610,8 @@ export function getJourneyMonitor(dbJourney: StoredJourney): JourneyMonitor {
     expires: new Date(dbJourney.expires),
     from: dbJourney.cachedFrom ?? undefined,
     to: dbJourney.cachedTo ?? undefined,
+    fromId: dbJourney.fromId,
+    toId: dbJourney.toId,
     firstClass: dbJourney.firstClass ?? undefined,
     bike: dbJourney.bike ?? undefined,
     deutschlandTicketDiscount: dbJourney.deutschlandTicketDiscount ?? undefined,

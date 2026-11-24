@@ -50,11 +50,13 @@ export type JourneyMonitor = {
   expires: Scalars['DateTime']['output'];
   firstClass?: Maybe<Scalars['Boolean']['output']>;
   from?: Maybe<Scalars['String']['output']>;
+  fromId?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   journey?: Maybe<Journey>;
   limitPrice: Scalars['Float']['output'];
   loyaltyCard?: Maybe<LoyaltyCard>;
   to?: Maybe<Scalars['String']['output']>;
+  toId?: Maybe<Scalars['String']['output']>;
   unavailable: Scalars['Boolean']['output'];
   userId: Scalars['ID']['output'];
 };

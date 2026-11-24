@@ -191,11 +191,13 @@ export type JourneyMonitorResolvers<
   expires?: Resolver<ResolversTypes['DateTime'], ParentType, ContextType>;
   firstClass?: Resolver<Types.Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
   from?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  fromId?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   journey?: Resolver<Types.Maybe<ResolversTypes['Journey']>, ParentType, ContextType>;
   limitPrice?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
   loyaltyCard?: Resolver<Types.Maybe<ResolversTypes['LoyaltyCard']>, ParentType, ContextType>;
   to?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  toId?: Resolver<Types.Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   unavailable?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   userId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
 };
