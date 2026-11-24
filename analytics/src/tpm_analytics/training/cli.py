@@ -20,14 +20,20 @@ import duckdb
 import pyarrow
 
 from tpm_analytics import calendar
-from tpm_analytics.silver._duck import connect
+from tpm_analytics.silver._duck import connect, read_parquet
 from tpm_analytics.training import backtest as backtest_protocol
 from tpm_analytics.training import model as training_model
 from tpm_analytics.training.config import DEFAULT_CONFIG_PATH, TrainingConfig, load_config
 from tpm_analytics.training.dataset import DatasetStats, SplitStats, _git_state, build_dataset
-from tpm_analytics.training.features import CALENDAR_SETS, FeatureSpec, feature_spec
+from tpm_analytics.training.features import CALENDAR_SETS, FeatureSpec, feature_spec, study_feature_spec
 from tpm_analytics.training.report import write_report
 from tpm_analytics.training.sources import resolve_source
+from tpm_analytics.training.study import (
+    coverage_profile,
+    forward_analog_availability,
+    run_feature_study,
+    write_feature_study,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -52,7 +58,17 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="drop ambiguous journey-chain links; use for the identity sensitivity run",
     )
-    parser.add_argument("--ablation", action="store_true", help="compare the four calendar feature sets")
+    parser.add_argument(
+        "--feature-study",
+        action="store_true",
+        help="run the reproducible feature-family study on the development folds only",
+    )
+    parser.add_argument(
+        "--forward-availability",
+        type=Path,
+        default=None,
+        help="forward Parquet used to measure actual analog availability for the stress test",
+    )
     parser.add_argument(
         "--evaluate-test",
         action="store_true",
@@ -113,6 +129,7 @@ def _dataset_config_payload(config: TrainingConfig) -> dict[str, Any]:
         "resample": asdict(config.resample),
         "sample": asdict(config.sample),
         "calendar": asdict(config.calendar),
+        "features": asdict(config.features),
         "r24_max_tail_hours": config.report.r24_max_tail_hours,
         "r24_max_gap_hours": config.report.r24_max_gap_hours,
         "min_eligible_rows": config.report.min_eligible_rows,
@@ -133,6 +150,8 @@ def _dataset_cache_key(
     code_sha: str,
     strict_chains: bool,
     source: Any,
+    *,
+    study: bool = False,
 ) -> str:
     """Dataset cache key."""
     payload = {
@@ -143,6 +162,7 @@ def _dataset_cache_key(
         ).hexdigest(),
         "source": source_uri,
         "strict_chains": strict_chains,
+        "study": study,
         "source_build_id": getattr(source, "build_id", None),
         "source_manifest_sha256": getattr(source, "manifest_sha256", None),
     }
@@ -259,38 +279,6 @@ def _load_splits(out_dir: Path, spec: FeatureSpec) -> dict[str, training_model.T
     }
 
 
-def _ablation(
-    full: dict[str, training_model.TabularData],
-    config: TrainingConfig,
-    primary_set: str,
-    primary: training_model.Evaluation,
-) -> dict[str, Any]:
-    """Compare calendar feature sets on the static path."""
-    results: dict[str, Any] = {
-        primary_set: {
-            "chosen_model": primary.chosen_model,
-            "calibration": primary.calibration_method,
-            "validation_brier": primary.metrics.get("brier"),
-            "validation_log_loss": primary.metrics.get("log_loss"),
-            "validation_roc_auc": primary.metrics.get("roc_auc"),
-        }
-    }
-    for calendar_set in CALENDAR_SETS:
-        if calendar_set == primary_set:
-            continue
-        spec = feature_spec(calendar_set)
-        splits = {name: data.select(spec.names) for name, data in full.items()}
-        evaluation, _, _ = training_model.train_and_evaluate(splits, spec, config, evaluate_test=False)
-        results[calendar_set] = {
-            "chosen_model": evaluation.chosen_model,
-            "calibration": evaluation.calibration_method,
-            "validation_brier": evaluation.metrics.get("brier"),
-            "validation_log_loss": evaluation.metrics.get("log_loss"),
-            "validation_roc_auc": evaluation.metrics.get("roc_auc"),
-        }
-    return results
-
-
 def _peak_rss_kb() -> int:
     """Return the process peak resident set size in KiB."""
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
@@ -312,17 +300,32 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("no source: pass --source or set source in the config")
         if args.calendar_features is not None:
             config = replace(config, calendar=replace(config.calendar, feature_set=args.calendar_features))
-        if args.ablation and args.evaluate_test:
-            raise ValueError("--ablation is validation-only; do not combine it with --evaluate-test")
-        if args.ablation and config.protocol.kind != "static_split":
-            raise ValueError("--ablation requires the static config (config/training-static.json)")
+        if args.feature_study:
+            if args.evaluate_test:
+                raise ValueError("--feature-study is development-only; do not combine it with --evaluate-test")
+            if config.protocol.kind != "backtest":
+                raise ValueError("--feature-study requires the backtest config")
+            if args.profile or args.forward or args.score_forward is not None or args.cache_dir is not None:
+                raise ValueError(
+                    "--feature-study cannot be combined with --profile, --forward, --score-forward or --cache-dir"
+                )
+        if args.forward_availability is not None and not args.feature_study:
+            raise ValueError("--forward-availability requires --feature-study")
+        study_offsets = tuple(config.features.analog_departure_offsets_days)
+        if args.feature_study:
+            study_offsets = tuple(sorted(set(study_offsets)))
         if args.score_forward is not None and config.protocol.kind != "backtest":
             raise ValueError("--score-forward requires a backtest config")
         if args.cache_dir is not None and config.protocol.kind != "backtest":
             raise ValueError("--cache-dir requires a backtest config")
         primary_set = config.calendar.feature_set
-        build_set = "full" if args.ablation else primary_set
+        build_set = "full" if args.feature_study else primary_set
         build_config = replace(config, calendar=replace(config.calendar, feature_set=build_set))
+        if args.feature_study:
+            build_config = replace(
+                build_config,
+                features=replace(config.features, analog_departures_enabled=True),
+            )
         source = resolve_source(source_uri)
         run_id = _run_id(config, args.run_id)
         if args.out is not None:
@@ -358,7 +361,9 @@ def main(argv: list[str] | None = None) -> int:
             and getattr(source, "manifest_sha256", None) is not None
         ):
             cache_root = args.dataset_cache_dir or (DEFAULT_CONFIG_PATH.parent.parent / "artifacts/.cache/datasets")
-            dataset_key = _dataset_cache_key(build_config, source_uri, _dataset_code_hash(), args.strict_chains, source)
+            dataset_key = _dataset_cache_key(
+                build_config, source_uri, _dataset_code_hash(), args.strict_chains, source, study=args.feature_study
+            )
             restore_started = time.perf_counter()
             stats = _restore_dataset(
                 cache_root,
@@ -381,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
             extensions=extensions,
             secret=source.s3_secret,
         )
+        study_context: dict[str, Any] | None = None
         try:
             if stats is None:
                 stats = build_dataset(
@@ -394,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                     threads=threads,
                     strict_chains=args.strict_chains,
                     forward=args.forward,
+                    study=args.feature_study,
                 )
                 if cache_root is not None and dataset_key is not None and not args.profile and not args.forward:
                     try:
@@ -401,6 +408,20 @@ def main(argv: list[str] | None = None) -> int:
                         _store_dataset(cache_root, dataset_key, work_dir)
                     except (OSError, ValueError, TypeError, KeyError) as error:
                         logging.getLogger(__name__).warning("dataset cache write skipped: %s", error)
+            if args.feature_study:
+                source_sql = read_parquet(source.glob, union_by_name=False)
+                coverage = coverage_profile(connection, source_sql)
+                forward = (
+                    forward_analog_availability(
+                        connection,
+                        args.forward_availability,
+                        source_sql,
+                        study_offsets,
+                    )
+                    if args.forward_availability is not None
+                    else None
+                )
+                study_context = {"coverage": coverage, "forward": forward}
         finally:
             connection.close()
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -408,10 +429,52 @@ def main(argv: list[str] | None = None) -> int:
             os.replace(work_dir, out_dir)
             print(json.dumps(stats.to_dict(), indent=2, sort_keys=True, default=str))
             return 0
+        if args.feature_study:
+            if study_context is None:
+                raise ValueError("the feature study context was not computed")
+            study_spec = study_feature_spec(study_offsets)
+            panel = backtest_protocol.load_panel(work_dir, study_spec)
+            result = run_feature_study(
+                panel,
+                config,
+                coverage=study_context["coverage"],
+                forward=study_context["forward"],
+            )
+            total_seconds = round(time.perf_counter() - run_started, 3)
+            summary = write_feature_study(work_dir, result)
+            summary.update(
+                {
+                    "out": str(out_dir),
+                    "run_id": run_id,
+                    "rows": stats.rows,
+                    "labelled_rows": stats.labelled_rows,
+                    "wall_seconds": total_seconds,
+                    "peak_rss_kb": _peak_rss_kb(),
+                    "dataset_reused": dataset_reused,
+                    "dataset_cache_key": dataset_key,
+                    "recipe_unchanged": result["recipe_unchanged"],
+                    "folds": result["folds"],
+                }
+            )
+            (work_dir / "study_runtime.json").write_text(
+                json.dumps(
+                    {
+                        "wall_seconds": total_seconds,
+                        "peak_rss_kb": int(summary["peak_rss_kb"]),
+                        "dataset_seconds": stats.duration_seconds,
+                        "dataset_source": "cache" if dataset_reused else "build",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(work_dir, out_dir)
+            print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+            return 0
         spec = feature_spec(primary_set)
         if config.protocol.kind == "backtest":
-            if args.ablation:
-                raise ValueError("--ablation is not available in backtest mode")
             panel = backtest_protocol.load_panel(work_dir, spec)
             dataset_manifest = json.loads((work_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
             dataset_sha256 = hashlib.sha256(
@@ -471,9 +534,8 @@ def main(argv: list[str] | None = None) -> int:
             splits,
             spec,
             config,
-            evaluate_test=args.evaluate_test and not args.ablation,
+            evaluate_test=args.evaluate_test,
         )
-        ablation = _ablation(full_splits, config, primary_set, evaluation) if args.ablation else None
         training_model.write_evaluation_artifacts(work_dir, evaluation, fitted, calibrator, spec, config)
         runtime = {
             "wall_seconds": round(time.perf_counter() - run_started, 3),
@@ -486,7 +548,6 @@ def main(argv: list[str] | None = None) -> int:
             spec,
             config.to_dict(),
             runner="local",
-            ablation=ablation,
             build_config=build_config.to_dict(),
             runtime=runtime,
         )
@@ -504,7 +565,6 @@ def main(argv: list[str] | None = None) -> int:
             "model_file": "model.joblib",
             "brier": evaluation.metrics["brier"],
             "log_loss": evaluation.metrics["log_loss"],
-            "ablation": ablation,
             **runtime,
         }
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))

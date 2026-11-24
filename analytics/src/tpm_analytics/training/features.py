@@ -90,6 +90,22 @@ FULL_CALENDAR: tuple[Feature, ...] = (
     Feature("dest_public_holiday_scope", CATEGORICAL, nullable=True, source="calendar"),
 )
 
+
+def analog_features(offsets: tuple[int, ...]) -> tuple[Feature, ...]:
+    """Return the I1 analog-departure columns for the requested day offsets."""
+    features: list[Feature] = []
+    for offset in offsets:
+        features.extend(
+            (
+                Feature(f"analog_d{offset}_price_ratio", NUMERIC, nullable=True, source="analog departure"),
+                Feature(f"analog_d{offset}_lead_gap_h", NUMERIC, nullable=True, source="analog departure"),
+                Feature(f"analog_d{offset}_next_ratio", NUMERIC, nullable=True, source="analog departure"),
+                Feature(f"analog_d{offset}_rise_lead_gap_h", NUMERIC, nullable=True, source="analog departure"),
+            )
+        )
+    return tuple(features)
+
+
 # Grouped permutation importance reports these families; every feature belongs to exactly one.
 FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     "price_level": (
@@ -136,6 +152,8 @@ FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
         "dest_station_category",
     ),
     "calendar": tuple(feature.name for feature in PUBLIC_CALENDAR + SCHOOL_CALENDAR + FULL_CALENDAR),
+    "analog_d1": tuple(feature.name for feature in analog_features((1,))),
+    "analog_d7": tuple(feature.name for feature in analog_features((7,))),
 }
 
 
@@ -181,11 +199,23 @@ class FeatureSpec:
         return tuple(feature.name for feature in self.features)
 
 
-def feature_spec(calendar_set: str) -> FeatureSpec:
-    """Return the allowlisted feature specification for a calendar set."""
+def feature_spec(calendar_set: str, *, analog_offsets: tuple[int, ...] = ()) -> FeatureSpec:
+    """Return the allowlisted feature specification for a calendar set and analog offsets."""
     if calendar_set not in CALENDAR_FEATURES:
         raise ValueError(f"unknown calendar feature set {calendar_set!r}")
-    return FeatureSpec(calendar_set, CORE_FEATURES + CALENDAR_FEATURES[calendar_set])
+    return FeatureSpec(
+        calendar_set,
+        CORE_FEATURES + CALENDAR_FEATURES[calendar_set] + analog_features(analog_offsets),
+    )
+
+
+def study_feature_spec(analog_offsets: tuple[int, ...]) -> FeatureSpec:
+    """Return the superset spec built for the feature study.
+
+    The study build contains every candidate family; each arm selects its own active subset from
+    the same panel. ``calendar_set = full`` is the widest calendar set.
+    """
+    return FeatureSpec("full", CORE_FEATURES + CALENDAR_FEATURES["full"] + analog_features(analog_offsets))
 
 
 LABEL_COLUMNS = (
@@ -248,19 +278,34 @@ AUDIT_COLUMNS = (
 )
 
 
-def column_roles(spec: FeatureSpec) -> dict[str, Any]:
+def column_roles(spec: FeatureSpec, candidates: tuple[Feature, ...] = ()) -> dict[str, Any]:
     """Return the feature/label/audit role of every output column.
 
     The Parquet files keep one flat schema for compatibility with DuckDB and the model loader.
     The sidecar makes the non-feature columns explicit so a new join or diagnostic cannot quietly
-    enter the model matrix.
+    enter the model matrix. ``candidates`` are columns present in the dataset for a feature study
+    but outside the default model allowlist.
     """
     features = list(spec.names)
+    candidate_names = [feature.name for feature in candidates if feature.name not in spec.names]
+    if len(candidate_names) != len(set(candidate_names)):
+        raise ValueError("candidate feature names must be unique")
     allowed_overlaps = {"headroom_pct", "hours_to_departure", "service_class"}
     overlaps = (set(LABEL_COLUMNS) | set(AUDIT_COLUMNS)) & set(features)
     unexpected = overlaps - allowed_overlaps
     if unexpected:
         raise ValueError(f"label/audit columns collide with features: {sorted(unexpected)}")
-    labels = [name for name in LABEL_COLUMNS if name not in features]
-    audit = [name for name in AUDIT_COLUMNS if name not in features and name not in labels]
-    return {"version": 1, "features": features, "labels": labels, "audit": audit}
+    label_overlaps = (set(LABEL_COLUMNS) | set(AUDIT_COLUMNS)) & set(candidate_names)
+    if label_overlaps:
+        raise ValueError(f"label/audit columns collide with candidate features: {sorted(label_overlaps)}")
+    labels = [name for name in LABEL_COLUMNS if name not in features and name not in candidate_names]
+    audit = [
+        name for name in AUDIT_COLUMNS if name not in features and name not in candidate_names and name not in labels
+    ]
+    return {
+        "version": 2,
+        "features": features,
+        "candidate_feature": candidate_names,
+        "labels": labels,
+        "audit": audit,
+    }

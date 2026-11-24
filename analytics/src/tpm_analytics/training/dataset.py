@@ -27,6 +27,7 @@ import duckdb
 
 from tpm_analytics import calendar
 from tpm_analytics.silver._duck import read_parquet, sql_string
+from tpm_analytics.training.analog import create_analog_features
 from tpm_analytics.training.audits import duplicate_audit, scrape_gap_audit, v2_chain_audit
 from tpm_analytics.training.bands import JOURNEY_BANDS, ttd_band_case
 from tpm_analytics.training.chains import ChainStats, build_chain_map
@@ -260,15 +261,15 @@ def _content_digest(connection: duckdb.DuckDBPyConnection, split: str, columns: 
     }
 
 
-def _final_columns(calendar_set: str) -> tuple[str, ...]:
+def _final_columns(calendar_set: str, analog_offsets: tuple[int, ...] = ()) -> tuple[str, ...]:
     """Return the ordered output columns for a split build."""
-    spec = feature_spec(calendar_set)
+    spec = feature_spec(calendar_set, analog_offsets=analog_offsets)
     return tuple(dict.fromkeys((*AUDIT_COLUMNS, *LABEL_COLUMNS, *spec.names)))
 
 
-def _forward_columns(calendar_set: str) -> tuple[str, ...]:
+def _forward_columns(calendar_set: str, analog_offsets: tuple[int, ...] = ()) -> tuple[str, ...]:
     """Forward features plus the grid-only check columns; no label or check fare."""
-    spec = feature_spec(calendar_set)
+    spec = feature_spec(calendar_set, analog_offsets=analog_offsets)
     return tuple(dict.fromkeys((*AUDIT_COLUMNS, "eligible", "check_at", "check_lag_h", *spec.names)))
 
 
@@ -278,6 +279,7 @@ def _create_views(
     config: TrainingConfig,
     calendar_set: str,
     *,
+    analog_offsets: tuple[int, ...] = (),
     strict_chains: bool = False,
     forward: bool = False,
 ) -> ChainStats:
@@ -979,8 +981,18 @@ def _create_views(
         )
         """
     )
+    panel_source = "panel"
+    if analog_offsets:
+        analog_columns = create_analog_features(connection, source_sql, "snapshot", analog_offsets)
+        connection.execute(
+            f"CREATE OR REPLACE TEMP VIEW panel_analog AS "
+            f"SELECT p.*, {', '.join(f'a.{name}' for name in analog_columns)} "
+            f"FROM panel p LEFT JOIN analog_features a "
+            f"USING (series_key, snapshot_at, bin_regime, bin_index)"
+        )
+        panel_source = "panel_analog"
     connection.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP VIEW panel_features AS
         SELECT
             *,
@@ -989,7 +1001,7 @@ def _create_views(
             (load_factor_change_24h IS NULL) AS load_factor_change_24h_missing,
             (load_factor_ordinal IS NULL) AS load_factor_missing,
             (transfers_actual IS NULL) AS transfers_missing
-        FROM panel
+        FROM {panel_source}
         """
     )
 
@@ -1767,15 +1779,28 @@ def build_dataset(
     threads: int | None = None,
     strict_chains: bool = False,
     forward: bool = False,
+    study: bool = False,
 ) -> DatasetStats:
-    """Build the panel, profile it and write the Parquet splits."""
+    """Build the panel, profile it and write the Parquet splits.
+
+    ``study`` builds the superset of every candidate feature family and records the families that
+    are outside the default allowlist under the ``candidate_feature`` role. A normal build only
+    carries its active feature set.
+    """
     # Provenance is the checkout state when the build starts, not when it happens to finish.
     git_sha, git_dirty, git_untracked = _git_state()
     started = time.perf_counter()
     out_dir = out_dir.resolve()
     dataset_dir = out_dir / "dataset"
-    calendar_set = config.calendar.feature_set
-    spec = feature_spec(calendar_set)
+    calendar_set = "full" if study else config.calendar.feature_set
+    analog_offsets = config.features.analog_departure_offsets_days if config.features.analog_departures_enabled else ()
+    spec = (
+        feature_spec("full", analog_offsets=analog_offsets)
+        if study
+        else feature_spec(calendar_set, analog_offsets=analog_offsets)
+    )
+    active_spec = feature_spec("none") if study else spec
+    candidate_features = tuple(feature for feature in spec.features if feature.name not in active_spec.names)
     _validate_source_schema(connection, source)
     source_sql = read_parquet(source.glob, union_by_name=False)
     source_rows = _source_count(connection, source_sql)
@@ -1788,12 +1813,15 @@ def build_dataset(
         source_sql,
         config,
         calendar_set,
+        analog_offsets=analog_offsets,
         strict_chains=strict_chains,
         forward=forward,
     )
     build_started = _phase("dataset views", build_started)
 
-    columns = _forward_columns(calendar_set) if forward else _final_columns(calendar_set)
+    columns = (
+        _forward_columns(calendar_set, analog_offsets) if forward else _final_columns(calendar_set, analog_offsets)
+    )
     missing = set(columns) - {row[0] for row in connection.execute("DESCRIBE SELECT * FROM sampled").fetchall()}
     if missing:
         raise DatasetError(f"sampled panel is missing columns: {sorted(missing)}")
@@ -1869,8 +1897,9 @@ def build_dataset(
             f"TO '{sql_string(forward_path.as_posix())}' (FORMAT parquet, COMPRESSION zstd)"
         )
         roles_payload = {
-            "version": 1,
+            "version": 2,
             "features": list(spec.names),
+            "candidate_feature": [],
             "audit": [name for name in AUDIT_COLUMNS if name not in set(spec.names)],
             "grid": ["eligible", "check_at", "check_lag_h"],
         }
@@ -2004,7 +2033,7 @@ def build_dataset(
                 }
             )
 
-    roles_payload = column_roles(spec)
+    roles_payload = column_roles(active_spec, candidate_features)
     roles_bytes = (json.dumps(roles_payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     manifest = {
         "manifest_version": 3,
@@ -2024,13 +2053,20 @@ def build_dataset(
         "cli_argv": list(cli_argv or ()),
         "threads": threads,
         "duckdb_settings": _duckdb_settings(connection),
-        "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
+        "feature_spec_sha256": hashlib.sha256(json.dumps(list(active_spec.names)).encode()).hexdigest(),
         "silver_build_id": source.build_id,
         "silver_manifest_sha256": source.manifest_sha256,
         "config_sha256": config.hash(),
         "calendar_version": calendar.dataset_version(),
         "calendar_feature_set": calendar_set,
-        "features": list(spec.names),
+        "features": list(active_spec.names),
+        "candidate_features": [feature.name for feature in candidate_features],
+        "build_features": list(spec.names),
+        "analog_departures": {
+            "enabled": bool(analog_offsets),
+            "offsets_days": list(analog_offsets),
+            "study": study,
+        },
         "column_roles": "column_roles.json",
         "column_roles_sha256": hashlib.sha256(roles_bytes).hexdigest(),
         "chains": {

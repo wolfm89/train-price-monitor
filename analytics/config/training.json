@@ -33,6 +33,12 @@
   "calendar": {
     "feature_set": "none"
   },
+  "features": {
+    "analog_departures": {
+      "enabled": false,
+      "offsets_days": [1, 7]
+    }
+  },
   "model": {
     "candidates": ["base_rate", "logistic", "hist_gradient_boosting"],
     "max_iter": 400,

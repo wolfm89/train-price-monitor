@@ -57,7 +57,14 @@ from tpm_analytics.training.dataset import (
     _source_inventory,
     build_dataset,
 )
-from tpm_analytics.training.features import LABEL_COLUMNS, family_members, feature_family, feature_spec
+from tpm_analytics.training.features import (
+    LABEL_COLUMNS,
+    analog_features,
+    column_roles,
+    family_members,
+    feature_family,
+    feature_spec,
+)
 from tpm_analytics.training.identity import berlin_week_sql, series_key_sql
 from tpm_analytics.training.labels import breach, breach_sql, cents
 from tpm_analytics.training.model import (
@@ -107,6 +114,12 @@ from tpm_analytics.training.selection import (
     table_sha256,
 )
 from tpm_analytics.training.sources import SourceSpec
+from tpm_analytics.training.study import (
+    _stress_targets,
+    coverage_profile,
+    mask_family,
+    study_arms,
+)
 
 SPLITS = {
     "train_end": "2026-07-10",
@@ -291,6 +304,521 @@ def test_mixed_schema_glob_raises_dataset_error(tmp_path: Path) -> None:
             )
     finally:
         connection.close()
+
+
+def _analog_rows() -> list[dict[str, object]]:
+    """A snapshot, its D-1 analog and filler rows for the other splits."""
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 8, 10, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route="analog",
+            train="ICE1",
+            fare=100.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 9, 8, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route="analog",
+            train="ICE1",
+            fare=110.0,
+        ),
+    ]
+    for observed, fare in (
+        (datetime(2026, 7, 7, 10, 0), 80.0),
+        (datetime(2026, 7, 7, 22, 0), 85.0),
+        (datetime(2026, 7, 8, 8, 0), 120.0),
+        (datetime(2026, 7, 8, 12, 0), 130.0),
+    ):
+        rows.append(
+            _row(
+                observed_at=observed,
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=fare,
+            )
+        )
+    for departure in (datetime(2026, 7, 15, 10, 0), datetime(2026, 7, 22, 10, 0), datetime(2026, 7, 29, 10, 0)):
+        rows.append(
+            _row(
+                observed_at=departure - timedelta(days=2),
+                departure=departure,
+                route="filler",
+                train="ICE2",
+                fare=80.0,
+            )
+        )
+        rows.append(
+            _row(
+                observed_at=departure - timedelta(days=1, hours=2),
+                departure=departure,
+                route="filler",
+                train="ICE2",
+                fare=85.0,
+            )
+        )
+    return rows
+
+
+def test_analog_features_use_the_previous_departure(tmp_path: Path) -> None:
+    source = tmp_path / "analog-silver.parquet"
+    _write_silver(source, _analog_rows())
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(config_path)
+    out = tmp_path / "analog-run"
+    connection = duckdb.connect()
+    try:
+        stats = build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="analog", build_id="analog", manifest_sha256=None),
+            config,
+            out,
+            run_id="analog",
+        )
+    finally:
+        connection.close()
+    assert stats.rows > 0
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            """
+            SELECT analog_d1_price_ratio, analog_d1_lead_gap_h,
+                   analog_d1_next_ratio, analog_d1_rise_lead_gap_h
+            FROM read_parquet(?)
+            WHERE route_id = 'analog' AND snapshot_at = TIMESTAMP '2026-07-08 10:00:00'
+            """,
+            [str(out / "dataset" / "train.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert row[0] == pytest.approx(100.0 / 80.0)
+    assert row[1] == pytest.approx(0.0)
+    assert row[2] == pytest.approx(120.0 / 80.0)
+    assert row[3] == pytest.approx(0.0)
+    roles = json.loads((out / "column_roles.json").read_text())
+    assert "analog_d1_price_ratio" in roles["features"]
+
+
+def _analog_snapshot_values(source: Path, config_path: Path, out: Path) -> tuple[Any, ...]:
+    """Build an analog dataset and return the test snapshot's four analog columns."""
+    config = load_config(config_path)
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="analog", build_id="analog", manifest_sha256=None),
+            config,
+            out,
+            run_id=out.name,
+        )
+    finally:
+        connection.close()
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            """
+            SELECT analog_d1_price_ratio, analog_d1_lead_gap_h,
+                   analog_d1_next_ratio, analog_d1_rise_lead_gap_h
+            FROM read_parquet(?)
+            WHERE route_id = 'analog' AND snapshot_at = TIMESTAMP '2026-07-08 10:00:00'
+            """,
+            [str(out / "dataset" / "train.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    return tuple(row)
+
+
+def test_analog_features_ignore_observations_after_the_snapshot(tmp_path: Path) -> None:
+    source = tmp_path / "analog-base.parquet"
+    _write_silver(source, _analog_rows())
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    base = _analog_snapshot_values(source, config_path, tmp_path / "base")
+
+    future = _analog_rows()
+    future.extend(
+        [
+            _row(
+                observed_at=datetime(2026, 7, 8, 10, 30),
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=1.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 8, 11, 0),
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=2.0,
+            ),
+        ]
+    )
+    mutated_source = tmp_path / "analog-future.parquet"
+    _write_silver(mutated_source, future)
+    mutated = _analog_snapshot_values(mutated_source, config_path, tmp_path / "future")
+    assert mutated == pytest.approx(base)
+
+
+def test_analog_features_ignore_other_trains_and_departure_shifts(tmp_path: Path) -> None:
+    rows = _analog_rows()
+    # A different train and a departure 20 minutes later must not be analogs.
+    rows.extend(
+        [
+            _row(
+                observed_at=datetime(2026, 7, 7, 10, 0),
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE-OTHER",
+                fare=10.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 7, 10, 0),
+                departure=datetime(2026, 7, 9, 10, 20),
+                route="analog",
+                train="ICE1",
+                fare=20.0,
+            ),
+        ]
+    )
+    source = tmp_path / "analog-wrong.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    values = _analog_snapshot_values(source, config_path, tmp_path / "wrong")
+    assert values[0] == pytest.approx(100.0 / 80.0)
+    assert values[2] == pytest.approx(120.0 / 80.0)
+
+
+def test_analog_tie_break_prefers_later_lead(tmp_path: Path) -> None:
+    rows = _analog_rows()
+    # Replace the exact-lead analog with two observations one hour either side. The larger lead
+    # (+1 h) wins the second tie-break.
+    rows = [
+        row
+        for row in rows
+        if not (
+            row["observed_at"] == datetime(2026, 7, 7, 10, 0)
+            and row["departure_planned"] == datetime(2026, 7, 9, 10, 0)
+        )
+    ]
+    rows.extend(
+        [
+            _row(
+                observed_at=datetime(2026, 7, 7, 9, 0),
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=70.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 7, 7, 11, 0),
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=60.0,
+            ),
+        ]
+    )
+    source = tmp_path / "analog-tie.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    values = _analog_snapshot_values(source, config_path, tmp_path / "tie")
+    assert values[0] == pytest.approx(100.0 / 70.0)
+    assert values[1] == pytest.approx(1.0)
+
+
+def test_feature_spec_default_and_candidate_roles() -> None:
+    assert feature_spec("none").names == (
+        "price_eur",
+        "headroom_pct",
+        "price_rank_route_day",
+        "price_rank_missing",
+        "price_vs_series_min",
+        "price_vs_series_median",
+        "price_change_24h",
+        "price_change_24h_missing",
+        "price_velocity_24h",
+        "price_jumps_24h",
+        "price_min_7d",
+        "price_max_7d",
+        "price_drawdown_7d",
+        "price_runup_7d",
+        "load_factor_ordinal",
+        "load_factor_missing",
+        "load_factor_change_24h",
+        "load_factor_change_24h_missing",
+        "hours_to_departure",
+        "departure_weekday",
+        "departure_hour_local",
+        "service_class",
+        "distance_km",
+        "train_type",
+        "duration_minutes",
+        "transfers_actual",
+        "transfers_missing",
+        "origin_state",
+        "dest_state",
+        "origin_station_category",
+        "dest_station_category",
+    )
+    roles = column_roles(feature_spec("none"), analog_features((1, 7)))
+    assert roles["features"] == list(feature_spec("none").names)
+    assert set(roles["candidate_feature"]) == {
+        "analog_d1_price_ratio",
+        "analog_d1_lead_gap_h",
+        "analog_d1_next_ratio",
+        "analog_d1_rise_lead_gap_h",
+        "analog_d7_price_ratio",
+        "analog_d7_lead_gap_h",
+        "analog_d7_next_ratio",
+        "analog_d7_rise_lead_gap_h",
+    }
+    assert not set(roles["candidate_feature"]) & set(roles["features"])
+
+
+def _route_day_hash(connection: duckdb.DuckDBPyConnection, route: str, day: date, seed: int = 42) -> int:
+    """Return the builder's route-day sampling bucket for a route and departure date."""
+    row = connection.execute(
+        f"""
+        SELECT CAST((('0x' || substr(sha256(concat_ws('|', {seed}, '{route}',
+            CAST(DATE '{day.isoformat()}' AS VARCHAR))), 1, 8))::UBIGINT % 10000) AS INTEGER)
+        """
+    ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_analog_features_use_unsampled_route_days(tmp_path: Path) -> None:
+    connection = duckdb.connect()
+    try:
+        train_route = next(
+            route
+            for route in (f"route{index}" for index in range(1000))
+            if _route_day_hash(connection, route, date(2026, 7, 10)) < 500
+            and _route_day_hash(connection, route, date(2026, 7, 9)) >= 500
+        )
+        other = {}
+        for name, day in (
+            ("select", date(2026, 7, 15)),
+            ("calibrate", date(2026, 7, 22)),
+            ("test", date(2026, 7, 29)),
+        ):
+            other[name] = next(
+                route
+                for route in (f"{name}{index}" for index in range(1000))
+                if _route_day_hash(connection, route, day) < 500
+            )
+    finally:
+        connection.close()
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 8, 10, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route=train_route,
+            train="ICE1",
+            fare=100.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 9, 8, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route=train_route,
+            train="ICE1",
+            fare=110.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 7, 10, 0),
+            departure=datetime(2026, 7, 9, 10, 0),
+            route=train_route,
+            train="ICE1",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 8, 8, 0),
+            departure=datetime(2026, 7, 9, 10, 0),
+            route=train_route,
+            train="ICE1",
+            fare=120.0,
+        ),
+    ]
+    for name, day in (("select", date(2026, 7, 15)), ("calibrate", date(2026, 7, 22)), ("test", date(2026, 7, 29))):
+        rows.extend(
+            (
+                _row(
+                    observed_at=datetime.combine(day - timedelta(days=2), datetime.min.time()) + timedelta(hours=10),
+                    departure=datetime.combine(day, datetime.min.time()) + timedelta(hours=10),
+                    route=other[name],
+                    train="ICE2",
+                    fare=80.0,
+                ),
+                _row(
+                    observed_at=datetime.combine(day - timedelta(days=1), datetime.min.time()) + timedelta(hours=8),
+                    departure=datetime.combine(day, datetime.min.time()) + timedelta(hours=10),
+                    route=other[name],
+                    train="ICE2",
+                    fare=85.0,
+                ),
+            )
+        )
+    source = tmp_path / "analog-unsampled.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["sample"]["sample_rate"] = 0.05
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(config_path)
+    out = tmp_path / "unsampled"
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="unsampled", build_id="unsampled", manifest_sha256=None),
+            config,
+            out,
+            run_id="unsampled",
+        )
+    finally:
+        connection.close()
+    connection = duckdb.connect()
+    try:
+        sampled = connection.execute(
+            "SELECT DISTINCT route_id, departure_date FROM read_parquet(?)",
+            [str(out / "dataset" / "train.parquet")],
+        ).fetchall()
+        row = connection.execute(
+            """
+            SELECT analog_d1_price_ratio, analog_d1_next_ratio
+            FROM read_parquet(?)
+            WHERE route_id = ? AND snapshot_at = TIMESTAMP '2026-07-08 10:00:00'
+            """,
+            [str(out / "dataset" / "train.parquet"), train_route],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert (train_route, date(2026, 7, 9)) not in sampled
+    assert row is not None
+    assert row[0] == pytest.approx(100.0 / 80.0)
+    assert row[1] == pytest.approx(120.0 / 80.0)
+
+
+def test_mask_family_hits_the_target_share() -> None:
+    count = 200
+    band = np.array(["1-3d"] * 100 + ["3-5d"] * 100, dtype=object)
+    features = {
+        "analog_d1_price_ratio": np.concatenate([np.full(100, 1.2), np.full(100, np.nan)]),
+        "analog_d1_lead_gap_h": np.concatenate([np.zeros(100), np.full(100, np.nan)]),
+        "analog_d1_next_ratio": np.concatenate([np.full(100, 1.1), np.full(100, np.nan)]),
+        "analog_d1_rise_lead_gap_h": np.concatenate([np.zeros(100), np.full(100, np.nan)]),
+    }
+    data = TabularData(
+        features=features,
+        y=np.zeros(count, dtype=np.int8),
+        series=np.array(["s"] * count, dtype=str),
+        route_day=np.array(["r"] * count, dtype=str),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 110.0),
+        future_max=np.full(count, 120.0),
+        future_observations=np.ones(count, dtype=np.int16),
+        headroom=np.ones(count, dtype=np.int16),
+        departure_date=np.array(["2026-07-10"] * count, dtype=str),
+        snapshot_at=np.array(["2026-07-08 10:00:00"] * count, dtype=str),
+        observation_era=np.array(["dense"] * count, dtype=str),
+        observation_week=np.array(["2026-W28"] * count, dtype=str),
+    )
+    masked = mask_family(
+        data,
+        ("analog_d1_price_ratio", "analog_d1_lead_gap_h", "analog_d1_next_ratio", "analog_d1_rise_lead_gap_h"),
+        {"1-3d": {"price": 0.5, "rise": 0.25}},
+        band,
+        np.random.default_rng(7),
+    )
+    near = band == "1-3d"
+    assert np.isfinite(masked.features["analog_d1_price_ratio"][near]).sum() == 50
+    assert np.isfinite(masked.features["analog_d1_next_ratio"][near]).sum() == 25
+    assert np.isnan(masked.features["analog_d1_price_ratio"][~near]).all()
+    assert np.isnan(masked.features["analog_d1_next_ratio"][~near]).all()
+
+
+def test_study_arms_are_fixed_and_stress_prefers_the_forward_set() -> None:
+    arms = study_arms((1, 7))
+    assert [arm.name for arm in arms] == [
+        "base",
+        "analog_d1",
+        "analog_d1_d7",
+        "calendar_public",
+        "calendar_public_school",
+        "calendar_full",
+    ]
+    assert arms[0].reference is None
+    assert arms[1].reference == "base"
+    assert arms[2].reference == "analog_d1"
+    targets, source = _stress_targets(
+        {"bands": [{"band": "1-3d", "price": 0.6, "rise": 0.4}]},
+        {"bands": [{"band": "1-3d", "share": 0.9}]},
+    )
+    assert source == "forward_set"
+    assert targets["1-3d"] == {"price": 0.6, "rise": 0.4}
+    targets, source = _stress_targets(None, {"bands": [{"band": "1-3d", "share": 0.9}]})
+    assert source == "coverage_profile"
+    assert targets["1-3d"] == {"price": 0.9, "rise": 0.9}
+    with pytest.raises(ModelError, match="pre-registered"):
+        study_arms((1, 3))
+
+
+def test_coverage_profile_measures_the_d_minus_one_window(tmp_path: Path) -> None:
+    source = tmp_path / "coverage.parquet"
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 8, 10, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route="hit",
+            train="ICE1",
+            fare=100.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 7, 10, 0),
+            departure=datetime(2026, 7, 9, 10, 0),
+            route="hit",
+            train="ICE1",
+            fare=80.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 8, 10, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route="miss",
+            train="ICE2",
+            fare=100.0,
+        ),
+    ]
+    _write_silver(source, rows)
+    connection = duckdb.connect()
+    try:
+        profile = coverage_profile(connection, f"read_parquet('{source.as_posix()}')")
+    finally:
+        connection.close()
+    assert profile["days"] == 28
+    assert profile["rows"] == 3
+    assert profile["bands"] == [{"band": "1-3d", "rows": 3, "share": pytest.approx(1.0 / 3.0)}]
 
 
 def test_dataset_contract_and_null_handoff(tmp_path: Path) -> None:
@@ -2803,7 +3331,8 @@ def test_column_roles_and_source_inventory(tmp_path: Path) -> None:
     roles = json.loads((out / "column_roles.json").read_text())
     manifest = json.loads((out / "dataset_manifest.json").read_text())
     assert manifest["column_roles"] == "column_roles.json"
-    assert roles["version"] == 1
+    assert roles["version"] == 2
+    assert roles["candidate_feature"] == []
     assert set(roles["features"]) == set(feature_spec("full").names)
     assert not set(roles["features"]) & set(roles["labels"])
     assert not set(roles["features"]) & set(roles["audit"])
@@ -5191,9 +5720,35 @@ def test_bootstrap_helpers_produce_bounded_intervals() -> None:
     assert _bootstrap(y, probabilities, np.full(len(y), "only"), 20, 11) == {}
 
 
-def test_ablation_requires_the_static_config(tmp_path: Path) -> None:
-    out = tmp_path / "ablation"
-    code = main(["--ablation", "--source", str(tmp_path / "missing.parquet"), "--out", str(out)])
+def test_feature_study_is_development_only(tmp_path: Path) -> None:
+    out = tmp_path / "study"
+    code = main(
+        [
+            "--feature-study",
+            "--evaluate-test",
+            "--source",
+            str(tmp_path / "missing.parquet"),
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == 2
+    assert not out.exists()
+
+
+def test_feature_study_requires_the_backtest_config(tmp_path: Path) -> None:
+    out = tmp_path / "study-static"
+    code = main(
+        [
+            "--config",
+            str(DEFAULT_CONFIG_PATH.parent / "training-static.json"),
+            "--feature-study",
+            "--source",
+            str(tmp_path / "missing.parquet"),
+            "--out",
+            str(out),
+        ]
+    )
     assert code == 2
     assert not out.exists()
 
@@ -5534,22 +6089,3 @@ def test_cli_profile_and_full_run(tmp_path: Path) -> None:
     tested_predictions = pq.read_table(test_out / "predictions" / "test.parquet").to_pydict()
     assert set(tested_predictions["calibration_mode"]) == {"full"}
     assert set(tested_predictions["calibration_fold"]) == {-1}
-
-    ablation_out = tmp_path / "ablation"
-    assert (
-        main(
-            [
-                "--config",
-                str(config),
-                "--source",
-                str(source),
-                "--out",
-                str(ablation_out),
-                "--ablation",
-            ]
-        )
-        == 0
-    )
-    ablated = json.loads((ablation_out / "metrics.json").read_text())
-    assert ablated["evaluation_on_test"] is False
-    assert all("test_brier" not in item for item in ablated["ablation"].values())

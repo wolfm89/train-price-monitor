@@ -1,0 +1,682 @@
+"""Reproducible feature-family study on the development folds.
+
+The study is deliberately narrow: one pre-registered definition per family, the frozen PR 6
+recipe, and development folds only. A family is kept only if the PR 6 replacement rule accepts it
+at full availability and a coverage stress test does not make it significantly worse near
+departure. No evaluation or sparse-era fold is read.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import duckdb
+import numpy as np
+
+from tpm_analytics.silver._duck import sql_string
+from tpm_analytics.training.analog import analog_feature_names, create_analog_features
+from tpm_analytics.training.bands import band_labels, ttd_band_case
+from tpm_analytics.training.config import TrainingConfig
+from tpm_analytics.training.features import (
+    CALENDAR_FEATURES,
+    CORE_FEATURES,
+    FeatureSpec,
+    study_feature_spec,
+)
+from tpm_analytics.training.model import (
+    Array,
+    FittedModel,
+    ModelError,
+    TabularData,
+    _ttd_array,
+    fit_calibrator,
+    fit_candidate,
+)
+from tpm_analytics.training.protocol import assert_purged, fold_masks, fold_slices
+from tpm_analytics.training.selection import development_folds, paired_bootstrap, replacement_rule
+
+STUDY_VERSION = 1
+STRESS_SEED_OFFSET = 17
+
+
+@dataclass(frozen=True)
+class StudyArm:
+    """One candidate feature subset and the arm it is compared with."""
+
+    name: str
+    features: tuple[str, ...]
+    reference: str | None
+    kind: str
+
+
+def _core_names() -> tuple[str, ...]:
+    """Return the frozen core feature names."""
+    return tuple(feature.name for feature in CORE_FEATURES)
+
+
+def study_arms(analog_offsets: tuple[int, ...]) -> tuple[StudyArm, ...]:
+    """Return the pre-registered arms in the frozen order."""
+    base = _core_names()
+    analog_d1 = analog_feature_names((1,))
+    analog_d7 = analog_feature_names((7,))
+    arms = [
+        StudyArm("base", base, None, "base"),
+        StudyArm("analog_d1", base + analog_d1, "base", "analog"),
+        StudyArm("analog_d1_d7", base + analog_d1 + analog_d7, "analog_d1", "analog"),
+        StudyArm(
+            "calendar_public",
+            base + tuple(feature.name for feature in CALENDAR_FEATURES["public"]),
+            "base",
+            "calendar",
+        ),
+        StudyArm(
+            "calendar_public_school",
+            base + tuple(feature.name for feature in CALENDAR_FEATURES["public_school"]),
+            "base",
+            "calendar",
+        ),
+        StudyArm(
+            "calendar_full",
+            base + tuple(feature.name for feature in CALENDAR_FEATURES["full"]),
+            "base",
+            "calendar",
+        ),
+    ]
+    if analog_offsets != (1, 7):
+        # The fixed arm order is part of the plan. A config with other offsets is a different study.
+        raise ModelError(f"the feature study is pre-registered for offsets (1, 7), not {analog_offsets}")
+    return tuple(arms)
+
+
+def _arm_spec(panel_spec: FeatureSpec, arm: StudyArm) -> FeatureSpec:
+    """Return the feature spec for one arm, preserving the study spec's declaration order."""
+    wanted = set(arm.features)
+    features = tuple(feature for feature in panel_spec.features if feature.name in wanted)
+    missing = wanted - {feature.name for feature in features}
+    if missing:
+        raise ModelError(f"arm {arm.name} uses columns missing from the study panel: {sorted(missing)}")
+    return FeatureSpec("none", features)
+
+
+def _pooled_scores(
+    panel: TabularData,
+    config: TrainingConfig,
+    panel_spec: FeatureSpec,
+    arms: tuple[StudyArm, ...],
+) -> tuple[dict[str, list[Array]], dict[str, list[tuple[FittedModel, Any, TabularData, FeatureSpec]]]]:
+    """Fit every arm on each development fold and return pooled scores and fitted state."""
+    folds = development_folds([fold for fold in config.protocol.cutoffs if fold.role == "development"])
+    scores: dict[str, list[Array]] = {arm.name: [] for arm in arms}
+    fitted: dict[str, list[tuple[FittedModel, Any, TabularData, FeatureSpec]]] = {arm.name: [] for arm in arms}
+    specs = {arm.name: _arm_spec(panel_spec, arm) for arm in arms}
+    for fold in folds:
+        masks = fold_masks(panel, fold, config.protocol)
+        assert_purged(panel, fold, config.protocol, masks)
+        train, calibrate, test = fold_slices(panel, masks)
+        for arm in arms:
+            spec = specs[arm.name]
+            train_arm = train.select(spec.names)
+            calibrate_arm = calibrate.select(spec.names)
+            test_arm = test.select(spec.names)
+            model = fit_candidate("hist_gradient_boosting", train_arm, spec, config)
+            calibrator = fit_calibrator(
+                model.predict(calibrate_arm),
+                calibrate.y,
+                "temperature",
+                min_positives=config.calibration.min_positives,
+            )
+            scores[arm.name].append(calibrator.predict(model.predict(test_arm)))
+            fitted[arm.name].append((model, calibrator, test_arm, spec))
+    return scores, fitted
+
+
+def _pooled_test(panel: TabularData, config: TrainingConfig) -> tuple[Array, Array, Array]:
+    """Return the pooled development test labels, departure dates and TTD bands."""
+    folds = development_folds([fold for fold in config.protocol.cutoffs if fold.role == "development"])
+    labels: list[Array] = []
+    clusters: list[Array] = []
+    bands: list[Array] = []
+    for fold in folds:
+        masks = fold_masks(panel, fold, config.protocol)
+        test = panel.subset(masks.test)
+        labels.append(test.y)
+        clusters.append(np.asarray(test.departure_date, dtype=str))
+        bands.append(_ttd_array(test))
+    return np.concatenate(labels), np.concatenate(clusters), np.concatenate(bands)
+
+
+def _interval(
+    labels: Array,
+    challenger: Array,
+    incumbent: Array,
+    clusters: Array,
+    *,
+    replicates: int,
+    seed: int,
+) -> dict[str, Any] | None:
+    """Return a paired cluster-bootstrap interval, or None when there are too few clusters."""
+    if len(np.unique(clusters)) < 2:
+        return None
+    return paired_bootstrap(labels, challenger, incumbent, clusters, replicates=replicates, seed=seed)
+
+
+def _band_intervals(
+    labels: Array,
+    challenger: Array,
+    incumbent: Array,
+    clusters: Array,
+    bands: Array,
+    *,
+    replicates: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Return one paired interval per headline TTD band."""
+    rows: list[dict[str, Any]] = []
+    for index, band in enumerate(band_labels()):
+        mask = bands == band
+        if not mask.any():
+            continue
+        interval = _interval(
+            labels[mask],
+            challenger[mask],
+            incumbent[mask],
+            clusters[mask],
+            replicates=replicates,
+            seed=seed + index,
+        )
+        rows.append({"band": band, "rows": int(mask.sum()), **(interval or {})})
+    return rows
+
+
+def _finite(values: Array) -> Array:
+    """Return a mask of finite numeric values."""
+    return np.isfinite(np.asarray(values, dtype=np.float64))
+
+
+def _present(values: Array) -> Array:
+    """Return a mask of non-missing values for numeric, boolean or categorical columns."""
+    if values.dtype.kind in {"U", "S", "O"}:
+        return np.asarray([value not in {"__missing__", "", None} for value in values], dtype=bool)
+    return _finite(values)
+
+
+def _availability_rows(
+    data: TabularData,
+    arms: tuple[StudyArm, ...],
+    panel_spec: FeatureSpec,
+    *,
+    source: str,
+) -> list[dict[str, Any]]:
+    """Return family availability by TTD band and observation era."""
+    bands = _ttd_array(data)
+    eras = np.asarray(data.observation_era, dtype=str)
+    rows: list[dict[str, Any]] = []
+    specs = {arm.name: _arm_spec(panel_spec, arm) for arm in arms}
+    core = set(_core_names())
+    for arm in arms:
+        spec = specs[arm.name]
+        present = np.ones(len(data), dtype=bool)
+        price = np.ones(len(data), dtype=bool)
+        rise = np.ones(len(data), dtype=bool)
+        for feature in spec.features:
+            if feature.name in core:
+                continue
+            present &= _present(data.features[feature.name])
+            if feature.name.endswith("_price_ratio"):
+                price &= _present(data.features[feature.name])
+            if feature.name.endswith("_next_ratio"):
+                rise &= _present(data.features[feature.name])
+        for band in band_labels():
+            band_mask = bands == band
+            if not band_mask.any():
+                continue
+            for era in sorted(set(eras[band_mask].tolist())):
+                mask = band_mask & (eras == era)
+                rows.append(
+                    {
+                        "source": source,
+                        "arm": arm.name,
+                        "band": band,
+                        "era": era,
+                        "rows": int(mask.sum()),
+                        "present": float(np.mean(present[mask])) if mask.any() else None,
+                        "price": float(np.mean(price[mask])) if arm.kind == "analog" and mask.any() else None,
+                        "rise": float(np.mean(rise[mask])) if arm.kind == "analog" and mask.any() else None,
+                    }
+                )
+    return rows
+
+
+def mask_family(
+    data: TabularData,
+    names: tuple[str, ...],
+    targets: dict[str, dict[str, float]],
+    bands: Array,
+    rng: np.random.Generator,
+) -> TabularData:
+    """Drop a family's columns at random per TTD band to match the target availability.
+
+    ``names`` must be ordered as four columns per offset: price ratio, lead gap, next ratio and
+    rise lead gap. The price and rise pairs carry separate targets. The keep count is exact up to
+    rounding, so a fixture can assert the masked share within one percentage point.
+    """
+    if len(names) % 4 != 0:
+        raise ModelError("analog masking needs four columns per offset")
+    features = dict(data.features)
+    for offset_index in range(len(names) // 4):
+        price_pair = names[offset_index * 4 : offset_index * 4 + 2]
+        rise_pair = names[offset_index * 4 + 2 : offset_index * 4 + 4]
+        for band, band_targets in targets.items():
+            band_mask = bands == band
+            if not band_mask.any():
+                continue
+            for pair, target in ((price_pair, band_targets["price"]), (rise_pair, band_targets["rise"])):
+                present = _present(features[pair[0]]) & band_mask
+                desired = round(float(target) * int(band_mask.sum()))
+                present_indices = np.flatnonzero(present)
+                if desired >= len(present_indices):
+                    continue
+                keep = rng.choice(present_indices, size=desired, replace=False)
+                drop = present.copy()
+                drop[keep] = False
+                for name in pair:
+                    values = np.array(features[name], copy=True)
+                    values[drop] = np.nan if values.dtype.kind == "f" else "__missing__"
+                    features[name] = values
+    return replace(data, features=features)
+
+
+def _masked_scores(
+    fitted: list[tuple[FittedModel, Any, TabularData, FeatureSpec]],
+    arm: StudyArm,
+    targets: dict[str, dict[str, float]],
+    config: TrainingConfig,
+) -> Array:
+    """Score the already-fitted arm on test blocks masked to the target availability."""
+    names = tuple(arm.features)
+    scores: list[Array] = []
+    for fold_index, (model, calibrator, test, spec) in enumerate(fitted):
+        bands = _ttd_array(test)
+        rng = np.random.default_rng(config.seed + STRESS_SEED_OFFSET + fold_index)
+        masked = mask_family(test, names, targets, bands, rng)
+        scores.append(calibrator.predict(model.predict(masked.select(spec.names))))
+    return np.concatenate(scores)
+
+
+def coverage_profile(
+    connection: duckdb.DuckDBPyConnection,
+    source_sql: str,
+    *,
+    days: int = 28,
+) -> dict[str, Any]:
+    """Measure the D-1 scrape coverage over the latest ``days`` of silver.
+
+    Grid-level: the D-1 route-day has some scrape 12-36 h before the snapshot. The specific train
+    and fare may still be missing, so this is an upper bound on the analog feature's availability.
+    """
+    end = connection.execute(f"SELECT max(observed_at) FROM {source_sql}").fetchone()
+    if end is None or end[0] is None:
+        raise ModelError("the source has no observations")
+    end_at = end[0]
+    if isinstance(end_at, str):
+        end_at = datetime.fromisoformat(end_at)
+    start_at = end_at - timedelta(days=days)
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE coverage_src AS
+        SELECT
+            route_id,
+            departure_date,
+            observed_at,
+            date_diff('second', observed_at, departure_planned) / 3600.0 AS hours_to_departure
+        FROM {source_sql}
+        WHERE observed_at BETWEEN TIMESTAMP '{start_at.isoformat(sep=" ")}'
+                               AND TIMESTAMP '{end_at.isoformat(sep=" ")}'
+          AND observed_at < departure_planned
+          AND schema_version IN (1, 2)
+          AND fare_lowest_eur IS NOT NULL
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE coverage_grid AS
+        SELECT DISTINCT route_id, departure_date, observed_at FROM coverage_src
+        """
+    )
+    rows = connection.execute(
+        f"""
+        WITH hits AS (
+            SELECT
+                {ttd_band_case("hours_to_departure")} AS band,
+                EXISTS (
+                    SELECT 1 FROM coverage_grid g
+                    WHERE g.route_id = coverage_src.route_id
+                      AND g.departure_date = coverage_src.departure_date - 1
+                      AND g.observed_at BETWEEN coverage_src.observed_at - INTERVAL 36 HOUR
+                                             AND coverage_src.observed_at - INTERVAL 12 HOUR
+                ) AS hit
+            FROM coverage_src
+        )
+        SELECT band, count(*) AS rows, avg(hit::INT) AS share
+        FROM hits
+        GROUP BY band
+        ORDER BY band
+        """
+    ).fetchall()
+    return {
+        "window_start": start_at.isoformat(),
+        "window_end": end_at.isoformat(),
+        "days": days,
+        "rows": sum(int(row[1]) for row in rows),
+        "bands": [{"band": str(row[0]), "rows": int(row[1]), "share": float(row[2])} for row in rows],
+        "missing_bands": sorted(set(band_labels()) - {str(row[0]) for row in rows}),
+    }
+
+
+def forward_analog_availability(
+    connection: duckdb.DuckDBPyConnection,
+    forward_path: Path,
+    source_sql: str,
+    offsets: tuple[int, ...],
+) -> dict[str, Any]:
+    """Measure actual analog availability on a forward Parquet, by TTD band."""
+    path = sql_string(forward_path.as_posix())
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE study_forward AS
+        SELECT
+            f.series_key,
+            f.snapshot_at,
+            f.bin_regime,
+            f.bin_index,
+            f.route_id,
+            f.service_class,
+            f.departure_planned,
+            f.departure_date,
+            f.hours_to_departure,
+            f.price_eur,
+            f.ttd_band,
+            f.observation_era,
+            t.train_number
+        FROM read_parquet('{path}') f
+        LEFT JOIN (
+            SELECT series_key, observed_at, min(train_number) AS train_number
+            FROM {source_sql}
+            GROUP BY 1, 2
+        ) t
+          ON t.series_key = f.series_key AND t.observed_at = f.snapshot_at
+        """
+    )
+    create_analog_features(connection, source_sql, "study_forward", offsets)
+    price = " AND ".join(f"a.analog_d{offset}_price_ratio IS NOT NULL" for offset in offsets)
+    rise = " AND ".join(f"a.analog_d{offset}_next_ratio IS NOT NULL" for offset in offsets)
+    rows = connection.execute(
+        f"""
+        SELECT
+            f.ttd_band AS band,
+            count(*) AS rows,
+            avg(CASE WHEN {price} THEN 1.0 ELSE 0.0 END) AS price,
+            avg(CASE WHEN {rise} THEN 1.0 ELSE 0.0 END) AS rise
+        FROM study_forward f
+        JOIN analog_features a USING (series_key, snapshot_at, bin_regime, bin_index)
+        GROUP BY f.ttd_band
+        ORDER BY f.ttd_band
+        """
+    ).fetchall()
+    return {
+        "forward_path": str(forward_path),
+        "rows": sum(int(row[1]) for row in rows),
+        "bands": [
+            {
+                "band": str(row[0]),
+                "rows": int(row[1]),
+                "price": float(row[2]),
+                "rise": float(row[3]),
+            }
+            for row in rows
+        ],
+    }
+
+
+def _stress_targets(
+    forward: dict[str, Any] | None, coverage: dict[str, Any]
+) -> tuple[dict[str, dict[str, float]], str]:
+    """Return the per-band stress target and its source.
+
+    Prefer the forward set's actual analog availability: the grid-level coverage profile is an
+    upper bound and would understate the missingness the model sees in production.
+    """
+    if forward is not None:
+        targets = {
+            str(row["band"]): {"price": float(row["price"]), "rise": float(row["rise"])}
+            for row in forward.get("bands", [])
+            if row.get("price") is not None and row.get("rise") is not None
+        }
+        if targets:
+            return targets, "forward_set"
+    targets = {
+        str(row["band"]): {"price": float(row["share"]), "rise": float(row["share"])}
+        for row in coverage.get("bands", [])
+    }
+    return targets, "coverage_profile"
+
+
+def _study_report(result: dict[str, Any]) -> str:
+    """Render the feature study as Markdown."""
+    lines = [
+        "# Feature study (PR 6b)",
+        "",
+        "Development folds only. Every arm refits the frozen PR 6 recipe (histogram gradient",
+        "boosting plus temperature calibration); the calibrator is not re-selected per arm.",
+        "",
+        "## Method",
+        "",
+        f"- Development folds: {', '.join(result['folds'])}",
+        f"- Paired cluster bootstrap: {result['settings']['replicates']} replicates, "
+        f"seed {result['settings']['seed']}, cluster {result['settings']['cluster']}",
+        f"- Coverage window: {result['coverage']['window_start']} to {result['coverage']['window_end']} "
+        f"({result['coverage']['days']} days, {result['coverage']['rows']} rows)",
+        f"- Stress target: {result['stress']['target_source']} (seed offset {STRESS_SEED_OFFSET})",
+        "",
+        "## Families",
+        "",
+        "| Family | Compared with | Δ log loss [95 % CI] | Δ Brier [95 % CI] | PR 6 rule | Stress | Decision |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in result["families"]:
+        interval = item.get("comparison") or {}
+        lines.append(
+            "| {name} | {reference} | {ll} | {brier} | {rule} | {stress} | {decision} |".format(
+                name=item["name"],
+                reference=item.get("reference") or "—",
+                ll=_interval_text(interval.get("log_loss")),
+                brier=_interval_text(interval.get("brier")),
+                rule="pass" if item.get("rule_passed") else "fail",
+                stress=item.get("stress_status") or "—",
+                decision=item["decision"],
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Availability",
+            "",
+            "| Source | Family | TTD band | Era | Rows | Present | Price analog | Rise analog |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in result["availability"]["panel"]:
+        lines.append(
+            f"| panel | {row['arm']} | {row['band']} | {row['era']} | {row['rows']} | "
+            f"{_pct(row.get('present'))} | {_pct(row['price'])} | {_pct(row['rise'])} |"
+        )
+    for row in result["availability"]["coverage"]:
+        lines.append(f"| coverage | — | {row['band']} | — | {row['rows']} | {_pct(row['share'])} | — | — |")
+    forward = result["availability"].get("forward")
+    if forward:
+        for row in forward["bands"]:
+            lines.append(
+                f"| forward | — | {row['band']} | — | {row['rows']} | — | {_pct(row['price'])} | {_pct(row['rise'])} |"
+            )
+    lines.extend(["", "## Decisions", ""])
+    for item in result["families"]:
+        lines.append(f"- **{item['name']}:** {item['reason']}")
+    lines.extend(["", "The default recipe is unchanged." if result["recipe_unchanged"] else ""])
+    return "\n".join(lines) + "\n"
+
+
+def _interval_text(interval: Any) -> str:
+    """Format a paired delta interval."""
+    if not interval:
+        return "—"
+    return f"[{float(interval[0]):+.5f}, {float(interval[1]):+.5f}]"
+
+
+def _pct(value: Any) -> str:
+    """Format a share as a percentage."""
+    return "—" if value is None else f"{float(value):.1%}"
+
+
+def run_feature_study(
+    panel: TabularData,
+    config: TrainingConfig,
+    *,
+    coverage: dict[str, Any],
+    forward: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the pre-registered feature study and return its JSON-serialisable result."""
+    panel_spec = study_feature_spec(config.features.analog_departure_offsets_days)
+    arms = study_arms(tuple(config.features.analog_departure_offsets_days))
+    labels, clusters, bands = _pooled_test(panel, config)
+    raw_scores, fitted = _pooled_scores(panel, config, panel_spec, arms)
+    scores = {name: np.concatenate(parts) for name, parts in raw_scores.items()}
+    replicates = config.report.bootstrap_replicates
+    seed = config.seed + 201
+    families: list[dict[str, Any]] = []
+    decisions: dict[str, str] = {}
+    for index, arm in enumerate(arms):
+        if arm.reference is None:
+            continue
+        interval = _interval(
+            labels,
+            scores[arm.name],
+            scores[arm.reference],
+            clusters,
+            replicates=replicates,
+            seed=seed + index,
+        )
+        rule_passed, rule_reason = replacement_rule(interval or {})
+        band_intervals = _band_intervals(
+            labels,
+            scores[arm.name],
+            scores[arm.reference],
+            clusters,
+            bands,
+            replicates=replicates,
+            seed=seed + 100 + index,
+        )
+        item: dict[str, Any] = {
+            "name": arm.name,
+            "kind": arm.kind,
+            "reference": arm.reference,
+            "features": list(arm.features),
+            "comparison": interval,
+            "bands": band_intervals,
+            "rule_passed": bool(rule_passed),
+            "rule_reason": rule_reason,
+            "stress": None,
+            "stress_status": "not_applicable" if arm.kind == "calendar" else "not_run",
+        }
+        if arm.kind == "analog" and arm.name == "analog_d1":
+            targets, target_source = _stress_targets(forward, coverage)
+            stressed = _masked_scores(fitted[arm.name], arm, targets, config)
+            overall = _interval(
+                labels,
+                stressed,
+                scores["base"],
+                clusters,
+                replicates=replicates,
+                seed=seed + 300 + index,
+            )
+            near = np.isin(bands, ["1-3d", "3-5d", "5-7d"])
+            near_interval = _interval(
+                labels[near],
+                stressed[near],
+                scores["base"][near],
+                clusters[near],
+                replicates=replicates,
+                seed=seed + 400 + index,
+            )
+            ok = bool(
+                overall and overall["log_loss"][0] <= 0.0 and near_interval and near_interval["log_loss"][0] <= 0.0
+            )
+            item["stress"] = {
+                "target_source": target_source,
+                "targets": targets,
+                "overall": overall,
+                "near_1_7d": near_interval,
+                "passed": ok,
+            }
+            item["stress_status"] = "pass" if ok else "fail"
+        stress_ok = item["stress_status"] in {"pass", "not_applicable", "not_run"}
+        keep = bool(item["rule_passed"] and stress_ok and item["stress_status"] != "not_run")
+        item["decision"] = "keep" if keep else "drop"
+        if keep:
+            item["reason"] = "passes the PR 6 replacement rule and the coverage stress test"
+        elif not item["rule_passed"]:
+            item["reason"] = f"PR 6 rule failed: {rule_reason}"
+        elif item["stress_status"] == "fail":
+            item["reason"] = "the coverage stress test is significantly worse at 1-7 d or overall"
+        else:
+            item["reason"] = "no stress result"
+        families.append(item)
+        decisions[arm.name] = item["decision"]
+    availability = {
+        "panel": _availability_rows(panel, arms, panel_spec, source="development_test"),
+        "coverage": coverage.get("bands", []),
+        "forward": forward,
+        "coverage_window": {
+            "start": coverage.get("window_start"),
+            "end": coverage.get("window_end"),
+            "days": coverage.get("days"),
+        },
+    }
+    targets, target_source = _stress_targets(forward, coverage)
+    return {
+        "version": STUDY_VERSION,
+        "folds": [fold.name for fold in config.protocol.cutoffs if fold.role == "development"],
+        "settings": {
+            "replicates": replicates,
+            "seed": seed,
+            "cluster": "departure_date",
+            "recipe": {"model": "hist_gradient_boosting", "calibration": "temperature"},
+            "stress_target_source": target_source,
+        },
+        "coverage": coverage,
+        "stress": {"target_source": target_source, "targets": targets, "seed_offset": STRESS_SEED_OFFSET},
+        "families": families,
+        "decisions": decisions,
+        "availability": availability,
+        "recipe_unchanged": not any(item["decision"] == "keep" for item in families),
+    }
+
+
+def write_feature_study(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
+    """Write ``feature_study.json`` and ``feature_study.md`` and return their paths and hashes."""
+    payload = (json.dumps(result, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8")
+    json_path = out_dir / "feature_study.json"
+    json_path.write_bytes(payload)
+    report = _study_report(result)
+    report_path = out_dir / "feature_study.md"
+    report_path.write_text(report, encoding="utf-8")
+    return {
+        "feature_study": json_path.name,
+        "feature_study_sha256": hashlib.sha256(payload).hexdigest(),
+        "feature_study_report": report_path.name,
+        "decisions": result["decisions"],
+    }
