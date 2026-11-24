@@ -186,6 +186,26 @@ describe('SearchResult watch action', () => {
     expect(input).toHaveFocus();
   });
 
+  it('only permits one positive decimal amount', async () => {
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+
+    fireEvent.change(input, { target: { value: 'abc1a2.345xyz' } });
+    expect(input).toHaveValue('12.34');
+
+    fireEvent.change(input, { target: { value: '12.34.56' } });
+    expect(input).toHaveValue('12.34');
+
+    fireEvent.change(input, { target: { value: 'abc' } });
+    expect(input).toHaveValue('');
+
+    fireEvent.change(input, { target: { value: '42.' } });
+    expect(input).toHaveValue('42.');
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(screen.queryByText(/Enter an amount above/)).not.toBeInTheDocument();
+  });
+
   it('submits with Enter once the amount is valid', async () => {
     mockMonitor.mockResolvedValue({ data: { monitorJourney: { id: 'jm-3' } } });
 

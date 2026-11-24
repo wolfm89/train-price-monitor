@@ -67,6 +67,25 @@ function parseLimitPrice(raw: string): number {
   return Number.parseFloat(raw.trim().replace(',', '.'));
 }
 
+/**
+ * Keeps the limit field to one positive decimal amount. Letters, signs, spaces
+ * and extra separators are removed; the user may still type a partial value
+ * such as `42.` while entering the decimals.
+ */
+function sanitizeLimitPrice(raw: string): string {
+  const cleaned = raw.replace(/[^\d.,]/g, '');
+  const separatorIndex = cleaned.search(/[.,]/);
+  if (separatorIndex === -1) return cleaned;
+
+  const separator = cleaned[separatorIndex];
+  const whole = cleaned.slice(0, separatorIndex);
+  const fraction = cleaned
+    .slice(separatorIndex + 1)
+    .replace(/[.,]/g, '')
+    .slice(0, 2);
+  return `${whole}${separator}${fraction}`;
+}
+
 const SearchResult: React.FC<Props> = ({
   searchResult,
   searchOptions,
@@ -116,7 +135,7 @@ const SearchResult: React.FC<Props> = ({
   // intermediate values ("4" on the way to "42.50") do not flag every keystroke.
   useEffect(() => {
     if (!openModal) return undefined;
-    if (limitPrice.trim() === '') {
+    if (limitPrice.trim() === '' || /[.,]$/.test(limitPrice)) {
       setLimitError(false);
       return undefined;
     }
@@ -471,7 +490,7 @@ const SearchResult: React.FC<Props> = ({
             inputRef={limitPriceRef}
             value={limitPrice}
             onChange={(e) => {
-              setLimitPrice(e.target.value);
+              setLimitPrice(sanitizeLimitPrice(e.target.value));
               setLimitError(false);
             }}
             onBlur={() => {
