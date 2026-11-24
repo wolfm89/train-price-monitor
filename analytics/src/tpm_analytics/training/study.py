@@ -513,6 +513,8 @@ def _study_report(result: dict[str, Any]) -> str:
         f"- Coverage window: {result['coverage']['window_start']} to {result['coverage']['window_end']} "
         f"({result['coverage']['days']} days, {result['coverage']['rows']} rows)",
         f"- Stress target: {result['stress']['target_source']} (seed offset {STRESS_SEED_OFFSET})",
+        "- The coverage profile is a grid-level upper bound; the stress target prefers the actual",
+        "  forward-set analog availability because it is the missingness the model would see.",
         "",
         "## Families",
         "",
