@@ -28,6 +28,7 @@ from tpm_analytics.training.features import (
     FeatureSpec,
     study_feature_spec,
 )
+from tpm_analytics.training.identity import series_key_sql
 from tpm_analytics.training.model import (
     Array,
     FittedModel,
@@ -153,6 +154,12 @@ def _pooled_test(panel: TabularData, config: TrainingConfig) -> tuple[Array, Arr
     return np.concatenate(labels), np.concatenate(clusters), np.concatenate(bands), concat_tabular(parts)
 
 
+def _band_order(band: str) -> int:
+    """Return the headline-band order, with unknown bands last."""
+    labels = band_labels()
+    return labels.index(band) if band in labels else len(labels)
+
+
 def _interval(
     labels: Array,
     challenger: Array,
@@ -201,10 +208,21 @@ def _finite(values: Array) -> Array:
     return np.isfinite(np.asarray(values, dtype=np.float64))
 
 
+def _is_missing(value: Any) -> bool:
+    """Return whether a categorical value is the loader's missing sentinel."""
+    if value is None:
+        return True
+    if isinstance(value, bytes):
+        return value in {b"__missing__", b""}
+    return value in {"__missing__", ""}
+
+
 def _present(values: Array) -> Array:
     """Return a mask of non-missing values for numeric, boolean or categorical columns."""
-    if values.dtype.kind in {"U", "S", "O"}:
-        return np.asarray([value not in {"__missing__", "", None} for value in values], dtype=bool)
+    if values.dtype.kind == "S":
+        return np.asarray([bytes(value) not in {b"__missing__", b""} for value in values], dtype=bool)
+    if values.dtype.kind in {"U", "O"}:
+        return np.asarray([not _is_missing(value) for value in values], dtype=bool)
     return _finite(values)
 
 
@@ -247,7 +265,7 @@ def _availability_rows(
                         "band": band,
                         "era": era,
                         "rows": int(mask.sum()),
-                        "present": float(np.mean(present[mask])) if mask.any() else None,
+                        "present": (float(np.mean(present[mask])) if arm.kind == "analog" and mask.any() else None),
                         "price": float(np.mean(price[mask])) if arm.kind == "analog" and mask.any() else None,
                         "rise": float(np.mean(rise[mask])) if arm.kind == "analog" and mask.any() else None,
                     }
@@ -278,19 +296,30 @@ def mask_family(
             band_mask = bands == band
             if not band_mask.any():
                 continue
-            for pair, target in ((price_pair, band_targets["price"]), (rise_pair, band_targets["rise"])):
-                present = _present(features[pair[0]]) & band_mask
-                desired = round(float(target) * int(band_mask.sum()))
-                present_indices = np.flatnonzero(present)
-                if desired >= len(present_indices):
-                    continue
-                keep = rng.choice(present_indices, size=desired, replace=False)
-                drop = present.copy()
-                drop[keep] = False
-                for name in pair:
-                    values = np.array(features[name], copy=True)
-                    values[drop] = np.nan if values.dtype.kind == "f" else "__missing__"
-                    features[name] = values
+            band_rows = int(band_mask.sum())
+            present_price = _present(features[price_pair[0]]) & band_mask
+            present_rise = _present(features[rise_pair[0]]) & band_mask
+            desired_price = min(round(float(band_targets["price"]) * band_rows), int(present_price.sum()))
+            keep_price = np.zeros(len(data), dtype=bool)
+            if desired_price > 0:
+                keep_price[rng.choice(np.flatnonzero(present_price), size=desired_price, replace=False)] = True
+            # The rise analog is chosen from the price candidates, so a rise row must also keep
+            # its price. Cap the rise target at the price keep set.
+            eligible_rise = present_rise & keep_price
+            desired_rise = min(round(float(band_targets["rise"]) * band_rows), int(eligible_rise.sum()))
+            keep_rise = np.zeros(len(data), dtype=bool)
+            if desired_rise > 0:
+                keep_rise[rng.choice(np.flatnonzero(eligible_rise), size=desired_rise, replace=False)] = True
+            for name in price_pair:
+                values = np.array(features[name], copy=True)
+                missing = b"__missing__" if values.dtype.kind == "S" else "__missing__"
+                values[present_price & ~keep_price] = np.nan if values.dtype.kind == "f" else missing
+                features[name] = values
+            for name in rise_pair:
+                values = np.array(features[name], copy=True)
+                missing = b"__missing__" if values.dtype.kind == "S" else "__missing__"
+                values[present_rise & ~keep_rise] = np.nan if values.dtype.kind == "f" else missing
+                features[name] = values
     return replace(data, features=features)
 
 
@@ -336,6 +365,7 @@ def coverage_profile(
             route_id,
             departure_date,
             observed_at,
+            schema_version,
             date_diff('second', observed_at, departure_planned) / 3600.0 AS hours_to_departure
         FROM {source_sql}
         WHERE observed_at BETWEEN TIMESTAMP '{start_at.isoformat(sep=" ")}'
@@ -343,6 +373,7 @@ def coverage_profile(
           AND observed_at < departure_planned
           AND schema_version IN (1, 2)
           AND fare_lowest_eur IS NOT NULL
+          AND date_diff('second', observed_at, departure_planned) BETWEEN 86400 AND 2592000
         """
     )
     connection.execute(
@@ -350,7 +381,7 @@ def coverage_profile(
         CREATE OR REPLACE TEMP TABLE coverage_grid AS
         SELECT DISTINCT route_id, departure_date, observed_at
         FROM {source_sql}
-        WHERE observed_at BETWEEN TIMESTAMP '{start_at.isoformat(sep=" ")}'
+        WHERE observed_at BETWEEN TIMESTAMP '{(start_at - timedelta(hours=36)).isoformat(sep=" ")}'
                                AND TIMESTAMP '{end_at.isoformat(sep=" ")}'
           AND observed_at < departure_planned
           AND schema_version IN (1, 2)
@@ -361,6 +392,7 @@ def coverage_profile(
         WITH hits AS (
             SELECT
                 {ttd_band_case("hours_to_departure")} AS band,
+                schema_version,
                 EXISTS (
                     SELECT 1 FROM coverage_grid g
                     WHERE g.route_id = coverage_src.route_id
@@ -370,7 +402,11 @@ def coverage_profile(
                 ) AS hit
             FROM coverage_src
         )
-        SELECT band, count(*) AS rows, avg(hit::INT) AS share
+        SELECT
+            band,
+            count(*) AS rows,
+            avg(hit::INT) AS share,
+            avg(CASE WHEN schema_version = 1 THEN hit::INT END) AS share_v1
         FROM hits
         GROUP BY band
         ORDER BY band
@@ -381,7 +417,18 @@ def coverage_profile(
         "window_end": end_at.isoformat(),
         "days": days,
         "rows": sum(int(row[1]) for row in rows),
-        "bands": [{"band": str(row[0]), "rows": int(row[1]), "share": float(row[2])} for row in rows],
+        "bands": sorted(
+            [
+                {
+                    "band": str(row[0]),
+                    "rows": int(row[1]),
+                    "share": float(row[2]),
+                    "share_v1": None if row[3] is None else float(row[3]),
+                }
+                for row in rows
+            ],
+            key=lambda item: _band_order(str(item["band"])),
+        ),
         "missing_bands": sorted(set(band_labels()) - {str(row[0]) for row in rows}),
     }
 
@@ -413,8 +460,12 @@ def forward_analog_availability(
             t.train_number
         FROM read_parquet('{path}') f
         LEFT JOIN (
-            SELECT series_key, observed_at, min(train_number) AS train_number
+            SELECT {series_key_sql()} AS series_key, observed_at, min(train_number) AS train_number
             FROM {source_sql}
+            WHERE schema_version = 1
+              AND (route_id, departure_date) IN (
+                  SELECT DISTINCT route_id, departure_date FROM study_forward
+              )
             GROUP BY 1, 2
         ) t
           ON t.series_key = f.series_key AND t.observed_at = f.snapshot_at
@@ -465,36 +516,46 @@ def forward_analog_availability(
         bands.append(item)
     return {
         "forward_path": str(forward_path),
+        "forward_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
         "rows": sum(int(row[1]) for row in rows),
-        "bands": bands,
+        "bands": sorted(bands, key=lambda item: _band_order(item["band"])),
     }
 
 
 def _stress_targets(
     forward: dict[str, Any] | None, coverage: dict[str, Any], arm_name: str = "analog_d1"
-) -> tuple[dict[str, dict[str, float]], str]:
-    """Return the per-band stress target and its source for one analog arm.
+) -> tuple[dict[str, dict[str, float]], str, dict[str, str]]:
+    """Return the per-band stress target, its overall source and the per-band sources.
 
-    Prefer the forward set's actual analog availability: the grid-level coverage profile is an
-    upper bound and would understate the missingness the model sees in production. The D-1 arm
-    uses the D-1 availability; the combined arm uses the joint D-1 + D-7 availability.
+    The forward set supplies the 1-7 d actual analog availability; the coverage profile fills the
+    7-30 d bands the forward build does not contain. The D-1 arm uses the D-1 availability.
     """
+    targets: dict[str, dict[str, float]] = {}
+    sources: dict[str, str] = {}
     if forward is not None:
         price_key = "d1d7_price" if arm_name == "analog_d1_d7" else "d1_price"
         rise_key = "d1d7_rise" if arm_name == "analog_d1_d7" else "d1_rise"
-        targets = {}
         for row in forward.get("bands", []):
             price = row.get(price_key, row.get("price"))
             rise = row.get(rise_key, row.get("rise"))
             if price is not None and rise is not None:
-                targets[str(row["band"])] = {"price": float(price), "rise": float(rise)}
-        if targets:
-            return targets, "forward_set"
-    targets = {
-        str(row["band"]): {"price": float(row["share"]), "rise": float(row["share"])}
-        for row in coverage.get("bands", [])
-    }
-    return targets, "coverage_profile"
+                band = str(row["band"])
+                targets[band] = {"price": float(price), "rise": float(rise)}
+                sources[band] = "forward_set"
+    for row in coverage.get("bands", []):
+        band = str(row["band"])
+        if band in targets or band == "unknown":
+            continue
+        share = float(row["share"])
+        targets[band] = {"price": share, "rise": share}
+        sources[band] = "coverage_profile"
+    if not sources:
+        return {}, "none", {}
+    if all(source == "forward_set" for source in sources.values()):
+        return targets, "forward_set", sources
+    if any(source == "forward_set" for source in sources.values()):
+        return targets, "forward_set+coverage_profile", sources
+    return targets, "coverage_profile", sources
 
 
 def _study_report(result: dict[str, Any]) -> str:
@@ -514,10 +575,12 @@ def _study_report(result: dict[str, Any]) -> str:
         f"- Coverage window: {result['coverage']['window_start']} to {result['coverage']['window_end']} "
         f"({result['coverage']['days']} days, {result['coverage']['rows']} rows)",
         f"- Stress target: {result['stress']['target_source']} (seed offset {STRESS_SEED_OFFSET})",
-        "- The coverage profile is a grid-level upper bound; the stress target prefers the actual",
-        "  forward-set analog availability because it is the missingness the model would see.",
-        "- Masking is random within a band; real missingness clusters by route and time. The forward",
-        "  set and the PR 7 sparse-era folds are the real check.",
+        "- The coverage profile is a grid-level, observation-weighted upper bound over v1+v2; the",
+        "  stress target prefers the actual forward-set analog availability and fills the missing",
+        "  7-30 d bands from the coverage profile.",
+        "- The stress scores the dense-era-trained model without retraining; masking is random within",
+        "  a band, while real missingness clusters by route and time. The PR 7 sparse-era folds are",
+        "  the real check.",
         "",
         "## Families",
         "",
@@ -537,6 +600,19 @@ def _study_report(result: dict[str, Any]) -> str:
                 decision=item["decision"],
             )
         )
+    lines.extend(["", "### Per-band comparisons", ""])
+    lines.extend(
+        [
+            "| Family | Band | Rows | Δ log loss [95 % CI] | Δ Brier [95 % CI] |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for item in result["families"]:
+        for row in item.get("bands", []):
+            lines.append(
+                f"| {item['name']} | {row['band']} | {row['rows']} | "
+                f"{_delta_text(row, 'log_loss')} | {_delta_text(row, 'brier')} |"
+            )
     lines.extend(
         [
             "",
@@ -549,33 +625,78 @@ def _study_report(result: dict[str, Any]) -> str:
     for row in result["availability"]["panel"]:
         lines.append(
             f"| panel | {row['arm']} | {row['band']} | {row['era']} | {row['rows']} | "
-            f"{_pct(row.get('present'))} | {_pct(row['price'])} | {_pct(row['rise'])} |"
+            f"{_pct(row.get('present'))} | {_pct(row.get('price'))} | {_pct(row.get('rise'))} |"
         )
     for row in result["availability"]["coverage"]:
         lines.append(f"| coverage | — | {row['band']} | — | {row['rows']} | {_pct(row['share'])} | — | — |")
     forward = result["availability"].get("forward")
     if forward:
+        lines.extend(
+            [
+                "",
+                "Forward-set analog availability. The first two columns are the D-1 feature; the",
+                "joint columns require both D-1 and D-7.",
+                "",
+                "| TTD band | Rows | D-1 price | D-1 rise | Joint price | Joint rise |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
         for row in forward["bands"]:
             lines.append(
-                f"| forward | — | {row['band']} | — | {row['rows']} | — | {_pct(row['price'])} | {_pct(row['rise'])} |"
+                f"| {row['band']} | {row['rows']} | {_pct(row.get('d1_price'))} | "
+                f"{_pct(row.get('d1_rise'))} | {_pct(row.get('price'))} | {_pct(row.get('rise'))} |"
             )
     lines.extend(["", "## Decisions", ""])
     for item in result["families"]:
         lines.append(f"- **{item['name']}:** {item['reason']}")
     lines.extend(["", "## Verdict", ""])
     analog = next((item for item in result["families"] if item["name"] == "analog_d1"), None)
-    if analog is not None and analog["rule_passed"] and analog["stress_status"] == "fail":
+    near_failed = bool(
+        analog
+        and analog.get("stress")
+        and analog["stress"].get("near_1_7d")
+        and analog["stress"]["near_1_7d"]["log_loss"][0] > 0.0
+    )
+    target = result["stress"]["target_source"]
+    if analog is not None and analog["rule_passed"] and analog["stress_status"] == "fail" and near_failed:
         lines.append(
-            "I1 helps when yesterday's train was scraped at the same lead time; at today's coverage "
-            "it makes near-departure predictions worse, so it is off."
+            "I1 helps at full availability but makes near-departure predictions worse at the measured "
+            f"stress availability ({target}); it stays off."
         )
     elif analog is not None and analog["decision"] == "keep":
         lines.append("I1 passes both checks; add it to the recipe and run one evaluation scoring run.")
-    else:
-        lines.append("No analog family passes both checks; the PR 6 recipe stays.")
-    if result["recipe_unchanged"]:
+    kept = [item["name"] for item in result["families"] if item["decision"] == "keep"]
+    if kept:
         lines.append("")
-        lines.append("The default recipe is unchanged.")
+        lines.append(f"Families to add: {', '.join(kept)}; run one evaluation scoring run.")
+    else:
+        lines.append("")
+        lines.append("No family was added; the PR 6 recipe is unchanged by this study.")
+    calendar = result.get("calendar_coverage") or {}
+    if calendar.get("public_holiday_rows") == 0:
+        lines.append("")
+        lines.append(
+            "The public-calendar arm is a null test: the development test window has no public "
+            "holiday. The school-calendar result is summer-only."
+        )
+    provenance = result.get("provenance") or {}
+    if provenance:
+        lines.extend(
+            [
+                "",
+                "## Provenance",
+                "",
+                f"- Git: {provenance.get('git_sha') or '—'} (dirty: {provenance.get('git_dirty')})",
+                f"- Silver: {provenance.get('silver_build_id') or '—'} "
+                f"(manifest {str(provenance.get('silver_manifest_sha256') or '—')[:12]})",
+                f"- Config: {str(provenance.get('config_sha256') or '—')[:12]}",
+                f"- Dataset: {str(provenance.get('dataset_manifest_sha256') or '—')[:12]} "
+                f"(reused: {provenance.get('dataset_reused')})",
+                f"- Sample rate: {provenance.get('sample_rate')}; strict chains: {provenance.get('strict_chains')}",
+                f"- Forward input: {provenance.get('forward_path') or '—'} "
+                f"(sha256 {str(provenance.get('forward_sha256') or '—')[:12]})",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -608,11 +729,20 @@ def run_feature_study(
     coverage: dict[str, Any],
     forward: dict[str, Any] | None = None,
     run_id: str | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the pre-registered feature study and return its JSON-serialisable result."""
     panel_spec = study_feature_spec(config.features.analog_departure_offsets_days)
     arms = study_arms(tuple(config.features.analog_departure_offsets_days))
     labels, clusters, bands, test_panel = _pooled_test(panel, config)
+    public_holiday = np.asarray(test_panel.features["origin_public_holiday"], dtype=bool) | np.asarray(
+        test_panel.features["dest_public_holiday"], dtype=bool
+    )
+    calendar_coverage = {
+        "development_test_rows": len(test_panel),
+        "public_holiday_rows": int(public_holiday.sum()),
+        "public_holiday_share": float(np.mean(public_holiday)),
+    }
     raw_scores, fitted = _pooled_scores(panel, config, panel_spec, arms)
     scores = {name: np.concatenate(parts) for name, parts in raw_scores.items()}
     replicates = config.report.bootstrap_replicates
@@ -651,14 +781,18 @@ def run_feature_study(
             "rule_reason": rule_reason,
             "stress": None,
             "stress_status": "not_applicable" if arm.kind == "calendar" else "not_run",
+            "informative": True,
         }
-        if arm.kind == "analog":
-            targets, target_source = _stress_targets(forward, coverage, arm.name)
+        if arm.kind == "calendar":
+            item["informative"] = arm.name != "calendar_public" or calendar_coverage["public_holiday_rows"] > 0
+        if arm.kind == "analog" and arm.name == "analog_d1":
+            targets, target_source, target_sources = _stress_targets(forward, coverage, arm.name)
+            forward_near = any(target_sources.get(band) == "forward_set" for band in ("1-3d", "3-5d", "5-7d"))
             stressed = _masked_scores(fitted[arm.name], arm, targets, config)
             overall = _interval(
                 labels,
                 stressed,
-                scores["base"],
+                scores[arm.reference],
                 clusters,
                 replicates=replicates,
                 seed=seed + 300 + index,
@@ -667,17 +801,25 @@ def run_feature_study(
             near_interval = _interval(
                 labels[near],
                 stressed[near],
-                scores["base"][near],
+                scores[arm.reference][near],
                 clusters[near],
                 replicates=replicates,
                 seed=seed + 400 + index,
             )
             ok = bool(
-                overall and overall["log_loss"][0] <= 0.0 and near_interval and near_interval["log_loss"][0] <= 0.0
+                forward_near
+                and overall
+                and overall["log_loss"][0] <= 0.0
+                and overall["mean_log_loss"] <= 0.0
+                and near_interval
+                and near_interval["log_loss"][0] <= 0.0
+                and near_interval["mean_log_loss"] <= 0.0
             )
             item["stress"] = {
                 "target_source": target_source,
+                "target_sources": target_sources,
                 "targets": targets,
+                "forward_near": forward_near,
                 "overall": overall,
                 "near_1_7d": near_interval,
                 "passed": ok,
@@ -690,10 +832,17 @@ def run_feature_study(
             item["reason"] = "passes the PR 6 replacement rule; calendar features have no coverage skew"
         elif keep:
             item["reason"] = "passes the PR 6 replacement rule and the coverage stress test"
+        elif not item["informative"]:
+            item["reason"] = "no public holiday in the development test window; this is a null test"
         elif not item["rule_passed"]:
             item["reason"] = f"PR 6 rule failed: {rule_reason}"
         elif item["stress_status"] == "fail":
             item["reason"] = "the coverage stress test is significantly worse at 1-7 d or overall"
+        elif arm.name == "analog_d1_d7":
+            item["reason"] = (
+                "combined D-1 + D-7 stress is not run; the nested arm fails the full-availability rule "
+                "or needs a D-7 fallback test in PR 7"
+            )
         else:
             item["reason"] = "no stress result"
         families.append(item)
@@ -708,7 +857,7 @@ def run_feature_study(
             "days": coverage.get("days"),
         },
     }
-    targets, target_source = _stress_targets(forward, coverage, "analog_d1")
+    targets, target_source, target_sources = _stress_targets(forward, coverage, "analog_d1")
     return {
         "version": STUDY_VERSION,
         "run_id": run_id,
@@ -734,6 +883,7 @@ def run_feature_study(
         "coverage": coverage,
         "stress": {
             "target_source": target_source,
+            "target_sources": target_sources,
             "targets": targets,
             "seed": config.seed,
             "seed_offset": STRESS_SEED_OFFSET,
@@ -741,7 +891,9 @@ def run_feature_study(
         "families": families,
         "decisions": decisions,
         "availability": availability,
-        "recipe_unchanged": not any(item["decision"] == "keep" for item in families),
+        "calendar_coverage": calendar_coverage,
+        "provenance": provenance or {},
+        "no_family_added": not any(item["decision"] == "keep" for item in families),
     }
 
 

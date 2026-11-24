@@ -32,6 +32,7 @@ from tpm_analytics.training.study import (
     coverage_profile,
     forward_analog_availability,
     run_feature_study,
+    study_arms,
     write_feature_study,
 )
 
@@ -309,11 +310,27 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(
                     "--feature-study cannot be combined with --profile, --forward, --score-forward or --cache-dir"
                 )
+            if args.calendar_features is not None:
+                raise ValueError("--feature-study fixes the calendar arms; do not pass --calendar-features")
+            if args.forward_availability is not None and not args.forward_availability.is_file():
+                raise ValueError(f"forward availability file not found: {args.forward_availability}")
         if args.forward_availability is not None and not args.feature_study:
             raise ValueError("--forward-availability requires --feature-study")
         study_offsets = tuple(config.features.analog_departure_offsets_days)
         if args.feature_study:
+            if args.forward_availability is None:
+                raise ValueError(
+                    "--feature-study needs --forward-availability: the keep decision uses the "
+                    "measured forward-set analog availability, not the grid upper bound"
+                )
             study_offsets = tuple(sorted(set(study_offsets)))
+            study_arms(study_offsets)
+        if (
+            config.protocol.kind == "static_split"
+            and config.features.analog_departures_enabled
+            and not args.feature_study
+        ):
+            raise ValueError("features.analog_departures is study-only; the static path keeps its legacy spec")
         if args.score_forward is not None and config.protocol.kind != "backtest":
             raise ValueError("--score-forward requires a backtest config")
         if args.cache_dir is not None and config.protocol.kind != "backtest":
@@ -449,12 +466,34 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("the feature study context was not computed")
             study_spec = study_feature_spec(study_offsets)
             panel = backtest_protocol.load_panel(work_dir, study_spec)
+            dataset_manifest = json.loads((work_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
+            dataset_digest = hashlib.sha256(
+                json.dumps(dataset_manifest.get("dataset_files", []), sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            forward = study_context["forward"]
+            provenance = {
+                "run_id": run_id,
+                "git_sha": dataset_manifest.get("git_sha"),
+                "git_dirty": dataset_manifest.get("git_dirty"),
+                "git_untracked": dataset_manifest.get("git_untracked"),
+                "silver_build_id": dataset_manifest.get("silver_build_id"),
+                "silver_manifest_sha256": dataset_manifest.get("silver_manifest_sha256"),
+                "config_sha256": dataset_manifest.get("config_sha256"),
+                "dataset_manifest_sha256": dataset_digest,
+                "dataset_cache_key": dataset_key,
+                "dataset_reused": dataset_reused,
+                "sample_rate": dataset_manifest.get("sample", {}).get("sample_rate"),
+                "strict_chains": dataset_manifest.get("strict_chains"),
+                "forward_path": forward.get("forward_path") if forward else None,
+                "forward_sha256": forward.get("forward_sha256") if forward else None,
+            }
             result = run_feature_study(
                 panel,
                 config,
                 coverage=study_context["coverage"],
-                forward=study_context["forward"],
+                forward=forward,
                 run_id=run_id,
+                provenance=provenance,
             )
             total_seconds = round(time.perf_counter() - run_started, 3)
             summary = write_feature_study(work_dir, result)
@@ -477,7 +516,14 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "wall_seconds": total_seconds,
                         "peak_rss_kb": int(summary["peak_rss_kb"]),
-                        "dataset_seconds": stats.duration_seconds,
+                        "run_id": run_id,
+                        "git_sha": provenance["git_sha"],
+                        "git_dirty": provenance["git_dirty"],
+                        "dataset_seconds": (
+                            original_build_seconds
+                            if dataset_reused and original_build_seconds is not None
+                            else stats.duration_seconds
+                        ),
                         "dataset_source": "cache" if dataset_reused else "build",
                     },
                     indent=2,
@@ -489,7 +535,10 @@ def main(argv: list[str] | None = None) -> int:
             os.replace(work_dir, out_dir)
             print(json.dumps(summary, indent=2, sort_keys=True, default=str))
             return 0
-        spec = feature_spec(primary_set)
+        analog_offsets = (
+            config.features.analog_departure_offsets_days if config.features.analog_departures_enabled else ()
+        )
+        spec = feature_spec(primary_set, analog_offsets=analog_offsets)
         if config.protocol.kind == "backtest":
             panel = backtest_protocol.load_panel(work_dir, spec)
             dataset_manifest = json.loads((work_dir / "dataset_manifest.json").read_text(encoding="utf-8"))

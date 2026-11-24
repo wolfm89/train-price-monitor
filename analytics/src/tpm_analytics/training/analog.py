@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import duckdb
 
-from tpm_analytics.training.identity import series_key_sql
+from tpm_analytics.training.identity import berlin_local_sql, series_key_sql
 
 ANALOG_LEAD_WINDOW_HOURS = 12
 ANALOG_DEPARTURE_TOLERANCE_MINUTES = 15
@@ -60,16 +60,13 @@ def _create_analog_source(
             departure_date,
             fare_lowest_eur AS price_eur,
             date_diff('second', observed_at, departure_planned) / 3600.0 AS hours_to_departure,
-            hour(departure_planned) * 60 + minute(departure_planned) AS dep_min,
+            CAST(epoch({berlin_local_sql("departure_planned")}) AS BIGINT) % 86400 AS dep_second,
             {series_key_sql()} AS series_key
         FROM {source_sql}
         WHERE schema_version = 1
           AND fare_lowest_eur IS NOT NULL
           AND observed_at < departure_planned
-          AND (route_id, departure_date) IN (
-              SELECT route_id, departure_date FROM {snapshot_table}
-              UNION {route_days}
-          )
+          AND (route_id, departure_date) IN ({route_days})
         """
     )
 
@@ -77,7 +74,7 @@ def _create_analog_source(
 def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: str, offset: int) -> None:
     """Create the candidate, price, next-day and rise tables for one offset."""
     lead_window = ANALOG_LEAD_WINDOW_HOURS
-    tolerance = ANALOG_DEPARTURE_TOLERANCE_MINUTES
+    tolerance_seconds = ANALOG_DEPARTURE_TOLERANCE_MINUTES * 60
     next_low, next_high = ANALOG_NEXT_WINDOW_HOURS
     # The same journey observed at or before t whose lead is within +-12 h of the snapshot's.
     connection.execute(
@@ -91,26 +88,35 @@ def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: 
             s.route_id,
             s.service_class,
             s.departure_planned,
-            hour(s.departure_planned) * 60 + minute(s.departure_planned) AS snapshot_dep_min,
+            CAST(epoch({berlin_local_sql("s.departure_planned")}) AS BIGINT) % 86400 AS snapshot_dep_second,
             a.observed_at AS analog_at,
             a.departure_planned AS analog_departure,
             a.train_number AS analog_train,
-            a.dep_min AS analog_dep_min,
+            a.series_key AS analog_series_key,
+            a.dep_second AS analog_dep_second,
             a.price_eur AS analog_price,
-            a.hours_to_departure - s.hours_to_departure AS lead_gap_h
+            a.hours_to_departure - s.hours_to_departure AS lead_gap_h,
+            LEAST(
+                abs(a.dep_second - CAST(epoch({berlin_local_sql("s.departure_planned")}) AS BIGINT) % 86400),
+                86400 - abs(a.dep_second - CAST(epoch({berlin_local_sql("s.departure_planned")}) AS BIGINT) % 86400)
+            ) AS dep_second_gap
         FROM {snapshot_table} s
         JOIN analog_source a
           ON a.route_id = s.route_id
          AND a.service_class = s.service_class
-         AND a.train_number = s.train_number
+         AND coalesce(a.train_number, '') = coalesce(s.train_number, '')
          AND a.departure_date = s.departure_date - {offset}
-         AND abs(a.dep_min - (hour(s.departure_planned) * 60 + minute(s.departure_planned))) <= {tolerance}
+         AND LEAST(
+                abs(a.dep_second - CAST(epoch({berlin_local_sql("s.departure_planned")}) AS BIGINT) % 86400),
+                86400 - abs(a.dep_second - CAST(epoch({berlin_local_sql("s.departure_planned")}) AS BIGINT) % 86400)
+             ) <= {tolerance_seconds}
          AND a.observed_at <= s.snapshot_at
          AND abs(a.hours_to_departure - s.hours_to_departure) <= {lead_window}
         """
     )
-    # Closest lead, then the larger lead, then the closest departure minute, lowest price, series key.
-    tie_break = "abs(lead_gap_h), lead_gap_h DESC, abs(analog_dep_min - snapshot_dep_min), analog_price, series_key"
+    # Closest lead, then the larger lead, then the closest circular departure time, lowest price,
+    # then the analog's series key.
+    tie_break = "abs(lead_gap_h), lead_gap_h DESC, dep_second_gap, analog_price, analog_series_key"
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE analog_d{offset}_price AS
@@ -144,7 +150,8 @@ def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: 
             JOIN analog_source n
               ON n.route_id = c.route_id
              AND n.service_class = c.service_class
-             AND n.train_number = c.analog_train
+             AND coalesce(n.train_number, '') = coalesce(c.analog_train, '')
+             AND n.series_key = c.analog_series_key
              AND n.departure_planned = c.analog_departure
              AND n.observed_at BETWEEN c.analog_at + INTERVAL {next_low} HOUR
                                     AND c.analog_at + INTERVAL {next_high} HOUR

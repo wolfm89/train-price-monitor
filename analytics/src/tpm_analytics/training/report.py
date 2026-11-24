@@ -109,7 +109,6 @@ def _report(
     spec: FeatureSpec,
     config: dict[str, Any],
     runner: str,
-    ablation: dict[str, Any] | None = None,
     provenance_lines: str = "",
 ) -> str:
     """Render the backtest report as Markdown."""
@@ -990,20 +989,6 @@ def _report(
     journey_none_60 = sum(item["journeys"] for item in journey.get("groups", []) if item["successor_60"] == "none")
     warning_items = _warnings(stats, evaluation)
     warnings = "\n".join(f"- {warning}" for warning in warning_items) or "- none"
-    ablation_section = ""
-    if ablation:
-        rows = [
-            [
-                name,
-                item["validation_brier"],
-                item["validation_log_loss"],
-                item["validation_roc_auc"],
-            ]
-            for name, item in ablation.items()
-        ]
-        ablation_section = "\n## Calendar ablation\n\n" + _table(
-            ["feature set", "validation Brier", "validation log loss", "validation ROC-AUC"], rows
-        )
     dataset_scope = (
         "includes it because `--evaluate-test` was used"
         if evaluation.evaluation_on_test
@@ -1369,7 +1354,6 @@ Candidate calibration method: `{evaluation.candidate_calibration_method}`; the f
 ### Train-split diagnostics (in-sample)
 
 {_table(["model", "Brier", "log loss", "ROC-AUC", "average precision", "positive rate"], candidate_train_rows)}
-{ablation_section}
 
 ### Climatology baseline
 
@@ -1484,7 +1468,6 @@ def write_report(
     config: dict[str, Any],
     *,
     runner: str,
-    ablation: dict[str, Any] | None = None,
     build_config: dict[str, Any] | None = None,
     runtime: dict[str, Any] | None = None,
 ) -> None:
@@ -1507,7 +1490,7 @@ def write_report(
         f"- Dataset digests: `{digests}`"
     )
     (out_dir / "report.md").write_text(
-        _report(stats, evaluation, spec, config, runner, ablation, provenance_lines),
+        _report(stats, evaluation, spec, config, runner, provenance_lines),
         encoding="utf-8",
     )
     payload = {
@@ -1520,8 +1503,6 @@ def write_report(
         "evaluation_on_test": evaluation.evaluation_on_test,
         "evaluation_split": evaluation.evaluation_split,
     }
-    if ablation is not None:
-        payload["ablation"] = ablation
     (out_dir / "metrics.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
@@ -1550,7 +1531,6 @@ def write_report(
         "candidates": evaluation.candidates,
         "metrics": evaluation.metrics,
         "bootstrap": evaluation.bootstrap,
-        "ablation": ablation,
         "runner": runner,
         "dropped_features": list(evaluation.dropped_features),
         "predictions": f"predictions/{evaluation.prediction_split}.parquet",

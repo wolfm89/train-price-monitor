@@ -1900,6 +1900,7 @@ def build_dataset(
             "version": 2,
             "features": list(spec.names),
             "candidate_feature": [],
+            "labels": [],
             "audit": [name for name in AUDIT_COLUMNS if name not in set(spec.names)],
             "grid": ["eligible", "check_at", "check_lag_h"],
         }
@@ -2053,7 +2054,8 @@ def build_dataset(
         "cli_argv": list(cli_argv or ()),
         "threads": threads,
         "duckdb_settings": _duckdb_settings(connection),
-        "feature_spec_sha256": hashlib.sha256(json.dumps(list(active_spec.names)).encode()).hexdigest(),
+        "feature_spec_sha256": hashlib.sha256(json.dumps(list(spec.names)).encode()).hexdigest(),
+        "active_feature_spec_sha256": hashlib.sha256(json.dumps(list(active_spec.names)).encode()).hexdigest(),
         "silver_build_id": source.build_id,
         "silver_manifest_sha256": source.manifest_sha256,
         "config_sha256": config.hash(),
@@ -2065,6 +2067,7 @@ def build_dataset(
         "analog_departures": {
             "enabled": bool(analog_offsets),
             "offsets_days": list(analog_offsets),
+            "configured_offsets_days": list(config.features.analog_departure_offsets_days),
             "study": study,
         },
         "column_roles": "column_roles.json",
