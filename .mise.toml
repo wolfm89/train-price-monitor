@@ -35,6 +35,22 @@ depends = ["//backend:dev"]
 description = "Start full stack with Docker Compose"
 run = "docker compose up"
 
+[tasks."serve:frontend"]
+description = "Serve the built frontend (low-footprint, no hot reload)"
+depends = ["//frontend:serve"]
+
+[tasks."serve:backend"]
+description = "Serve the compiled backend (low-footprint, no hot reload)"
+depends = ["//backend:serve"]
+
+[tasks.serve]
+description = "Serve built frontend and compiled backend (low memory, no hot reload)"
+# Build sequentially first: the builds are the cold-start memory peak. Then run
+# both servers concurrently even when MISE_JOBS=1, which would otherwise let the
+# first long-running `depends` block the second. `mise run -j 2` also propagates
+# a failing task's exit code and prefixes each server's output.
+run = "mise run //frontend:build:serve && mise run //backend:build:serve && mise run -j 2 //frontend:serve ::: //backend:serve"
+
 [tasks.build]
 description = "Build all modules"
 depends = ["//...:build"]

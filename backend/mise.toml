@@ -9,6 +9,18 @@ run = "npm run dev 2>&1 | tee /tmp/backend.log"
 LOCAL_DEV = "1"
 PORT = "4000"
 
+[tasks."build:serve"]
+description = "Build the backend bundle for the low-footprint serve mode (cached)"
+run = "npm run build"
+sources = ["src/**", "scripts/**", "package.json", "package-lock.json", "tsconfig.json"]
+outputs = ["dist/main.js", "dist/main.js.map"]
+
+[tasks.serve]
+description = "Run the compiled backend on :4000 (no rebuild/watch)"
+depends = ["build:serve"]
+run = "node --enable-source-maps dist/main.js"
+env = { LOCAL_DEV = "1", PORT = "4000", NODE_OPTIONS = "--max-old-space-size=384" }
+
 [tasks.codegen]
 description = "Generate GraphQL types from schema"
 run = "npm run codegen"

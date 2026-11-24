@@ -39,6 +39,7 @@ Do not commit `.env` files. The canonical variable reference is [configuration.m
 | ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Frontend only      | `mise run //frontend:dev`                                     | Vite on port 3000; API calls are same-origin and proxied to `VITE_DEV_BACKEND_URL` (default `http://127.0.0.1:4000`).                                                                                       |
 | Backend + frontend | `mise run //backend:dev` in one terminal, frontend in another | GraphQL on port 4000; S3/SQS/Cognito are the deployed resources from `env:local`.                                                                                                                           |
+| Low-footprint      | `mise run serve`                                              | Built frontend on port 3000 and compiled backend on port 4000; no watch/HMR.                                                                                                                                |
 | Docker Compose     | `mise run dev:docker`                                         | Frontend, backend and a Floci container. It reads `AWS_PROFILE`, `PROFILE_IMAGE_BUCKET_NAME` and `TPM_SQS_QUEUE_URL` from the shell or repo-root `.env`, not `backend/.env`, and publishes ports 3000/4000. |
 | Scraper on Floci   | see [scraper/README.md](../scraper/README.md)                 | Local DynamoDB/S3 and the scraper tasks.                                                                                                                                                                    |
 
@@ -69,6 +70,34 @@ Production builds read `REACT_APP_GRAPHQL_ENDPOINT` and `REACT_APP_COGNITO_*` as
 dev the client always calls `/graphql` and the dev server proxies it to `VITE_DEV_BACKEND_URL`, so
 the endpoint is not used there. The dev server accepts the unprefixed `COGNITO_*` names too; CI
 supplies the `REACT_APP_*` values.
+
+### Low-footprint preview mode
+
+For checking a built UI on a small VM, `mise run serve` builds both modules first and then runs the
+compiled backend and the static frontend without watchers:
+
+```bash
+mise run serve            # build both, then run both
+mise run serve:frontend   # frontend only
+mise run serve:backend    # backend only
+```
+
+Prerequisites: `mise run env:local` must have written the Cognito values, and ports 3000/4000 must
+be free (stop `//frontend:dev` / `//backend:dev` first). `vite preview` uses `--strictPort`, so a
+taken port fails instead of silently moving.
+
+The preview bundle is written to `frontend/build/preview`, leaving the deploy-consumed
+`frontend/build` untouched. It bakes in `REACT_APP_GRAPHQL_ENDPOINT=/`, so `vite preview` proxies
+`/graphql` to the backend. Preview runs in production mode, so the proxy target comes from
+`VITE_DEV_BACKEND_URL` in `frontend/.env` or the shell (default `http://127.0.0.1:4000`); a value in
+`.env.development` is ignored. The backend runs `dist/main.js` on port 4000. This uses roughly half
+the resident memory of the two dev servers.
+
+There is **no hot reload and no rebuild-on-save**: edits do not appear until you rerun the task. Both
+`//frontend:build:serve` and `//backend:build:serve` declare mise `sources` and `outputs`, so
+rerunning rebuilds only when their sources changed; `mise run --force //frontend:build:serve` (or
+`//backend:build:serve`) forces a rebuild. Ctrl-C stops both servers. Switch back to
+`mise run //frontend:dev` and `mise run //backend:dev` for watch mode.
 
 ## Checks
 

@@ -5,6 +5,31 @@ includes = ["../mise.tasks.toml"]
 description = "Start frontend dev server"
 run = "npm run dev 2>&1 | tee /tmp/frontend.log"
 
+[tasks."build:serve"]
+description = "Build the frontend for the low-footprint preview (GraphQL via the local proxy)"
+# Keep the preview artifact out of build/index.html, which the deploy task
+# consumes. A production build also empties build/, so this rebuilds afterwards.
+run = "REACT_APP_GRAPHQL_ENDPOINT=/ npm run build -- --outDir build/preview"
+sources = [
+  "src/**",
+  "!src/**/*.test.*",
+  "public/**",
+  "index.html",
+  "tsconfig.json",
+  "vite.config.ts",
+  "package.json",
+  "package-lock.json",
+  ".env",
+  ".env.*",
+]
+outputs = ["build/preview/index.html", "build/preview/assets"]
+
+[tasks.serve]
+description = "Serve the built frontend on :3000 (static, no HMR)"
+depends = ["build:serve"]
+run = "./node_modules/.bin/vite preview --outDir build/preview --host 0.0.0.0 --port 3000 --strictPort"
+env = { NODE_OPTIONS = "--max-old-space-size=384" }
+
 [tasks.test]
 run = "npm run test:ci"
 
