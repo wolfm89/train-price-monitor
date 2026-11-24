@@ -119,6 +119,7 @@ from tpm_analytics.training.study import (
     _stress_targets,
     _study_report,
     coverage_profile,
+    forward_analog_availability,
     mask_family,
     study_arms,
 )
@@ -440,6 +441,70 @@ def _analog_snapshot_values(source: Path, config_path: Path, out: Path) -> tuple
     return tuple(row)
 
 
+def test_forward_analog_availability_finds_the_d1_analog(tmp_path: Path) -> None:
+    source = tmp_path / "forward-silver.parquet"
+    _write_silver(source, _analog_rows())
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    config = load_config(config_path)
+    out = tmp_path / "forward-dataset"
+    connection = duckdb.connect()
+    try:
+        build_dataset(
+            connection,
+            SourceSpec(glob=str(source), label="forward", build_id="forward", manifest_sha256=None),
+            config,
+            out,
+            run_id="forward",
+        )
+        row = connection.execute(
+            """
+            SELECT series_key, route_id, service_class, departure_planned, departure_date,
+                   hours_to_departure, price_eur, snapshot_at
+            FROM read_parquet(?)
+            WHERE route_id = 'analog' AND snapshot_at = TIMESTAMP '2026-07-08 10:00:00'
+            """,
+            [str(out / "dataset" / "train.parquet")],
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    forward_path = tmp_path / "forward.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "series_key": [row[0]],
+                "snapshot_at": [row[7]],
+                "bin_regime": ["12h"],
+                "bin_index": [4],
+                "route_id": [row[1]],
+                "service_class": [row[2]],
+                "departure_planned": [row[3]],
+                "departure_date": [row[4]],
+                "hours_to_departure": [row[5]],
+                "price_eur": [row[6]],
+                "ttd_band": ["1-3d"],
+                "observation_era": ["forward"],
+            }
+        ),
+        forward_path,
+    )
+    connection = duckdb.connect()
+    try:
+        availability = forward_analog_availability(
+            connection, forward_path, f"read_parquet('{source.as_posix()}')", (1, 7)
+        )
+    finally:
+        connection.close()
+    assert availability["rows"] == 1
+    assert availability["bands"][0]["band"] == "1-3d"
+    assert availability["bands"][0]["d1_price"] == pytest.approx(1.0)
+    assert availability["bands"][0]["d1_rise"] == pytest.approx(1.0)
+
+
 def test_study_build_marks_calendar_and_analog_columns_as_candidates(tmp_path: Path) -> None:
     source = tmp_path / "study-silver.parquet"
     _write_silver(source, _analog_rows())
@@ -538,6 +603,39 @@ def test_analog_features_ignore_other_trains_and_departure_shifts(tmp_path: Path
     values = _analog_snapshot_values(source, config_path, tmp_path / "wrong")
     assert values[0] == pytest.approx(100.0 / 80.0)
     assert values[2] == pytest.approx(120.0 / 80.0)
+
+
+def test_analog_lead_window_boundary(tmp_path: Path) -> None:
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    def build_with(extra_observed: datetime, label: str) -> tuple[Any, ...]:
+        rows = [
+            row
+            for row in _analog_rows()
+            if not (row["route_id"] == "analog" and row["departure_planned"] == datetime(2026, 7, 9, 10, 0))
+        ]
+        rows.append(
+            _row(
+                observed_at=extra_observed,
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=85.0,
+            )
+        )
+        source = tmp_path / f"{label}.parquet"
+        _write_silver(source, rows)
+        return _analog_snapshot_values(source, config_path, tmp_path / label)
+
+    at_boundary = build_with(datetime(2026, 7, 7, 22, 0), "boundary")
+    assert at_boundary[0] == pytest.approx(100.0 / 85.0)
+    assert at_boundary[1] == pytest.approx(-12.0)
+    outside = build_with(datetime(2026, 7, 8, 0, 0), "outside")
+    assert outside[0] is None
 
 
 def test_analog_tie_break_prefers_later_lead(tmp_path: Path) -> None:

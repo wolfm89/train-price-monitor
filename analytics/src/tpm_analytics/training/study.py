@@ -459,22 +459,32 @@ def forward_analog_availability(
             f.hours_to_departure,
             f.price_eur,
             f.ttd_band,
-            f.observation_era,
-            t.train_number
+            f.observation_era
         FROM read_parquet('{path}') f
-        LEFT JOIN (
-            SELECT {series_key_sql()} AS series_key, observed_at, min(train_number) AS train_number
-            FROM {source_sql}
-            WHERE schema_version = 1
-              AND (route_id, departure_date) IN (
-                  SELECT DISTINCT route_id, departure_date FROM study_forward
-              )
-            GROUP BY 1, 2
-        ) t
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE study_forward_train AS
+        SELECT {series_key_sql()} AS series_key, observed_at, min(train_number) AS train_number
+        FROM {source_sql}
+        WHERE schema_version = 1
+          AND (route_id, departure_date) IN (
+              SELECT DISTINCT route_id, departure_date FROM study_forward
+          )
+        GROUP BY 1, 2
+        """
+    )
+    connection.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE study_forward_full AS
+        SELECT f.*, t.train_number
+        FROM study_forward f
+        LEFT JOIN study_forward_train t
           ON t.series_key = f.series_key AND t.observed_at = f.snapshot_at
         """
     )
-    create_analog_features(connection, source_sql, "study_forward", offsets)
+    create_analog_features(connection, source_sql, "study_forward_full", offsets)
     price = " AND ".join(f"a.analog_d{offset}_price_ratio IS NOT NULL" for offset in offsets)
     rise = " AND ".join(f"a.analog_d{offset}_next_ratio IS NOT NULL" for offset in offsets)
     extra = ""
@@ -493,7 +503,7 @@ def forward_analog_availability(
             count(*) AS rows,
             avg(CASE WHEN {price} THEN 1.0 ELSE 0.0 END) AS price,
             avg(CASE WHEN {rise} THEN 1.0 ELSE 0.0 END) AS rise{extra}
-        FROM study_forward f
+        FROM study_forward_full f
         JOIN analog_features a USING (series_key, snapshot_at, bin_regime, bin_index)
         GROUP BY f.ttd_band
         ORDER BY f.ttd_band
@@ -521,7 +531,7 @@ def forward_analog_availability(
         "forward_path": str(forward_path),
         "forward_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
         "rows": sum(int(row[1]) for row in rows),
-        "bands": sorted(bands, key=lambda item: _band_order(item["band"])),
+        "bands": sorted(bands, key=lambda item: _band_order(str(item["band"]))),
     }
 
 
@@ -549,9 +559,10 @@ def _stress_targets(
         band = str(row["band"])
         if band in targets or band == "unknown":
             continue
-        share = float(row["share"])
+        share_v1 = row.get("share_v1")
+        share = float(share_v1 if share_v1 is not None else row["share"])
         targets[band] = {"price": share, "rise": share}
-        sources[band] = "coverage_profile"
+        sources[band] = "coverage_profile_v1" if share_v1 is not None else "coverage_profile"
     if not sources:
         return {}, "none", {}
     if all(source == "forward_set" for source in sources.values()):
