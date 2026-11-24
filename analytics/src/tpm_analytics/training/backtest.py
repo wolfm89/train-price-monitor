@@ -1799,7 +1799,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     item["headroom_pct"],
                     item["ttd_band"],
                     _yes(item.get("operating_point")),
-                    _range(item.get("thresholds")),
+                    _value_range(item.get("thresholds")),
                     f"{item['qualifying_folds']}/{item['folds']}",
                     item["calibration_alerts"],
                     _fmt(item.get("calibration_precision")),
@@ -1838,7 +1838,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     item["headroom_pct"],
                     item["ttd_band"],
                     _yes(item.get("operating_point")),
-                    _range(item.get("thresholds")),
+                    _value_range(item.get("thresholds")),
                     f"{item['qualifying_folds']}/{item['folds']}",
                     item["calibration_alerts"],
                     _fmt(item.get("calibration_precision")),
@@ -2491,7 +2491,7 @@ def _ci(values: Any, digits: int = 4) -> str:
     return f"{_fmt(values[0], digits)}..{_fmt(values[1], digits)}"
 
 
-def _range(values: Any, digits: int = 4) -> str:
+def _value_range(values: Any, digits: int = 4) -> str:
     """Format the minimum and maximum of a value list, whatever its length."""
     if not isinstance(values, list) or not values:
         return "—"
