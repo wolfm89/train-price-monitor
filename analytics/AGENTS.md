@@ -22,7 +22,7 @@ uv sync --group train
 uv run --group train pytest
 uv run --group train ty check
 mise run //analytics:train -- --source .data/silver/<build>
-mise run //analytics:train:ablation -- --source .data/silver/<build>
+mise run //analytics:train:study -- --source .data/silver/<build>
 ```
 
 The `train` group adds numpy, scikit-learn, scipy, joblib and pyarrow. CI installs it for the
@@ -118,7 +118,7 @@ v2-only and mixed-schema input.
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
-  for backtest scoring. `--ablation` requires `config/training-static.json`. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
+  for backtest scoring. `--feature-study` builds the superset panel and runs the fixed development-fold arms; it refuses `--evaluate-test` and never reads an evaluation or sparse-era fold. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
   checkpoints hold report state plus the fitted model and calibrator that permutation importance
   needs, never the train or calibration panels; verify `pkl_sha256` before reuse. The hash ships
   beside the file, so it proves integrity, not authenticity. A cache-free 5 % backtest peaked at
@@ -133,6 +133,20 @@ v2-only and mixed-schema input.
   `base_rate < logistic < hist_gradient_boosting` and
   `sigmoid = temperature < isotonic < covariate`; climatology is a reference row, never selectable.
   The full table goes to `recipe.json`; only the rule settings enter the recipe hash.
+- **Feature study (PR 6b).** The reproducible study is `--feature-study`; the arms are `analog_d1`
+  vs base, `analog_d1 + analog_d7` vs `analog_d1`, and the three calendar sets vs base. Every arm
+  refits the frozen HGB + temperature recipe (early stopping, no calibrator re-selection). The I1
+  switch is `features.analog_departures` (`enabled: false` by default, offsets 1 and 7); when on,
+  the builder reads analog route-days from full v1 silver, not the sampled panel. The definition is
+  causal and pre-registered: same route/class/first train, planned departure within 15 minutes on
+  `D - k`, observation at or before the snapshot, price analog at the closest lead within 12 h, rise
+  analog whose own next-day point (20-28 h, closest to +24 h) is also at or before the snapshot.
+  Keep a family only if the PR 6 replacement rule accepts it at full availability **and** the
+  coverage stress test (columns masked to the measured availability by band) does not make it
+  significantly worse overall or at 1-7 days. The grid-level coverage profile is an upper bound;
+  prefer the actual forward-set availability. Rerun when 1-7 day coverage reaches 80 % or after
+  four weeks of lead-phase paired scrapes. `candidate_feature` marks study-only columns in
+  `column_roles.json`.
 - **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on
   logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom)). The covariate
   calibrator must be monotone in score in every band and non-increasing in headroom; otherwise it
@@ -206,7 +220,7 @@ v2-only and mixed-schema input.
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
-  and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
+  and `--feature-study` report development folds only. `--evaluate-test` gates the test label and model tables;
   journey disappearance is corpus-level and includes test departures. `profile.json` and
   `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
 - **Journey identity.** The series key follows the itinerary (route, first train, class,

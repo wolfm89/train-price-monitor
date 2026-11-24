@@ -370,7 +370,7 @@ uploaded and no AWS resource is created. Downloaded silver belongs under the ign
 uv sync --group train
 mise run //analytics:train -- --source .data/silver/<build> --profile   # profile only
 mise run //analytics:train -- --source .data/silver/<build>
-mise run //analytics:train:ablation -- --source .data/silver/<build>
+mise run //analytics:train:study -- --source .data/silver/<build> --forward-availability artifacts/<run>/forward_input.parquet
 ```
 
 `--source` accepts an S3 pointer, a Parquet glob, a single file, a local directory or a local
@@ -452,9 +452,9 @@ booking now, each with a departure-date cluster interval, a random alert at the 
 perfect-breach oracles, perfect timing against booking now and the mean cost of waiting. Near
 departure the policy is roughly break-even against booking now at low headroom and loses several
 euros at 20-30 % headroom; the oracle columns are point estimates. Grouped permutation importance
-covers up to seven families on the pooled development test blocks (the calendar family is empty
-when `calendar.feature_set` is `none`); the `limit` family is the label's own headroom parameter,
-not a market driver. The sample is allocated equally across all development departure dates, so
+covers the configured feature families on the pooled development test blocks (the calendar family
+is empty when `calendar.feature_set` is `none`; the analog families are present only when the I1
+switch is on); the `limit` family is the label's own headroom parameter, not a market driver. The sample is allocated equally across all development departure dates, so
 the mean is date-weighted; permutation is global across dates. The date spread is reported next to
 the repeat spread; within-date permutation is a PR 7 refinement.
 
@@ -464,8 +464,28 @@ all-route build exceeds the host memory ceiling; a later sample-scale run raises
 `--score-forward PATH` fits the 14 September forward fold, scores that Parquet and writes
 `forward_predictions.parquet` plus `forward_smoke.json`; it computes no labels or metrics.
 
-`--ablation` stays validation/static-only and requires `config/training-static.json`; it compares
-the four calendar sets. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
+`--feature-study` is the reproducible feature-family study. It builds one dataset with every
+candidate column (`calendar.feature_set = full` plus the I1 analog columns), fits the frozen
+HGB + temperature recipe on the development folds only and refuses `--evaluate-test`. The fixed
+arms are `analog_d1` vs base, `analog_d1 + analog_d7` vs `analog_d1`, and
+`calendar_public`, `calendar_public_school` and `calendar_full` vs base. It writes
+`feature_study.json` and `feature_study.md` with paired overall and per-band intervals,
+availability by band/era, the coverage profile and a decision per family.
+
+The I1 analog switch is `features.analog_departures` (`enabled: false`, `offsets_days: [1, 7]` by
+default) and stays off. When enabled, the builder reads the analog route-days from the **full v1
+silver**, not the sampled panel. The analog is the same route, class and first-train number on
+`D - k` with a planned departure within 15 minutes, observed at or before the snapshot. The price
+analog is the closest lead within 12 hours; the rise analog is the closest-lead observation whose
+own next-day point (20-28 hours later, closest to +24 hours) is also at or before the snapshot.
+The feature is exactly causal; tie-breaks are closest lead, larger lead, closest departure minute,
+lowest price, then series key. `--feature-study` forces the switch on for the study build; the
+coverage profile measures the D-1 scrape grid over the latest 28 days of silver. A family is kept
+only if it passes the PR 6 replacement rule at full availability **and** the coverage stress test
+does not make it significantly worse overall or at 1-7 days. The stress target prefers the actual
+availability measured on `--forward-availability`; the grid-level profile is an upper bound.
+Rerun the study when the 1-7 day coverage reaches 80 % or after four weeks of lead-phase paired
+scrapes. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
 matching dataset build (default `artifacts/.cache/datasets`); reuse is allowed only on a clean tree,
 verifies every split hash and records the reuse key. Pass `--no-dataset-cache` for an independent
 build, and note that two clean builds are only independent when the dataset cache is disabled or

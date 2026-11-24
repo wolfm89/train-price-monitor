@@ -34,6 +34,7 @@ from tpm_analytics.training.model import (
     ModelError,
     TabularData,
     _ttd_array,
+    concat_tabular,
     fit_calibrator,
     fit_candidate,
 )
@@ -135,19 +136,21 @@ def _pooled_scores(
     return scores, fitted
 
 
-def _pooled_test(panel: TabularData, config: TrainingConfig) -> tuple[Array, Array, Array]:
-    """Return the pooled development test labels, departure dates and TTD bands."""
+def _pooled_test(panel: TabularData, config: TrainingConfig) -> tuple[Array, Array, Array, TabularData]:
+    """Return the pooled development test labels, dates, bands and panel."""
     folds = development_folds([fold for fold in config.protocol.cutoffs if fold.role == "development"])
     labels: list[Array] = []
     clusters: list[Array] = []
     bands: list[Array] = []
+    parts: list[TabularData] = []
     for fold in folds:
         masks = fold_masks(panel, fold, config.protocol)
         test = panel.subset(masks.test)
+        parts.append(test)
         labels.append(test.y)
         clusters.append(np.asarray(test.departure_date, dtype=str))
         bands.append(_ttd_array(test))
-    return np.concatenate(labels), np.concatenate(clusters), np.concatenate(bands)
+    return np.concatenate(labels), np.concatenate(clusters), np.concatenate(bands), concat_tabular(parts)
 
 
 def _interval(
@@ -298,7 +301,7 @@ def _masked_scores(
     config: TrainingConfig,
 ) -> Array:
     """Score the already-fitted arm on test blocks masked to the target availability."""
-    names = tuple(arm.features)
+    names = tuple(name for name in arm.features if name.startswith("analog_"))
     scores: list[Array] = []
     for fold_index, (model, calibrator, test, spec) in enumerate(fitted):
         bands = _ttd_array(test)
@@ -343,9 +346,14 @@ def coverage_profile(
         """
     )
     connection.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP TABLE coverage_grid AS
-        SELECT DISTINCT route_id, departure_date, observed_at FROM coverage_src
+        SELECT DISTINCT route_id, departure_date, observed_at
+        FROM {source_sql}
+        WHERE observed_at BETWEEN TIMESTAMP '{start_at.isoformat(sep=" ")}'
+                               AND TIMESTAMP '{end_at.isoformat(sep=" ")}'
+          AND observed_at < departure_planned
+          AND schema_version IN (1, 2)
         """
     )
     rows = connection.execute(
@@ -552,7 +560,7 @@ def run_feature_study(
     """Run the pre-registered feature study and return its JSON-serialisable result."""
     panel_spec = study_feature_spec(config.features.analog_departure_offsets_days)
     arms = study_arms(tuple(config.features.analog_departure_offsets_days))
-    labels, clusters, bands = _pooled_test(panel, config)
+    labels, clusters, bands, test_panel = _pooled_test(panel, config)
     raw_scores, fitted = _pooled_scores(panel, config, panel_spec, arms)
     scores = {name: np.concatenate(parts) for name, parts in raw_scores.items()}
     replicates = config.report.bootstrap_replicates
@@ -637,7 +645,7 @@ def run_feature_study(
         families.append(item)
         decisions[arm.name] = item["decision"]
     availability = {
-        "panel": _availability_rows(panel, arms, panel_spec, source="development_test"),
+        "panel": _availability_rows(test_panel, arms, panel_spec, source="development_test"),
         "coverage": coverage.get("bands", []),
         "forward": forward,
         "coverage_window": {
@@ -654,11 +662,27 @@ def run_feature_study(
             "replicates": replicates,
             "seed": seed,
             "cluster": "departure_date",
-            "recipe": {"model": "hist_gradient_boosting", "calibration": "temperature"},
+            "recipe": {
+                "model": "hist_gradient_boosting",
+                "calibration": "temperature",
+                "model_settings": {
+                    "max_iter": config.model.max_iter,
+                    "learning_rate": config.model.learning_rate,
+                    "max_leaf_nodes": config.model.max_leaf_nodes,
+                    "random_state": config.model.random_state,
+                },
+                "calibration_folds": config.calibration.folds,
+                "calibration_min_positives": config.calibration.min_positives,
+            },
             "stress_target_source": target_source,
         },
         "coverage": coverage,
-        "stress": {"target_source": target_source, "targets": targets, "seed_offset": STRESS_SEED_OFFSET},
+        "stress": {
+            "target_source": target_source,
+            "targets": targets,
+            "seed": config.seed,
+            "seed_offset": STRESS_SEED_OFFSET,
+        },
         "families": families,
         "decisions": decisions,
         "availability": availability,
