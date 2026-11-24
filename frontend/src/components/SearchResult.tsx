@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
   Typography,
   Button,
@@ -15,8 +15,10 @@ import {
 import { Train as TrainIcon } from '@mui/icons-material';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
-import { MonitorJourney } from '../api/journey';
+import { Link } from 'react-router-dom';
 import { useMutation } from 'urql';
+
+import { MonitorJourney } from '../api/journey';
 import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
@@ -43,6 +45,22 @@ interface Props {
 
 const MONO_FONT = '"IBM Plex Mono", monospace';
 
+// Both action states share these styles and a fixed minWidth, so the
+// "+ Watch" -> "View ↗" swap keeps the right-hand column at 153px
+// (68px price + 14px gap + 71px button). A wider button would grow that column
+// and shift the centred route-line icon on rows that have a price.
+const ACTION_BUTTON_SX = {
+  minWidth: 71,
+  border: '1.5px solid',
+  borderRadius: '7px',
+  px: 1.5,
+  py: 0.5,
+  fontSize: 12,
+  fontWeight: 700,
+  textTransform: 'none',
+  whiteSpace: 'nowrap',
+} as const;
+
 const SearchResult: React.FC<Props> = ({
   searchResult,
   searchOptions,
@@ -57,6 +75,25 @@ const SearchResult: React.FC<Props> = ({
   const { user } = useContext(AuthContext);
   const [, monitorJourney] = useMutation(MonitorJourney);
   const [loading, setLoading] = useState(false);
+  // refreshToken -> JourneyMonitor id, so a row that was just watched can link
+  // straight to its ticket at /journeys#<id>. Keyed by token because it is
+  // unique per search result and survives in-app Earlier/Later paging while this
+  // component stays mounted. A re-search or reload remounts SearchResult and
+  // resets the map, so the row offers "+ Watch" again.
+  const [addedJourneyIds, setAddedJourneyIds] = useState<Record<string, string>>({});
+  // The row's button is unmounted and replaced by the link, so move focus to the
+  // link once the dialog's focus trap has released it. Otherwise a keyboard user
+  // is dropped back to the top of the page after confirming.
+  const [focusToken, setFocusToken] = useState<string | null>(null);
+  const addedLinkRefs = useRef<Record<string, HTMLElement | null>>({});
+
+  useEffect(() => {
+    if (!focusToken) return;
+    const timeout = window.setTimeout(() => {
+      addedLinkRefs.current[focusToken]?.focus();
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [focusToken]);
 
   const handleWatchClick = (journey: Journey) => {
     setSelectedJourney(journey);
@@ -93,6 +130,16 @@ const SearchResult: React.FC<Props> = ({
         if (result.error) {
           addAlert(result.error.message, AlertSeverity.Error);
         } else {
+          const journeyId = result.data?.monitorJourney?.id;
+          if (!journeyId) {
+            // A success response without an id cannot produce a deeplink. Treat
+            // it as a failure instead of claiming success and leaving "+ Watch"
+            // active, which would invite a duplicate.
+            addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
+            return;
+          }
+          setAddedJourneyIds((prev) => ({ ...prev, [refreshToken]: journeyId }));
+          setFocusToken(refreshToken);
           addAlert('Journey successfully added to watchlist!', AlertSeverity.Success);
         }
       })
@@ -267,37 +314,50 @@ const SearchResult: React.FC<Props> = ({
                 </Typography>
               </Box>
 
-              {result.price != null && (
-                <Button
-                  size="small"
-                  disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
-                  aria-busy={loading && selectedJourney?.refreshToken === result.refreshToken}
-                  onClick={() => handleWatchClick(result)}
-                  sx={{
-                    bgcolor: 'secondary.light',
-                    color: 'secondary.dark',
-                    border: '1.5px solid',
-                    borderColor: 'secondary.main',
-                    borderRadius: '7px',
-                    px: 1.5,
-                    py: 0.5,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    textTransform: 'none',
-                    whiteSpace: 'nowrap',
-                    '&:hover': { bgcolor: 'secondary.dark', color: '#fff' },
-                  }}
-                >
-                  {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                    <>
-                      <CircularProgress size={14} color="inherit" />
-                      Adding…
-                    </>
-                  ) : (
-                    '+ Watch'
-                  )}
-                </Button>
-              )}
+              {result.price != null &&
+                (addedJourneyIds[result.refreshToken] ? (
+                  <Button
+                    component={Link}
+                    to={`/journeys#${addedJourneyIds[result.refreshToken]}`}
+                    size="small"
+                    ref={(el) => {
+                      addedLinkRefs.current[result.refreshToken] = el;
+                    }}
+                    aria-label={`View the ${formatTime(result.departure)}\u2013${formatTime(result.arrival)} ${result.means.join(' + ')} connection in your watchlist`}
+                    sx={{
+                      ...ACTION_BUTTON_SX,
+                      bgcolor: 'success.main',
+                      color: '#fff',
+                      borderColor: 'success.main',
+                      '&:hover': { bgcolor: 'success.dark' },
+                    }}
+                  >
+                    View {'\u2197'}
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
+                    aria-busy={loading && selectedJourney?.refreshToken === result.refreshToken}
+                    onClick={() => handleWatchClick(result)}
+                    sx={{
+                      ...ACTION_BUTTON_SX,
+                      bgcolor: 'secondary.light',
+                      color: 'secondary.dark',
+                      borderColor: 'secondary.main',
+                      '&:hover': { bgcolor: 'secondary.dark', color: '#fff' },
+                    }}
+                  >
+                    {loading && selectedJourney?.refreshToken === result.refreshToken ? (
+                      <>
+                        <CircularProgress size={14} color="inherit" />
+                        Adding…
+                      </>
+                    ) : (
+                      '+ Watch'
+                    )}
+                  </Button>
+                ))}
             </Box>
           </Paper>
         ))}
