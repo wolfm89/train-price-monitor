@@ -56,7 +56,7 @@ Shared by the backend and scraper.
 
 | Variable                       | Scope             | Default / deployed                                      | Set by          | Purpose                                                                       |
 | ------------------------------ | ----------------- | ------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
-| `DB_MIN_GAP_MS`                | Backend + scraper | `1000` code; API `300`, refresher `1500`, poller `2500` | CDK / developer | Minimum spacing between request starts.                                       |
+| `DB_MIN_GAP_MS`                | Backend + scraper | `1000` code; API `300`, refresher `1500`, poller `3500` | CDK / developer | Minimum spacing between request starts.                                       |
 | `DB_MAX_IN_FLIGHT`             | Backend + scraper | `2`                                                     | CDK / developer | Concurrent DB requests.                                                       |
 | `DB_MAX_ATTEMPTS`              | Backend + scraper | `2`; API `1`                                            | CDK / developer | Direct attempts per request.                                                  |
 | `DB_RETRY_BACKOFF_MS`          | Backend + scraper | `3000`                                                  | developer       | Pause before a retry, multiplied by the attempt number.                       |

@@ -41,7 +41,7 @@ describe('ScraperStack', () => {
       Environment: {
         Variables: Match.objectLike({
           SCRAPER_BATCH_SIZE: String(SCRAPER_CONFIG.batch_size),
-          DB_MIN_GAP_MS: '2500',
+          DB_MIN_GAP_MS: '3500',
           DB_MAX_IN_FLIGHT: '2',
         }),
       },

@@ -37,7 +37,7 @@ human-only AWS deploy (it builds the bundles first); the Floci deploy below is a
 
 ## DB pacing and throttling
 
-- The poller runs at 2.5 s between request starts with at most 2 in flight, in a batch of 25 targets
+- The poller runs at 3.5 s between request starts with at most 2 in flight, in a batch of 25 targets
   (50 calls) every 15 minutes. That is about 2,400 scrapes a day against the ~1,654 the TTD intervals
   need, so the backlog drains in about a week.
 - Raise `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log show

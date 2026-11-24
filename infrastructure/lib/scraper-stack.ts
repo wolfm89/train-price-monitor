@@ -110,7 +110,7 @@ export class ScraperStack extends cdk.Stack {
     // transport is pure Node (node:https) with rotating TLS profiles; see
     // ../../shared/db-fetch.ts. x86_64 to match the Lambda architecture.
     //
-    // Sizing: the work is network-bound (a paced call every ~2.5 s), so memory
+    // Sizing: the work is network-bound (a paced call every ~3.5 s), so memory
     // only needs to hold the route catalog, the AWS SDK and one batch of Parquet
     // rows.
     // -------------------------------------------------------------------------
@@ -119,9 +119,11 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
       memorySize: SCRAPER_CONFIG.poller_memory_mib,
-      // A 25-target batch is ~50 paced calls (~125 s), and the p90 run is ~190 s.
-      // ABORT_THRESHOLD_MS in scraper/src/poller.ts (250 s) leaves 50 s for the
-      // current target's worst case (~43 s) and the final S3 upload.
+      // A 25-target batch is ~50 paced calls (~175 s at 3.5 s spacing). The
+      // observed maximum at 2.5 s was ~146 s; project ~195 s here. The
+      // ABORT_THRESHOLD_MS guard in scraper/src/poller.ts (250 s) is checked
+      // before a target, leaving the current target and the final S3 upload
+      // inside the timeout.
       timeout: cdk.Duration.seconds(SCRAPER_CONFIG.poller_timeout_seconds),
       logGroup: pollerLogGroup,
       environment: {
@@ -135,14 +137,17 @@ export class ScraperStack extends cdk.Stack {
         SCRAPER_BATCH_SIZE: String(POLLER_BATCH_SIZE),
         // Spacing and concurrency of DB calls (see shared/db-fetch.ts). Measured:
         // 6 parallel calls were fine, a 60-call burst got the IP throttled for
-        // minutes, 24 calls one at a time with 2.5 s gaps all succeeded.
-        DB_MIN_GAP_MS: '2500',
+        // minutes, 24 calls one at a time with 2.5 s gaps passed. The Navigator
+        // API later throttled sustained 50-call batches at 2.5 s, so the poller
+        // now uses 3.5 s.
+        DB_MIN_GAP_MS: '3500',
         DB_MAX_IN_FLIGHT: '2',
         // Start with the profile that is currently accepted; the transport still
         // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
         DB_TLS_PROFILE: 'tls13',
-        // One target makes two calls in parallel; 45 s covers two 20 s attempts
-        // plus backoff, and 250 s guard + 45 s + upload stays under the timeout.
+        // One target makes two calls staggered by DB_MIN_GAP_MS; 45 s is the
+        // per-request budget. The poller aborts at its threshold before the
+        // Lambda timeout.
         DB_TOTAL_BUDGET_MS: '45000',
         // No Decodo key on purpose: the poller is bulk work and must never spend
         // the free allowance. When DB throttles it stops the batch instead.

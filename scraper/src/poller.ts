@@ -27,21 +27,22 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * Max targets per invocation. Each target = 2 API calls (2nd and 1st class).
  *
  * Tunable via env so the cadence/batch trade-off can be adjusted without a code
- * change. DB is reached directly over HTTP with a Firefox-imitating client (see
- * ../../shared/db-fetch.ts), which spaces requests (~2.5 s apart in this function,
- * see the CDK stack) because bursts get the Lambda's IP throttled for minutes.
+ * change. DB is reached directly over HTTP with a browser-like TLS client (see
+ * ../../shared/db-fetch.ts), which spaces requests (~3.5 s apart in this function,
+ * see the CDK stack) because sustained traffic gets the Lambda's IP throttled.
  *
- * 25 targets is ~50 calls, about 125 s. The TTD intervals need ~1,654 scrapes
- * a day for a 60-day horizon; 25 every 15 minutes is ~2,400, so the schedule is
- * met and the backlog drains. Raise it only while the `transport` counters in the
- * "Poller finished" log stay clean.
+ * 25 targets is ~50 calls, about 195 s including pacing and request overhead. The
+ * TTD intervals need ~1,654 scrapes a day for a 60-day horizon; 25 every 15
+ * minutes is ~2,400, so the schedule is met and the backlog drains. Raise it only
+ * while the `transport` counters in the "Poller finished" log stay clean.
  */
 const scraperConfig = runtimeConfig.scraper;
 const BRONZE_PREFIX = runtimeConfig.bronze_prefix;
 const BATCH_SIZE = positiveIntFromEnv('SCRAPER_BATCH_SIZE', scraperConfig.batch_size, logger);
-/** Abort if elapsed exceeds this many milliseconds. Must stay below the function
- * timeout with room for the current target (two parallel calls, each up to two
- * 20 s attempts plus backoff ~= 43 s) and the final S3 upload: 250 + 43 + 1 < 300. */
+/** Abort if elapsed exceeds this many milliseconds. The guard is checked before
+ * a target; the current target (two calls staggered by DB_MIN_GAP_MS, each up to
+ * two 20 s attempts plus backoff) and the final S3 upload must fit in the
+ * remaining time before the Lambda timeout. */
 const ABORT_THRESHOLD_MS = scraperConfig.abort_threshold_ms;
 /**
  * Extra rows to read per tier when selecting a batch, so a run of expired rows
