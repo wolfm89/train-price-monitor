@@ -42,6 +42,9 @@ Vite also accepts the unprefixed `COGNITO_*` names. See
 The API client attaches the Cognito JWT. The watchlist reads the cached journey snapshot, so it does
 not call DB Vendo while rendering. The UI distinguishes fares at/below the limit from fares above it.
 
+After a search result is added to the watchlist, its **+ Watch** button becomes a **View ↗** link to
+that journey's ticket at `/journeys#<id>`, so the user can jump straight to the new entry.
+
 ## Tests
 
 Vitest + Testing Library. Tests cover API query variables, pagination, profile/data deletion helpers
