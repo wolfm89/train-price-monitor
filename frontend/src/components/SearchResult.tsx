@@ -112,6 +112,22 @@ const SearchResult: React.FC<Props> = ({
 
   const isPending = (refreshToken: string) => pendingToken === refreshToken;
 
+  // Validate while the user is still typing, but only after a short pause so
+  // intermediate values ("4" on the way to "42.50") do not flag every keystroke.
+  useEffect(() => {
+    if (!openModal) return undefined;
+    if (limitPrice.trim() === '') {
+      setLimitError(false);
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      const parsed = parseLimitPrice(limitPrice);
+      setLimitError(!Number.isFinite(parsed) || parsed <= (selectedJourney?.price ?? 0));
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [limitPrice, openModal, selectedJourney?.price]);
+
   const handleWatchClick = (journey: Journey) => {
     setSelectedJourney(journey);
     setLimitError(false);

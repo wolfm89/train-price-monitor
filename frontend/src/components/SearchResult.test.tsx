@@ -171,6 +171,21 @@ describe('SearchResult watch action', () => {
     await waitFor(() => expect(mockMonitor).toHaveBeenCalledWith(expect.objectContaining({ limitPrice: 42.5 })));
   });
 
+  it('validates live while the field is still focused', async () => {
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+    input.focus();
+
+    fireEvent.change(input, { target: { value: '10' } });
+    await waitFor(() => expect(screen.getByText(/Enter an amount above €42/)).toBeInTheDocument());
+    expect(input).toHaveFocus();
+
+    fireEvent.change(input, { target: { value: '80' } });
+    await waitFor(() => expect(screen.queryByText(/Enter an amount above €42/)).not.toBeInTheDocument());
+    expect(input).toHaveFocus();
+  });
+
   it('submits with Enter once the amount is valid', async () => {
     mockMonitor.mockResolvedValue({ data: { monitorJourney: { id: 'jm-3' } } });
 
