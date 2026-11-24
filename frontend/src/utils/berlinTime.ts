@@ -63,6 +63,30 @@ function wallClockMatches(instant: Date, expected: WallClock): boolean {
   );
 }
 
+function pad2(value: number): string {
+  return value.toString().padStart(2, '0');
+}
+
+/**
+ * Formats an instant as a Berlin wall-clock timestamp in the form
+ * `YYYY-MM-DDTHH:mm:ss`.
+ *
+ * DB's booking deep links expect local German time without a timezone suffix,
+ * so this is the inverse of {@link berlinWallTimeToDate}: it takes the UTC
+ * instant we store and renders the clock a traveller sees in Germany.
+ * Returns `''` for an invalid date.
+ */
+export function formatBerlinWallClock(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const wallClock = wallClockInBerlin(date);
+  return (
+    `${wallClock.year}-${pad2(wallClock.month)}-${pad2(wallClock.day)}` +
+    `T${pad2(wallClock.hour)}:${pad2(wallClock.minute)}:${pad2(wallClock.second)}`
+  );
+}
+
 /**
  * Interprets a `YYYY-MM-DD` day and an `HH:MM` time as Berlin wall-clock time
  * and returns the matching instant.

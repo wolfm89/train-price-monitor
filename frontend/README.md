@@ -45,6 +45,10 @@ not call DB Vendo while rendering. The UI distinguishes fares at/below the limit
 After a search result is added to the watchlist, its **+ Watch** button becomes a **View ↗** link to
 that journey's ticket at `/journeys#<id>`, so the user can jump straight to the new entry.
 
+Each watchlist ticket also has a **Buy ticket on bahn.de** footer link. It is built entirely in the
+browser from the cached snapshot (origin, destination, departure, class and D-Ticket flag), so it
+makes no backend call and sends nothing to DB until the user clicks it.
+
 ## Tests
 
 Vitest + Testing Library. Tests cover API query variables, pagination, profile/data deletion helpers

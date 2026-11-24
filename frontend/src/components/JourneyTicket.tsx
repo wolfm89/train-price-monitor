@@ -1,13 +1,15 @@
-import React from 'react';
-import { Box, Chip, CircularProgress, IconButton, Paper, Typography, Theme } from '@mui/material';
+import React, { useMemo } from 'react';
+import { Box, Chip, CircularProgress, IconButton, Link, Paper, Typography, Theme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PedalBikeIcon from '@mui/icons-material/PedalBike';
 import TrainIcon from '@mui/icons-material/Train';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
+import { buildBahnDeTicketUrl } from '../utils/bahnLink';
 import { formatCurrency, formatDate, formatDuration, formatTime } from '../utils/format';
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,8 @@ export interface Journey {
   unavailable: boolean;
   from?: string | null;
   to?: string | null;
+  fromId?: string | null;
+  toId?: string | null;
   firstClass?: boolean | null;
   bike?: boolean | null;
   deutschlandTicketDiscount?: boolean | null;
@@ -503,6 +507,8 @@ export default function JourneyTicket({
     limitPrice,
     from,
     to,
+    fromId,
+    toId,
     journey,
     unavailable,
     firstClass,
@@ -511,6 +517,20 @@ export default function JourneyTicket({
     ageGroup,
     loyaltyCard,
   } = monitor;
+
+  const ticketUrl = useMemo(
+    () =>
+      buildBahnDeTicketUrl({
+        from,
+        to,
+        fromId,
+        toId,
+        departure: journey?.departure,
+        firstClass,
+        deutschlandTicketDiscount,
+      }),
+    [from, to, fromId, toId, journey?.departure, firstClass, deutschlandTicketDiscount]
+  );
 
   return (
     <Box id={id} tabIndex={-1} sx={{ position: 'relative', scrollMarginTop: '88px' }}>
@@ -556,6 +576,37 @@ export default function JourneyTicket({
           />
         ) : (
           <NoTrackBanner unavailable={unavailable} />
+        )}
+
+        {ticketUrl && (
+          <Link
+            href={ticketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            underline="none"
+            aria-label="Buy ticket on bahn.de (opens in new tab)"
+            sx={(theme) => ({
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+              px: { xs: 1.5, sm: 2.5 },
+              py: 1.1,
+              borderTop: '1px solid',
+              borderColor: 'divider',
+              color: 'primary.main',
+              fontSize: 13,
+              fontWeight: 600,
+              borderBottomLeftRadius: 'inherit',
+              borderBottomRightRadius: 'inherit',
+              transition: 'background-color 0.15s',
+              '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) },
+              '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: '-2px' },
+            })}
+          >
+            <span>Buy ticket on bahn.de</span>
+            <OpenInNewIcon sx={{ fontSize: 16 }} />
+          </Link>
         )}
       </Paper>
     </Box>
