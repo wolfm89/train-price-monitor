@@ -21,6 +21,9 @@ declare module '@mui/material/Typography' {
   }
 }
 
+const INFO_MAIN = '#5b7a9e';
+const INFO_DARK = '#3f5670';
+
 export const theme = createTheme({
   palette: {
     mode: 'light',
@@ -46,8 +49,8 @@ export const theme = createTheme({
       dark: '#7d4900',
     },
     info: {
-      main: '#5b7a9e',
-      dark: '#3f5670',
+      main: INFO_MAIN,
+      dark: INFO_DARK,
     },
     background: {
       default: '#f8f8f4',
@@ -138,6 +141,27 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           textTransform: 'none',
+        },
+      },
+    },
+    // The brand primary is red, which makes a focused field look exactly like
+    // an invalid one. Use the informational blue for focus and keep red for
+    // errors only.
+    MuiOutlinedInput: {
+      styleOverrides: {
+        root: {
+          '&.Mui-focused:not(.Mui-error) .MuiOutlinedInput-notchedOutline': {
+            borderColor: INFO_MAIN,
+          },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          '&.Mui-focused:not(.Mui-error)': {
+            color: INFO_DARK,
+          },
         },
       },
     },

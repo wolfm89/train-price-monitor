@@ -48,4 +48,14 @@ describe('theme contrast', () => {
     const tint = blend(theme.palette.info.main, theme.palette.background.ticket, 0.12);
     expect(contrastRatio(theme.palette.info.dark, tint)).toBeGreaterThanOrEqual(4.5);
   });
+
+  it('uses the info colour for focused fields instead of the error red', () => {
+    const root = theme.components?.MuiOutlinedInput?.styleOverrides?.root as unknown as Record<string, unknown>;
+    const label = theme.components?.MuiInputLabel?.styleOverrides?.root as unknown as Record<string, unknown>;
+
+    expect(root['&.Mui-focused:not(.Mui-error) .MuiOutlinedInput-notchedOutline']).toEqual({
+      borderColor: theme.palette.info.main,
+    });
+    expect(label['&.Mui-focused:not(.Mui-error)']).toEqual({ color: theme.palette.info.dark });
+  });
 });
