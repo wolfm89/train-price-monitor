@@ -522,9 +522,6 @@ const SearchResult: React.FC<Props> = ({
       >
         <DialogTitle>Set limit price</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Current price: {currentFare}
-          </Typography>
           <TextField
             id="limit-price"
             label="Limit price"
