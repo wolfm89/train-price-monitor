@@ -197,7 +197,7 @@ const Header = () => {
           </Button>
         )}
         {isInitialCheckDone && user && (
-          <Box component="nav" aria-label="Main" sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box component="nav" aria-label="Main" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             <Button
               component={Link}
               to="/search"
@@ -232,7 +232,6 @@ const Header = () => {
                 p: { xs: '5px', sm: '6px' },
                 minWidth: 44,
                 minHeight: 44,
-                ml: 0.25,
                 '&:hover': {
                   color: '#fff',
                   backgroundColor: 'rgba(255,255,255,0.13)',
@@ -256,10 +255,11 @@ const Header = () => {
               aria-controls="account-menu"
               onClick={handleAccountClick}
               sx={{
-                ml: 0.5,
+                ml: 0,
                 p: 0,
                 minWidth: 44,
                 minHeight: 44,
+                color: 'rgba(255,255,255,0.85)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

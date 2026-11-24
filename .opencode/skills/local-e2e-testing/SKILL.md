@@ -189,8 +189,8 @@ A "Set Limit Price" dialog opens showing the current price. Enter a limit price 
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
-    await page.getByRole('spinbutton', { name: 'Limit Price' }).fill('200');
-    await page.getByRole('button', { name: 'Confirm' }).click();
+    await page.getByRole('textbox', { name: 'Limit price' }).fill('200');
+    await page.getByRole('button', { name: 'Save limit' }).click();
     await page.waitForTimeout(4000);
   }`
 }
@@ -198,7 +198,7 @@ playwright_browser_run_code_unsafe {
 
 ### Inspect the GraphQL mutation in network requests
 
-After clicking Confirm, use `playwright_browser_network_requests` to find the POST to `/graphql` and verify its body:
+After clicking Save limit, use `playwright_browser_network_requests` to find the POST to `/graphql` and verify its body:
 
 ```
 playwright_browser_network_requests { filter: "/graphql", static: false }

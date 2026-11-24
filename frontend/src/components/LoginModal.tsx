@@ -25,7 +25,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
-  const [fieldError, setFieldError] = useState<{ field: 'email' | 'password'; message: string } | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const [formError, setFormError] = useState('');
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -35,7 +35,7 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const resetAndClose = () => {
     setEmail('');
     setPassword('');
-    setFieldError(null);
+    setFieldErrors({});
     setFormError('');
     onClose();
   };
@@ -44,22 +44,20 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     event.preventDefault();
     if (submitting) return;
 
-    if (!email.trim()) {
-      setFieldError({ field: 'email', message: 'Enter your email address.' });
-      emailRef.current?.focus();
-      return;
-    }
-    if (!password) {
-      setFieldError({ field: 'password', message: 'Enter your password.' });
-      passwordRef.current?.focus();
+    const nextErrors: { email?: string; password?: string } = {};
+    if (!email.trim()) nextErrors.email = 'Enter your email address.';
+    if (!password) nextErrors.password = 'Enter your password.';
+    if (nextErrors.email || nextErrors.password) {
+      setFieldErrors(nextErrors);
+      (nextErrors.email ? emailRef : passwordRef).current?.focus();
       return;
     }
 
-    setFieldError(null);
+    setFieldErrors({});
     setFormError('');
     setSubmitting(true);
     try {
-      await signIn(email, password);
+      await signIn(email.trim(), password);
       addAlert('Sign in successful!', AlertSeverity.Success);
       resetAndClose();
     } catch (err: unknown) {
@@ -87,12 +85,12 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
             value={email}
             onChange={(e) => {
               setEmail(e.target.value);
-              if (fieldError?.field === 'email') setFieldError(null);
+              setFieldErrors((prev) => ({ ...prev, email: undefined }));
               setFormError('');
             }}
             inputRef={emailRef}
-            error={fieldError?.field === 'email'}
-            helperText={fieldError?.field === 'email' ? fieldError.message : ''}
+            error={Boolean(fieldErrors.email)}
+            helperText={fieldErrors.email ?? ''}
             required
           />
           <TextField
@@ -106,12 +104,12 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
             value={password}
             onChange={(e) => {
               setPassword(e.target.value);
-              if (fieldError?.field === 'password') setFieldError(null);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
               setFormError('');
             }}
             inputRef={passwordRef}
-            error={fieldError?.field === 'password'}
-            helperText={fieldError?.field === 'password' ? fieldError.message : ''}
+            error={Boolean(fieldErrors.password)}
+            helperText={fieldErrors.password ?? ''}
             required
           />
           {formError && (

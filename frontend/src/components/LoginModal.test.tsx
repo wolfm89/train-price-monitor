@@ -42,17 +42,26 @@ describe('LoginModal validation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
 
     expect(screen.getByText('Enter your email address.')).toBeInTheDocument();
-    expect(screen.queryByText('Enter your password.')).not.toBeInTheDocument();
+    expect(screen.getByText('Enter your password.')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/Email/), { target: { value: 'ada@example.com' } });
     expect(screen.queryByText('Enter your email address.')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
     expect(screen.getByText('Enter your password.')).toBeInTheDocument();
-    expect(screen.queryByText('Enter your email address.')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/Password/), { target: { value: 'correct-horse' } });
     expect(screen.queryByText('Enter your password.')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a rejected sign-in as a form error and focuses the password', async () => {
+    signIn.mockRejectedValueOnce(new Error('Incorrect username or password.'));
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText(/Email/), { target: { value: 'ada@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Password/), { target: { value: 'wrong' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }));
+
+    await waitFor(() => expect(screen.getByText('Incorrect username or password.')).toBeInTheDocument());
+    expect(screen.getByLabelText(/Password/)).toHaveFocus();
   });
 
   it('submits the credentials once both fields are present', async () => {

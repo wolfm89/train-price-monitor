@@ -67,4 +67,8 @@ describe('getBerlinHour', () => {
   it('returns the Berlin hour around midnight', () => {
     expect(getBerlinHour(new Date('2026-01-14T23:30:00.000Z'))).toBe(0);
   });
+
+  it('returns 0 for an invalid date instead of throwing', () => {
+    expect(getBerlinHour(new Date(NaN))).toBe(0);
+  });
 });

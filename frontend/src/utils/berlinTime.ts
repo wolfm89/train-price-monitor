@@ -39,6 +39,7 @@ function wallClockInBerlin(instant: Date): WallClock {
 
 /** Returns the hour (0–23) in Berlin at the given instant. */
 export function getBerlinHour(instant: Date = new Date()): number {
+  if (Number.isNaN(instant.getTime())) return 0;
   return wallClockInBerlin(instant).hour;
 }
 

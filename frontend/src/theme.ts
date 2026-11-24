@@ -109,6 +109,7 @@ export const theme = createTheme({
         'a, button, [role="button"]': {
           touchAction: 'manipulation',
           WebkitTapHighlightColor: 'transparent',
+          '&:active': { opacity: 0.85 },
         },
         '@media (prefers-reduced-motion: reduce)': {
           '*, *::before, *::after': {
@@ -128,8 +129,15 @@ export const theme = createTheme({
         root: {
           '&.Mui-focusVisible': {
             outline: '2px solid currentColor',
-            outlineOffset: '-2px',
+            outlineOffset: '-3px',
           },
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
         },
       },
     },

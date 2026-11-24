@@ -45,12 +45,11 @@ interface Props {
 
 const MONO_FONT = '"IBM Plex Mono", monospace';
 
-// Both action states share the same 71px width and the loading state swaps the
-// label for a spinner, so the right-hand column stays at 153px (68px price +
-// 14px gap + 71px button). A wider button/loading label would grow that column
-// and shift the centred route-line icon on rows that have a price.
+// Both action states share a minimum 71px width; the loading state swaps the
+// label for a spinner, so the right-hand column stays near 153px (68px price +
+// 14px gap + 71px button). A growing loading label would shift the centred
+// route-line icon on rows that have a price.
 const ACTION_BUTTON_SX = {
-  width: 71,
   minWidth: 71,
   minHeight: { xs: 44, sm: 32 },
   boxSizing: 'border-box',
@@ -63,6 +62,10 @@ const ACTION_BUTTON_SX = {
   textTransform: 'none',
   whiteSpace: 'nowrap',
 } as const;
+
+function parseLimitPrice(raw: string): number {
+  return Number.parseFloat(raw.trim().replace(',', '.'));
+}
 
 const SearchResult: React.FC<Props> = ({
   searchResult,
@@ -79,7 +82,7 @@ const SearchResult: React.FC<Props> = ({
   const limitPriceRef = useRef<HTMLInputElement>(null);
   const { user } = useContext(AuthContext);
   const [, monitorJourney] = useMutation(MonitorJourney);
-  const [loading, setLoading] = useState(false);
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
   // refreshToken -> JourneyMonitor id, so a row that was just watched can link
   // straight to its ticket at /journeys#<id>. Keyed by token because it is
   // unique per search result and survives in-app Earlier/Later paging while this
@@ -91,6 +94,7 @@ const SearchResult: React.FC<Props> = ({
   // is dropped back to the top of the page after confirming.
   const [focusToken, setFocusToken] = useState<string | null>(null);
   const addedLinkRefs = useRef<Record<string, HTMLElement | null>>({});
+  const watchButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     if (!focusToken) return;
@@ -99,6 +103,14 @@ const SearchResult: React.FC<Props> = ({
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [focusToken]);
+
+  const refocusWatchButton = (refreshToken: string) => {
+    window.setTimeout(() => {
+      watchButtonRefs.current[refreshToken]?.focus();
+    }, 250);
+  };
+
+  const isPending = (refreshToken: string) => pendingToken === refreshToken;
 
   const handleWatchClick = (journey: Journey) => {
     setSelectedJourney(journey);
@@ -116,20 +128,22 @@ const SearchResult: React.FC<Props> = ({
   };
 
   const handleConfirmWatch = () => {
+    if (pendingToken || !selectedJourney) return;
     if (!isValidLimitPrice()) {
       setLimitError(true);
       limitPriceRef.current?.focus();
       return;
     }
-    setLoading(true);
-    const { refreshToken, departure, fromId, toId } = selectedJourney!;
+
+    const { refreshToken, departure, fromId, toId } = selectedJourney;
+    setPendingToken(refreshToken);
     const expires = new Date(departure);
     expires.setHours(expires.getHours() - 1);
 
     monitorJourney({
       userId: user?.['custom:id'],
       refreshToken: refreshToken,
-      limitPrice: parseFloat(limitPrice),
+      limitPrice: parseLimitPrice(limitPrice),
       expires: expires,
       fromId: fromId,
       toId: toId,
@@ -137,27 +151,33 @@ const SearchResult: React.FC<Props> = ({
       options: searchOptions,
     })
       .then((result) => {
-        setLoading(false);
         setSelectedJourney(null);
         if (result.error) {
           addAlert(result.error.message, AlertSeverity.Error);
-        } else {
-          const journeyId = result.data?.monitorJourney?.id;
-          if (!journeyId) {
-            // A success response without an id cannot produce a deeplink. Treat
-            // it as a failure instead of claiming success and leaving "+ Watch"
-            // active, which would invite a duplicate.
-            addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
-            return;
-          }
-          setAddedJourneyIds((prev) => ({ ...prev, [refreshToken]: journeyId }));
-          setFocusToken(refreshToken);
-          addAlert('Journey successfully added to watchlist!', AlertSeverity.Success);
+          refocusWatchButton(refreshToken);
+          return;
         }
+
+        const journeyId = result.data?.monitorJourney?.id;
+        if (!journeyId) {
+          // A success response without an id cannot produce a deeplink. Treat
+          // it as a failure instead of claiming success and leaving "+ Watch"
+          // active, which would invite a duplicate.
+          addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
+          refocusWatchButton(refreshToken);
+          return;
+        }
+
+        setAddedJourneyIds((prev) => ({ ...prev, [refreshToken]: journeyId }));
+        setFocusToken(refreshToken);
+        addAlert('Journey successfully added to watchlist!', AlertSeverity.Success);
       })
       .catch(() => {
-        setLoading(false);
         addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
+        refocusWatchButton(refreshToken);
+      })
+      .finally(() => {
+        setPendingToken(null);
       });
 
     setOpenModal(false);
@@ -171,8 +191,8 @@ const SearchResult: React.FC<Props> = ({
   };
 
   const isValidLimitPrice = () => {
-    const floatValue = parseFloat(limitPrice);
-    return !isNaN(floatValue) && floatValue > (selectedJourney?.price ?? 0);
+    const floatValue = parseLimitPrice(limitPrice);
+    return Number.isFinite(floatValue) && floatValue > (selectedJourney?.price ?? 0);
   };
 
   return (
@@ -350,14 +370,19 @@ const SearchResult: React.FC<Props> = ({
                 ) : (
                   <Button
                     size="small"
-                    disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
-                    aria-busy={loading && selectedJourney?.refreshToken === result.refreshToken}
+                    aria-disabled={pendingToken !== null}
+                    aria-busy={isPending(result.refreshToken)}
                     aria-label={
-                      loading && selectedJourney?.refreshToken === result.refreshToken
-                        ? `Adding ${formatTime(result.departure)} connection to your watchlist`
-                        : undefined
+                      isPending(result.refreshToken)
+                        ? `Adding the ${formatTime(result.departure)} connection to your watchlist…`
+                        : `Add the ${formatTime(result.departure)}\u2013${formatTime(result.arrival)} ${result.means.join(' + ')} connection to your watchlist`
                     }
-                    onClick={() => handleWatchClick(result)}
+                    ref={(el) => {
+                      watchButtonRefs.current[result.refreshToken] = el;
+                    }}
+                    onClick={() => {
+                      if (!pendingToken) handleWatchClick(result);
+                    }}
                     sx={{
                       ...ACTION_BUTTON_SX,
                       bgcolor: 'secondary.light',
@@ -365,13 +390,15 @@ const SearchResult: React.FC<Props> = ({
                       borderColor: 'secondary.main',
                       '&:hover': { bgcolor: 'secondary.dark', color: '#fff' },
                       '&:active': { bgcolor: 'secondary.dark', color: '#fff' },
+                      '&[aria-disabled="true"]': {
+                        bgcolor: 'secondary.light',
+                        color: 'secondary.dark',
+                        borderColor: 'secondary.main',
+                        cursor: 'default',
+                      },
                     }}
                   >
-                    {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                      <CircularProgress size={14} color="inherit" />
-                    ) : (
-                      '+ Watch'
-                    )}
+                    {isPending(result.refreshToken) ? <CircularProgress size={14} color="inherit" /> : '+ Watch'}
                   </Button>
                 ))}
             </Box>
@@ -412,15 +439,16 @@ const SearchResult: React.FC<Props> = ({
 
       {/* Watch Modal */}
       <Dialog open={openModal} onClose={handleCloseModal}>
-        <DialogTitle>Set Limit Price</DialogTitle>
+        <DialogTitle>Set limit price</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
             Current Price: {selectedJourney?.price != null ? formatCurrency(selectedJourney.price) : 'n/a'}
           </Typography>
           <TextField
-            label="Limit Price"
+            id="limit-price"
+            label="Limit price"
             name="limitPrice"
-            type="number"
+            type="text"
             inputMode="decimal"
             autoComplete="off"
             placeholder="e.g. 80.00"
@@ -430,13 +458,12 @@ const SearchResult: React.FC<Props> = ({
               setLimitPrice(e.target.value);
               setLimitError(false);
             }}
+            onBlur={() => {
+              if (limitPrice.trim() !== '') setLimitError(!isValidLimitPrice());
+            }}
             onKeyDown={handleKeyDown}
-            error={limitError || (!isValidLimitPrice() && limitPrice !== '')}
-            helperText={
-              limitError || (!isValidLimitPrice() && limitPrice !== '')
-                ? `Enter an amount above ${formatCurrency(selectedJourney?.price ?? 0)}.`
-                : ''
-            }
+            error={limitError}
+            helperText={limitError ? `Enter an amount above ${formatCurrency(selectedJourney?.price ?? 0)}.` : ''}
           />
         </DialogContent>
         <DialogActions>

@@ -565,7 +565,7 @@ const ProfilePage: React.FC = () => {
               onClick={handleDeleteAccount}
               sx={{ textTransform: 'none', fontWeight: 500 }}
             >
-              Delete my account
+              Delete account
             </Button>
           </Paper>
         </Box>
@@ -573,13 +573,13 @@ const ProfilePage: React.FC = () => {
 
       {/* Delete confirmation dialog */}
       <Dialog open={showDeleteConfirmation} onClose={() => setShowDeleteConfirmation(false)}>
-        <DialogTitle>Delete Account</DialogTitle>
+        <DialogTitle>Delete account</DialogTitle>
         <DialogContent>
           <Typography>Are you sure you want to delete your account? This action cannot be undone.</Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setShowDeleteConfirmation(false)}>Cancel</Button>
-          <Button onClick={handleConfirmDeleteAccount} color="error">
+          <Button onClick={handleConfirmDeleteAccount} color="error" variant="contained">
             Delete account
           </Button>
         </DialogActions>

@@ -72,9 +72,11 @@ function renderResult(journeys: Journey[] = [journey]): void {
   );
 }
 
+const WATCH_NAME = /Add the .* connection to your watchlist/;
+
 function startWatch(index = 0): void {
-  fireEvent.click(screen.getAllByRole('button', { name: '+ Watch' })[index]);
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Limit Price' }), { target: { value: '80' } });
+  fireEvent.click(screen.getAllByRole('button', { name: WATCH_NAME })[index]);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Limit price' }), { target: { value: '80' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
 }
 
@@ -92,7 +94,7 @@ describe('SearchResult watch action', () => {
     const link = await screen.findByRole('link', { name: /connection in your watchlist/i });
     expect(link).toHaveAttribute('href', '/journeys#jm-1');
     expect(link.getAttribute('aria-label')).toMatch(/10:00.*14:00.*ICE.*connection in your watchlist/);
-    expect(screen.queryByRole('button', { name: '+ Watch' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: WATCH_NAME })).not.toBeInTheDocument();
 
     expect(mockMonitor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -118,7 +120,9 @@ describe('SearchResult watch action', () => {
 
     await waitFor(() => expect(mockAddAlert).toHaveBeenCalledWith('Nope', AlertSeverity.Error));
     expect(mockAddAlert).not.toHaveBeenCalledWith(expect.stringContaining('successfully'), AlertSeverity.Success);
-    expect(await screen.findByRole('button', { name: '+ Watch' })).toBeInTheDocument();
+    const watch = await screen.findByRole('button', { name: WATCH_NAME });
+    expect(watch).toBeInTheDocument();
+    await waitFor(() => expect(watch).toHaveFocus());
     expect(screen.queryByRole('link', { name: /watchlist/i })).not.toBeInTheDocument();
   });
 
@@ -134,17 +138,71 @@ describe('SearchResult watch action', () => {
         AlertSeverity.Error
       )
     );
-    expect(await screen.findByRole('button', { name: '+ Watch' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: WATCH_NAME })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /watchlist/i })).not.toBeInTheDocument();
   });
 
   it('explains the limit rule instead of submitting an empty amount', () => {
     renderResult();
-    fireEvent.click(screen.getByRole('button', { name: '+ Watch' }));
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
     fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
 
     expect(mockMonitor).not.toHaveBeenCalled();
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAttribute('aria-describedby', 'limit-price-helper-text');
     expect(screen.getByText(/Enter an amount above €42/)).toBeInTheDocument();
+  });
+
+  it('accepts a comma decimal and rejects an amount at or below the current fare', async () => {
+    mockMonitor.mockResolvedValue({ data: { monitorJourney: { id: 'jm-2' } } });
+
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+
+    fireEvent.change(input, { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
+    expect(mockMonitor).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: '42,50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
+    await waitFor(() => expect(mockMonitor).toHaveBeenCalledWith(expect.objectContaining({ limitPrice: 42.5 })));
+  });
+
+  it('submits with Enter once the amount is valid', async () => {
+    mockMonitor.mockResolvedValue({ data: { monitorJourney: { id: 'jm-3' } } });
+
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+    fireEvent.change(input, { target: { value: '80' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mockMonitor).toHaveBeenCalledWith(expect.objectContaining({ limitPrice: 80 })));
+  });
+
+  it('announces progress without removing the row action while pending', async () => {
+    let resolveMonitor!: (value: unknown) => void;
+    mockMonitor.mockReturnValue(
+      new Promise((resolve) => {
+        resolveMonitor = resolve;
+      })
+    );
+
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: WATCH_NAME }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Limit price' }), { target: { value: '80' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
+
+    const pending = await screen.findByRole('button', { name: /Adding the 10:00 connection to your watchlist/ });
+    expect(pending).toHaveAttribute('aria-busy', 'true');
+    expect(pending).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+
+    resolveMonitor({ data: { monitorJourney: { id: 'jm-4' } } });
+    await waitFor(() => expect(screen.getByRole('link', { name: /watchlist/ })).toBeInTheDocument());
   });
 
   it('only turns the watched row into a link', async () => {
@@ -156,6 +214,6 @@ describe('SearchResult watch action', () => {
     const links = await screen.findAllByRole('link', { name: /watchlist/i });
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute('href', '/journeys#jm-1');
-    expect(screen.getAllByRole('button', { name: '+ Watch' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: WATCH_NAME })).toHaveLength(1);
   });
 });

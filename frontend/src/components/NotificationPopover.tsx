@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Popover, Box, Typography, IconButton, Chip, ButtonBase } from '@mui/material';
-import { formatTime } from '../utils/format';
+import { formatInputDate, formatTime } from '../utils/format';
 import { CheckCircle as CheckCircleIcon } from '@mui/icons-material';
 import VisuallyHidden from './VisuallyHidden';
 
@@ -31,20 +31,25 @@ interface NotificationPopoverProps {
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 
+function berlinDayKey(date: Date): number {
+  return Date.parse(`${formatInputDate(date)}T00:00:00Z`);
+}
+
 function formatRelativeTime(timestamp: Date): string {
   const date = new Date(timestamp);
   const diffMs = Date.now() - date.getTime();
-  const diffMins = Math.round(diffMs / 60000);
+  const diffMins = Math.floor(diffMs / 60000);
 
   if (diffMins < 1) return 'Just now';
   if (diffMins < 60) return relativeTimeFormatter.format(-diffMins, 'minute');
 
-  const diffHours = Math.round(diffMins / 60);
+  const diffHours = Math.floor(diffMins / 60);
   if (diffHours < 24) return relativeTimeFormatter.format(-diffHours, 'hour');
 
-  const diffDays = Math.round(diffHours / 24);
-  if (diffDays === 1) return `Yesterday, ${formatTime(date)}`;
-  return relativeTimeFormatter.format(-diffDays, 'day');
+  const dayDiff = Math.round((berlinDayKey(new Date()) - berlinDayKey(date)) / 86400000);
+  if (dayDiff === 1) return `Yesterday, ${formatTime(date)}`;
+  if (dayDiff > 1) return relativeTimeFormatter.format(-dayDiff, 'day');
+  return relativeTimeFormatter.format(-diffHours, 'hour');
 }
 
 function notificationPlainText(notification: Notification): string {
@@ -152,7 +157,6 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
             maxHeight: 'min(70vh, 520px)',
             borderRadius: 2,
             overflow: 'hidden',
-            overscrollBehavior: 'contain',
             display: 'flex',
             flexDirection: 'column',
           },
@@ -204,7 +208,7 @@ const NotificationPopover: React.FC<NotificationPopoverProps> = ({
       </Box>
 
       {/* Notification items */}
-      <Box sx={{ overflowY: 'auto', flex: 1 }}>
+      <Box data-testid="notification-list" sx={{ overflowY: 'auto', flex: 1, overscrollBehavior: 'contain' }}>
         {notifications && notifications.length > 0 ? (
           <Box role="list">
             {notifications.map((notification: Notification) => {
