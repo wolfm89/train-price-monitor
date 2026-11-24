@@ -37,6 +37,11 @@ function wallClockInBerlin(instant: Date): WallClock {
   };
 }
 
+/** Returns the hour (0–23) in Berlin at the given instant. */
+export function getBerlinHour(instant: Date = new Date()): number {
+  return wallClockInBerlin(instant).hour;
+}
+
 /** Berlin's UTC offset (CET +01:00, CEST +02:00) at the given instant, in ms. */
 function berlinOffsetMs(instant: Date): number {
   const wallClock = wallClockInBerlin(instant);

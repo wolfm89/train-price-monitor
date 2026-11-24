@@ -45,15 +45,18 @@ interface Props {
 
 const MONO_FONT = '"IBM Plex Mono", monospace';
 
-// Both action states share these styles and a fixed minWidth, so the
-// "+ Watch" -> "View ↗" swap keeps the right-hand column at 153px
-// (68px price + 14px gap + 71px button). A wider button would grow that column
+// Both action states share the same 71px width and the loading state swaps the
+// label for a spinner, so the right-hand column stays at 153px (68px price +
+// 14px gap + 71px button). A wider button/loading label would grow that column
 // and shift the centred route-line icon on rows that have a price.
 const ACTION_BUTTON_SX = {
+  width: 71,
   minWidth: 71,
+  minHeight: { xs: 44, sm: 32 },
+  boxSizing: 'border-box',
   border: '1.5px solid',
   borderRadius: '7px',
-  px: 1.5,
+  px: 1.25,
   py: 0.5,
   fontSize: 12,
   fontWeight: 700,
@@ -72,6 +75,8 @@ const SearchResult: React.FC<Props> = ({
   const [openModal, setOpenModal] = useState(false);
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
   const [limitPrice, setLimitPrice] = useState('');
+  const [limitError, setLimitError] = useState(false);
+  const limitPriceRef = useRef<HTMLInputElement>(null);
   const { user } = useContext(AuthContext);
   const [, monitorJourney] = useMutation(MonitorJourney);
   const [loading, setLoading] = useState(false);
@@ -97,6 +102,7 @@ const SearchResult: React.FC<Props> = ({
 
   const handleWatchClick = (journey: Journey) => {
     setSelectedJourney(journey);
+    setLimitError(false);
     setOpenModal(true);
   };
 
@@ -105,10 +111,16 @@ const SearchResult: React.FC<Props> = ({
     setTimeout(() => {
       setSelectedJourney(null);
       setLimitPrice('');
+      setLimitError(false);
     }, 100);
   };
 
   const handleConfirmWatch = () => {
+    if (!isValidLimitPrice()) {
+      setLimitError(true);
+      limitPriceRef.current?.focus();
+      return;
+    }
     setLoading(true);
     const { refreshToken, departure, fromId, toId } = selectedJourney!;
     const expires = new Date(departure);
@@ -153,7 +165,7 @@ const SearchResult: React.FC<Props> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && isValidLimitPrice()) {
+    if (e.key === 'Enter') {
       handleConfirmWatch();
     }
   };
@@ -330,15 +342,21 @@ const SearchResult: React.FC<Props> = ({
                       color: '#fff',
                       borderColor: 'success.main',
                       '&:hover': { bgcolor: 'success.dark' },
+                      '&:active': { bgcolor: 'success.dark' },
                     }}
                   >
-                    View {'\u2197'}
+                    View {'\u2192'}
                   </Button>
                 ) : (
                   <Button
                     size="small"
                     disabled={loading && selectedJourney?.refreshToken === result.refreshToken}
                     aria-busy={loading && selectedJourney?.refreshToken === result.refreshToken}
+                    aria-label={
+                      loading && selectedJourney?.refreshToken === result.refreshToken
+                        ? `Adding ${formatTime(result.departure)} connection to your watchlist`
+                        : undefined
+                    }
                     onClick={() => handleWatchClick(result)}
                     sx={{
                       ...ACTION_BUTTON_SX,
@@ -346,13 +364,11 @@ const SearchResult: React.FC<Props> = ({
                       color: 'secondary.dark',
                       borderColor: 'secondary.main',
                       '&:hover': { bgcolor: 'secondary.dark', color: '#fff' },
+                      '&:active': { bgcolor: 'secondary.dark', color: '#fff' },
                     }}
                   >
                     {loading && selectedJourney?.refreshToken === result.refreshToken ? (
-                      <>
-                        <CircularProgress size={14} color="inherit" />
-                        Adding…
-                      </>
+                      <CircularProgress size={14} color="inherit" />
                     ) : (
                       '+ Watch'
                     )}
@@ -403,19 +419,29 @@ const SearchResult: React.FC<Props> = ({
           </Typography>
           <TextField
             label="Limit Price"
+            name="limitPrice"
             type="number"
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="e.g. 80.00"
+            inputRef={limitPriceRef}
             value={limitPrice}
-            onChange={(e) => setLimitPrice(e.target.value)}
+            onChange={(e) => {
+              setLimitPrice(e.target.value);
+              setLimitError(false);
+            }}
             onKeyDown={handleKeyDown}
-            error={!isValidLimitPrice() && limitPrice !== ''}
-            helperText={!isValidLimitPrice() && limitPrice !== '' ? 'Invalid limit price' : ''}
+            error={limitError || (!isValidLimitPrice() && limitPrice !== '')}
+            helperText={
+              limitError || (!isValidLimitPrice() && limitPrice !== '')
+                ? `Enter an amount above ${formatCurrency(selectedJourney?.price ?? 0)}.`
+                : ''
+            }
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseModal}>Cancel</Button>
-          <Button onClick={handleConfirmWatch} disabled={!isValidLimitPrice()}>
-            Confirm
-          </Button>
+          <Button onClick={handleConfirmWatch}>Save limit</Button>
         </DialogActions>
       </Dialog>
     </>

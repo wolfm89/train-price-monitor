@@ -106,12 +106,29 @@ export const theme = createTheme({
   components: {
     MuiCssBaseline: {
       styleOverrides: {
+        'a, button, [role="button"]': {
+          touchAction: 'manipulation',
+          WebkitTapHighlightColor: 'transparent',
+        },
         '@media (prefers-reduced-motion: reduce)': {
           '*, *::before, *::after': {
             animationDuration: '0.01ms !important',
             animationIterationCount: '1 !important',
             transitionDuration: '0.01ms !important',
             scrollBehavior: 'auto !important',
+          },
+        },
+      },
+    },
+    // ButtonBase zeroes the native outline; restore a visible keyboard focus
+    // ring for every Button, IconButton, clickable Chip and MenuItem. The ring
+    // is inset so it stays visible on both light surfaces and the red AppBar.
+    MuiButtonBase: {
+      styleOverrides: {
+        root: {
+          '&.Mui-focusVisible': {
+            outline: '2px solid currentColor',
+            outlineOffset: '-2px',
           },
         },
       },

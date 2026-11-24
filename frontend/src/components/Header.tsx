@@ -31,7 +31,8 @@ const navBtnSx = {
   border: '1.5px solid rgba(255,255,255,0.35)',
   px: { xs: 1.25, sm: 1.5 },
   py: 0.625,
-  minWidth: 0, // override MUI Button default 64px min-width so icon-only buttons are compact on mobile
+  minWidth: { xs: 44, sm: 0 },
+  minHeight: 44,
   textTransform: 'none' as const,
   '& .MuiButton-startIcon': {
     marginRight: { xs: 0, sm: '8px' }, // collapse icon trailing margin when no text follows on mobile
@@ -229,6 +230,8 @@ const Header = () => {
                 border: '1.5px solid rgba(255,255,255,0.35)',
                 borderRadius: '6px',
                 p: { xs: '5px', sm: '6px' },
+                minWidth: 44,
+                minHeight: 44,
                 ml: 0.25,
                 '&:hover': {
                   color: '#fff',
@@ -252,7 +255,15 @@ const Header = () => {
               aria-expanded={Boolean(accountAnchorEl)}
               aria-controls="account-menu"
               onClick={handleAccountClick}
-              sx={{ ml: 0.5, p: 0 }}
+              sx={{
+                ml: 0.5,
+                p: 0,
+                minWidth: 44,
+                minHeight: 44,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
             >
               <Avatar
                 alt="Profile Picture"

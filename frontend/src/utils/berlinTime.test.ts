@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { berlinWallTimeToDate, berlinWallTimeToIso, formatBerlinWallClock } from './berlinTime';
+import { berlinWallTimeToDate, berlinWallTimeToIso, formatBerlinWallClock, getBerlinHour } from './berlinTime';
 
 describe('berlinWallTimeToDate', () => {
   it('interprets a winter wall-clock time as CET (+01:00)', () => {
@@ -55,5 +55,16 @@ describe('formatBerlinWallClock', () => {
   it('returns an empty string for an invalid date', () => {
     expect(formatBerlinWallClock('not-a-date')).toBe('');
     expect(formatBerlinWallClock(new Date(NaN))).toBe('');
+  });
+});
+
+describe('getBerlinHour', () => {
+  it('uses the Berlin offset in winter and summer', () => {
+    expect(getBerlinHour(new Date('2026-01-15T13:30:00.000Z'))).toBe(14);
+    expect(getBerlinHour(new Date('2026-07-15T12:30:00.000Z'))).toBe(14);
+  });
+
+  it('returns the Berlin hour around midnight', () => {
+    expect(getBerlinHour(new Date('2026-01-14T23:30:00.000Z'))).toBe(0);
   });
 });

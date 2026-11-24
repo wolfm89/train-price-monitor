@@ -75,7 +75,7 @@ function renderResult(journeys: Journey[] = [journey]): void {
 function startWatch(index = 0): void {
   fireEvent.click(screen.getAllByRole('button', { name: '+ Watch' })[index]);
   fireEvent.change(screen.getByRole('spinbutton', { name: 'Limit Price' }), { target: { value: '80' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
 }
 
 describe('SearchResult watch action', () => {
@@ -136,6 +136,15 @@ describe('SearchResult watch action', () => {
     );
     expect(await screen.findByRole('button', { name: '+ Watch' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /watchlist/i })).not.toBeInTheDocument();
+  });
+
+  it('explains the limit rule instead of submitting an empty amount', () => {
+    renderResult();
+    fireEvent.click(screen.getByRole('button', { name: '+ Watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
+
+    expect(mockMonitor).not.toHaveBeenCalled();
+    expect(screen.getByText(/Enter an amount above €42/)).toBeInTheDocument();
   });
 
   it('only turns the watched row into a link', async () => {

@@ -491,9 +491,12 @@ const SearchMask: React.FC<Props> = ({
                   placeholder="Station"
                   fullWidth
                   error={showValidation && !hasFrom}
+                  helperText={showValidation && !hasFrom ? 'Choose a departure station.' : ''}
                   inputProps={{
                     ...params.inputProps,
                     'aria-label': 'From station',
+                    name: 'from',
+                    autoComplete: 'off',
                   }}
                   slotProps={{
                     input: {
@@ -546,9 +549,12 @@ const SearchMask: React.FC<Props> = ({
                   placeholder="Station"
                   fullWidth
                   error={showValidation && !hasTo}
+                  helperText={showValidation && !hasTo ? 'Choose an arrival station.' : ''}
                   inputProps={{
                     ...params.inputProps,
                     'aria-label': 'To station',
+                    name: 'to',
+                    autoComplete: 'off',
                   }}
                   slotProps={{
                     input: {
@@ -600,8 +606,14 @@ const SearchMask: React.FC<Props> = ({
                 fullWidth
                 size="small"
                 error={showValidation && (!hasDate || !isFuture)}
+                helperText={showValidation && (!hasDate || !isFuture) ? 'Choose a future departure date.' : ''}
                 slotProps={{
-                  htmlInput: { 'aria-label': 'Departure date', min: todayInBerlin },
+                  htmlInput: {
+                    'aria-label': 'Departure date',
+                    min: todayInBerlin,
+                    name: 'departureDate',
+                    autoComplete: 'off',
+                  },
                   input: {
                     startAdornment: (
                       <InputAdornment position="start">
@@ -623,8 +635,9 @@ const SearchMask: React.FC<Props> = ({
                 onChange={(e) => setDepartureTime(e.target.value)}
                 fullWidth
                 error={showValidation && !hasTime}
+                helperText={showValidation && !hasTime ? 'Choose a departure time.' : ''}
                 slotProps={{
-                  htmlInput: { 'aria-label': 'Departure time' },
+                  htmlInput: { 'aria-label': 'Departure time', name: 'departureTime', autoComplete: 'off' },
                   input: {
                     startAdornment: (
                       <InputAdornment position="start">

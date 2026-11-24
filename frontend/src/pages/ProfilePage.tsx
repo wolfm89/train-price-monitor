@@ -580,7 +580,7 @@ const ProfilePage: React.FC = () => {
         <DialogActions>
           <Button onClick={() => setShowDeleteConfirmation(false)}>Cancel</Button>
           <Button onClick={handleConfirmDeleteAccount} color="error">
-            Delete
+            Delete account
           </Button>
         </DialogActions>
       </Dialog>
