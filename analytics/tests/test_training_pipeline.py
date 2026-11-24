@@ -4784,16 +4784,21 @@ def test_cell_threshold_handles_ties_and_prefers_recall() -> None:
 
 
 def test_feature_families_cover_every_feature() -> None:
+    families = family_members()
+    core_families = {name: names for name, names in families.items() if not name.startswith("analog_")}
     for calendar_set in ("none", "public", "public_school", "full"):
         spec = feature_spec(calendar_set)
         assigned: list[str] = []
-        for names in family_members().values():
+        for names in core_families.values():
             assigned.extend(names)
         assert len(assigned) == len(set(assigned))
         assert set(spec.names) <= set(assigned)
-        assert all(feature_family(name) in family_members() for name in spec.names)
+        assert all(feature_family(name) in families for name in spec.names)
     assert feature_family("headroom_pct") == "limit"
     assert set(feature_spec("full").names) == set(assigned)
+    analog = set(feature_spec("none", analog_offsets=(1, 7)).names) - set(feature_spec("none").names)
+    assert analog
+    assert all(feature_family(name).startswith("analog_") for name in analog)
 
 
 def test_permuting_a_family_changes_only_that_family() -> None:
