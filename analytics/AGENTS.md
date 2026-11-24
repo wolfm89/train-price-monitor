@@ -119,9 +119,55 @@ v2-only and mixed-schema input.
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
   for backtest scoring. `--ablation` requires `config/training-static.json`. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
-  checkpoints hold report state only, never the train or calibration panels. A cache-free 5 %
-  backtest peaks near 6.47 GB (4.03 GB with the dataset cache); 10 % has not been measured, so
-  raise memory before scaling.
+  checkpoints hold report state plus the fitted model and calibrator that permutation importance
+  needs, never the train or calibration panels; verify `pkl_sha256` before reuse. The hash ships
+  beside the file, so it proves integrity, not authenticity. A cache-free 5 % backtest peaked at
+  6.35 GiB in an earlier twin; the final cold run reached 6.24 GiB (the development run 6.30 GiB).
+  The dataset build sets the peak. PR 5's cold runs recorded 11.0-11.5 GiB under concurrent load,
+  so treat any single figure as per-phase and measure before scaling; 10 % has not been measured.
+- **Recipe selection is development-only.** `training/selection.py` performs a joint search over
+  every model x calibration pair on the development folds and refuses any other role. Comparison
+  is a paired departure-date cluster bootstrap (2,000 replicates) on delta log loss (primary) and
+  delta Brier. A more complex choice replaces a simpler one only when the log-loss 95 % interval is
+  entirely below zero and the Brier interval is not entirely above zero. Complexity order is
+  `base_rate < logistic < hist_gradient_boosting` and
+  `sigmoid = temperature < isotonic < covariate`; climatology is a reference row, never selectable.
+  The full table goes to `recipe.json`; only the rule settings enter the recipe hash.
+- **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on
+  logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom)). The covariate
+  calibrator must be monotone in score in every band and non-increasing in headroom; otherwise it
+  falls back to isotonic and the requested/fitted methods are recorded per fold. All outputs are
+  clipped to `[1e-6, 1 - 1e-6]`. Per-headroom tables use the selected calibrator at each headroom;
+  the per-headroom isotonic is a diagnostic column. The static path keeps its three legacy
+  methods and its 1e-3 output clip; its split digests, validation predictions, `calibration.csv`
+  and headline metrics stay identical to `pr4-final`, while new config fields change the recorded
+  config hash. The base-rate/logistic candidate tables and the paired-vs-logistic interval are not
+  pinned because PR 6 upgraded those candidates.
+- **Thresholds.** One per headroom x TTD band on the calibration block's out-of-fold scores: the
+  highest recall whose one-sided 95 % Wilson lower bound on precision is at least
+  `threshold_precision_floor` with at least `threshold_min_alerts` (30) alerts. A cell with no
+  qualifying point does not alert. Pooled precision and recall use each row's own fold and cell
+  threshold; never substitute the mean threshold. The test-side hold rate uses point-estimate
+  precision; report the development and evaluation rates. The Wilson bound is nominal under
+  departure-date correlation; state the design effect and treat the hold rate as descriptive. Cells
+  with fewer than 100 test alerts or under 5 % recall are nominal only. Cell rows relabel every test
+  row at the cell's headroom; the pooled cell-threshold figure uses the assigned headroom.
+  `threshold_min_alerts` is backtest-only; the static path does not enforce it.
+- **Decision value and importance.** Decision value uses the primary 20-28 h `check_at` and
+  compares the alert policy with waiting (the current product, primary) and booking now, plus a
+  random alert, both perfect-breach oracles and perfect timing. The euro means are per
+  snapshot-row, not per journey; no alert means waiting for the next day's check. Near departure
+  the policy is roughly break-even against booking now at low headroom and loses several euros at
+  20-30 % headroom; the oracle and lift columns are point estimates. Grouped permutation importance
+  uses each development fold's own model and calibrator on a date-stratified sample of the pooled
+  test blocks; permutation is global across dates. Families live in `features.py`, every feature
+  belongs to exactly one, and the `limit` family is the label's own headroom parameter.
+- **Early stopping.** HGB holds out the last 7 days of the fold's training rows by `snapshot_at`,
+  stops at the first plateau (50 iterations without a 1e-4 gain over the running best), and refits
+  on all training rows with the best iteration at that point. Probe-training rows whose
+  `label_window_end` crosses the holdout boundary are purged. The holdout never touches
+  calibration. The cap is the recipe's `max_iter` (at most 400); record `hit_cap`, `probe_rows`
+  and `purged_probe_rows` per fold.
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
   `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
   (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.
@@ -203,8 +249,9 @@ v2-only and mixed-schema input.
   inside the feature matrix.
 - The climatology score is a baseline, not a selectable production candidate. Keep it out of
   `model.candidates` unless a future plan changes that decision.
-- `predictions/<split>.parquet` and `model.joblib` are local artifacts. Never load or trust a model
-  file you did not produce; they are not uploaded. Verify `model.joblib` against
+- The static path writes `predictions/<split>.parquet` and `model.joblib`; the backtest writes
+  `predictions/backtest.parquet` and no model file. Never load or trust a model file you did not
+  produce; they are not uploaded. Verify `model.joblib` against
   `manifest.json.artifact_sha256` before loading; the hash proves integrity, not authenticity,
   because the expected value ships in the same directory.
 - In predictions, `raw_score` is the model score at that row's headroom, `raw_score_pooled` is the

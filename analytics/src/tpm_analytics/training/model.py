@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ import pyarrow.parquet as pq
 from numpy.typing import NDArray
 from scipy.optimize import minimize_scalar
 from scipy.special import expit
-from sklearn.compose import ColumnTransformer
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
@@ -36,12 +37,12 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, SplineTransformer, StandardScaler
 
 from tpm_analytics.silver._duck import sql_string
 from tpm_analytics.training.bands import CLIMATOLOGY_BANDS, HEADLINE_BANDS, band_labels
 from tpm_analytics.training.config import MODEL_NAMES, TrainingConfig
-from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, NUMERIC, FeatureSpec
+from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, FeatureSpec
 from tpm_analytics.training.identity import berlin_week_sql
 from tpm_analytics.training.labels import breach, cents
 
@@ -410,6 +411,14 @@ def _usable_columns(
     return tuple(usable), tuple(dropped)
 
 
+EARLY_STOPPING_DAYS = 7
+EARLY_STOPPING_MAX_ITER = 400
+EARLY_STOPPING_PATIENCE = 50
+EARLY_STOPPING_TOLERANCE = 1e-4
+LOGISTIC_RELATIVE_FEATURES = ("price_change_24h", "price_velocity_24h")
+LOGISTIC_SPLINE_KNOTS = 6
+
+
 @dataclass
 class FittedModel:
     """A fitted estimator together with its feature encoder and selected columns."""
@@ -420,6 +429,7 @@ class FittedModel:
     spec: FeatureSpec
     selected: tuple[int, ...] | None = None
     dropped: tuple[str, ...] = ()
+    early_stopping: dict[str, Any] | None = None
 
     def transform(self, data: TabularData) -> Array:
         """Build the model matrix for the panel."""
@@ -458,15 +468,246 @@ class FittedModel:
 
 
 class BaseRateModel:
-    """A constant-probability baseline."""
+    """A per-headroom prevalence baseline."""
 
-    def __init__(self, rate: float) -> None:
-        """Initialise the instance."""
-        self.rate = float(rate)
+    def __init__(self, rates: dict[int, float], global_rate: float, headroom_index: int) -> None:
+        """Initialise the instance with a rate per headroom and a global fallback."""
+        self.rates = {int(head): float(rate) for head, rate in rates.items()}
+        self.global_rate = float(global_rate)
+        self.headroom_index = int(headroom_index)
 
     def predict_proba(self, matrix: Array) -> Array:
-        """Return class probabilities for the supplied matrix."""
-        return np.column_stack([np.full(len(matrix), 1.0 - self.rate), np.full(len(matrix), self.rate)])
+        """Return class probabilities for the supplied matrix's headroom column."""
+        raw = np.asarray(matrix[:, self.headroom_index], dtype=np.float64)
+        finite = np.isfinite(raw)
+        values = np.full(len(raw), self.global_rate, dtype=np.float64)
+        if finite.any():
+            heads = np.rint(raw[finite]).astype(np.int64)
+            top = max([*self.rates, int(heads.max()), 100])
+            table = np.full(top + 1, self.global_rate, dtype=np.float64)
+            for head, rate in self.rates.items():
+                if 0 <= head <= top:
+                    table[head] = rate
+            values[finite] = table[np.clip(heads, 0, top)]
+        return np.column_stack([1.0 - values, values])
+
+
+class LogisticPrep(BaseEstimator, TransformerMixin):
+    """Numeric transforms and categorical encoding for the upgraded logistic candidate.
+
+    The headroom enters as ``log(1 + headroom)``, hours to departure as a natural spline, and the
+    absolute 24 h fare changes as fractions of the current fare. Median imputation with missing
+    indicators and one-hot categories follow the shared matrix.
+    """
+
+    def __init__(self, spec: FeatureSpec) -> None:
+        """Initialise the transformer for one feature specification."""
+        self.spec = spec
+
+    def _numeric(self, matrix: Array) -> Array:
+        """Build the numeric block, expanding the spline and relative fares."""
+        blocks: list[Array] = []
+        price_index = self.spec.names.index("price_eur") if "price_eur" in self.spec.names else None
+        price = matrix[:, price_index].astype(np.float64) if price_index is not None else None
+        for index in self.numeric_:
+            name = self.spec.names[index]
+            column = np.asarray(matrix[:, index], dtype=np.float64)
+            if index == self.hours_index_:
+                blocks.append(np.asarray(self.spline_.transform(column.reshape(-1, 1)), dtype=np.float64))
+            elif name == "headroom_pct":
+                blocks.append(np.log1p(np.clip(column, 0.0, None)).reshape(-1, 1))
+            elif name in LOGISTIC_RELATIVE_FEATURES and price is not None:
+                relative = np.full(len(column), np.nan, dtype=np.float64)
+                valid = np.isfinite(column) & np.isfinite(price) & (price > 0)
+                relative[valid] = column[valid] / price[valid]
+                blocks.append(relative.reshape(-1, 1))
+            else:
+                blocks.append(column.reshape(-1, 1))
+        if not blocks:
+            return np.empty((len(matrix), 0), dtype=np.float64)
+        return np.column_stack(blocks)
+
+    def fit(self, matrix: Array, y: Array | None = None) -> LogisticPrep:
+        """Fit the spline, imputer, scaler and category encoder."""
+        self.numeric_ = [index for index, feature in enumerate(self.spec.features) if feature.kind != CATEGORICAL]
+        self.categorical_ = [index for index, feature in enumerate(self.spec.features) if feature.kind == CATEGORICAL]
+        self.hours_index_ = self.spec.names.index("hours_to_departure")
+        self.spline_ = SplineTransformer(
+            n_knots=LOGISTIC_SPLINE_KNOTS,
+            degree=3,
+            include_bias=False,
+            extrapolation="linear",
+        )
+        self.spline_.fit(np.asarray(matrix[:, self.hours_index_], dtype=np.float64).reshape(-1, 1))
+        numeric = self._numeric(matrix)
+        self.imputer_ = SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True)
+        self.scaler_ = StandardScaler()
+        self.scaler_.fit(self.imputer_.fit_transform(numeric))
+        self.encoder_ = OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32)
+        self.encoder_.fit(np.asarray(matrix[:, self.categorical_], dtype=np.float64))
+        return self
+
+    def transform(self, matrix: Array) -> Array:
+        """Apply the fitted transforms and return a dense matrix."""
+        numeric = self.scaler_.transform(self.imputer_.transform(self._numeric(matrix)))
+        parts = [numeric]
+        if self.categorical_:
+            categories = np.asarray(matrix[:, self.categorical_], dtype=np.float64)
+            parts.append(self.encoder_.transform(categories))
+        return np.asarray(np.hstack(parts), dtype=np.float32)
+
+
+def _log_loss_at(y: Array, probabilities: Array) -> float:
+    """Return the clipped binary log loss for one probability vector."""
+    clipped = np.clip(probabilities, 1e-9, 1.0 - 1e-9)
+    return float(-np.mean(y * np.log(clipped) + (1.0 - y) * np.log(1.0 - clipped)))
+
+
+def _early_stopping_plan(losses: list[float]) -> tuple[int, int]:
+    """Return the best iteration and the iteration where patience would stop.
+
+    The rule is causal: an improvement counts only when it beats the running best by at least
+    ``EARLY_STOPPING_TOLERANCE``; after ``EARLY_STOPPING_PATIENCE`` such iterations the search
+    stops and uses the best iteration seen so far. Later dips beyond the plateau are not used.
+    """
+    if not losses:
+        return 1, 1
+    best_index = 0
+    best_loss = losses[0]
+    for index, loss in enumerate(losses):
+        if loss < best_loss - EARLY_STOPPING_TOLERANCE:
+            best_loss = loss
+            best_index = index
+        if index - best_index >= EARLY_STOPPING_PATIENCE:
+            return best_index + 1, index + 1
+    return best_index + 1, len(losses)
+
+
+def _holdout_mask(snapshot_at: Array) -> Array | None:
+    """Return the last training week's rows, or None when it is too small to judge."""
+    snapshot = np.asarray(snapshot_at, dtype="datetime64[ms]")
+    if len(snapshot) < 200:
+        return None
+    holdout = snapshot > snapshot.max() - np.timedelta64(EARLY_STOPPING_DAYS, "D")
+    if int(holdout.sum()) < 100 or int((~holdout).sum()) < 100:
+        return None
+    return holdout
+
+
+def _non_empty_columns(matrix: Array, rows: Array) -> tuple[int, ...]:
+    """Return columns with at least one non-NaN value in the selected rows."""
+    view = matrix[rows]
+    return tuple(index for index in range(view.shape[1]) if not np.all(np.isnan(view[:, index])))
+
+
+def _hgb_settings(
+    settings: dict[str, Any],
+    *,
+    iterations: int,
+    monotonic: list[int],
+    categorical: list[int],
+) -> HistGradientBoostingClassifier:
+    """Build one HGB estimator with the shared settings."""
+    return HistGradientBoostingClassifier(
+        max_iter=iterations,
+        early_stopping=False,
+        categorical_features=categorical,
+        monotonic_cst=monotonic,
+        **settings,
+    )
+
+
+def _probe_train_mask(
+    holdout: Array,
+    snapshot: Array,
+    label_window_end: Array | None,
+) -> Array:
+    """Return probe-training rows, purged on the label end at the holdout boundary."""
+    probe_train = ~holdout
+    if label_window_end is not None:
+        labels_end = np.asarray(label_window_end, dtype="datetime64[ms]")
+        cutoff = snapshot.max() - np.timedelta64(EARLY_STOPPING_DAYS, "D")
+        probe_train &= labels_end <= cutoff
+    return probe_train
+
+
+def _fit_hgb_with_early_stopping(
+    refit_matrix: Array,
+    probe_matrix: Array | None,
+    y: Array,
+    snapshot_at: Array,
+    *,
+    label_window_end: Array | None = None,
+    estimator_settings: dict[str, Any],
+    refit_monotonic: list[int],
+    refit_categorical: list[int],
+    probe_monotonic: list[int],
+    probe_categorical: list[int],
+    max_iter: int,
+) -> tuple[Any, dict[str, Any]]:
+    """Fit HGB on all but the last training week, pick the iteration, then refit on all rows."""
+    started = time.perf_counter()
+    limit = min(EARLY_STOPPING_MAX_ITER, int(max_iter))
+    snapshot = np.asarray(snapshot_at, dtype="datetime64[ms]")
+    holdout = _holdout_mask(snapshot_at)
+    probe_train = _probe_train_mask(holdout, snapshot, label_window_end) if holdout is not None else None
+    if (
+        holdout is None
+        or probe_matrix is None
+        or len(np.unique(y[holdout])) < 2
+        or probe_train is None
+        or int(probe_train.sum()) < 100
+    ):
+        estimator = _hgb_settings(
+            estimator_settings,
+            iterations=limit,
+            monotonic=refit_monotonic,
+            categorical=refit_categorical,
+        ).fit(refit_matrix, y)
+        return estimator, {
+            "fallback": True,
+            "iterations": limit,
+            "holdout_rows": int(holdout.sum()) if holdout is not None else 0,
+            "probe_rows": int(probe_train.sum()) if probe_train is not None else 0,
+            "fit_seconds": round(time.perf_counter() - started, 3),
+            "refit_seconds": 0.0,
+            "capped": bool(limit < int(max_iter)),
+            "hit_cap": bool(limit >= int(max_iter)),
+            "stop_iteration": limit,
+        }
+    if probe_matrix is None or probe_train is None:
+        raise ModelError("probe matrix is missing after the early-stopping fallback")
+    probe = _hgb_settings(
+        estimator_settings,
+        iterations=limit,
+        monotonic=probe_monotonic,
+        categorical=probe_categorical,
+    ).fit(probe_matrix[probe_train], y[probe_train])
+    fit_seconds = time.perf_counter() - started
+    losses = [_log_loss_at(y[holdout], stage[:, 1]) for stage in probe.staged_predict_proba(probe_matrix[holdout])]
+    best, stop = _early_stopping_plan(losses)
+    refit_started = time.perf_counter()
+    estimator = _hgb_settings(
+        estimator_settings,
+        iterations=best,
+        monotonic=refit_monotonic,
+        categorical=refit_categorical,
+    ).fit(refit_matrix, y)
+    refit_seconds = time.perf_counter() - refit_started
+    return estimator, {
+        "fallback": False,
+        "iterations": best,
+        "stop_iteration": stop,
+        "holdout_rows": int(holdout.sum()),
+        "probe_rows": int(probe_train.sum()),
+        "purged_probe_rows": int((~holdout).sum() - probe_train.sum()),
+        "holdout_log_loss": float(losses[best - 1]),
+        "train_log_loss": _log_loss_at(y, estimator.predict_proba(refit_matrix)[:, 1]),
+        "fit_seconds": round(fit_seconds, 3),
+        "refit_seconds": round(refit_seconds, 3),
+        "capped": bool(limit < int(max_iter)),
+        "hit_cap": bool(best >= limit),
+    }
 
 
 def fit_candidate(
@@ -484,32 +725,14 @@ def fit_candidate(
     encoder = fit_encoder(data, spec) if encoder is None else encoder
     matrix = _matrix(data, spec, encoder) if matrix is None else matrix
     if name == "base_rate":
-        estimator: Any = BaseRateModel(float(np.mean(data.y)))
+        headroom_index = spec.names.index("headroom_pct")
+        heads = np.asarray(data.headroom, dtype=np.int64)
+        rates = {int(head): float(np.mean(data.y[heads == head])) for head in np.unique(heads)}
+        estimator: Any = BaseRateModel(rates, float(np.mean(data.y)), headroom_index)
     elif name == "logistic":
-        numeric = _indices(spec, (NUMERIC, BOOLEAN))
-        categorical = _indices(spec, (CATEGORICAL,))
-        preprocess = ColumnTransformer(
-            [
-                (
-                    "numeric",
-                    Pipeline(
-                        [
-                            ("impute", SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True)),
-                            ("scale", StandardScaler()),
-                        ]
-                    ),
-                    numeric,
-                ),
-                (
-                    "categorical",
-                    OneHotEncoder(handle_unknown="ignore", sparse_output=False, dtype=np.float32),
-                    categorical,
-                ),
-            ]
-        )
         estimator = Pipeline(
             [
-                ("preprocess", preprocess),
+                ("preprocess", LogisticPrep(spec)),
                 (
                     "classifier",
                     LogisticRegression(
@@ -522,24 +745,64 @@ def fit_candidate(
         estimator.fit(matrix, data.y)
     elif name == "hist_gradient_boosting":
         categorical = _indices(spec, (CATEGORICAL,))
+        categorical_set = set(categorical)
         selected, dropped = _usable_columns(matrix, categorical, spec.names)
         if not selected:
             raise ModelError("no feature has two distinct values")
-        remapped = [position for position, index in enumerate(selected) if index in set(categorical)]
-        monotonic = [0] * len(selected)
+        refit_categorical = [position for position, index in enumerate(selected) if index in categorical_set]
+        refit_monotonic = [0] * len(selected)
         headroom_index = spec.names.index("headroom_pct")
         if headroom_index in selected:
-            monotonic[selected.index(headroom_index)] = -1
-        estimator = HistGradientBoostingClassifier(
+            refit_monotonic[selected.index(headroom_index)] = -1
+        if config.protocol.kind == "static_split":
+            # The static legacy path is the pr4-final regression pin: keep its original
+            # max-iteration HGB fit and do not apply the backtest early-stopping rule.
+            estimator = _hgb_settings(
+                {
+                    "learning_rate": config.model.learning_rate,
+                    "max_leaf_nodes": config.model.max_leaf_nodes,
+                    "random_state": config.model.random_state,
+                },
+                iterations=config.model.max_iter,
+                monotonic=refit_monotonic,
+                categorical=refit_categorical,
+            ).fit(matrix[:, list(selected)], data.y)
+            return FittedModel(
+                name=name,
+                estimator=estimator,
+                encoder=encoder,
+                spec=spec,
+                selected=selected,
+                dropped=dropped,
+            )
+        holdout = _holdout_mask(data.snapshot_at)
+        probe_selected: tuple[int, ...] = ()
+        if holdout is not None:
+            snapshot = np.asarray(data.snapshot_at, dtype="datetime64[ms]")
+            probe_train = _probe_train_mask(holdout, snapshot, data.label_window_end)
+            non_empty = set(_non_empty_columns(matrix, probe_train))
+            probe_selected = tuple(index for index in selected if index in non_empty)
+        probe_categorical = [position for position, index in enumerate(probe_selected) if index in categorical_set]
+        probe_monotonic = [0] * len(probe_selected)
+        if headroom_index in probe_selected:
+            probe_monotonic[probe_selected.index(headroom_index)] = -1
+        estimator, early_stopping = _fit_hgb_with_early_stopping(
+            matrix[:, list(selected)],
+            matrix[:, list(probe_selected)] if probe_selected else None,
+            data.y,
+            data.snapshot_at,
+            label_window_end=data.label_window_end,
+            estimator_settings={
+                "learning_rate": config.model.learning_rate,
+                "max_leaf_nodes": config.model.max_leaf_nodes,
+                "random_state": config.model.random_state,
+            },
+            refit_monotonic=refit_monotonic,
+            refit_categorical=refit_categorical,
+            probe_monotonic=probe_monotonic,
+            probe_categorical=probe_categorical,
             max_iter=config.model.max_iter,
-            learning_rate=config.model.learning_rate,
-            max_leaf_nodes=config.model.max_leaf_nodes,
-            early_stopping=False,
-            categorical_features=remapped,
-            monotonic_cst=monotonic,
-            random_state=config.model.random_state,
         )
-        estimator.fit(matrix[:, list(selected)], data.y)
         return FittedModel(
             name=name,
             estimator=estimator,
@@ -547,6 +810,7 @@ def fit_candidate(
             spec=spec,
             selected=selected,
             dropped=dropped,
+            early_stopping=early_stopping,
         )
     else:
         raise ModelError(f"unknown model {name!r}")
@@ -660,50 +924,161 @@ def fit_climatology(data: TabularData, *, strength: float = 50.0) -> Climatology
     )
 
 
+CALIBRATION_EPS = 1e-6
+# The static legacy path keeps its three original methods and its 1e-3 output clip so its reference
+# predictions stay byte-identical; the covariate calibrator is a backtest candidate only.
+STATIC_CALIBRATION_METHODS = ("sigmoid", "isotonic", "temperature")
+STATIC_CALIBRATION_EPS = 1e-3
+_COVARIATE_BANDS = tuple(label for label, _, _ in HEADLINE_BANDS)
+
+
+def _logit(values: Array) -> Array:
+    """Return the logit of clipped probabilities."""
+    clipped = np.clip(np.asarray(values, dtype=np.float64), CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
+    return np.log(clipped / (1.0 - clipped))
+
+
+class CovariateCalibrator:
+    """A logistic calibrator on the score, the TTD band and the headroom.
+
+    The score enters as a logit, the band as dummies (the first band is the reference) with
+    band x logit interactions, and the headroom as ``log(1 + headroom)``. One calibrator therefore
+    serves every headroom and every distance to departure.
+    """
+
+    def design(self, raw: Array, hours: Array, headroom: Array) -> Array:
+        """Return the covariate design matrix."""
+        score = _logit(raw)
+        bands = _band_labels(np.asarray(hours, dtype=np.float64), HEADLINE_BANDS)
+        if np.any(bands == "unknown"):
+            raise ModelError("the covariate calibrator only supports the 24 h-30 d TTD domain")
+        dummies = np.column_stack([bands == label for label in _COVARIATE_BANDS[1:]]).astype(np.float64)
+        head = np.full(len(score), np.nan) if headroom is None else np.asarray(headroom, dtype=np.float64)
+        return np.column_stack(
+            [
+                score,
+                dummies,
+                dummies * score[:, None],
+                np.log1p(np.clip(head, 0.0, None)),
+            ]
+        )
+
+    def fit(self, raw: Array, y: Array, hours: Array, headroom: Array) -> CovariateCalibrator:
+        """Fit the logistic regression on the calibration block."""
+        self.model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+        self.model.fit(self.design(raw, hours, headroom), y)
+        return self
+
+    def predict(self, raw: Array, hours: Array, headroom: Array) -> Array:
+        """Return calibrated probabilities for the supplied rows."""
+        return np.asarray(self.model.predict_proba(self.design(raw, hours, headroom))[:, 1], dtype=np.float64)
+
+
+def _covariate_constraints(calibrator: CovariateCalibrator) -> tuple[bool, str]:
+    """Check the fitted coefficient signs: score slope >= 0 per band, headroom slope <= 0."""
+    coefficients = np.asarray(calibrator.model.coef_, dtype=np.float64).ravel()
+    if len(coefficients) != 2 * (len(_COVARIATE_BANDS) - 1) + 2:
+        raise ModelError("the covariate calibrator has an unexpected design width")
+    base = float(coefficients[0])
+    for index, label in enumerate(_COVARIATE_BANDS):
+        slope = base if index == 0 else base + float(coefficients[(len(_COVARIATE_BANDS) - 1) + index])
+        if slope < 0.0:
+            return False, f"not monotone in score in band {label}"
+    if float(coefficients[-1]) > 0.0:
+        return False, "not non-increasing in headroom"
+    return True, ""
+
+
 class ScoreCalibrator:
     """A calibrator over raw probabilities, fitted on a held-out slice."""
 
-    def __init__(self, method: str, model: Any, temperature: float | None = None) -> None:
+    def __init__(
+        self,
+        method: str,
+        model: Any,
+        temperature: float | None = None,
+        *,
+        requested: str | None = None,
+        fallback: bool = False,
+        fallback_reason: str | None = None,
+        epsilon: float = CALIBRATION_EPS,
+    ) -> None:
         """Initialise the instance."""
         self.method = method
         self.model = model
         self.temperature = temperature
+        self.requested = requested or method
+        self.fallback = fallback
+        self.fallback_reason = fallback_reason
+        self.epsilon = float(epsilon)
 
-    def predict(self, raw: Array) -> Array:
-        """Return model probabilities for the supplied rows."""
-        clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+    def predict(self, raw: Array, *, hours: Array | None = None, headroom: Array | None = None) -> Array:
+        """Return calibrated probabilities for the supplied rows."""
+        clipped = np.clip(raw, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
         if self.method == "constant":
-            return np.full(len(clipped), float(self.model), dtype=np.float64)
-        if self.method == "temperature":
+            values = np.full(len(clipped), float(self.model), dtype=np.float64)
+        elif self.method == "temperature":
             if self.temperature is None:
                 raise ModelError("temperature calibrator has no fitted temperature")
-            logits = np.log(clipped / (1.0 - clipped))
-            values = expit(logits / float(self.temperature))
+            values = expit(_logit(clipped) / float(self.temperature))
         elif self.method == "isotonic":
             values = self.model.predict(clipped)
+        elif self.method == "covariate":
+            if hours is None or headroom is None:
+                raise ModelError("the covariate calibrator needs hours_to_departure and headroom")
+            values = self.model.predict(clipped, np.asarray(hours, dtype=np.float64), headroom)
         else:
             values = self.model.predict_proba(clipped.reshape(-1, 1))[:, 1]
-        return np.asarray(np.clip(values, 1e-3, 1.0 - 1e-3), dtype=np.float64)
+        return np.asarray(np.clip(values, self.epsilon, 1.0 - self.epsilon), dtype=np.float64)
 
 
-def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> ScoreCalibrator:
-    """Fit and return a probability calibrator."""
-    clipped = np.clip(raw, 1e-6, 1.0 - 1e-6)
+def fit_calibrator(
+    raw: Array,
+    y: Array,
+    method: str,
+    *,
+    min_positives: int,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
+) -> ScoreCalibrator:
+    """Fit and return a probability calibrator with the requested and fitted method."""
+    clipped = np.clip(raw, CALIBRATION_EPS, 1.0 - CALIBRATION_EPS)
+    requested = method
     if len(np.unique(y)) < 2:
-        return ScoreCalibrator("constant", float(np.mean(y)))
+        return ScoreCalibrator(
+            "constant",
+            float(np.mean(y)),
+            requested=requested,
+            fallback=True,
+            fallback_reason="single-class calibration block",
+            epsilon=epsilon,
+        )
     positives = int(np.sum(y))
     if method == "isotonic" and positives < min_positives:
         method = "sigmoid"
+        fallback = True
+        fallback_reason = f"isotonic needs {min_positives} positives, got {positives}"
+    else:
+        fallback = False
+        fallback_reason = None
     if method == "sigmoid":
         model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
         model.fit(clipped.reshape(-1, 1), y)
-        return ScoreCalibrator("sigmoid", model)
+        return ScoreCalibrator(
+            "sigmoid",
+            model,
+            requested=requested,
+            fallback=fallback,
+            fallback_reason=fallback_reason,
+            epsilon=epsilon,
+        )
     if method == "isotonic":
         model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         model.fit(clipped, y)
-        return ScoreCalibrator("isotonic", model)
+        return ScoreCalibrator("isotonic", model, requested=requested, epsilon=epsilon)
     if method == "temperature":
-        logits = np.log(clipped / (1.0 - clipped))
+        logits = _logit(clipped)
 
         def loss(log_temperature: float) -> float:
             """Return the calibration loss for one temperature."""
@@ -711,7 +1086,35 @@ def fit_calibrator(raw: Array, y: Array, method: str, *, min_positives: int) -> 
             return float(-np.mean(y * np.log(probabilities) + (1 - y) * np.log(1.0 - probabilities)))
 
         result = minimize_scalar(loss, bounds=(-3.0, 3.0), method="bounded")
-        return ScoreCalibrator("temperature", None, float(np.exp(result.x)))
+        return ScoreCalibrator("temperature", None, float(np.exp(result.x)), requested=requested, epsilon=epsilon)
+    if method == "covariate":
+        if hours is None or headroom is None:
+            raise ModelError("the covariate calibrator needs hours_to_departure and headroom")
+        if positives < min_positives:
+            model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
+            model.fit(clipped.reshape(-1, 1), y)
+            return ScoreCalibrator(
+                "sigmoid",
+                model,
+                requested=requested,
+                fallback=True,
+                fallback_reason=f"covariate needs {min_positives} positives, got {positives}",
+                epsilon=epsilon,
+            )
+        calibrator = CovariateCalibrator().fit(clipped, y, hours, headroom)
+        monotone, reason = _covariate_constraints(calibrator)
+        if not monotone:
+            model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+            model.fit(clipped, y)
+            return ScoreCalibrator(
+                "isotonic",
+                model,
+                requested=requested,
+                fallback=True,
+                fallback_reason=reason,
+                epsilon=epsilon,
+            )
+        return ScoreCalibrator("covariate", calibrator, requested=requested, epsilon=epsilon)
     raise ModelError(f"unknown calibration method {method!r}")
 
 
@@ -737,14 +1140,18 @@ def _metrics(y: Array, probabilities: Array) -> dict[str, float | None]:
     }
 
 
-def _cross_fitted_with_folds(
+def _cross_fitted_detailed(
     raw: Array,
     y: Array,
     groups: Array,
     method: str,
     config: TrainingConfig,
-) -> tuple[Array, Array]:
-    """Fit the calibrator out-of-fold and return predictions plus fold ids."""
+    *,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
+) -> tuple[Array, Array, tuple[dict[str, Any], ...]]:
+    """Fit the calibrator out-of-fold and return predictions, fold ids and fitted methods."""
     unique = np.unique(groups)
     folds = min(config.calibration.folds, len(unique))
     if folds < 2:
@@ -752,23 +1159,128 @@ def _cross_fitted_with_folds(
     splitter = GroupKFold(n_splits=folds)
     predicted = np.full(len(raw), np.nan, dtype=np.float64)
     fold_ids = np.full(len(raw), -1, dtype=np.int16)
+    methods: list[dict[str, Any]] = []
     for fold, (fit_idx, predict_idx) in enumerate(splitter.split(raw, y, groups)):
         calibrator = fit_calibrator(
             raw[fit_idx],
             y[fit_idx],
             method,
             min_positives=config.calibration.min_positives,
+            hours=None if hours is None else hours[fit_idx],
+            headroom=None if headroom is None else headroom[fit_idx],
+            epsilon=epsilon,
         )
-        predicted[predict_idx] = calibrator.predict(raw[predict_idx])
+        predicted[predict_idx] = calibrator.predict(
+            raw[predict_idx],
+            hours=None if hours is None else hours[predict_idx],
+            headroom=None if headroom is None else headroom[predict_idx],
+        )
         fold_ids[predict_idx] = fold
+        methods.append(
+            {
+                "fold": fold,
+                "requested": calibrator.requested,
+                "fitted": calibrator.method,
+                "fallback": calibrator.fallback,
+                "fallback_reason": calibrator.fallback_reason,
+            }
+        )
     if np.isnan(predicted).any():
         raise ModelError("cross-fitted calibration left rows without a prediction")
+    return predicted, fold_ids, tuple(methods)
+
+
+def _cross_fitted_with_folds(
+    raw: Array,
+    y: Array,
+    groups: Array,
+    method: str,
+    config: TrainingConfig,
+    *,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
+) -> tuple[Array, Array]:
+    """Fit the calibrator out-of-fold and return predictions plus fold ids."""
+    predicted, fold_ids, _ = _cross_fitted_detailed(
+        raw, y, groups, method, config, hours=hours, headroom=headroom, epsilon=epsilon
+    )
     return predicted, fold_ids
 
 
-def _cross_fitted(raw: Array, y: Array, groups: Array, method: str, config: TrainingConfig) -> Array:
+def _cross_fitted(
+    raw: Array,
+    y: Array,
+    groups: Array,
+    method: str,
+    config: TrainingConfig,
+    *,
+    hours: Array | None = None,
+    headroom: Array | None = None,
+    epsilon: float = CALIBRATION_EPS,
+) -> Array:
     """Return out-of-fold calibrated predictions by group."""
-    return _cross_fitted_with_folds(raw, y, groups, method, config)[0]
+    return _cross_fitted_with_folds(raw, y, groups, method, config, hours=hours, headroom=headroom, epsilon=epsilon)[0]
+
+
+def _cross_fitted_at_headroom(
+    fit_raw: Array,
+    fit_y: Array,
+    groups: Array,
+    apply_raw: Array,
+    method: str,
+    config: TrainingConfig,
+    *,
+    hours: Array,
+    fit_headroom: Array,
+    predict_headroom: Array,
+) -> tuple[Array, tuple[dict[str, Any], ...]]:
+    """Cross-fit on the assigned headroom, then predict the same rows at a fixed headroom.
+
+    This keeps the threshold on the same calibrator scale that scores the test rows: the fold's
+    calibrator is fitted on the calibration block's assigned-headroom rows and applied to the
+    relabelled scores at ``predict_headroom``.
+    """
+    unique = np.unique(groups)
+    folds = min(config.calibration.folds, len(unique))
+    if folds < 2:
+        raise ModelError("cross-fitting needs at least two groups; refusing to score in-sample")
+    if len(apply_raw) != len(fit_raw):
+        raise ModelError("cross-fitted calibration applied to a different population")
+    splitter = GroupKFold(n_splits=folds)
+    predicted = np.full(len(apply_raw), np.nan, dtype=np.float64)
+    methods: list[dict[str, Any]] = []
+    for fold, (fit_idx, predict_idx) in enumerate(splitter.split(fit_raw, fit_y, groups)):
+        calibrator = fit_calibrator(
+            fit_raw[fit_idx],
+            fit_y[fit_idx],
+            method,
+            min_positives=config.calibration.min_positives,
+            hours=hours[fit_idx],
+            headroom=fit_headroom[fit_idx],
+        )
+        predicted[predict_idx] = calibrator.predict(
+            apply_raw[predict_idx],
+            hours=hours[predict_idx],
+            headroom=predict_headroom[predict_idx],
+        )
+        methods.append(
+            {
+                "fold": fold,
+                "requested": calibrator.requested,
+                "fitted": calibrator.method,
+                "fallback": calibrator.fallback,
+                "fallback_reason": calibrator.fallback_reason,
+            }
+        )
+    if np.isnan(predicted).any():
+        raise ModelError("cross-fitted calibration left rows without a prediction")
+    return predicted, tuple(methods)
+
+
+def _hours(data: TabularData) -> Array:
+    """Return hours to departure as a float array."""
+    return np.asarray(data.features["hours_to_departure"], dtype=np.float64)
 
 
 @dataclass(frozen=True)
@@ -871,6 +1383,85 @@ class Evaluation:
         }
 
 
+WILSON_ONE_SIDED_Z = 1.6448536269514722
+
+
+def _wilson_lower(successes: int, total: int, z: float = WILSON_ONE_SIDED_Z) -> float:
+    """Return the one-sided Wilson lower bound of a proportion."""
+    if total <= 0:
+        return 0.0
+    proportion = successes / total
+    denominator = 1.0 + z * z / total
+    centre = proportion + z * z / (2.0 * total)
+    margin = z * np.sqrt(proportion * (1.0 - proportion) / total + z * z / (4.0 * total * total))
+    return float(max(0.0, (centre - margin) / denominator))
+
+
+def _cell_threshold(
+    y: Array,
+    probabilities: Array,
+    floor: float,
+    min_alerts: int,
+) -> dict[str, Any]:
+    """Choose the highest-recall threshold whose Wilson lower bound meets the precision floor."""
+    labels = np.asarray(y, dtype=np.int8)
+    scores = np.asarray(probabilities, dtype=np.float64)
+    finite = np.isfinite(scores)
+    if not np.all(finite):
+        labels = labels[finite]
+        scores = scores[finite]
+    positives = int(np.sum(labels))
+    row: dict[str, Any] = {
+        "threshold": None,
+        "alerts": 0,
+        "precision": None,
+        "recall": None,
+        "wilson_lower": None,
+        "qualified": False,
+        "rows": len(labels),
+        "positives": positives,
+        "floor": float(floor),
+        "min_alerts": int(min_alerts),
+    }
+    if len(labels) == 0 or positives == 0:
+        return row
+    order = np.argsort(-scores, kind="stable")
+    sorted_scores = scores[order]
+    sorted_labels = labels[order]
+    # Every distinct score is a candidate cut; ties enter together so the result is deterministic.
+    boundaries = np.flatnonzero(np.r_[sorted_scores[1:] != sorted_scores[:-1], True])
+    cumulative = np.cumsum(sorted_labels)
+    best: tuple[float, float, int, float, float] | None = None
+    for index in boundaries:
+        alerts = int(index + 1)
+        true_positive = int(cumulative[index])
+        if alerts < min_alerts:
+            continue
+        precision = true_positive / alerts
+        lower = _wilson_lower(true_positive, alerts)
+        recall = true_positive / positives
+        if lower < floor:
+            continue
+        threshold = float(sorted_scores[index])
+        candidate = (recall, threshold, alerts, precision, lower)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    if best is None:
+        return row
+    recall, threshold, alerts, precision, lower = best
+    row.update(
+        {
+            "threshold": float(threshold),
+            "alerts": int(alerts),
+            "precision": float(precision),
+            "recall": float(recall),
+            "wilson_lower": float(lower),
+            "qualified": True,
+        }
+    )
+    return row
+
+
 def _threshold(y: Array, probabilities: Array, floor: float) -> tuple[float, bool]:
     """Choose a threshold meeting the precision floor or maximising F1."""
     classes = np.unique(y)
@@ -896,6 +1487,18 @@ def _decision_metrics(y: Array, probabilities: Array, threshold: float) -> dict[
     precision = true_positive / max(true_positive + false_positive, 1)
     recall = true_positive / max(true_positive + false_negative, 1)
     return {"precision_at_threshold": float(precision), "recall_at_threshold": float(recall)}
+
+
+def _pr_curve_points(y: Array, probabilities: Array, targets: tuple[float, ...]) -> list[dict[str, float]]:
+    """Return the best precision at or above every recall target."""
+    precision, recall, _ = precision_recall_curve(y, probabilities)
+    points: list[dict[str, float]] = []
+    for target in targets:
+        mask = recall >= target
+        if not mask.any():
+            continue
+        points.append({"recall": float(target), "precision": float(np.max(precision[mask]))})
+    return points
 
 
 def _calibration_curve(y: Array, probabilities: Array, bins: int) -> tuple[Array, Array, Array]:
@@ -1217,8 +1820,13 @@ def _decision_row(
     groups: Array,
     replicates: int,
     seed: int,
+    labels: Array | None = None,
 ) -> dict[str, Any]:
-    """One decision-value row for an alert mask and a set of check prices."""
+    """One decision-value row for an alert mask and a set of check prices.
+
+    ``saving`` is the check fare minus today's fare: positive when waiting costs more. An alert
+    means booking now, so the policy saves the rise on alerted rows and nothing elsewhere.
+    """
     saving_vs_wait = np.where(alert, saving, 0.0)
     saving_vs_book = -np.where(alert, 0.0, saving)
     row: dict[str, Any] = {
@@ -1240,6 +1848,13 @@ def _decision_row(
     }
     if headroom_pct is not None:
         row["headroom_pct"] = int(headroom_pct)
+    if labels is not None:
+        truth = np.asarray(labels, dtype=np.int8)
+        perfect = truth == 1
+        row["perfect_breach_rows"] = int(perfect.sum())
+        row["perfect_breach_vs_wait_eur"] = float(np.mean(np.where(perfect, saving, 0.0)))
+        row["perfect_breach_vs_book_eur"] = float(np.mean(-np.where(perfect, 0.0, saving)))
+        row["perfect_timing_vs_book_eur"] = float(np.mean(np.maximum(-saving, 0.0)))
     return row
 
 
@@ -1340,7 +1955,14 @@ def _fit_candidates(
         else:
             metrics[name] = _metrics(
                 validation_select.y,
-                _cross_fitted(raw, validation_select.y, validation_select.route_day, calibration_method, config),
+                _cross_fitted(
+                    raw,
+                    validation_select.y,
+                    validation_select.route_day,
+                    calibration_method,
+                    config,
+                    epsilon=STATIC_CALIBRATION_EPS,
+                ),
             )
     return candidates, metrics, train_metrics
 
@@ -1377,7 +1999,16 @@ def _fit_final_calibration(
     method_scores: dict[str, dict[str, float | None]] = {}
     oof_predictions: dict[str, Array] = {}
     for method in config.calibration.methods:
-        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
+        if method not in STATIC_CALIBRATION_METHODS:
+            continue
+        oof_predictions[method] = _cross_fitted(
+            raw_cal,
+            cal_data.y,
+            cal_data.route_day,
+            method,
+            config,
+            epsilon=STATIC_CALIBRATION_EPS,
+        )
         method_scores[method] = _metrics(cal_data.y, oof_predictions[method])
 
     def _brier_key(name: str) -> float:
@@ -1391,6 +2022,7 @@ def _fit_final_calibration(
         cal_data.y,
         requested,
         min_positives=config.calibration.min_positives,
+        epsilon=STATIC_CALIBRATION_EPS,
     )
     # Preserve the requested method only for the single-class constant calibrator; otherwise
     # record the effective method (for example an isotonic-to-sigmoid fallback) and use its
@@ -1398,7 +2030,14 @@ def _fit_final_calibration(
     calibration_constant = calibrator.method == "constant"
     method = requested if calibration_constant else calibrator.method
     if method not in oof_predictions:
-        oof_predictions[method] = _cross_fitted(raw_cal, cal_data.y, cal_data.route_day, method, config)
+        oof_predictions[method] = _cross_fitted(
+            raw_cal,
+            cal_data.y,
+            cal_data.route_day,
+            method,
+            config,
+            epsilon=STATIC_CALIBRATION_EPS,
+        )
     threshold, threshold_met = _threshold(
         cal_data.y,
         oof_predictions[method],
@@ -1423,9 +2062,17 @@ def _calibrated_scores(
             fit_y,
             method,
             min_positives=config.calibration.min_positives,
+            epsilon=STATIC_CALIBRATION_EPS,
         )
         return calibrator.predict(apply_raw), np.full(len(apply_raw), -1, dtype=np.int16), "full"
-    predicted, folds = _cross_fitted_with_folds(fit_raw, fit_y, groups, method, config)
+    predicted, folds = _cross_fitted_with_folds(
+        fit_raw,
+        fit_y,
+        groups,
+        method,
+        config,
+        epsilon=STATIC_CALIBRATION_EPS,
+    )
     if len(apply_raw) != len(predicted):
         raise ModelError("out-of-fold calibration applied to a different population")
     return predicted, folds, "oof"
