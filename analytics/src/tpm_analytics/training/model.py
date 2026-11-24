@@ -741,6 +741,27 @@ def fit_candidate(
         headroom_index = spec.names.index("headroom_pct")
         if headroom_index in selected:
             refit_monotonic[selected.index(headroom_index)] = -1
+        if config.protocol.kind == "static_split":
+            # The static legacy path is the pr4-final regression pin: keep its original
+            # max-iteration HGB fit and do not apply the backtest early-stopping rule.
+            estimator = _hgb_settings(
+                {
+                    "learning_rate": config.model.learning_rate,
+                    "max_leaf_nodes": config.model.max_leaf_nodes,
+                    "random_state": config.model.random_state,
+                },
+                iterations=config.model.max_iter,
+                monotonic=refit_monotonic,
+                categorical=refit_categorical,
+            ).fit(matrix[:, list(selected)], data.y)
+            return FittedModel(
+                name=name,
+                estimator=estimator,
+                encoder=encoder,
+                spec=spec,
+                selected=selected,
+                dropped=dropped,
+            )
         holdout = _holdout_mask(data.snapshot_at)
         probe_selected = selected
         if holdout is not None:
