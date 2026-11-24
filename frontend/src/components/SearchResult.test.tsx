@@ -112,17 +112,17 @@ describe('SearchResult watch action', () => {
     await waitFor(() => expect(document.activeElement).toBe(link));
   });
 
-  it('keeps the watch button and reports an error when the mutation fails', async () => {
+  it('keeps the dialog and amount when the mutation fails', async () => {
     mockMonitor.mockResolvedValue({ error: { message: 'Nope' } });
 
     renderResult();
     startWatch();
 
-    await waitFor(() => expect(mockAddAlert).toHaveBeenCalledWith('Nope', AlertSeverity.Error));
+    await waitFor(() => expect(screen.getByText('Could not save the limit. Please try again.')).toBeInTheDocument());
     expect(mockAddAlert).not.toHaveBeenCalledWith(expect.stringContaining('successfully'), AlertSeverity.Success);
-    const watch = await screen.findByRole('button', { name: WATCH_NAME });
-    expect(watch).toBeInTheDocument();
-    await waitFor(() => expect(watch).toHaveFocus());
+    const input = screen.getByRole('textbox', { name: 'Limit price' });
+    expect(input).toHaveValue('80');
+    expect(input).toHaveFocus();
     expect(screen.queryByRole('link', { name: /watchlist/i })).not.toBeInTheDocument();
   });
 
@@ -132,13 +132,9 @@ describe('SearchResult watch action', () => {
     renderResult();
     startWatch();
 
-    await waitFor(() =>
-      expect(mockAddAlert).toHaveBeenCalledWith(
-        'Failed to add journey to watchlist. Please try again.',
-        AlertSeverity.Error
-      )
-    );
-    expect(await screen.findByRole('button', { name: WATCH_NAME })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Could not save the limit. Please try again.')).toBeInTheDocument());
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Limit price' })).toHaveValue('80');
     expect(screen.queryByRole('link', { name: /watchlist/i })).not.toBeInTheDocument();
   });
 
@@ -152,7 +148,7 @@ describe('SearchResult watch action', () => {
     expect(input).toHaveFocus();
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input).toHaveAttribute('aria-describedby', 'limit-price-helper-text');
-    expect(screen.getByText(/Enter an amount above €42/)).toBeInTheDocument();
+    expect(screen.getByText(/Your limit must be above the current fare of €42/, { selector: 'p' })).toBeInTheDocument();
   });
 
   it('accepts a comma decimal and rejects an amount at or below the current fare', async () => {
@@ -178,11 +174,19 @@ describe('SearchResult watch action', () => {
     input.focus();
 
     fireEvent.change(input, { target: { value: '10' } });
-    await waitFor(() => expect(screen.getByText(/Enter an amount above €42/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Your limit must be above the current fare of €42/, { selector: 'p' })
+      ).toBeInTheDocument()
+    );
     expect(input).toHaveFocus();
 
     fireEvent.change(input, { target: { value: '80' } });
-    await waitFor(() => expect(screen.queryByText(/Enter an amount above €42/)).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Your limit must be above the current fare of €42/, { selector: 'p' })
+      ).not.toBeInTheDocument()
+    );
     expect(input).toHaveFocus();
   });
 
@@ -197,13 +201,25 @@ describe('SearchResult watch action', () => {
     fireEvent.change(input, { target: { value: '12.34.56' } });
     expect(input).toHaveValue('12.34');
 
+    fireEvent.change(input, { target: { value: '1.234,56' } });
+    expect(input).toHaveValue('1234,56');
+
     fireEvent.change(input, { target: { value: 'abc' } });
     expect(input).toHaveValue('');
+
+    fireEvent.change(input, { target: { value: '８０．５' } });
+    expect(input).toHaveValue('80.5');
+
+    fireEvent.change(input, { target: { value: '1234567890123' } });
+    expect(input).toHaveValue('123456789');
+
+    fireEvent.paste(input, { clipboardData: { getData: () => '1.234,56' } });
+    expect(input).toHaveValue('1234,56');
 
     fireEvent.change(input, { target: { value: '42.' } });
     expect(input).toHaveValue('42.');
     await new Promise((resolve) => setTimeout(resolve, 450));
-    expect(screen.queryByText(/Enter an amount above/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your limit must be above/)).not.toBeInTheDocument();
   });
 
   it('submits with Enter once the amount is valid', async () => {
@@ -218,7 +234,7 @@ describe('SearchResult watch action', () => {
     await waitFor(() => expect(mockMonitor).toHaveBeenCalledWith(expect.objectContaining({ limitPrice: 80 })));
   });
 
-  it('announces progress without removing the row action while pending', async () => {
+  it('shows a saving state in the dialog while pending', async () => {
     let resolveMonitor!: (value: unknown) => void;
     mockMonitor.mockReturnValue(
       new Promise((resolve) => {
@@ -231,9 +247,10 @@ describe('SearchResult watch action', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Limit price' }), { target: { value: '80' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
 
-    const pending = await screen.findByRole('button', { name: /Adding the 10:00 connection to your watchlist/ });
-    expect(pending).toHaveAttribute('aria-busy', 'true');
-    expect(pending).toHaveAttribute('aria-disabled', 'true');
+    const saving = await screen.findByRole('button', { name: 'Saving…' });
+    expect(saving).toBeDisabled();
+    expect(saving).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('textbox', { name: 'Limit price' })).toHaveValue('80');
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
 
     resolveMonitor({ data: { monitorJourney: { id: 'jm-4' } } });

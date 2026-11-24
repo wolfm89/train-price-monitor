@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Typography,
   Button,
   Box,
@@ -8,6 +9,7 @@ import {
   DialogContent,
   DialogActions,
   TextField,
+  InputAdornment,
   CircularProgress,
   Chip,
   Paper,
@@ -23,6 +25,7 @@ import { AuthContext } from '../providers/AuthProvider';
 import useAlert from '../hooks/useAlert';
 import { AlertSeverity } from '../providers/AlertProvider';
 import { JourneySearchOptions } from './SearchMask';
+import VisuallyHidden from './VisuallyHidden';
 import { formatCurrency, formatDuration, formatTime } from '../utils/format';
 
 export interface Journey {
@@ -63,22 +66,58 @@ const ACTION_BUTTON_SX = {
   whiteSpace: 'nowrap',
 } as const;
 
+const MAX_INTEGER_DIGITS = 9;
+
 function parseLimitPrice(raw: string): number {
-  return Number.parseFloat(raw.trim().replace(',', '.'));
+  return Number.parseFloat(raw.trim().replace(/[.,]/g, '.'));
 }
 
 /**
  * Keeps the limit field to one positive decimal amount. Letters, signs, spaces
  * and extra separators are removed; the user may still type a partial value
  * such as `42.` while entering the decimals.
+ *
+ * A pasted value may use thousands grouping (`1.234,56` or `1,234.56`); the
+ * paste path recognises that and normalises it to a plain decimal. Typing uses
+ * the first separator as the decimal point so that a second separator cannot
+ * silently multiply the amount.
  */
-function sanitizeLimitPrice(raw: string): string {
-  const cleaned = raw.replace(/[^\d.,]/g, '');
+function sanitizeLimitPrice(raw: string, fromPaste = false): string {
+  const cleaned = raw.normalize('NFKC').replace(/[^\d.,]/g, '');
+  if (cleaned === '') return '';
+
+  if (fromPaste) {
+    const separatorIndex = Math.max(cleaned.lastIndexOf('.'), cleaned.lastIndexOf(','));
+    if (separatorIndex === -1) return cleaned.slice(0, MAX_INTEGER_DIGITS);
+
+    const separatorCount = (cleaned.match(/[.,]/g) ?? []).length;
+    const whole = cleaned.slice(0, separatorIndex).replace(/[.,]/g, '');
+    const fraction = cleaned.slice(separatorIndex + 1).replace(/[.,]/g, '');
+    const treatAsGrouping = separatorCount > 1 ? fraction.length !== 2 : fraction.length === 3 && whole !== '0';
+
+    if (treatAsGrouping) {
+      return `${whole}${fraction}`.slice(0, MAX_INTEGER_DIGITS);
+    }
+    return `${whole.slice(0, MAX_INTEGER_DIGITS)}${cleaned[separatorIndex]}${fraction.slice(0, 2)}`;
+  }
+
   const separatorIndex = cleaned.search(/[.,]/);
-  if (separatorIndex === -1) return cleaned;
+  if (separatorIndex === -1) return cleaned.slice(0, MAX_INTEGER_DIGITS);
+
+  // A dot plus a comma usually means a grouped amount; treat the last one as
+  // the decimal separator so typing "1.234,56" does not become "1.23".
+  if (cleaned.includes('.') && cleaned.includes(',')) {
+    const last = Math.max(cleaned.lastIndexOf('.'), cleaned.lastIndexOf(','));
+    const whole = cleaned.slice(0, last).replace(/[.,]/g, '');
+    const fraction = cleaned
+      .slice(last + 1)
+      .replace(/[.,]/g, '')
+      .slice(0, 2);
+    return `${whole.slice(0, MAX_INTEGER_DIGITS)}${cleaned[last]}${fraction}`;
+  }
 
   const separator = cleaned[separatorIndex];
-  const whole = cleaned.slice(0, separatorIndex);
+  const whole = cleaned.slice(0, separatorIndex).slice(0, MAX_INTEGER_DIGITS);
   const fraction = cleaned
     .slice(separatorIndex + 1)
     .replace(/[.,]/g, '')
@@ -98,6 +137,7 @@ const SearchResult: React.FC<Props> = ({
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
   const [limitPrice, setLimitPrice] = useState('');
   const [limitError, setLimitError] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const limitPriceRef = useRef<HTMLInputElement>(null);
   const { user } = useContext(AuthContext);
   const [, monitorJourney] = useMutation(MonitorJourney);
@@ -113,7 +153,6 @@ const SearchResult: React.FC<Props> = ({
   // is dropped back to the top of the page after confirming.
   const [focusToken, setFocusToken] = useState<string | null>(null);
   const addedLinkRefs = useRef<Record<string, HTMLElement | null>>({});
-  const watchButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     if (!focusToken) return;
@@ -122,12 +161,6 @@ const SearchResult: React.FC<Props> = ({
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [focusToken]);
-
-  const refocusWatchButton = (refreshToken: string) => {
-    window.setTimeout(() => {
-      watchButtonRefs.current[refreshToken]?.focus();
-    }, 250);
-  };
 
   const isPending = (refreshToken: string) => pendingToken === refreshToken;
 
@@ -147,19 +180,30 @@ const SearchResult: React.FC<Props> = ({
     return () => window.clearTimeout(timeout);
   }, [limitPrice, openModal, selectedJourney?.price]);
 
+  useEffect(() => {
+    if (submitError && pendingToken === null) {
+      limitPriceRef.current?.focus();
+    }
+  }, [submitError, pendingToken]);
+
   const handleWatchClick = (journey: Journey) => {
     setSelectedJourney(journey);
+    setLimitPrice('');
     setLimitError(false);
+    setSubmitError('');
     setOpenModal(true);
   };
 
   const handleCloseModal = () => {
+    if (pendingToken) return;
     setOpenModal(false);
-    setTimeout(() => {
-      setSelectedJourney(null);
-      setLimitPrice('');
-      setLimitError(false);
-    }, 100);
+  };
+
+  const resetDialog = () => {
+    setSelectedJourney(null);
+    setLimitPrice('');
+    setLimitError(false);
+    setSubmitError('');
   };
 
   const handleConfirmWatch = () => {
@@ -172,6 +216,7 @@ const SearchResult: React.FC<Props> = ({
 
     const { refreshToken, departure, fromId, toId } = selectedJourney;
     setPendingToken(refreshToken);
+    setSubmitError('');
     const expires = new Date(departure);
     expires.setHours(expires.getHours() - 1);
 
@@ -186,10 +231,8 @@ const SearchResult: React.FC<Props> = ({
       options: searchOptions,
     })
       .then((result) => {
-        setSelectedJourney(null);
         if (result.error) {
-          addAlert(result.error.message, AlertSeverity.Error);
-          refocusWatchButton(refreshToken);
+          setSubmitError('Could not save the limit. Please try again.');
           return;
         }
 
@@ -198,25 +241,21 @@ const SearchResult: React.FC<Props> = ({
           // A success response without an id cannot produce a deeplink. Treat
           // it as a failure instead of claiming success and leaving "+ Watch"
           // active, which would invite a duplicate.
-          addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
-          refocusWatchButton(refreshToken);
+          setSubmitError('Could not save the limit. Please try again.');
           return;
         }
 
         setAddedJourneyIds((prev) => ({ ...prev, [refreshToken]: journeyId }));
         setFocusToken(refreshToken);
+        setOpenModal(false);
         addAlert('Journey successfully added to watchlist!', AlertSeverity.Success);
       })
       .catch(() => {
-        addAlert('Failed to add journey to watchlist. Please try again.', AlertSeverity.Error);
-        refocusWatchButton(refreshToken);
+        setSubmitError('Could not save the limit. Please try again.');
       })
       .finally(() => {
         setPendingToken(null);
       });
-
-    setOpenModal(false);
-    setLimitPrice('');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -229,6 +268,10 @@ const SearchResult: React.FC<Props> = ({
     const floatValue = parseLimitPrice(limitPrice);
     return Number.isFinite(floatValue) && floatValue > (selectedJourney?.price ?? 0);
   };
+
+  const currentFare = formatCurrency(selectedJourney?.price ?? 0);
+  const limitErrorMessage = `Your limit must be above the current fare of ${currentFare}.`;
+  const limitHint = `Must be above ${currentFare}. Numbers only, up to 2 decimals.`;
 
   return (
     <>
@@ -405,18 +448,15 @@ const SearchResult: React.FC<Props> = ({
                 ) : (
                   <Button
                     size="small"
-                    aria-disabled={pendingToken !== null}
+                    aria-disabled={isPending(result.refreshToken)}
                     aria-busy={isPending(result.refreshToken)}
                     aria-label={
                       isPending(result.refreshToken)
                         ? `Adding the ${formatTime(result.departure)} connection to your watchlist…`
                         : `Add the ${formatTime(result.departure)}\u2013${formatTime(result.arrival)} ${result.means.join(' + ')} connection to your watchlist`
                     }
-                    ref={(el) => {
-                      watchButtonRefs.current[result.refreshToken] = el;
-                    }}
                     onClick={() => {
-                      if (!pendingToken) handleWatchClick(result);
+                      if (!isPending(result.refreshToken)) handleWatchClick(result);
                     }}
                     sx={{
                       ...ACTION_BUTTON_SX,
@@ -473,11 +513,17 @@ const SearchResult: React.FC<Props> = ({
       )}
 
       {/* Watch Modal */}
-      <Dialog open={openModal} onClose={handleCloseModal}>
+      <Dialog
+        open={openModal}
+        onClose={handleCloseModal}
+        maxWidth="xs"
+        fullWidth
+        slotProps={{ transition: { onExited: resetDialog } }}
+      >
         <DialogTitle>Set limit price</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Current Price: {selectedJourney?.price != null ? formatCurrency(selectedJourney.price) : 'n/a'}
+            Current price: {currentFare}
           </Typography>
           <TextField
             id="limit-price"
@@ -487,23 +533,57 @@ const SearchResult: React.FC<Props> = ({
             inputMode="decimal"
             autoComplete="off"
             placeholder="e.g. 80.00"
+            required
+            fullWidth
+            disabled={pendingToken !== null}
             inputRef={limitPriceRef}
             value={limitPrice}
             onChange={(e) => {
               setLimitPrice(sanitizeLimitPrice(e.target.value));
-              setLimitError(false);
+              setSubmitError('');
+            }}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text');
+              if (!text) return;
+              e.preventDefault();
+              setLimitPrice(sanitizeLimitPrice(text, true));
+              setSubmitError('');
             }}
             onBlur={() => {
               if (limitPrice.trim() !== '') setLimitError(!isValidLimitPrice());
             }}
             onKeyDown={handleKeyDown}
             error={limitError}
-            helperText={limitError ? `Enter an amount above ${formatCurrency(selectedJourney?.price ?? 0)}.` : ''}
+            helperText={limitError ? limitErrorMessage : limitHint}
+            slotProps={{
+              input: { startAdornment: <InputAdornment position="start">€</InputAdornment> },
+              htmlInput: { enterKeyHint: 'done' },
+            }}
           />
+          <VisuallyHidden>
+            <span role="status" aria-live="polite">
+              {limitError ? limitErrorMessage : ''}
+            </span>
+          </VisuallyHidden>
+          {submitError && (
+            <Alert severity="error" sx={{ mt: 1.5 }}>
+              {submitError}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseModal}>Cancel</Button>
-          <Button onClick={handleConfirmWatch}>Save limit</Button>
+          <Button onClick={handleCloseModal} disabled={pendingToken !== null} sx={{ minHeight: { xs: 44 } }}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirmWatch}
+            disabled={pendingToken !== null}
+            aria-busy={pendingToken !== null}
+            startIcon={pendingToken !== null ? <CircularProgress size={16} color="inherit" /> : undefined}
+            sx={{ minHeight: { xs: 44 }, '&.Mui-disabled': { color: 'text.secondary' } }}
+          >
+            {pendingToken !== null ? 'Saving…' : 'Save limit'}
+          </Button>
         </DialogActions>
       </Dialog>
     </>

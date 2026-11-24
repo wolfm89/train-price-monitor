@@ -8,9 +8,9 @@ import PedalBikeIcon from '@mui/icons-material/PedalBike';
 import TrainIcon from '@mui/icons-material/Train';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
-import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
 import { buildBahnDeTicketUrl } from '../utils/bahnLink';
 import { formatCurrency, formatDate, formatDuration, formatTime } from '../utils/format';
+import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
 
 // ---------------------------------------------------------------------------
 // Types
