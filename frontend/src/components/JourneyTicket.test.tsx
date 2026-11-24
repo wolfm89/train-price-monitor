@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import JourneyTicket, { Journey } from './JourneyTicket';
@@ -69,6 +69,19 @@ describe('JourneyTicket bahn.de link', () => {
     renderTicket({ ...monitor, unavailable: true });
 
     expect(getTicketLink()).toBeInTheDocument();
+  });
+
+  it('hides the link when the saved traveller preferences cannot be represented', () => {
+    renderTicket({ ...monitor, ageGroup: 'CHILD' });
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('prefills a BahnCard 25 traveller parameter', () => {
+    renderTicket({ ...monitor, loyaltyCard: { type: 'BAHNCARD', discount: 25, class: 1 } });
+
+    const params = new URLSearchParams(new URL(getTicketLink().getAttribute('href')!).hash.slice(1));
+    expect(params.get('r')).toBe('13:17:KLASSE_1:1');
   });
 
   it('falls back to the name-only station parameter without stored IDs', () => {

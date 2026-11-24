@@ -19,6 +19,15 @@
 | CloudWatch, CloudTrail                    | pseudonymous ids, counts and redacted error messages; CloudTrail's event history records sign-up/sign-in calls, including the caller's IP address                                                                                                                                                                                                        |
 | Browser                                   | landing page `theme`, blog `pref-theme`, app `CognitoIdentityServiceProvider.*` (60 min tokens, 30-day refresh token). No cookies anywhere                                                                                                                                                                                                               |
 
+## Outbound bookings
+
+Each watchlist ticket can build a bahn.de booking link locally from the route, departure, travel class
+and D-Ticket flag already shown on the ticket. Nothing is sent before the user clicks it; on click
+bahn.de receives those search details and the browser's IP address. The link opens in a new tab with
+`rel="noopener noreferrer"` (no referrer), carries no account identifier, email, name or token, and
+is not logged. When this ships, the public policy must list this click-through as a DB recipient
+(both languages and the "Stand / Last updated" date).
+
 ## Rules for changes
 
 1. **No personal data in logs**: no email addresses, names, free-text search input, raw events,

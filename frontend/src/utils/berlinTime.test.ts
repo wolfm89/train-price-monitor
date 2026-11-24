@@ -48,7 +48,7 @@ describe('formatBerlinWallClock', () => {
     expect(formatBerlinWallClock('2026-07-15T12:00:00.000Z')).toBe('2026-07-15T14:00:00');
   });
 
-  it('rolls over to the previous Berlin day for a late UTC instant', () => {
+  it('rolls over to the next Berlin day for a late UTC instant', () => {
     expect(formatBerlinWallClock('2026-01-14T23:30:00.000Z')).toBe('2026-01-15T00:30:00');
   });
 

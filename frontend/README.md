@@ -45,9 +45,12 @@ not call DB Vendo while rendering. The UI distinguishes fares at/below the limit
 After a search result is added to the watchlist, its **+ Watch** button becomes a **View ↗** link to
 that journey's ticket at `/journeys#<id>`, so the user can jump straight to the new entry.
 
-Each watchlist ticket also has a **Buy ticket on bahn.de** footer link. It is built entirely in the
-browser from the cached snapshot (origin, destination, departure, class and D-Ticket flag), so it
-makes no backend call and sends nothing to DB until the user clicks it.
+Each watched journey with a cached route and future departure also has a **Buy ticket on bahn.de**
+footer link. It is built entirely in the browser from the cached snapshot (origin, destination,
+departure, class and D-Ticket flag), so it makes no backend call and sends nothing to DB until the
+user clicks it. The link appears when the saved traveller preferences can be prefilled faithfully
+(adult, with or without a BahnCard 25/50); unsupported discount cards or age groups hide it rather
+than opening a search with a different fare.
 
 ## Tests
 

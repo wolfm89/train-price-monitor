@@ -529,8 +529,10 @@ export default function JourneyTicket({
         departure: journey?.departure,
         firstClass,
         deutschlandTicketDiscount,
+        ageGroup,
+        loyaltyCard,
       }),
-    [from, to, fromId, toId, journey?.departure, firstClass, deutschlandTicketDiscount]
+    [from, to, fromId, toId, journey?.departure, firstClass, deutschlandTicketDiscount, ageGroup, loyaltyCard]
   );
 
   return (

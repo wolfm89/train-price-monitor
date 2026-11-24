@@ -57,6 +57,105 @@ describe('buildBahnDeTicketUrl', () => {
     expect(params.get('dltv')).toBe('true');
   });
 
+  it('maps a BahnCard 25 to the DB traveller parameter', () => {
+    const url = buildBahnDeTicketUrl(
+      {
+        from: 'Berlin Hbf',
+        to: 'München Hbf',
+        departure: '2030-01-15T09:00:00.000Z',
+        ageGroup: 'ADULT',
+        loyaltyCard: { type: 'BAHNCARD', discount: 25, class: 1 },
+      },
+      NOW
+    );
+
+    expect(paramsFrom(url!).get('r')).toBe('13:17:KLASSE_1:1');
+  });
+
+  it('maps a BahnCard 50 to the DB traveller parameter', () => {
+    const url = buildBahnDeTicketUrl(
+      {
+        from: 'Berlin Hbf',
+        to: 'München Hbf',
+        departure: '2030-01-15T09:00:00.000Z',
+        ageGroup: 'ADULT',
+        loyaltyCard: { type: 'BAHNCARD', discount: 50, class: 2 },
+      },
+      NOW
+    );
+
+    expect(paramsFrom(url!).get('r')).toBe('13:23:KLASSE_2:1');
+  });
+
+  it('hides the link when the saved traveller preferences cannot be represented', () => {
+    const base = {
+      from: 'Berlin Hbf',
+      to: 'München Hbf',
+      departure: '2030-01-15T09:00:00.000Z',
+    };
+
+    expect(buildBahnDeTicketUrl({ ...base, ageGroup: 'CHILD' }, NOW)).toBeNull();
+    expect(buildBahnDeTicketUrl({ ...base, loyaltyCard: { type: 'VORTEILSCARD' } }, NOW)).toBeNull();
+  });
+
+  it('hides the link for a departure in the past', () => {
+    const url = buildBahnDeTicketUrl(
+      {
+        from: 'Berlin Hbf',
+        to: 'München Hbf',
+        departure: '2025-01-15T09:00:00.000Z',
+      },
+      NOW
+    );
+
+    expect(url).toBeNull();
+  });
+
+  it('accepts a Date object and trims station names', () => {
+    const url = buildBahnDeTicketUrl(
+      {
+        from: '  Berlin Hbf  ',
+        to: '  München Hbf  ',
+        departure: new Date('2030-01-15T09:00:00.000Z'),
+      },
+      NOW
+    );
+
+    const params = paramsFrom(url!);
+    expect(params.get('so')).toBe('Berlin Hbf');
+    expect(params.get('zo')).toBe('München Hbf');
+  });
+
+  it('encodes station names without letting them inject extra fragment parameters', () => {
+    const url = buildBahnDeTicketUrl(
+      {
+        from: 'A&B #1@x',
+        to: 'München Hbf',
+        departure: '2030-01-15T09:00:00.000Z',
+      },
+      NOW
+    );
+
+    const params = paramsFrom(url!);
+    expect(params.get('so')).toBe('A&B #1@x');
+    expect(params.get('soid')).toBe('O=A&B #1@x');
+    expect(params.get('zo')).toBe('München Hbf');
+    expect(params.get('hd')).toBe('2030-01-15T10:00:00');
+  });
+
+  it('applies the Berlin offset on a DST transition day', () => {
+    const url = buildBahnDeTicketUrl(
+      {
+        from: 'Berlin Hbf',
+        to: 'München Hbf',
+        departure: '2030-03-31T01:30:00.000Z',
+      },
+      NOW
+    );
+
+    expect(paramsFrom(url!).get('hd')).toBe('2030-03-31T03:30:00');
+  });
+
   it('passes a full DB station ID through unchanged', () => {
     const stationId = 'A=1@O=Berlin Hbf@X=13369549@Y=52525589@U=80@L=8011160@B=1@p=1696451873@';
     const url = buildBahnDeTicketUrl(
