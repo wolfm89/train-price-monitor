@@ -333,17 +333,17 @@ def select_outcome(
             method
             for method in methods
             if method in scores
-            and any(fitted_method == method for fitted_method in calibrator_outcomes[(name, method)])
+            and calibrator_outcomes[(name, method)]
+            and all(fitted_method == method for fitted_method in calibrator_outcomes[(name, method)])
         )
-        excluded[name] = {
-            method: (
-                "fell back to "
-                + ", ".join(sorted(set(calibrator_outcomes[(name, method)])))
-                + " in every development fold"
-            )
-            for method in methods
-            if method in scores and method not in available
-        }
+        excluded[name] = {}
+        for method in methods:
+            if method not in scores or method in available:
+                continue
+            outcomes = calibrator_outcomes[(name, method)]
+            if outcomes:
+                fallbacks = sum(1 for fitted_method in outcomes if fitted_method != method)
+                excluded[name][method] = f"fell back in {fallbacks}/{len(outcomes)} development folds"
         if name == "base_rate":
             for method in ("isotonic", "temperature"):
                 excluded[name].setdefault(method, "constant score is a no-op for this calibrator")

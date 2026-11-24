@@ -94,10 +94,12 @@ FULL_CALENDAR: tuple[Feature, ...] = (
 FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     "price_level": (
         "price_eur",
-        "headroom_pct",
         "price_rank_route_day",
         "price_rank_missing",
     ),
+    # The user's headroom is the label's own parameter, not a market driver; keep it separate so
+    # the price-level family is not read as causal.
+    "limit": ("headroom_pct",),
     "price_history": (
         "price_vs_series_min",
         "price_vs_series_median",

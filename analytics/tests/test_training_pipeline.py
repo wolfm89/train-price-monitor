@@ -2948,6 +2948,13 @@ def test_calibrator_outputs_are_bounded() -> None:
     assert np.allclose(legacy.predict(np.array([0.0, 1.0])), 1e-3)
     modern = fit_calibrator(raw, np.zeros(len(raw), dtype=np.int8), "sigmoid", min_positives=1)
     assert np.allclose(modern.predict(np.array([0.0, 1.0])), 1e-6)
+    # Two classes actually reach the sigmoid branch; single-class labels hit the constant branch.
+    two_raw = np.r_[np.full(500, 1e-6), np.full(500, 1.0 - 1e-6)]
+    two_y = np.r_[np.zeros(500, dtype=np.int8), np.ones(500, dtype=np.int8)]
+    sigmoid = fit_calibrator(two_raw, two_y, "sigmoid", min_positives=1, epsilon=1e-3)
+    bounded = sigmoid.predict(np.array([0.0, 1.0]))
+    assert bounded.min() >= 1e-3
+    assert bounded.max() <= 1.0 - 1e-3
 
 
 def test_load_model_rejects_wrong_hash(tmp_path: Path) -> None:
@@ -3491,6 +3498,14 @@ def test_recipe_hash_records_the_rule_not_the_fitted_table() -> None:
         selection_settings={**rule, "replicates": 1000},
     )
     assert other.sha256() != first.sha256()
+    rules = Recipe(
+        "hist_gradient_boosting",
+        "temperature",
+        0.7,
+        settings,
+        rule_settings={"early_stopping": {"patience": 99}},
+    )
+    assert rules.sha256() != first.sha256()
 
 
 def test_replacement_rule_needs_both_intervals() -> None:
@@ -3820,10 +3835,17 @@ def test_backtest_smoke_and_recipe_freeze(tmp_path: Path) -> None:
     assert scored.importance
     assert {row["kind"] for row in scored.importance} == {"family", "feature"}
     assert all(np.isfinite(row["delta_log_loss"]) for row in scored.importance)
+    assert all("date_std" in row for row in scored.importance)
+    if "precision" in scored.pooled.get("intervals", {}):
+        low, high = scored.pooled["intervals"]["precision"]
+        assert low <= scored.pooled["cell_threshold_precision"] <= high
     development = tuple(item for item in scored.folds if item.fold.role == "development")
     small = _grouped_importance(development, config, spec, sample=400, repeats=1, seed=5)
-    assert len([row for row in small if row["kind"] == "family"]) == 6
+    assert len([row for row in small if row["kind"] == "family"]) == 7
     assert len([row for row in small if row["kind"] == "feature"]) == len(spec.names)
+    expected_dates = len(np.unique(np.concatenate([item.test.departure_date for item in development])))
+    assert all(row["departures"] == expected_dates for row in small)
+    assert all(row["rows"] <= 400 for row in small)
 
 
 def test_selection_rejects_a_non_development_fold() -> None:
@@ -3932,6 +3954,8 @@ def test_early_stopping_plan_uses_patience_and_tolerance() -> None:
     assert _early_stopping_plan(never) == (400, 400)
     flat = [0.4] * 400
     assert _early_stopping_plan(flat) == (1, 51)
+    plateau = [0.5 - 0.001 * index for index in range(10)] + [0.491] * 60 + [0.49099] + [0.491] * 329
+    assert _early_stopping_plan(plateau) == (10, 60)
 
 
 def test_holdout_is_the_last_training_week() -> None:
@@ -4203,6 +4227,7 @@ def test_feature_families_cover_every_feature() -> None:
         assert len(assigned) == len(set(assigned))
         assert set(spec.names) <= set(assigned)
         assert all(feature_family(name) in family_members() for name in spec.names)
+    assert feature_family("headroom_pct") == "limit"
     assert set(feature_spec("full").names) == set(assigned)
 
 
@@ -4248,6 +4273,7 @@ def test_threshold_and_decision_helpers_agree_with_the_fold_state(tmp_path: Path
     rows = _threshold_cells((result,), config, floor=0.4, min_alerts=10)
     assert len(rows) == 5 * len(HEADLINE_BANDS)
     assert all("thresholds" in row and "operating_point" in row for row in rows)
+    assert all("threshold" not in row for row in rows)
     hold = _threshold_hold_rate(rows)
     assert hold["cells"] == len(rows)
     assert hold["with_operating_point"] == sum(row["operating_point"] for row in rows)

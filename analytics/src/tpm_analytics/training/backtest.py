@@ -31,6 +31,13 @@ from tpm_analytics.training.dataset import DatasetError, _git_state
 from tpm_analytics.training.features import BOOLEAN, CATEGORICAL, LABEL_COLUMNS, FeatureSpec, family_members
 from tpm_analytics.training.labels import breach
 from tpm_analytics.training.model import (
+    CALIBRATION_EPS,
+    EARLY_STOPPING_DAYS,
+    EARLY_STOPPING_MAX_ITER,
+    EARLY_STOPPING_PATIENCE,
+    EARLY_STOPPING_TOLERANCE,
+    LOGISTIC_SPLINE_KNOTS,
+    WILSON_ONE_SIDED_Z,
     Array,
     FittedModel,
     ModelError,
@@ -91,6 +98,7 @@ class Recipe:
     calibration_min_positives: int = 1000
     threshold_min_alerts: int = 30
     selection_settings: dict[str, Any] = field(default_factory=dict)
+    rule_settings: dict[str, Any] = field(default_factory=dict)
     selection_table: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def payload(self) -> dict[str, Any]:
@@ -107,6 +115,7 @@ class Recipe:
             "calibration_min_positives": self.calibration_min_positives,
             "threshold_min_alerts": self.threshold_min_alerts,
             "selection_settings": self.selection_settings,
+            "rule_settings": self.rule_settings,
         }
 
     def sha256(self) -> str:
@@ -461,6 +470,17 @@ def select_recipe_bundle(
         calibration_min_positives=config.calibration.min_positives,
         threshold_min_alerts=config.report.threshold_min_alerts,
         selection_settings=selection_settings(outcome.table),
+        rule_settings={
+            "early_stopping": {
+                "days": EARLY_STOPPING_DAYS,
+                "max_iter": EARLY_STOPPING_MAX_ITER,
+                "patience": EARLY_STOPPING_PATIENCE,
+                "tolerance": EARLY_STOPPING_TOLERANCE,
+            },
+            "logistic_spline_knots": LOGISTIC_SPLINE_KNOTS,
+            "calibration_epsilon": CALIBRATION_EPS,
+            "wilson_z": WILSON_ONE_SIDED_Z,
+        },
         selection_table=outcome.table,
     )
     return recipe, outcome.models, outcome.table
@@ -854,7 +874,6 @@ def _threshold_cells(
                     "qualifying_folds": qualifying_folds,
                     "folds": len(folds),
                     "thresholds": sorted(thresholds),
-                    "threshold": (min(thresholds) + max(thresholds)) / 2.0 if thresholds else None,
                     "calibration_alerts": calibration_alerts,
                     "calibration_precision": calibration_precision,
                     "calibration_recall": calibration_recall,
@@ -1005,11 +1024,11 @@ def _permuted_features(features: dict[str, Array], names: tuple[str, ...], order
     return {name: np.asarray(features[name])[order] for name in names}
 
 
-def _importance_loss(
+def _importance_losses(
     samples: list[tuple[FoldResult, Array, Array]],
     overrides: dict[str, Array] | None,
-) -> float:
-    """Mean log loss for the sampled rows, optionally with permuted feature columns."""
+) -> Array:
+    """Per-row log loss for the sampled rows, optionally with permuted feature columns."""
     losses = np.empty(sum(len(local) for _, _, local in samples), dtype=np.float64)
     for fold, positions, local in samples:
         model = fold.model
@@ -1023,13 +1042,17 @@ def _importance_loss(
                 features={**data.features, **{name: values[positions] for name, values in overrides.items()}},
             )
         probabilities = model.predict(data)
+        heads = data.headroom
+        if overrides is not None and "headroom_pct" in overrides:
+            # The permuted headroom must reach the calibrator too, not only the model matrix.
+            heads = np.rint(np.asarray(data.features["headroom_pct"], dtype=np.float64)).astype(np.int16)
         calibrated = calibrator.predict(
             probabilities,
             hours=_hours(data),
-            headroom=data.headroom,
+            headroom=heads,
         )
         losses[positions] = _row_log_loss(data.y, calibrated)
-    return float(losses.mean())
+    return losses
 
 
 def _grouped_importance(
@@ -1048,15 +1071,14 @@ def _grouped_importance(
     rng = np.random.default_rng(seed)
     departure = np.asarray(pooled.departure_date, dtype=str)
     dates = np.unique(departure)
-    rng.shuffle(dates)
-    chosen: set[str] = set()
-    count = 0
+    per_date = max(1, sample // len(dates))
+    selected_parts: list[Array] = []
     for value in dates:
-        chosen.add(str(value))
-        count += int(np.sum(departure == value))
-        if count >= sample:
-            break
-    selected = np.flatnonzero(np.isin(departure, list(chosen)))
+        indices = np.flatnonzero(departure == value)
+        if len(indices) > per_date:
+            indices = np.sort(rng.choice(indices, size=per_date, replace=False))
+        selected_parts.append(indices)
+    selected = np.concatenate(selected_parts)
     if len(selected) == 0:
         return []
     samples: list[tuple[FoldResult, Array, Array]] = []
@@ -1067,7 +1089,10 @@ def _grouped_importance(
         samples.append((fold, positions, selected[positions] - start))
         start = end
     pooled_sample = pooled.subset(selected)
-    baseline = _importance_loss(samples, None)
+    baseline = _importance_losses(samples, None)
+    selected_departure = np.asarray(pooled_sample.departure_date, dtype=str)
+    date_values, date_inverse = np.unique(selected_departure, return_inverse=True)
+    date_counts = np.bincount(date_inverse, minlength=len(date_values))
     families = {
         family: tuple(name for name in names if name in spec.names) for family, names in family_members().items()
     }
@@ -1078,11 +1103,15 @@ def _grouped_importance(
     rows: list[dict[str, Any]] = []
     for kind, name, names in entries:
         deltas: list[float] = []
+        date_means: list[Array] = []
         for _ in range(repeats):
             order = rng.permutation(len(selected))
             overrides = _permuted_features(pooled_sample.features, names, order)
-            deltas.append(_importance_loss(samples, overrides) - baseline)
+            delta = _importance_losses(samples, overrides) - baseline
+            deltas.append(float(delta.mean()))
+            date_means.append(np.bincount(date_inverse, weights=delta, minlength=len(date_values)) / date_counts)
         values = np.asarray(deltas, dtype=np.float64)
+        mean_by_date = np.mean(np.column_stack(date_means), axis=1)
         rows.append(
             {
                 "kind": kind,
@@ -1092,9 +1121,12 @@ def _grouped_importance(
                 "std": float(values.std()),
                 "min": float(values.min()),
                 "max": float(values.max()),
+                "date_std": float(np.std(mean_by_date)),
+                "date_min": float(np.min(mean_by_date)),
+                "date_max": float(np.max(mean_by_date)),
                 "repeats": int(repeats),
                 "rows": len(selected),
-                "departures": len(chosen),
+                "departures": len(date_values),
             }
         )
     return sorted(rows, key=lambda row: (row["kind"], -row["delta_log_loss"]))
@@ -1167,6 +1199,7 @@ def _load_cached_recipe(
             calibration_min_positives=int(payload.get("calibration_min_positives", config.calibration.min_positives)),
             threshold_min_alerts=int(payload.get("threshold_min_alerts", config.report.threshold_min_alerts)),
             selection_settings=payload.get("selection_settings") or {},
+            rule_settings=payload.get("rule_settings") or {},
             selection_table=payload.get("selection") or {},
         )
     except KeyError, TypeError, ValueError:
@@ -1312,13 +1345,22 @@ def _pooled_summary(
     metrics["bootstrap"] = _bootstrap(
         pooled.y, calibrated, pooled.departure_date, config.report.bootstrap_replicates, config.seed
     )
+    cell_thresholds: list[Array] = []
+    for item in folds:
+        bands = _ttd_array(item.test)
+        thresholds = np.full(len(item.test), np.inf, dtype=np.float64)
+        for (headroom, band), entry in item.cell_thresholds.items():
+            if entry is not None and entry["qualified"]:
+                mask = (item.test.headroom == headroom) & (bands == band)
+                thresholds[mask] = float(entry["threshold"])
+        cell_thresholds.append(thresholds)
     metrics["intervals"] = _bootstrap_metrics(
         pooled.y,
         calibrated,
         pooled.departure_date,
         config.report.metric_bootstrap_replicates,
         config.seed + 1,
-        np.concatenate([np.full(len(item.test), item.threshold) for item in folds]),
+        np.concatenate(cell_thresholds),
     )
     headroom, headroom_ttd = _headroom_rows(pooled, folds, config)
     metrics.update(_pooled_cell_metrics(folds, config))
@@ -1859,7 +1901,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     feature_importance = [row for row in result.importance if row["kind"] == "feature"]
     importance_table = (
         _table(
-            ["group", "features", "delta log loss", "std", "min", "max", "rows", "departures"],
+            ["group", "features", "delta log loss", "std", "min", "max", "date std", "rows", "departures"],
             [
                 [
                     row["name"],
@@ -1868,6 +1910,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     _fmt(row["std"], 5),
                     _fmt(row["min"], 5),
                     _fmt(row["max"], 5),
+                    _fmt(row.get("date_std"), 5),
                     row["rows"],
                     row["departures"],
                 ]
@@ -1879,7 +1922,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
     )
     feature_importance_table = (
         _table(
-            ["feature", "delta log loss", "std", "min", "max", "departures"],
+            ["feature", "delta log loss", "std", "min", "max", "date std", "departures"],
             [
                 [
                     row["name"],
@@ -1887,6 +1930,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
                     _fmt(row["std"], 5),
                     _fmt(row["min"], 5),
                     _fmt(row["max"], 5),
+                    _fmt(row.get("date_std"), 5),
                     row["departures"],
                 ]
                 for row in feature_importance[:15]
@@ -2051,7 +2095,8 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
         f"Intervals are a cluster bootstrap by departure date across folds: "
         f"{config.report.bootstrap_replicates} replicates for Brier and log loss, "
         f"{config.report.metric_bootstrap_replicates} for the other metrics, {clusters} clusters; "
-        f"precision and recall use the mean fold threshold."
+        "precision and recall use each row's own fold and cell threshold. The per-fold table's "
+        "`fold thr` columns are the legacy global rule, not the product rule."
         if interval_rows
         else ""
     )
@@ -2284,7 +2329,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
             "BSS clim",
             "AUC",
             "AP",
-            "threshold",
+            "fold thr",
             "floor met",
             "test prec",
             "test rec",
@@ -2335,6 +2380,10 @@ protocols from the static validation split; a higher Brier here is not a model r
 ## Folds
 
 {fold_table}
+
+The per-fold `fold thr` and `floor met` columns use the legacy global threshold; the per-cell
+threshold table below is the product rule. PR 6 scored the evaluation folds in the cache-free run,
+the determinism twin and a report regeneration; the ledger records all three.
 
 {diagnostics_table}
 
@@ -2396,6 +2445,9 @@ departure-date cluster-bootstrap replicates.
 
 ## Evaluation calibration cells (headroom x TTD band x era)
 
+The evaluation folds are all dense; the era dimension is shown for completeness. The development
+cells are dense as well, and the sparse-era folds are not pooled into these tables.
+
 {calibration_cells_table}
 
 ## Thresholds
@@ -2404,7 +2456,10 @@ Thresholds are chosen per headroom x TTD band on the calibration block's out-of-
 highest recall whose one-sided 95 % Wilson lower bound on precision is at least
 {result.recipe.threshold_floor:g}, with at least {result.recipe.threshold_min_alerts} alerts. A cell
 with no qualifying operating point does not alert. `folds` counts the folds with an operating
-point; the precision and recall columns pool every fold at its own threshold. {hold_note}
+point; the precision and recall columns pool every fold at its own threshold. The test `floor met`
+check uses point-estimate precision; the calibration rule used the Wilson lower bound. Cell rows
+relabel every test row at the cell's headroom; the pooled `cell-threshold` precision/recall use
+each row's assigned headroom. {hold_note}
 
 ### Development thresholds
 
@@ -2432,11 +2487,12 @@ point; the precision and recall columns pool every fold at its own threshold. {h
 ## Development importance
 
 Grouped permutation importance on the pooled development test blocks with each fold's own model
-and calibrator: whole departure dates are sampled until at least 20,000 rows are reached
-({result.importance[0]["rows"] if result.importance else 0} rows from
-{result.importance[0]["departures"] if result.importance else 0} of the pooled dates here), five
-repeats, delta log loss. The spread columns are the minimum, maximum and standard deviation
-(ddof=0) across repeats; the date count is the real sampling uncertainty.
+and calibrator: up to 20,000 rows stratified across all development departure dates (about
+{result.importance[0]["rows"] if result.importance else 0} rows from
+{result.importance[0]["departures"] if result.importance else 0} dates here), five repeats, delta
+log loss. `std`/`min`/`max` are the permutation spread across repeats; `date std` is the spread of
+the per-date mean deltas. The `limit` family is the user's headroom, the label's own parameter;
+read it as a sanity check, not a market driver.
 
 ### Feature families
 
@@ -2462,13 +2518,13 @@ The cutoffs straddle the late-July scrape-cadence ramp and the 13-21 July outage
 Decision value uses the next-day check at 20-28 h. An alert means "book now"; no alert means "wait
 one day". The saving is the check fare minus today's fare, so positive means waiting costs more.
 The primary comparison is **waiting** (the current product notifies only once the fare reaches the
-limit). The oracle columns show the ceiling: a perfect breach alert beats booking now by only a few
-euros near departure, and perfect timing is not reachable.
-
-A perfect breach alert still beats booking now by only a small margin near departure (see the
-oracle columns); no realistic breach alert does, because fares near departure mostly rise. The
-alert is protection against crossing the limit, not a buy-or-wait oracle. Read the euro columns in
-the tables below rather than a fixed headline number.
+limit). At low headroom and 1-3 d the policy is roughly break-even against booking now; its
+interval includes zero. From 20 % headroom up it loses several euros against booking now. Even the
+perfect breach oracle is negative against booking now from 20 % up near departure. A random alert
+at the same share captures most of the waiting value; the model's lift is the remaining part. The
+oracle columns are point estimates; the policy columns carry the cluster intervals. The alert is
+protection against crossing the limit, not a buy-or-wait oracle. Read the euro columns rather than
+a fixed headline number.
 
 ### Development decision value
 

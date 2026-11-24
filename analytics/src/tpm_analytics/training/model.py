@@ -396,16 +396,13 @@ def _usable_columns(
     matrix: Array,
     categorical: list[int],
     names: tuple[str, ...],
-    *,
-    rows: Array | None = None,
 ) -> tuple[tuple[int, ...], tuple[str, ...]]:
     """Drop columns with no usable split; HistGB cannot bin a constant/all-null feature."""
     usable: list[int] = []
     dropped: list[str] = []
     categorical_set = set(categorical)
-    view = matrix if rows is None else matrix[rows]
-    for index in range(view.shape[1]):
-        column = view[:, index]
+    for index in range(matrix.shape[1]):
+        column = matrix[:, index]
         values = column if index in categorical_set else column[~np.isnan(column)]
         if values.size >= 2 and np.any(values != values[0]):
             usable.append(index)
@@ -563,16 +560,23 @@ def _log_loss_at(y: Array, probabilities: Array) -> float:
 
 
 def _early_stopping_plan(losses: list[float]) -> tuple[int, int]:
-    """Return the best iteration and the iteration where patience would stop."""
+    """Return the best iteration and the iteration where patience would stop.
+
+    The rule is causal: an improvement counts only when it beats the running best by at least
+    ``EARLY_STOPPING_TOLERANCE``; after ``EARLY_STOPPING_PATIENCE`` such iterations the search
+    stops and uses the best iteration seen so far. Later dips beyond the plateau are not used.
+    """
     if not losses:
         return 1, 1
-    best = int(np.argmin(losses)) + 1
-    stop = len(losses)
-    for index in range(best - 1, len(losses)):
-        if index + 1 - best >= EARLY_STOPPING_PATIENCE and losses[index] > losses[best - 1] - EARLY_STOPPING_TOLERANCE:
-            stop = index + 1
-            break
-    return best, stop
+    best_index = 0
+    best_loss = losses[0]
+    for index, loss in enumerate(losses):
+        if loss < best_loss - EARLY_STOPPING_TOLERANCE:
+            best_loss = loss
+            best_index = index
+        if index - best_index >= EARLY_STOPPING_PATIENCE:
+            return best_index + 1, index + 1
+    return best_index + 1, len(losses)
 
 
 def _holdout_mask(snapshot_at: Array) -> Array | None:
@@ -609,12 +613,27 @@ def _hgb_settings(
     )
 
 
+def _probe_train_mask(
+    holdout: Array,
+    snapshot: Array,
+    label_window_end: Array | None,
+) -> Array:
+    """Return probe-training rows, purged on the label end at the holdout boundary."""
+    probe_train = ~holdout
+    if label_window_end is not None:
+        labels_end = np.asarray(label_window_end, dtype="datetime64[ms]")
+        cutoff = snapshot.max() - np.timedelta64(EARLY_STOPPING_DAYS, "D")
+        probe_train &= labels_end <= cutoff
+    return probe_train
+
+
 def _fit_hgb_with_early_stopping(
     refit_matrix: Array,
     probe_matrix: Array,
     y: Array,
     snapshot_at: Array,
     *,
+    label_window_end: Array | None = None,
     estimator_settings: dict[str, Any],
     refit_monotonic: list[int],
     refit_categorical: list[int],
@@ -625,8 +644,10 @@ def _fit_hgb_with_early_stopping(
     """Fit HGB on all but the last training week, pick the iteration, then refit on all rows."""
     started = time.perf_counter()
     limit = min(EARLY_STOPPING_MAX_ITER, int(max_iter))
+    snapshot = np.asarray(snapshot_at, dtype="datetime64[ms]")
     holdout = _holdout_mask(snapshot_at)
-    if holdout is None or len(np.unique(y[holdout])) < 2:
+    probe_train = _probe_train_mask(holdout, snapshot, label_window_end) if holdout is not None else None
+    if holdout is None or len(np.unique(y[holdout])) < 2 or probe_train is None or int(probe_train.sum()) < 100:
         estimator = _hgb_settings(
             estimator_settings,
             iterations=limit,
@@ -637,16 +658,18 @@ def _fit_hgb_with_early_stopping(
             "fallback": True,
             "iterations": limit,
             "holdout_rows": int(holdout.sum()) if holdout is not None else 0,
+            "probe_rows": int(probe_train.sum()) if probe_train is not None else 0,
             "fit_seconds": round(time.perf_counter() - started, 3),
             "refit_seconds": 0.0,
             "capped": bool(limit < int(max_iter)),
+            "hit_cap": False,
         }
     probe = _hgb_settings(
         estimator_settings,
         iterations=limit,
         monotonic=probe_monotonic,
         categorical=probe_categorical,
-    ).fit(probe_matrix[~holdout], y[~holdout])
+    ).fit(probe_matrix[probe_train], y[probe_train])
     fit_seconds = time.perf_counter() - started
     losses = [_log_loss_at(y[holdout], stage[:, 1]) for stage in probe.staged_predict_proba(probe_matrix[holdout])]
     best, stop = _early_stopping_plan(losses)
@@ -663,11 +686,14 @@ def _fit_hgb_with_early_stopping(
         "iterations": best,
         "stop_iteration": stop,
         "holdout_rows": int(holdout.sum()),
+        "probe_rows": int(probe_train.sum()),
+        "purged_probe_rows": int((~holdout).sum() - probe_train.sum()),
         "holdout_log_loss": float(losses[best - 1]),
         "train_log_loss": _log_loss_at(y, estimator.predict_proba(refit_matrix)[:, 1]),
         "fit_seconds": round(fit_seconds, 3),
         "refit_seconds": round(refit_seconds, 3),
         "capped": bool(limit < int(max_iter)),
+        "hit_cap": bool(best >= limit),
     }
 
 
@@ -731,6 +757,7 @@ def fit_candidate(
             matrix[:, list(probe_selected)],
             data.y,
             data.snapshot_at,
+            label_window_end=data.label_window_end,
             estimator_settings={
                 "learning_rate": config.model.learning_rate,
                 "max_leaf_nodes": config.model.max_leaf_nodes,
@@ -1005,7 +1032,12 @@ def fit_calibrator(
         model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000)
         model.fit(clipped.reshape(-1, 1), y)
         return ScoreCalibrator(
-            "sigmoid", model, requested=requested, fallback=fallback, fallback_reason=fallback_reason
+            "sigmoid",
+            model,
+            requested=requested,
+            fallback=fallback,
+            fallback_reason=fallback_reason,
+            epsilon=epsilon,
         )
     if method == "isotonic":
         model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)

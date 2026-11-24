@@ -144,16 +144,23 @@ v2-only and mixed-schema input.
   highest recall whose one-sided 95 % Wilson lower bound on precision is at least
   `threshold_precision_floor` with at least `threshold_min_alerts` (30) alerts. A cell with no
   qualifying point does not alert. Pooled precision and recall use each row's own fold and cell
-  threshold; never substitute the mean threshold.
+  threshold; never substitute the mean threshold. The test-side hold rate uses point-estimate
+  precision; report the development and evaluation rates. Cell rows relabel every test row at the
+  cell's headroom; the pooled cell-threshold figure uses the assigned headroom.
 - **Decision value and importance.** Decision value uses the primary 20-28 h `check_at` and
   compares the alert policy with waiting (the current product, primary) and booking now, plus a
-  random alert, both perfect-breach oracles and perfect timing. Grouped permutation importance uses
-  each development fold's own model and calibrator on the pooled test blocks; families live in
-  `features.py` and every feature must belong to exactly one.
+  random alert, both perfect-breach oracles and perfect timing. Near departure the policy is
+  roughly break-even against booking now at low headroom and loses several euros at 20-30 %
+  headroom; the oracle columns are point estimates. Grouped permutation importance uses each
+  development fold's own model and calibrator on the pooled test blocks; families live in
+  `features.py`, every feature belongs to exactly one, and the `limit` family is the label's own
+  headroom parameter.
 - **Early stopping.** HGB holds out the last 7 days of the fold's training rows by `snapshot_at`,
-  stops when the holdout log loss has not improved by 1e-4 for 50 iterations, and refits on all
-  training rows with the chosen iteration count. The holdout never touches calibration. The cap
-  is the recipe's `max_iter` (at most 400).
+  stops at the first plateau (50 iterations without a 1e-4 gain over the running best), and refits
+  on all training rows with the best iteration at that point. Probe-training rows whose
+  `label_window_end` crosses the holdout boundary are purged. The holdout never touches
+  calibration. The cap is the recipe's `max_iter` (at most 400); record `hit_cap`, `probe_rows`
+  and `purged_probe_rows` per fold.
 - `--forward` builds the unscored forward Parquet with grid columns (`eligible`, `check_at`,
   `check_lag_h`) and no label or check-fare columns. The smoke build uses a 5 % route-day sample
   (`protocol.forward.sample_rate`) because the all-route build exceeds the memory ceiling.

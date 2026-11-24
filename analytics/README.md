@@ -404,12 +404,15 @@ A series may span a cutoff because labels are purged and every feature is past-o
 mode still requires the static `splits` block: it bounds the panel at `test_end`, but those splits
 are not used for scoring. Long backtests
 can resume with `--cache-dir`: finished folds and the frozen recipe are checkpointed there, keyed
-by the config, dataset digest and a fit-code hash, and the checkpoints keep report state rather
-than the training panels. A dirty tree disables reuse. Delete the cache directory to force a clean refit.
+by the config, dataset digest and a fit-code hash. Checkpoints keep report state plus the fitted
+model and calibrator that permutation importance needs, never the training panels; verify a
+checkpoint's `pkl_sha256` before reusing it. A dirty tree disables reuse. Delete the cache
+directory to force a clean refit.
 
 A cache-free 5 % development run peaked at 6.30 GiB in PR 6, with the dataset build setting the
-peak; PR 5's cold full runs recorded 11.0-11.5 GB under concurrent load, so measure the phase you
-care about. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
+peak; PR 5's cold full runs recorded 11.0-11.5 GiB under concurrent load, so measure the phase you
+care about. The ceiling in the PR 6 plan is 6.6 GiB. 10 % has not been measured; raise the memory
+limit before trying 25 or 50 %.
 
 Calibration offers sigmoid, temperature, isotonic and a **covariate** calibrator: a logistic model
 on logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom), one model for
@@ -423,15 +426,22 @@ Thresholds are chosen per headroom x TTD band on the calibration block's out-of-
 scores: the highest recall whose one-sided 95 % Wilson lower bound on precision is at least
 `report.threshold_precision_floor` (0.70) with at least `report.threshold_min_alerts` (30) alerts.
 A cell with no qualifying operating point does not alert. The report shows calibration-block and
-test precision/recall, the share of cells that held the floor on test, and precision at fixed
-recalls per band. Pooled precision and recall use each row's own fold and cell threshold.
+test precision/recall, the share of cells that held the floor on test (point-estimate precision;
+the development and evaluation rates are both reported), and precision at fixed recalls per band.
+Pooled precision and recall use each row's own fold and cell threshold. Cell rows relabel every
+test row at the cell's headroom; the pooled cell-threshold figure uses each row's assigned
+headroom.
 
 Decision value uses the primary 20-28 h `check_at`: an alert means book now and no alert means
 wait one day. It reports the saving against waiting (the current product, primary) and against
 booking now, each with a departure-date cluster interval, a random alert at the same share, both
-perfect-breach oracles, perfect timing against booking now and the mean cost of waiting. Grouped
-permutation importance covers up to six families on the pooled development test blocks (the
-calendar family is empty when `calendar.feature_set` is `none`).
+perfect-breach oracles, perfect timing against booking now and the mean cost of waiting. Near
+departure the policy is roughly break-even against booking now at low headroom and loses several
+euros at 20-30 % headroom; the oracle columns are point estimates. Grouped permutation importance
+covers up to seven families on the pooled development test blocks (the calendar family is empty
+when `calendar.feature_set` is `none`); the `limit` family is the label's own headroom parameter,
+not a market driver. The sample is stratified across all development departure dates, and the
+date spread is reported next to the repeat spread.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
