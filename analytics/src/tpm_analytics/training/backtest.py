@@ -5,8 +5,6 @@ recipe is frozen on the development folds, then refitted on each evaluation fold
 selection. Evaluation and sparse-era folds are scored only with ``--evaluate-test``.
 """
 
-from __future__ import annotations
-
 import hashlib
 import itertools
 import json

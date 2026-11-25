@@ -6,6 +6,9 @@ weekly Lambda publishes the result and a quality report. This is the only Python
 
 ## Commands
 
+Python 3.15 is the minimum (`requires-python = ">=3.15"`). Write modern 3.15 syntax and do
+not add `from __future__ import annotations`; deferred annotations are the default (PEP 649).
+
 ```bash
 uv sync --frozen     # create .venv from uv.lock; uv manages the interpreter
 uv run pytest        # fixture tests over v1-only, v2-only and mixed bronze files

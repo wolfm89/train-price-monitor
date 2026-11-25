@@ -7,8 +7,6 @@ sampled panel, chain map, scrape grid, snapshot and check tables are materialise
 reused.
 """
 
-from __future__ import annotations
-
 import glob
 import hashlib
 import json

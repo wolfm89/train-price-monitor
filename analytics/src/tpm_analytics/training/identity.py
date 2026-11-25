@@ -1,7 +1,5 @@
 """Shared journey-identity definitions for the training builder."""
 
-from __future__ import annotations
-
 LINK_TOLERANCE_SECONDS = 900
 
 # The canonical row for a same-scrape duplicate group. The training dedup and the chain series

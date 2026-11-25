@@ -1,7 +1,5 @@
 """End-to-end tests for the training dataset and the one-command CLI."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import replace

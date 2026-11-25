@@ -9,8 +9,6 @@ The SQL helpers return expressions; ``breach`` is the numpy equivalent. Keep the
 the dataset builder, the per-headroom recomputation and the tests all import this definition.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import numpy as np

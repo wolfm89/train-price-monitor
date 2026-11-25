@@ -4,8 +4,6 @@ The SQL builder produces these columns; this module is the single list of names 
 It deliberately does not generate SQL: a mismatch is an error rather than a silent extra column.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any
 

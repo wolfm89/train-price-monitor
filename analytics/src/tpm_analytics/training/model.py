@@ -5,8 +5,6 @@ uses the same ordinal matrix. Calibration is fitted on validation-calibrate only
 selection slice or the test set.
 """
 
-from __future__ import annotations
-
 import hashlib
 import itertools
 import json

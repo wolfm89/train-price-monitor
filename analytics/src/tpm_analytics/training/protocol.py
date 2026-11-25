@@ -4,8 +4,6 @@ The panel is built once; a fold selects rows by ``snapshot_at`` and ``label_wind
 on the label end (the check time), never on the snapshot, is the point of the protocol.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime, time
 

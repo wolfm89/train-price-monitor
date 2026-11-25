@@ -6,8 +6,6 @@ at full availability and a coverage stress test does not make it significantly w
 departure. No evaluation or sparse-era fold is read.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import dataclass, replace

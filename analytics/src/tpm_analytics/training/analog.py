@@ -11,8 +11,6 @@ route-days are read from the full silver source, not the sampled panel: the D-1 
 usually not in the 5 % sample.
 """
 
-from __future__ import annotations
-
 import duckdb
 
 from tpm_analytics.training.identity import SAME_SCRAPE_ORDER, berlin_local_sql, series_key_sql

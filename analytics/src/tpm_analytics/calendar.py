@@ -7,8 +7,6 @@ a small daily table that the training builder can join to route-days.
 It deliberately does not call the network, read S3 or open a DuckDB connection at import time.
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import tempfile

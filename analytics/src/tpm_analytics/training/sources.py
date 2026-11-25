@@ -4,8 +4,6 @@ The pointer is a small JSON document with ``build_id`` and ``manifest`` keys. We
 in one place so the CLI, the manifest and tests all agree on what "the latest silver build" means.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import dataclass

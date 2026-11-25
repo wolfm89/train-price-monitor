@@ -4,8 +4,6 @@ The JSON file lives outside the package on purpose: it is a repository input, no
 Every value that changes the dataset, the model or the report is hashed into the manifest.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re

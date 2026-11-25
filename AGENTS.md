@@ -50,6 +50,9 @@ exhausted a 17.6 GB VM.
 
 ## Conventions that apply everywhere
 
+- Python is 3.15+ and analytics-only; write modern 3.15 syntax and do not add
+  `from __future__ import annotations` (deferred annotations are the default, PEP 649).
+
 - TypeScript strict mode in every module; explicit parameter and return types, `interface` for object
   shapes, `unknown` instead of `any`.
 - `const` by default, `let` only when reassignment is needed.

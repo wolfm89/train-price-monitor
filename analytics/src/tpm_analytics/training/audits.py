@@ -5,8 +5,6 @@ cadence, duplicate keys in one scrape, and how the v1 chains compare with the v2
 sequence in the overlap. All of them are descriptive; none feeds a feature or a label.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import duckdb

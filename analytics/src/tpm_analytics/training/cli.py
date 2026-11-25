@@ -1,7 +1,5 @@
 """Command-line entry point for the baseline training builder."""
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json

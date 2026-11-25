@@ -6,8 +6,6 @@ zero and the delta Brier interval is not entirely above zero. The rule, not the 
 part of the recipe hash.
 """
 
-from __future__ import annotations
-
 import copy
 import hashlib
 import json
