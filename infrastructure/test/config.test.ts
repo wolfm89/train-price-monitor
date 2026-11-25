@@ -6,6 +6,8 @@ import {
   METRIC_NAMESPACE,
   MONTHLY_BUDGET_NAME,
   MONTHLY_BUDGET_USD,
+  POLLER_DB_GAP_MS,
+  POLLER_DB_TOTAL_BUDGET_MS,
   RETENTION_CONFIG,
   SCHEDULES,
   SCRAPER_CONFIG,
@@ -35,8 +37,8 @@ describe('shared configuration', () => {
     // Worst case: the guard, one staggered target at the full request budget,
     // and the final upload. The poller now runs 20 targets, so normal runs are
     // well below the guard.
-    const dbGapMs = 3_500;
-    const dbTotalBudgetMs = 45_000;
+    const dbGapMs = POLLER_DB_GAP_MS;
+    const dbTotalBudgetMs = POLLER_DB_TOTAL_BUDGET_MS;
     const uploadMs = 1_000;
     expect(SCRAPER_CONFIG.abort_threshold_ms + dbGapMs + dbTotalBudgetMs + uploadMs).toBeLessThanOrEqual(290_000);
     expect(SCRAPER_CONFIG.abort_threshold_ms + dbGapMs + dbTotalBudgetMs + uploadMs).toBeLessThanOrEqual(

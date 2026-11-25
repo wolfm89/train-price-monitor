@@ -277,6 +277,10 @@ export const METRIC_NAMESPACE = APP_NAME;
 export const DB_PROXY_REGION = process.env.CDK_DB_PROXY_REGION?.trim() || 'us-east-1';
 export const DB_PROXY_FUNCTION_NAME = `${APP_NAME}-DbProxy`;
 
+/** Poller DB pacing; shared by the stack and the safety-margin test. */
+export const POLLER_DB_GAP_MS = 3_500;
+export const POLLER_DB_TOTAL_BUDGET_MS = 45_000;
+
 export const ALERT_TOPIC_NAME = `${APP_NAME}Alerts`;
 export const MONTHLY_BUDGET_NAME = `${APP_NAME}-Monthly`;
 export const MONTHLY_BUDGET_USD = 1;

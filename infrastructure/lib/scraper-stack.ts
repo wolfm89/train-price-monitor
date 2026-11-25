@@ -12,7 +12,16 @@ import {
   aws_sns as sns,
 } from 'aws-cdk-lib';
 import { DASHBOARD_START, scraperWidgets } from './dashboards';
-import { DASHBOARD_NAMES, DB_PROXY_REGION, METRIC_NAMESPACE, SCHEDULES, SCRAPER_CONFIG, SILVER_CONFIG } from './config';
+import {
+  DASHBOARD_NAMES,
+  DB_PROXY_REGION,
+  METRIC_NAMESPACE,
+  POLLER_DB_GAP_MS,
+  POLLER_DB_TOTAL_BUDGET_MS,
+  SCHEDULES,
+  SCRAPER_CONFIG,
+  SILVER_CONFIG,
+} from './config';
 
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
@@ -141,7 +150,7 @@ export class ScraperStack extends cdk.Stack {
         // minutes, 24 calls one at a time with 2.5 s gaps passed. The Navigator
         // API later throttled sustained 50-call batches at 2.5 s, so the poller
         // now uses 3.5 s.
-        DB_MIN_GAP_MS: '3500',
+        DB_MIN_GAP_MS: String(POLLER_DB_GAP_MS),
         DB_MAX_IN_FLIGHT: '2',
         // Start with the profile that is currently accepted; the transport still
         // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
@@ -153,7 +162,7 @@ export class ScraperStack extends cdk.Stack {
         // per-request budget. The proxy invoke is bounded by
         // DB_REQUEST_TIMEOUT_MS (20 s default). The poller aborts at its
         // threshold before the Lambda timeout.
-        DB_TOTAL_BUDGET_MS: '45000',
+        DB_TOTAL_BUDGET_MS: String(POLLER_DB_TOTAL_BUDGET_MS),
         // No Decodo key on purpose: the poller is bulk work and must never spend
         // the free allowance. When DB throttles it stops the batch instead.
       },

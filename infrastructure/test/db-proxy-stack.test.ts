@@ -12,7 +12,7 @@ test('DbProxyStack creates the us-east-1 Navigator proxy', () => {
     FunctionName: 'TrainPriceMonitor-DbProxy',
     Runtime: 'nodejs24.x',
     Timeout: 20,
-    ReservedConcurrentExecutions: 10,
+    ReservedConcurrentExecutions: 5,
     Environment: {
       Variables: Match.objectLike({
         DB_TLS_PROFILE: 'tls12',

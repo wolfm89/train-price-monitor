@@ -45,8 +45,8 @@ const DEPARTURE_SAFETY_MARGIN_MS = 90 * MINUTE_MS;
 
 /**
  * Every route sharing a departure date hits the near-entry clamp and the final
- * scrape at the same instant. Spread both over a window: the poller serves 25
- * targets per 15 minutes, so 140 targets due together take ~1.4 hours to drain.
+ * scrape at the same instant. Spread both over a window: the poller serves 20
+ * targets per 15 minutes, so 140 targets due together take ~1.75 hours to drain.
  */
 const NEAR_ENTRY_SPREAD_MS = 6 * HOUR_MS;
 const FINAL_SCRAPE_WINDOW_MS = 3 * HOUR_MS;

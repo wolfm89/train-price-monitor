@@ -2,8 +2,8 @@
 # Seed a new linked worktree with local-only files.
 #
 # pre-commit runs this at the post-checkout stage, which Git also invokes for
-# `git worktree add`. It is a no-op in the main worktree and never overwrites
-# an existing file.
+# `git worktree add`. It is a no-op in the main worktree. Existing files are
+# left alone; env:local only runs when both generated env files are missing.
 
 [ "${PRE_COMMIT_CHECKOUT_TYPE:-0}" = "1" ] || exit 0
 
@@ -16,7 +16,8 @@ if [ "$git_dir" = "$common_dir" ]; then
 fi
 
 root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-main_root=$(cd "$(dirname "$common_dir")" && pwd -P) || exit 0
+main_root=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+[ -n "$main_root" ] || exit 0
 
 if [ "$root" = "$main_root" ]; then
   exit 0
@@ -24,10 +25,19 @@ fi
 
 created=0
 
+clear_dangling_symlink() {
+  dest=$1
+
+  if [ -L "$dest" ] && [ ! -e "$dest" ]; then
+    rm -f "$dest"
+  fi
+}
+
 link_if_missing() {
   src=$1
   dest=$2
 
+  clear_dangling_symlink "$dest"
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     return 0
   fi
@@ -44,6 +54,7 @@ copy_if_missing() {
   src=$1
   dest=$2
 
+  clear_dangling_symlink "$dest"
   if [ -e "$dest" ]; then
     return 0
   fi
@@ -56,18 +67,29 @@ copy_if_missing() {
   fi
 }
 
-# Secrets and deploy inputs: one shared source, so values cannot drift.
+# `.env` is loaded by mise. `.env.keys` is a manual provider-key stash for
+# transport experiments; nothing in the repo loads it automatically.
 link_if_missing "$main_root/.env" "$root/.env"
 link_if_missing "$main_root/.env.keys" "$root/.env.keys"
 
 # Build-time config: copy it so a worktree can diverge if needed.
 copy_if_missing "$main_root/frontend/.env.production" "$root/frontend/.env.production"
 
-# CloudFormation-derived values. Skip quietly when AWS or mise is unavailable.
-if [ "${WORKTREE_INIT_SKIP_ENV:-0}" != "1" ] && { [ ! -f "$root/backend/.env" ] || [ ! -f "$root/frontend/.env" ]; }; then
+# `git worktree add` reports an all-zero from-ref; a branch checkout does not.
+# Only a new worktree may call AWS, and only when both generated files are absent,
+# so a checkout never overwrites hand-edited env files.
+is_new_worktree=0
+case "${PRE_COMMIT_FROM_REF:-}" in
+  0000000000000000000000000000000000000000) is_new_worktree=1 ;;
+esac
+
+if [ "${WORKTREE_INIT_SKIP_ENV:-0}" != "1" ] &&
+  [ "$is_new_worktree" -eq 1 ] &&
+  [ ! -f "$root/backend/.env" ] &&
+  [ ! -f "$root/frontend/.env" ]; then
   if command -v mise >/dev/null 2>&1; then
     if (cd "$root" && mise run env:local >/dev/null 2>&1); then
-      echo "worktree-init: generated backend/.env and frontend/.env"
+      echo "worktree-init: generated backend/.env, frontend/.env and frontend/.env.production"
       created=1
     else
       echo "worktree-init: could not generate env files; run 'mise run env:local' after AWS login"

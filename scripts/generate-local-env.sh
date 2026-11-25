@@ -3,13 +3,14 @@ set -euo pipefail
 
 : "${AWS_PROFILE:?Set AWS_PROFILE to an authenticated AWS profile before running this script.}"
 STACK_NAME="${STACK_NAME:-InfrastructureStack}"
+AWS_REGION="${AWS_REGION:-eu-central-1}"
 
 declare -A CLOUD_FORMATION_OUTPUTS=(
   [PROFILE_IMAGE_BUCKET_NAME]=BackendProfileImageBucketName
   [TPM_SQS_QUEUE_URL]=BackendQueueUrl
   [COGNITO_USER_POOL_ID]=CognitoAuthUserPoolId
   [COGNITO_IDENTITY_POOL_ID]=CognitoAuthIdentityPoolId
-  [REACT_APP_GRAPHQL_ENDPOINT]=BackendGraphqlApiEndpoint
+  [REACT_APP_GRAPHQL_ENDPOINT]=BackendApiEndpoint
 )
 
 declare -A ENV_FILE_FIELDS=(
@@ -30,7 +31,7 @@ require_value() {
 
   if [[ -z "$value" || "$value" == "None" ]]; then
     echo "ERROR: ${name} is required" >&2
-    exit 1
+    return 1
   fi
 }
 
@@ -41,7 +42,7 @@ cloudformation_output() {
   value="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
     --query "Stacks[0].Outputs[?starts_with(OutputKey, '${output_key_prefix}')].OutputValue | [0]" \
     --output text)"
-  require_value "CloudFormation output starting with '${output_key_prefix}' in ${STACK_NAME}" "$value"
+  require_value "CloudFormation output starting with '${output_key_prefix}' in ${STACK_NAME}" "$value" || return 1
   printf '%s\n' "$value"
 }
 
@@ -59,7 +60,8 @@ write_env_file() {
 aws sts get-caller-identity >/dev/null
 
 for env_name in "${!CLOUD_FORMATION_OUTPUTS[@]}"; do
-  printf -v "$env_name" '%s' "$(cloudformation_output "${CLOUD_FORMATION_OUTPUTS[$env_name]}")"
+  value="$(cloudformation_output "${CLOUD_FORMATION_OUTPUTS[$env_name]}")" || exit 1
+  printf -v "$env_name" '%s' "$value"
 done
 
 COGNITO_CLIENT_ID="$(aws cognito-idp list-user-pool-clients --user-pool-id "$COGNITO_USER_POOL_ID" --query 'UserPoolClients[0].ClientId' --output text)"

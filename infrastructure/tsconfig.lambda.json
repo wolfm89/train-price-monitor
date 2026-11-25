@@ -3,12 +3,12 @@
   "compilerOptions": {
     "rootDir": "../..",
     "noEmit": true,
-    "types": ["node"],
+    "types": ["node", "jest"],
     "paths": {
       "@aws-sdk/client-lambda": ["./node_modules/@aws-sdk/client-lambda/dist-types/index.d.ts"],
       "@aws-sdk/client-ssm": ["./node_modules/@aws-sdk/client-ssm/dist-types/index.d.ts"]
     }
   },
-  "include": ["lambda/db-proxy/**/*.ts", "../shared/db-fetch.ts"],
+  "include": ["lambda/db-proxy/**/*.ts", "test/db-proxy-handler.test.ts", "../shared/db-fetch.ts"],
   "exclude": ["node_modules", "cdk.out"]
 }

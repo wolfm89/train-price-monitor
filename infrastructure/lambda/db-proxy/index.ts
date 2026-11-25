@@ -37,10 +37,11 @@ export async function handler(event: DbProxyRequest): Promise<DbProxyResponse> {
     throw new Error('DB proxy request is missing a URL');
   }
 
-  const timeoutMs =
-    typeof event.timeoutMs === 'number' && Number.isFinite(event.timeoutMs)
-      ? Math.max(1_000, Math.floor(event.timeoutMs))
-      : 15_000;
+  const requestedTimeoutMs =
+    typeof event.timeoutMs === 'number' && Number.isFinite(event.timeoutMs) ? Math.floor(event.timeoutMs) : 15_000;
+  // The Lambda timeout is 20 s. Cap the inner DB request at 15 s so the proxy
+  // can return a structured response before the caller and Lambda time out.
+  const timeoutMs = Math.min(Math.max(1_000, requestedTimeoutMs), 15_000);
   const previousTotal = process.env.DB_TOTAL_BUDGET_MS;
   const previousRequest = process.env.DB_REQUEST_TIMEOUT_MS;
   process.env.DB_TOTAL_BUDGET_MS = String(timeoutMs);

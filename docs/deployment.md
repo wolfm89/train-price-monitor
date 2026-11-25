@@ -113,7 +113,7 @@ CloudFormation output keys are generated logical IDs with a hash suffix, for exa
   not read `AWS_REGION`; it is kept in the generated file for local tooling). The dev server needs
   no `.env.development`: it proxies `/graphql` to `VITE_DEV_BACKEND_URL` (default
   `http://127.0.0.1:4000`).
-- `frontend/.env.production`: `REACT_APP_GRAPHQL_ENDPOINT` from `BackendGraphqlApiEndpoint`.
+- `frontend/.env.production`: `REACT_APP_GRAPHQL_ENDPOINT` from `BackendApiEndpoint`.
 
 Set `STACK_NAME` if the stack is not named `InfrastructureStack`. The script verifies the AWS
 identity with `sts:GetCallerIdentity` and needs `cloudformation:DescribeStacks` and

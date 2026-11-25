@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
-import { decodeProxyBody, isProxyThrottleError, isThrottled } from '../../shared/db-fetch.js';
+import {
+  decodeProxyBody,
+  isProxyBusyError,
+  isProxyThrottleError,
+  isThrottled,
+  proxyInvokeTimeout,
+} from '../../shared/db-fetch.js';
 
 test('decodes gzip and plain proxy bodies', () => {
   const text = '{"intervalle":[]}';
@@ -15,6 +21,20 @@ test('classifies proxy throttle errors', () => {
   assert.equal(isProxyThrottleError('452 OPS_BLOCKED'), true);
   assert.equal(isProxyThrottleError('breaker open'), true);
   assert.equal(isProxyThrottleError('DB proxy failed: Unhandled'), false);
+});
+
+test('classifies proxy concurrency rejections', () => {
+  assert.equal(isProxyBusyError({ name: 'TooManyRequestsException' }), true);
+  assert.equal(isProxyBusyError({ name: 'ResourceConflictException' }), true);
+  assert.equal(isProxyBusyError(new Error('TooManyRequestsException')), false);
+  assert.equal(isProxyBusyError({ name: 'AccessDeniedException' }), false);
+});
+
+test('bounds the proxy invoke by the request timeout and remaining budget', () => {
+  const now = 1_000_000;
+  assert.equal(proxyInvokeTimeout(now + 20_000, now, 8_000), 8_000);
+  assert.equal(proxyInvokeTimeout(now + 3_000, now, 8_000), 3_000);
+  assert.equal(proxyInvokeTimeout(now - 1, now, 8_000), 1);
 });
 
 test('classifies throttling DB statuses', () => {

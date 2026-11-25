@@ -32,13 +32,13 @@ export class DbProxyStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.X86_64,
       memorySize: 128,
-      // Keep the proxy shorter than the API's 29 s cap. The caller also aborts
-      // the invoke at DB_REQUEST_TIMEOUT_MS.
+      // Keep the proxy shorter than the API's 29 s cap. The caller aborts the
+      // invoke at DB_REQUEST_TIMEOUT_MS; the handler caps the inner request at 15 s.
       timeout: cdk.Duration.seconds(20),
-      // One shared egress for the poller and the API. Cap it so a traffic spike
-      // cannot get the egress throttled; overflow invokes fail fast and the
-      // backend falls back to Decodo.
-      reservedConcurrentExecutions: 10,
+      // One shared egress for the poller and the API. The transport measured six
+      // parallel calls as the safe ceiling, so five leaves margin. Overflow
+      // invokes are classified as proxy-busy, not DB failures.
+      reservedConcurrentExecutions: 5,
       logGroup,
       environment: {
         DB_TLS_PROFILE: 'tls12',

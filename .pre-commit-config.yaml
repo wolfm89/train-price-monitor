@@ -1,5 +1,6 @@
 default_install_hook_types: [pre-commit, post-checkout]
 # Keep the existing hooks out of the post-checkout stage; only worktree-init runs there.
+# Add any future hook type here (for example pre-push) or its default-staged hooks stay disabled.
 default_stages: [pre-commit, manual]
 
 default_language_version:

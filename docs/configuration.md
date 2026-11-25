@@ -70,6 +70,9 @@ Shared by the backend and scraper.
 | `DB_PROXY_FUNCTION`            | Backend + scraper | ARN of `DbProxyStack`                                          | CDK             | Invoke this Lambda for DB requests instead of direct HTTPS.                   |
 | `DB_PROXY_REGION`              | Backend + scraper | `us-east-1`                                                    | CDK             | Region of `DB_PROXY_FUNCTION`; follows `CDK_DB_PROXY_REGION`.                 |
 
+`DB_REQUEST_TIMEOUT_MS` is the caller's invoke deadline. The proxy caps its own DB request at 15 s so
+it can return a structured response before its 20 s Lambda timeout.
+
 The direct path is Node `https` with a browser-like ClientHello. In production the backend and poller
 use the `DbProxyStack` Lambda; local development and a region with an accepted egress use the direct
 path. Decodo is only wired into the backend; the poller has no fallback key. See

@@ -21,11 +21,11 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | `TPM-Scraper-PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
 | `TPM-Scraper-PollerErrors`        | The poller Lambda is failing.                                                               |
-| `TPM-Scraper-PollerThrottledByDb` | The poller DB breaker opened in two consecutive runs; DB is refusing the egress.            |
-| `TPM-Scraper-PollerNoPrices`      | No direct successful scrape for 45 minutes.                                                 |
+| `TPM-Scraper-PollerThrottledByDb` | The poller DB breaker opened in two consecutive runs; the DB egress proxy is blocked.       |
+| `TPM-Scraper-PollerNoPrices`      | No successful scrape for 45 minutes.                                                        |
 | `TPM-Scraper-PollerBatchAborted`  | A run hit the 240 s abort; the log line, not a raw duration threshold.                      |
 | `TPM-App-SearchErrors`            | GraphQL search errors in the API.                                                           |
-| `TPM-App-UsingDecodoFallback`     | The direct DB transport has been degraded for two consecutive hours.                        |
+| `TPM-App-UsingDecodoFallback`     | The DB transport has been degraded for two consecutive hours.                               |
 | `TPM-App-RefresherErrors`         | The hourly/daily SQS worker is failing.                                                     |
 | `TPM-App-SearchThrottled`         | The GraphQL Lambda is being throttled (account concurrency limit reached).                  |
 | `TPM-App-RefresherDLQ`            | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
@@ -41,7 +41,7 @@ alarm metrics.
 ## Dashboards
 
 - `TrainPriceMonitor-Scraper`: run duration vs the 240 s abort, scrapes per run, failed target
-  scrapes, pipeline errors, DB throttling/backlog, price rows written, S3 storage and the last failed
+  scrapes, pipeline errors, DB breaker opens, price rows written, S3 storage and the last failed
   scrapes.
 - `TrainPriceMonitor-App`: API p50/p90/p99 and integration latency, requests, GraphQL errors, 4xx/5xx,
   refresher duration and errors, Lambda throttles, DLQ depth/age, SES sends/deliveries/bounces/
@@ -85,9 +85,9 @@ then.
    the old proxy stack:
    `aws cloudformation delete-stack --region us-east-1 --stack-name DbProxyStack`.
    The old log group is retained.
-5. On 2026-11-25 a proxied 25-target batch hit the 240 s abort. The poller now uses 20 targets,
-   3.5 s spacing and the 240 s guard. If the DB breaker opens repeatedly, reduce calls/day rather
-   than the gap.
+5. On 2026-11-25 a proxied 25-target batch took 255.7 s against the then-current 250 s guard. The
+   poller now uses 20 targets, 3.5 s spacing and the 240 s guard. If the DB breaker opens
+   repeatedly, reduce calls/day rather than the gap.
 
 ### Poller not running / no prices
 

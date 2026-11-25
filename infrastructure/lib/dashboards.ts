@@ -203,7 +203,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   return [
     [
       header(
-        `**Scraper** · batch ${props.batchSize} targets every 15 min · priority NEAR → MID → FAR · abort 240 s · timeout 300 s`
+        `**Scraper** · batch ${props.batchSize} targets every 15 min · priority NEAR → MID → FAR · abort ${RUN_ABORT_MS / 1000} s · timeout ${RUN_TIMEOUT_MS / 1000} s`
       ),
     ],
     [alarmStatus(props.alarms)],

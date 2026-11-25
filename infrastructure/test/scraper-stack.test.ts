@@ -3,7 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScraperStack } from '../lib/scraper-stack';
-import { DB_PROXY_REGION, SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
+import { DB_PROXY_REGION, POLLER_DB_GAP_MS, SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
 
 // The stack bundles the pre-built scraper output as Lambda assets. The CDK tests
 // do not need real bundles, only that the (gitignored) directories exist.
@@ -42,7 +42,7 @@ describe('ScraperStack', () => {
       Environment: {
         Variables: Match.objectLike({
           SCRAPER_BATCH_SIZE: String(SCRAPER_CONFIG.batch_size),
-          DB_MIN_GAP_MS: '3500',
+          DB_MIN_GAP_MS: String(POLLER_DB_GAP_MS),
           DB_MAX_IN_FLIGHT: '2',
         }),
       },

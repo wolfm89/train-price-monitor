@@ -136,9 +136,11 @@ pre-commit run --all-files --hook-stage manual   # includes tsc and ty
 Prettier, ESLint, ruff and uv-lock run on the changed files. The manual stage adds the slower
 typechecks.
 
-`pre-commit install` also installs the `post-checkout` hook. In a linked worktree it links or copies
-the ignored local files (`.env`, `.env.keys`, `frontend/.env.production`) from the main worktree and
-runs `mise run env:local` when AWS is available, so a new worktree can build without manual setup.
+`pre-commit install` also installs the `post-checkout` hook. In a new linked worktree it links or
+copies the ignored local files (`.env`, `.env.keys`, `frontend/.env.production`) from the main
+worktree and, when both generated env files are absent, runs `mise run env:local`. AWS failures are
+reported but do not block checkout. Set `WORKTREE_INIT_SKIP_ENV=1` to skip the AWS call. `.env.keys`
+is a manual provider-key stash for transport experiments; nothing loads it automatically.
 
 ## Code generation
 

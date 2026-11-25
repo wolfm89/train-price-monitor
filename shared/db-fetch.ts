@@ -125,6 +125,8 @@ export interface DbTransportStats {
   retries: number;
   breakerOpened: number;
   breakerSkips: number;
+  /** The proxy rejected an invoke because its concurrency limit was full. */
+  proxyBusy: number;
   /** How often a request had to switch to the next TLS profile after OPS_BLOCKED. */
   profileRotations: number;
   fallbackOk: number;
@@ -143,6 +145,7 @@ const stats: DbTransportStats = {
   retries: 0,
   breakerOpened: 0,
   breakerSkips: 0,
+  proxyBusy: 0,
   profileRotations: 0,
   fallbackOk: 0,
   fallbackFailed: 0,
@@ -202,12 +205,16 @@ function recordSuccess(): void {
   consecutiveFailures = 0;
 }
 
+function openBreaker(): void {
+  consecutiveFailures = 0;
+  breakerOpenUntil = Date.now() + intFromEnv('DB_BREAKER_COOLDOWN_MS', 180_000);
+  stats.breakerOpened++;
+}
+
 function recordFailure(): void {
   consecutiveFailures++;
   if (consecutiveFailures >= Math.max(1, intFromEnv('DB_BREAKER_THRESHOLD', 3))) {
-    consecutiveFailures = 0;
-    breakerOpenUntil = Date.now() + intFromEnv('DB_BREAKER_COOLDOWN_MS', 180_000);
-    stats.breakerOpened++;
+    openBreaker();
   }
 }
 
@@ -576,6 +583,15 @@ type LambdaSdk = typeof import('@aws-sdk/client-lambda');
 let lambdaSdk: LambdaSdk | null = null;
 let lambdaClient: InstanceType<LambdaSdk['LambdaClient']> | null = null;
 
+/** Bounds one proxy invoke by the configured timeout and the caller's remaining budget. */
+export function proxyInvokeTimeout(
+  deadline: number,
+  now = Date.now(),
+  requestTimeoutMs = intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000)
+): number {
+  return Math.max(1, Math.min(requestTimeoutMs, deadline - now));
+}
+
 async function invokeProxy(
   functionName: string,
   url: string,
@@ -594,8 +610,7 @@ async function invokeProxy(
   // The SDK has no request timeout by default. Bound the invoke by the
   // per-attempt timeout and the caller's remaining budget so a slow proxy cannot
   // hold a user request past the API Gateway cap.
-  const remaining = deadline - Date.now();
-  const requestTimeout = Math.max(1, Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000), remaining));
+  const requestTimeout = proxyInvokeTimeout(deadline);
   const payload = JSON.stringify({
     url,
     method: init.method ?? 'GET',
@@ -656,6 +671,15 @@ export function isProxyThrottleError(message: string): boolean {
   return /throttl|OPS_BLOCKED|breaker/i.test(message);
 }
 
+/** True when Lambda rejected the invoke because the proxy's concurrency limit was full. */
+export function isProxyBusyError(error: unknown): boolean {
+  const name =
+    typeof error === 'object' && error !== null && 'name' in error
+      ? String((error as { name?: unknown }).name ?? '')
+      : '';
+  return name === 'TooManyRequestsException' || name === 'ResourceConflictException';
+}
+
 /** Decodes the optional gzip/base64 proxy body; plain strings pass through. */
 export function decodeProxyBody(encoding: 'gzip' | undefined, body: string | undefined): Buffer {
   return encoding === 'gzip' ? zlib.gunzipSync(Buffer.from(body ?? '', 'base64')) : Buffer.from(body ?? '');
@@ -670,6 +694,8 @@ async function proxyFetch(
   const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
+  let lastWasProxyBusy = false;
+  let failureRecorded = false;
 
   for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
     const release = await acquireSlot();
@@ -683,23 +709,36 @@ async function proxyFetch(
         stats.directOk++;
         return response;
       }
+      lastWasProxyBusy = false;
       if (throttled) stats.directThrottled++;
       else stats.directFailed++;
       lastResponse = response;
       lastError = null;
       if (!throttled && response.status < 500) return response;
     } catch (error) {
-      if (error instanceof DbThrottledError) {
+      if (isProxyBusyError(error)) {
+        // Our own concurrency cap, not a DB block. Retry within the budget; do
+        // not open the breaker or spend the Decodo fallback on it.
+        stats.proxyBusy++;
+        lastWasProxyBusy = true;
+        lastError = error;
+        lastResponse = null;
+      } else if (error instanceof DbThrottledError) {
         // The proxy's own breaker is open. It answers in ~100 ms; retrying is
         // noise, and this is a block, not a generic failure.
         stats.directThrottled++;
         lastError = error;
         lastResponse = null;
+        openBreaker();
+        failureRecorded = true;
+        lastWasProxyBusy = false;
         break;
+      } else {
+        lastWasProxyBusy = false;
+        stats.directFailed++;
+        lastError = error;
+        lastResponse = null;
       }
-      stats.directFailed++;
-      lastError = error;
-      lastResponse = null;
     } finally {
       release();
     }
@@ -710,7 +749,11 @@ async function proxyFetch(
     }
   }
 
-  recordFailure();
+  if (lastWasProxyBusy) {
+    throw new DbThrottledError('DB proxy is busy (Lambda concurrency limit)');
+  }
+
+  if (!failureRecorded) recordFailure();
   const fallback = await viaFallback(url, init, deadline);
   if (fallback) return fallback;
   if (lastError instanceof DbThrottledError) throw lastError;
