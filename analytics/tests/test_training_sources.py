@@ -1,7 +1,5 @@
 """Source resolution and provenance tests for the training CLI."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 from pathlib import Path

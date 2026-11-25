@@ -9,8 +9,6 @@ Usage:
     uv run python scripts/build_calendar.py --check
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys

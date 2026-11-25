@@ -4,8 +4,6 @@ The JSON file lives outside the package on purpose: it is a repository input, no
 Every value that changes the dataset, the model or the report is hashed into the manifest.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re
@@ -139,6 +137,28 @@ class CalendarConfig:
         """Validate this configuration section."""
         if self.feature_set not in CALENDAR_SETS:
             raise ConfigError(f"calendar.feature_set must be one of {CALENDAR_SETS}")
+
+
+@dataclass(frozen=True)
+class FeaturesConfig:
+    """Optional feature-family switches.
+
+    The analog-departure family is off by default. ``offsets_days`` stays populated while the
+    switch is off so a study run can be reproduced without editing the input file.
+    """
+
+    analog_departures_enabled: bool
+    analog_departure_offsets_days: tuple[int, ...]
+
+    def validate(self) -> None:
+        """Validate this configuration section."""
+        offsets = self.analog_departure_offsets_days
+        if not offsets:
+            raise ConfigError("features.analog_departures.offsets_days must not be empty")
+        if any(offset not in {1, 7} for offset in offsets):
+            raise ConfigError("features.analog_departures.offsets_days supports only 1 and 7 days")
+        if tuple(sorted(set(offsets))) != offsets:
+            raise ConfigError("features.analog_departures.offsets_days must be strictly increasing and unique")
 
 
 @dataclass(frozen=True)
@@ -310,6 +330,7 @@ class TrainingConfig:
     resample: ResampleConfig
     sample: SampleConfig
     calendar: CalendarConfig
+    features: FeaturesConfig
     model: ModelConfig
     calibration: CalibrationConfig
     report: ReportConfig
@@ -326,6 +347,7 @@ class TrainingConfig:
         self.resample.validate()
         self.sample.validate()
         self.calendar.validate()
+        self.features.validate()
         self.model.validate()
         self.calibration.validate()
         self.report.validate()
@@ -417,6 +439,20 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
         protocol_raw = {"kind": "static_split"}
     if not isinstance(protocol_raw, dict):
         raise ConfigError("protocol must be an object")
+    features_raw = raw.get("features") or {}
+    if not isinstance(features_raw, dict):
+        raise ConfigError("features must be an object")
+    analog_raw = features_raw.get("analog_departures") or {}
+    if not isinstance(analog_raw, dict):
+        raise ConfigError("features.analog_departures must be an object")
+    enabled_raw = analog_raw.get("enabled", False)
+    if not isinstance(enabled_raw, bool):
+        raise ConfigError("features.analog_departures.enabled must be a boolean")
+    offsets_raw = analog_raw.get("offsets_days", [1, 7])
+    if not isinstance(offsets_raw, list) or any(
+        isinstance(value, bool) or not isinstance(value, int) for value in offsets_raw
+    ):
+        raise ConfigError("features.analog_departures.offsets_days must be a list of integers")
     cutoffs_raw = protocol_raw.get("cutoffs") or []
     if not isinstance(cutoffs_raw, list):
         raise ConfigError("protocol.cutoffs must be a list")
@@ -493,6 +529,10 @@ def parse_config(raw: dict[str, Any]) -> TrainingConfig:
             seed=_int(sample_raw, "seed", minimum=0),
         ),
         calendar=CalendarConfig(feature_set=_str(calendar_raw, "feature_set")),
+        features=FeaturesConfig(
+            analog_departures_enabled=enabled_raw,
+            analog_departure_offsets_days=tuple(int(value) for value in offsets_raw),
+        ),
         model=ModelConfig(
             candidates=tuple(model_raw.get("candidates", [])),
             max_iter=_int(model_raw, "max_iter", minimum=1),

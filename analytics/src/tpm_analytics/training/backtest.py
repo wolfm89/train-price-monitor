@@ -5,8 +5,6 @@ recipe is frozen on the development folds, then refitted on each evaluation fold
 selection. Evaluation and sparse-era folds are scored only with ``--evaluate-test``.
 """
 
-from __future__ import annotations
-
 import hashlib
 import itertools
 import json
@@ -2390,7 +2388,7 @@ def _report(result: BacktestResult, config: TrainingConfig, dataset_manifest: di
 departure, in the 24 h-30 d domain. Rows are the labelled subset; a missing check is censored
 (`not_listed`), not a negative.
 
-**What is clean:** the evaluation weeks were inspected in PR 5 and earlier; these are a
+**What is clean:** the evaluation weeks were inspected in earlier development work; these are a
 re-measurement on an inspected cohort, not an unbiased estimate for a new period. The
 October-November forward set is the only untouched data. These are different populations and
 protocols from the static validation split; a higher Brier here is not a model regression.
@@ -2486,7 +2484,8 @@ check uses point-estimate precision; the calibration rule used the Wilson lower 
 is **nominal**: it assumes independent rows, while alerts within a departure date share the same
 fare movement. The measured design effect is 1.4-3.2x, and a boundary rule is expected to hold on
 roughly half of new cells. Treat the hold rate as descriptive; a departure-date cluster bound is
-the PR 7 replacement. Cells with fewer than 100 test alerts or under 5 % recall are nominal only.
+a date-clustered replacement. Cells with fewer than 100 test alerts or under 5 % recall are
+nominal only.
 Cell rows relabel every test row at the cell's headroom; the pooled `cell-threshold`
 precision/recall use each row's assigned headroom. {hold_note}
 
@@ -2523,7 +2522,7 @@ log loss. The sample is allocated equally per departure date, so the mean is dat
 the pooled-block mean; permutation is global across dates. `std`/`min`/`max` are the permutation
 spread across repeats; `date std` is the spread of the per-date mean deltas. The `limit` family is
 the user's headroom, the label's own parameter; read it as a sanity check, not a market driver.
-Within-date permutation and a date-level interval are PR 7 refinements.
+Within-date permutation and a date-level interval are future refinements.
 
 ### Feature families
 

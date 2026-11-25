@@ -57,9 +57,9 @@ run = "uv run --group train python -m tpm_analytics.training.cli"
 description = "Profile the training source without training"
 run = "uv run --group train python -m tpm_analytics.training.cli --profile"
 
-[tasks."train:ablation"]
-description = "Run the four calendar feature sets on one full dataset (static config)"
-run = "uv run --group train python -m tpm_analytics.training.cli --config config/training-static.json --ablation"
+[tasks."train:study"]
+description = "Run the development-fold feature-family study; pass --source <pointer|glob> and --forward-availability <parquet> after --"
+run = "TRAIN_DUCKDB_MAX_TEMP_SIZE=64GB uv run --group train python -m tpm_analytics.training.cli --feature-study"
 
 [tasks."train:clean"]
 description = "Remove local training artifacts"

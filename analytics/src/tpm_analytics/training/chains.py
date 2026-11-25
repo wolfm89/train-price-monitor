@@ -17,8 +17,6 @@ return is a new incarnation of the same series key (suffixed ``#r``), so a link 
 observations after the scrape that decides it. This is the rule an online refresher can apply.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections import deque

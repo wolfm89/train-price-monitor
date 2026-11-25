@@ -6,6 +6,9 @@ weekly Lambda publishes the result and a quality report. This is the only Python
 
 ## Commands
 
+Python 3.15 is the minimum (`requires-python = ">=3.15"`). Write modern 3.15 syntax and do
+not add `from __future__ import annotations`; deferred annotations are the default (PEP 649).
+
 ```bash
 uv sync --frozen     # create .venv from uv.lock; uv manages the interpreter
 uv run pytest        # fixture tests over v1-only, v2-only and mixed bronze files
@@ -22,7 +25,7 @@ uv sync --group train
 uv run --group train pytest
 uv run --group train ty check
 mise run //analytics:train -- --source .data/silver/<build>
-mise run //analytics:train:ablation -- --source .data/silver/<build>
+mise run //analytics:train:study -- --source .data/silver/<build>
 ```
 
 The `train` group adds numpy, scikit-learn, scipy, joblib and pyarrow. CI installs it for the
@@ -31,8 +34,10 @@ Lambda image.
 
 The training CLI defaults to DuckDB `memory_limit=6GB` and `max_temp_size=20GB`; override them with
 `TRAIN_DUCKDB_MEMORY_LIMIT` and `TRAIN_DUCKDB_MAX_TEMP_SIZE`. Both effective values are recorded in
-`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for the 5 %
-route-day sample; raise it for the 10/25/50 % learning-curve runs.
+`dataset_manifest.json` under `duckdb_settings`. The 20 GB temp default is sized for a plain 5 %
+route-day build. The analog study build spills more than 20 GB; set
+`TRAIN_DUCKDB_MAX_TEMP_SIZE=64GB` for `--feature-study` and record the temp peak. Raise it for the
+10/25/50 % learning-curve runs.
 
 S3 credentials are frozen into a temporary DuckDB secret for the run. IAM Identity Center role
 sessions default to one hour; for a long scan, download the silver build to `analytics/.data/` and
@@ -118,12 +123,12 @@ v2-only and mixed-schema input.
   sparse-era folds are scored only with `--evaluate-test`; the scored blocks go in the manifest and
   the parent-plan ledger. A series may span a backtest cutoff because labels are purged and features
   are past-only. The static `splits` block still bounds the panel at `test_end`; it is not used
-  for backtest scoring. `--ablation` requires `config/training-static.json`. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
+  for backtest scoring. `--feature-study` builds the superset panel and runs the fixed development-fold arms; it refuses `--evaluate-test` and never reads an evaluation or sparse-era fold. The study requires `--forward-availability`; the keep decision uses the measured forward-set analog availability, not the grid upper bound. `--cache-dir` resumes completed folds and the frozen recipe by config, dataset digest and fit-code hash;
   checkpoints hold report state plus the fitted model and calibrator that permutation importance
   needs, never the train or calibration panels; verify `pkl_sha256` before reuse. The hash ships
   beside the file, so it proves integrity, not authenticity. A cache-free 5 % backtest peaked at
   6.35 GiB in an earlier twin; the final cold run reached 6.24 GiB (the development run 6.30 GiB).
-  The dataset build sets the peak. PR 5's cold runs recorded 11.0-11.5 GiB under concurrent load,
+  The dataset build sets the peak. Earlier cold runs recorded 11.0-11.5 GiB under concurrent load,
   so treat any single figure as per-phase and measure before scaling; 10 % has not been measured.
 - **Recipe selection is development-only.** `training/selection.py` performs a joint search over
   every model x calibration pair on the development folds and refuses any other role. Comparison
@@ -133,6 +138,24 @@ v2-only and mixed-schema input.
   `base_rate < logistic < hist_gradient_boosting` and
   `sigmoid = temperature < isotonic < covariate`; climatology is a reference row, never selectable.
   The full table goes to `recipe.json`; only the rule settings enter the recipe hash.
+- **Feature study.** The reproducible study is `--feature-study`; the arms are `analog_d1`
+  vs base, `analog_d1 + analog_d7` vs `analog_d1`, and the three calendar sets vs base. Every arm
+  refits the frozen HGB + temperature recipe (early stopping, no calibrator re-selection). The
+  switch is `features.analog_departures` (`enabled: false` by default, offsets 1 and 7); when on,
+  the builder reads analog route-days from full v1 silver, not the sampled panel. The definition is
+  causal and pre-registered: same route/class/first train, planned departure within 15 minutes on
+  `D - k`, observation at or before the snapshot, price analog at the closest lead within 12 h, rise
+  analog whose own next-day point (20-28 h, closest to +24 h) is also at or before the snapshot.
+  Keep a family only if the recipe replacement rule accepts it at full availability **and** the
+  coverage stress test (columns masked to the measured availability by band) does not make it
+  significantly worse overall or at 1-7 days. The stress target uses the forward-set availability
+  for 1-7 days and fills the 7-30 day bands from the coverage profile; the profile itself is an
+  observation-weighted v1+v2 grid upper bound, not the snapshot population. The decision also
+  requires the point estimate not to be positive. `candidate_feature` marks study-only columns in
+  `column_roles.json`. The switch builds the columns and, in a normal run, adds them to the model
+  spec; the study harness selects the arms explicitly. The analog source is v1-only, so the revisit trigger must be measured on
+  v1 actual availability, not the v1+v2 grid, and the v2 port is a prerequisite for paired
+  next-day scrapes.
 - **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on
   logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom)). The covariate
   calibrator must be monotone in score in every band and non-increasing in headroom; otherwise it
@@ -142,7 +165,7 @@ v2-only and mixed-schema input.
   methods and its 1e-3 output clip; its split digests, validation predictions, `calibration.csv`
   and headline metrics stay identical to `pr4-final`, while new config fields change the recorded
   config hash. The base-rate/logistic candidate tables and the paired-vs-logistic interval are not
-  pinned because PR 6 upgraded those candidates.
+  pinned because the later selection step upgraded those candidates.
 - **Thresholds.** One per headroom x TTD band on the calibration block's out-of-fold scores: the
   highest recall whose one-sided 95 % Wilson lower bound on precision is at least
   `threshold_precision_floor` with at least `threshold_min_alerts` (30) alerts. A cell with no
@@ -206,7 +229,7 @@ v2-only and mixed-schema input.
   commit it or upload the dataset to S3 from this module.
 - The test split is a future-departure cohort. Do not describe it as an era holdout or use it to
   claim post-fix generalization. Test metrics are written only with `--evaluate-test`; the default
-  and `--ablation` report validation only. `--evaluate-test` gates the test label and model tables;
+  and `--feature-study` report development folds only. `--evaluate-test` gates the test label and model tables;
   journey disappearance is corpus-level and includes test departures. `profile.json` and
   `dataset_manifest.json` keep descriptive test aggregates for the dataset build.
 - **Journey identity.** The series key follows the itinerary (route, first train, class,
@@ -237,8 +260,8 @@ v2-only and mixed-schema input.
   their edges at `:07:30 / :22:30 / :37:30 / :52:30`. A departure shift that crosses an edge
   starts a new series. `price_rank_route_day` ranks every priced journey in
   the route-day x class x scrape cross-section before resampling; route-day sampling keeps the
-  whole cross-section. `column_roles.json` records which output columns are features, labels or
-  audit so a new diagnostic cannot quietly enter the model matrix.
+  whole cross-section. `column_roles.json` records which output columns are features, candidate
+  features (study-only), labels or audit so a new diagnostic cannot quietly enter the model matrix.
 - `observation_week` is the Europe/Berlin ISO week. `identity.berlin_week_sql` implements the EU
   DST rule directly because DuckDB's ICU timezone functions need `pytz` in the Python client.
 - `check_at` is the primary 20-28 h next-day check; `check_at_2024` is the crossed-back and

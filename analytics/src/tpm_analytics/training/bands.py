@@ -1,7 +1,5 @@
 """Time-to-departure bands shared by the dataset diagnostics and the evaluation report."""
 
-from __future__ import annotations
-
 import math
 
 # Headline bands from the review plan. Bounds are hours before departure, lower-inclusive.
