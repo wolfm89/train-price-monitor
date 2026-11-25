@@ -2,7 +2,8 @@
 
 Code and values used by more than one module. There is no `node_modules` here: each consuming
 module type-checks these files through its own tsconfig `include` and bundles them with esbuild.
-The root [`AGENTS.md`](../AGENTS.md) still applies; this file covers the shared pieces.
+Lint uses the root ESLint config via `mise run //shared:lint`. The root [`AGENTS.md`](../AGENTS.md)
+still applies; this file covers the shared pieces.
 
 ## Files
 
@@ -76,8 +77,8 @@ development never touches SSM.
   dependency; that is the problem this file exists to avoid.
 - Do not remove the `cross-fetch` alias in `../backend/` or `../scraper/`, and do not send
   additional headers without re-measuring against the live DB endpoint.
-- After a transport change, run backend and scraper `typecheck`, `lint` and `test`, then build both
-  bundles and confirm neither contains a native module.
+- After a transport change, run `mise run //shared:lint`, backend and scraper `typecheck`, `lint`
+  and `test`, then build both bundles and confirm neither contains a native module.
 - `runtime-config.json` is read by both runtimes and by CDK. Change it together with
   `docs/configuration.md` and check `../infrastructure/lib/config.ts`; do not fork a value into a
   module-local copy.
