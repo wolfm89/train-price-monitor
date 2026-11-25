@@ -53,9 +53,10 @@ From the repository root: `mise run //backend:dev` and `mise run //backend:test`
 - `db-vendo-client` reaches DB through the shared `cross-fetch` alias to `../shared/db-fetch.ts`,
   using the `dbnav` Navigator profile. Read [`shared/AGENTS.md`](../shared/AGENTS.md) before
   touching transport behavior.
-- The API and refresher can fall back to Decodo when the direct path is throttled
-  (`DECODO_API_KEY_PARAM`, premium pool). `DB_TRANSPORT=decodo` is the kill switch. The key lives in
-  an SSM SecureString written by CI; functions receive only the parameter name, never the key.
+- The API and refresher reach DB through the configured `DbProxyStack` (`DB_PROXY_FUNCTION`) and
+  fall back to Decodo when the direct path is throttled (`DECODO_API_KEY_PARAM`, premium pool).
+  `DB_TRANSPORT=decodo` is the kill switch. The key lives in an SSM SecureString written by CI;
+  functions receive only the parameter name, never the key.
 - The bundle is `--format=cjs`. Do **not** externalize ESM-only packages: `require()` of ESM crashes
   Lambda with `UserCodeSyntaxError`, which API Gateway reports as a 502 and often disguises as CORS.
   `db-vendo-client` must stay bundled.

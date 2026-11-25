@@ -201,7 +201,11 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   });
 
   return [
-    [header('**Scraper** · batch 25 targets every 15 min · priority NEAR → MID → FAR · abort 250 s · timeout 300 s')],
+    [
+      header(
+        `**Scraper** · batch ${props.batchSize} targets every 15 min · priority NEAR → MID → FAR · abort 250 s · timeout 300 s`
+      ),
+    ],
     [alarmStatus(props.alarms)],
     [
       new cloudwatch.GraphWidget({
@@ -220,9 +224,8 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
         metrics: [runMsMax],
         leftYAxis: { min: 0, max: RUN_TIMEOUT_MS },
         annotations: [
-          // 180 s was the warn band at batch 18-22; at batch 25 the observed max
-          // at 2.5 s was ~146 s and the projected max at 3.5 s is ~195 s, so
-          // warning there would paint a healthy pipeline amber.
+          // 180 s was the warn band at batch 18-22; at batch 20 the projected max
+          // is ~195 s, so warning there would paint a healthy pipeline amber.
           { value: RUN_WARN_MS, label: 'warn', color: AMBER },
           { value: RUN_ABORT_MS, label: 'abort', color: RED },
         ],

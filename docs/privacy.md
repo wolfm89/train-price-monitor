@@ -19,6 +19,13 @@
 | CloudWatch, CloudTrail                    | pseudonymous ids, counts and redacted error messages; CloudTrail's event history records sign-up/sign-in calls, including the caller's IP address                                                                                                                                                                                                        |
 | Browser                                   | landing page `theme`, blog `pref-theme`, app `CognitoIdentityServiceProvider.*` (60 min tokens, 30-day refresh token). No cookies anywhere                                                                                                                                                                                                               |
 
+## DB pricing requests
+
+The backend and poller reach DB through a Lambda in `CDK_DB_PROXY_REGION` (default `us-east-1`). The
+payload is station IDs, travel date and class; it carries no user id, email, name, token or cookie.
+The proxy does not log the URL or the body; it returns status, content type and a gzipped body to the
+caller only.
+
 ## Outbound bookings
 
 Each watchlist ticket can build a bahn.de booking link locally from the route, departure, travel class

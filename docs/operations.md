@@ -21,7 +21,7 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | `TPM-Scraper-PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
 | `TPM-Scraper-PollerErrors`        | The poller Lambda is failing.                                                               |
-| `TPM-Scraper-PollerThrottledByDb` | DB throttling in two consecutive runs; a single 429 is noise.                               |
+| `TPM-Scraper-PollerThrottledByDb` | More than 10 throttled DB calls in two consecutive runs; a few proxy retries are normal.    |
 | `TPM-Scraper-PollerNoPrices`      | No direct successful scrape for 45 minutes.                                                 |
 | `TPM-Scraper-PollerBatchAborted`  | A run hit the 250 s abort; the log line, not a raw duration threshold.                      |
 | `TPM-App-SearchErrors`            | GraphQL search errors in the API.                                                           |
@@ -74,28 +74,27 @@ then.
 
 ### DB throttling or `403 OPS_BLOCKED`
 
-1. Check the `TPM-App-UsingDecodoFallback` alarm and the poller transport counters.
-2. The backend uses the DB Navigator API over the direct TLS transport and falls back to Decodo when
-   `DECODO_API_KEY_PARAM` resolves. If Decodo is unavailable, interactive search degrades.
-3. The poller has no Decodo key. On throttling it ends the batch; untouched targets are retried by
-   the next run. Do not raise `SCRAPER_BATCH_SIZE` while the transport counters are dirty.
-4. If every TLS profile is blocked, check whether the egress is refused. On 2026-11-23 the web
-   booking API rejected every AWS Lambda IP and region tested while German residential egress still
-   passed. The poller uses the DB Navigator API (`app.services-bahn.de`); a poller `OPS_BLOCKED`
-   means that edge is refusing the egress too. Another profile, Lambda IP or AWS region will not
-   help; pause the poller instead of re-probing every 15 minutes.
-5. On 2026-11-24 the Navigator API throttled the poller after ~22 h at 2.5 s spacing. The poller
-   now uses 3.5 s. If `PollerThrottled` returns near the same cumulative call count since UTC
-   midnight, treat it as a daily budget and reduce calls/day (batch size or cadence), not the gap.
-6. If the proxy region itself is blocked, set `CDK_DB_PROXY_REGION` to another region and redeploy;
-   delete the old region's `DbProxyStack`. Check its log group for proxy errors.
+1. Check `TPM-App-UsingDecodoFallback`, the poller transport counters, and the `DbProxyStack` log group.
+2. The backend reaches the Navigator API through the configured DB proxy and falls back to Decodo
+   when `DECODO_API_KEY_PARAM` resolves. The poller uses the same proxy and has no Decodo key.
+3. On a proxy block the poller ends the batch; untouched targets are retried by the next run. Do not
+   raise `SCRAPER_BATCH_SIZE`. A few `directThrottled` retries per run are normal; the alarm fires
+   above 10 in two consecutive runs.
+4. If the proxy region is blocked, test a new egress first, then set `CDK_DB_PROXY_REGION` to it.
+   `eu-central-1` is currently blocked. Deploy the caller stacks with the new ARN first, then delete
+   the old proxy stack:
+   `aws cloudformation delete-stack --region us-east-1 --stack-name DbProxyStack`.
+   The old log group is retained.
+5. On 2026-11-24 the Navigator API throttled 25-target batches; the poller now uses 20 targets and
+   3.5 s spacing. If `PollerThrottled` returns near the same cumulative call count since UTC
+   midnight, reduce calls/day rather than the gap.
 
 ### Poller not running / no prices
 
 1. Confirm the poller schedule is enabled (`CDK_SCRAPER_PAUSED` not `1`) and the Lambda has recent
    invocations.
 2. Check the poller logs for `DbThrottledError`, TLS profile rotations and batch aborts.
-3. Check the schedule table backlog: healthy runs drain 25 targets every 15 minutes; the `ByDue`
+3. Check the schedule table backlog: healthy runs drain 20 targets every 15 minutes; the `ByDue`
    index serves NEAR first.
 4. If the backlog is deep, do not raise the batch size blindly; DB pacing is the constraint.
 

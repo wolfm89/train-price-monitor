@@ -23,9 +23,9 @@ human-only AWS deploy (it builds the bundles first); the Floci deploy below is a
   with conditional writes. `HYDRATOR_FULL_SEED=1` backfills `due_key` on old rows; a full seed writes
   ~8,400 items against a 5 WCU table and can exceed the 15-minute timeout unless capacity is raised.
 - **Poller** runs every 15 minutes. It queries each `ByDue` tier in NEAR → MID → FAR order
-  (paginated, up to 5 pages per tier), up to 25 targets, makes two bestprice calls per target (first
+  (paginated, up to 5 pages per tier), up to 20 targets, makes two bestprice calls per target (first
   and second class) and reschedules each target. It uses the DB Navigator API (`dbnav`,
-  `app.services-bahn.de`), not the bahn.de web API, which refuses AWS Lambda egress.
+  `app.services-bahn.de`) through the configured DB proxy, not the bahn.de web API.
 - `due_key` is `<tier rank>#<next_scrape_at>`; the index is `status` + `due_key`. Keep the prefix and
   the tier order when changing scheduling, otherwise near departures stop winning.
 - Targets whose departure day has passed are deleted instead of scraped.
@@ -37,12 +37,12 @@ human-only AWS deploy (it builds the bundles first); the Floci deploy below is a
 
 ## DB pacing and throttling
 
-- The poller runs at 3.5 s between request starts with at most 2 in flight, in a batch of 25 targets
-  (50 calls) every 15 minutes. That is about 2,400 scrapes a day against the ~1,654 the TTD intervals
-  need, so the backlog drains in about a week.
+- The poller runs at 3.5 s between request starts with at most 2 in flight, in a batch of 20 targets
+  (40 calls) every 15 minutes. That is about 1,920 scrapes a day against the ~1,654 the TTD intervals
+  need, so the backlog drains.
 - Raise `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log show
-  zero `directThrottled`, `breakerOpened` and `profileRotations`. DB throttles an egress IP that
-  bursts.
+  zero `breakerOpened` and no batch aborts. A few `directThrottled` retries are normal through the
+  proxy; `TPM-Scraper-PollerThrottledByDb` fires above 10 in two consecutive runs.
 - **The poller has no Decodo key on purpose.** Bulk work must never spend the free fallback
   allowance. On `DbThrottledError` it ends the batch and leaves the rest for the next run.
 - Do not raise concurrency or reduce the gap to make a deadline; it gets the IP a longer ban.

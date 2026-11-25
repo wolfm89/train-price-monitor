@@ -48,8 +48,10 @@ Useful values:
 - `CDK_TRANSFORM_VERSION` records the short commit SHA in the silver manifest; empty falls back to
   `sql-<hash>`.
 - `CDK_DECODO_API_KEY_PARAM` defaults to `/train-price-monitor/decodo-api-key`.
-- `CDK_DB_PROXY_REGION` selects the DB proxy region (`us-east-1` default; `eu-central-1` to switch
-  back). Changing it creates a `DbProxyStack` in the new region; delete the old region's stack.
+- `CDK_DB_PROXY_REGION` selects the DB proxy region (`us-east-1` default). Test the new egress
+  first; `eu-central-1` is currently blocked. Deploy the caller stacks with the new ARN first, then
+  delete the old region's stack, e.g.
+  `aws cloudformation delete-stack --region us-east-1 --stack-name DbProxyStack`.
 
 ## Bootstrap
 
@@ -138,7 +140,9 @@ Sunday 03:30 UTC, after the 03:00 compactor.
 - **Pause analytics:** set `CDK_ANALYTICS_PAUSED=1` and redeploy. The schedule stays deployed but
   disabled.
 - **Roll back an application deploy:** `cdk deploy` the previous commit; the S3/data resources are
-  retained according to the stack policies.
+  retained according to the stack policies. A rollback to a pre-proxy commit leaves `DbProxyStack`
+  orphaned and the callers on the blocked direct path; keep the stack or delete it explicitly (see
+  the `CDK_DB_PROXY_REGION` note above).
 - **Roll back a silver build:** move `silver/_latest.json` to an older manifest. Builds are kept for
   at least a day and the newest two are retained.
 - **Quality reports** are kept indefinitely; `silver/builds/` keeps two builds.

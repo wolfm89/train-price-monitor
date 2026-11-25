@@ -99,7 +99,7 @@ describe('Dashboards', () => {
     }
 
     // The gauge's warn band must sit above the projected maximum run time
-    // (~195 s at batch 25 and 3.5 s spacing) and just below the abort, not at the
+    // (~195 s at batch 20 and 3.5 s spacing) and just below the abort, not at the
     // old 180 s.
     expect(scraper).toContain('200000');
     expect(scraper).toContain('250000');

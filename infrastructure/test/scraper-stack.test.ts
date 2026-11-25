@@ -3,7 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScraperStack } from '../lib/scraper-stack';
-import { SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
+import { DB_PROXY_REGION, SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
 
 // The stack bundles the pre-built scraper output as Lambda assets. The CDK tests
 // do not need real bundles, only that the (gitignored) directories exist.
@@ -38,6 +38,7 @@ describe('ScraperStack', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
       Timeout: SCRAPER_CONFIG.poller_timeout_seconds,
+      MemorySize: SCRAPER_CONFIG.poller_memory_mib,
       Environment: {
         Variables: Match.objectLike({
           SCRAPER_BATCH_SIZE: String(SCRAPER_CONFIG.batch_size),
@@ -53,8 +54,8 @@ describe('ScraperStack', () => {
     expect(variables.some((name) => name.startsWith('DECODO') || name.startsWith('BROWSER'))).toBe(false);
   });
 
-  test('Poller invokes the us-east-1 DB proxy when configured', () => {
-    const proxyArn = 'arn:aws:lambda:us-east-1:111111111111:function:TrainPriceMonitor-DbProxy';
+  test('Poller invokes the configured DB proxy and keeps the alarm threshold sane', () => {
+    const proxyArn = `arn:aws:lambda:${DB_PROXY_REGION}:111111111111:function:TrainPriceMonitor-DbProxy`;
     const stack = new ScraperStack(new cdk.App(), 'ProxyScraperStack', {
       env: { account: '111111111111', region: 'eu-central-1' },
       dbProxyFunctionArn: proxyArn,
@@ -65,10 +66,21 @@ describe('ScraperStack', () => {
       Environment: {
         Variables: Match.objectLike({
           DB_PROXY_FUNCTION: proxyArn,
-          DB_PROXY_REGION: 'us-east-1',
+          DB_PROXY_REGION,
           DB_TLS_PROFILE: 'tls12',
         }),
       },
+    });
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({ Action: 'lambda:InvokeFunction', Resource: proxyArn, Effect: 'Allow' }),
+        ]),
+      },
+    });
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'TPM-Scraper-PollerThrottledByDb',
+      Threshold: 10,
     });
   });
 

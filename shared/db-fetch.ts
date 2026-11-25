@@ -38,7 +38,7 @@
  *  DB_MAX_IN_FLIGHT         concurrent requests (default 2)
  *  DB_MAX_ATTEMPTS          direct attempts per request (default 2)
  *  DB_RETRY_BACKOFF_MS      pause before a retry, multiplied by the attempt (default 3000)
- *  DB_REQUEST_TIMEOUT_MS    per-attempt timeout (default 20000)
+ *  DB_REQUEST_TIMEOUT_MS    per-attempt timeout; in proxy mode bounds the Lambda invoke (default 20000)
  *  DB_TOTAL_BUDGET_MS       wall-clock budget for one request, direct + fallback (default 24000)
  *  DB_BREAKER_THRESHOLD     consecutive failed requests that open the breaker (default 3)
  *  DB_BREAKER_COOLDOWN_MS   how long the breaker stays open (default 180000)
@@ -576,7 +576,12 @@ type LambdaSdk = typeof import('@aws-sdk/client-lambda');
 let lambdaSdk: LambdaSdk | null = null;
 let lambdaClient: InstanceType<LambdaSdk['LambdaClient']> | null = null;
 
-async function invokeProxy(functionName: string, url: string, init: FetchInit): Promise<FetchCompatibleResponse> {
+async function invokeProxy(
+  functionName: string,
+  url: string,
+  init: FetchInit,
+  deadline: number
+): Promise<FetchCompatibleResponse> {
   if (!lambdaSdk) lambdaSdk = await import('@aws-sdk/client-lambda');
   if (!lambdaClient) {
     lambdaClient = new lambdaSdk.LambdaClient({ region: process.env.DB_PROXY_REGION || 'us-east-1' });
@@ -588,21 +593,59 @@ async function invokeProxy(functionName: string, url: string, init: FetchInit): 
     headers: init.headers ?? {},
     body: init.body,
   });
+  // The SDK has no request timeout by default. Bound the invoke by the
+  // per-attempt timeout and the caller's remaining budget so a slow proxy cannot
+  // hold a user request past the API Gateway cap.
+  const remaining = deadline - Date.now();
+  const requestTimeout = Math.max(1_000, Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000), remaining));
   const result = await lambdaClient.send(
     new lambdaSdk.InvokeCommand({
       FunctionName: functionName,
       InvocationType: 'RequestResponse',
       Payload: Buffer.from(payload),
-    })
+    }),
+    { abortSignal: AbortSignal.timeout(requestTimeout) }
   );
-  if (result.FunctionError) throw new Error(`DB proxy failed: ${result.FunctionError}`);
+
+  if (result.FunctionError) {
+    const raw = result.Payload ? Buffer.from(result.Payload).toString('utf8') : '';
+    let message = result.FunctionError;
+    try {
+      const error = JSON.parse(raw) as { errorMessage?: string };
+      if (typeof error.errorMessage === 'string' && error.errorMessage) message = error.errorMessage;
+    } catch {
+      // Keep the FunctionError name when the payload is not JSON.
+    }
+    if (/throttl|OPS_BLOCKED|breaker/i.test(message)) throw new DbThrottledError(message);
+    throw new Error(`DB proxy failed: ${message}`);
+  }
 
   const raw = result.Payload ? Buffer.from(result.Payload).toString('utf8') : '';
-  const parsed = JSON.parse(raw) as { status?: number; contentType?: string | null; body?: string };
+  let parsed: {
+    status?: number;
+    statusText?: string;
+    contentType?: string | null;
+    encoding?: 'gzip';
+    body?: string;
+  };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    throw new Error('DB proxy returned an invalid response');
+  }
   if (typeof parsed.status !== 'number') throw new Error('DB proxy returned an invalid response');
 
+  const body =
+    parsed.encoding === 'gzip'
+      ? zlib.gunzipSync(Buffer.from(parsed.body ?? '', 'base64'))
+      : Buffer.from(parsed.body ?? '');
   const headers: Array<[string, string]> = parsed.contentType ? [['content-type', parsed.contentType]] : [];
-  return new FetchCompatibleResponse(parsed.status, '', parsed.body ?? '', headers);
+  return new FetchCompatibleResponse(
+    parsed.status,
+    parsed.statusText || String(parsed.status),
+    body.toString('utf8'),
+    headers
+  );
 }
 
 async function proxyFetch(
@@ -618,7 +661,7 @@ async function proxyFetch(
   for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
     const release = await acquireSlot();
     try {
-      const response = await invokeProxy(functionName, url, init);
+      const response = await invokeProxy(functionName, url, init, deadline);
       const bodyText = await response.text();
       const throttled = isThrottled(response.status, bodyText);
 

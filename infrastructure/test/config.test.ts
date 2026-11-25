@@ -32,12 +32,34 @@ describe('shared configuration', () => {
   });
 
   test('keeps the poller safety margin inside the Lambda timeout', () => {
-    // Worst-case target (two 20 s attempts plus backoff ~= 43 s) plus the final upload.
-    expect(SCRAPER_CONFIG.abort_threshold_ms + 44_000).toBeLessThanOrEqual(
+    // Worst case: the guard, one staggered target at the full request budget,
+    // and the final upload. The poller now runs 20 targets, so normal runs are
+    // well below the guard.
+    const dbGapMs = 3_500;
+    const dbTotalBudgetMs = 45_000;
+    const uploadMs = 1_000;
+    expect(SCRAPER_CONFIG.abort_threshold_ms + dbGapMs + dbTotalBudgetMs + uploadMs).toBeLessThanOrEqual(
       SCRAPER_CONFIG.poller_timeout_seconds * 1000
     );
     expect(SCRAPER_CONFIG.hydrator_timeout_minutes).toBeGreaterThan(0);
     expect(SCRAPER_CONFIG.compactor_timeout_seconds).toBeGreaterThan(0);
+  });
+
+  test('DB proxy region defaults to us-east-1 and follows CDK_DB_PROXY_REGION', async () => {
+    const previous = process.env.CDK_DB_PROXY_REGION;
+    try {
+      delete process.env.CDK_DB_PROXY_REGION;
+      jest.resetModules();
+      expect((await import('../lib/config')).DB_PROXY_REGION).toBe('us-east-1');
+
+      process.env.CDK_DB_PROXY_REGION = 'eu-central-1';
+      jest.resetModules();
+      expect((await import('../lib/config')).DB_PROXY_REGION).toBe('eu-central-1');
+    } finally {
+      if (previous === undefined) delete process.env.CDK_DB_PROXY_REGION;
+      else process.env.CDK_DB_PROXY_REGION = previous;
+      jest.resetModules();
+    }
   });
 
   test('keeps the DuckDB memory and temp budgets inside Lambda limits', () => {
