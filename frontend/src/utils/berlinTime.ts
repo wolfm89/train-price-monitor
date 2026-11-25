@@ -37,6 +37,12 @@ function wallClockInBerlin(instant: Date): WallClock {
   };
 }
 
+/** Returns the hour (0–23) in Berlin at the given instant. */
+export function getBerlinHour(instant: Date = new Date()): number {
+  if (Number.isNaN(instant.getTime())) return 0;
+  return wallClockInBerlin(instant).hour;
+}
+
 /** Berlin's UTC offset (CET +01:00, CEST +02:00) at the given instant, in ms. */
 function berlinOffsetMs(instant: Date): number {
   const wallClock = wallClockInBerlin(instant);
@@ -60,6 +66,30 @@ function wallClockMatches(instant: Date, expected: WallClock): boolean {
     actual.hour === expected.hour &&
     actual.minute === expected.minute &&
     actual.second === expected.second
+  );
+}
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, '0');
+}
+
+/**
+ * Formats an instant as a Berlin wall-clock timestamp in the form
+ * `YYYY-MM-DDTHH:mm:ss`.
+ *
+ * DB's booking deep links expect local German time without a timezone suffix,
+ * so this is the inverse of {@link berlinWallTimeToDate}: it takes the UTC
+ * instant we store and renders the clock a traveller sees in Germany.
+ * Returns `''` for an invalid date.
+ */
+export function formatBerlinWallClock(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const wallClock = wallClockInBerlin(date);
+  return (
+    `${wallClock.year}-${pad2(wallClock.month)}-${pad2(wallClock.day)}` +
+    `T${pad2(wallClock.hour)}:${pad2(wallClock.minute)}:${pad2(wallClock.second)}`
   );
 }
 

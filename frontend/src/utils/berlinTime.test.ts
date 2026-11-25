@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { berlinWallTimeToDate, berlinWallTimeToIso } from './berlinTime';
+import { berlinWallTimeToDate, berlinWallTimeToIso, formatBerlinWallClock, getBerlinHour } from './berlinTime';
 
 describe('berlinWallTimeToDate', () => {
   it('interprets a winter wall-clock time as CET (+01:00)', () => {
@@ -36,5 +36,39 @@ describe('berlinWallTimeToDate', () => {
     expect(Number.isNaN(berlinWallTimeToDate('15.01.2026', '14:00').getTime())).toBe(true);
     expect(Number.isNaN(berlinWallTimeToDate('2026-01-15', '2pm').getTime())).toBe(true);
     expect(berlinWallTimeToIso('', '')).toBe('');
+  });
+});
+
+describe('formatBerlinWallClock', () => {
+  it('renders a winter instant as CET wall-clock time', () => {
+    expect(formatBerlinWallClock('2026-01-15T13:00:00.000Z')).toBe('2026-01-15T14:00:00');
+  });
+
+  it('renders a summer instant as CEST wall-clock time', () => {
+    expect(formatBerlinWallClock('2026-07-15T12:00:00.000Z')).toBe('2026-07-15T14:00:00');
+  });
+
+  it('rolls over to the next Berlin day for a late UTC instant', () => {
+    expect(formatBerlinWallClock('2026-01-14T23:30:00.000Z')).toBe('2026-01-15T00:30:00');
+  });
+
+  it('returns an empty string for an invalid date', () => {
+    expect(formatBerlinWallClock('not-a-date')).toBe('');
+    expect(formatBerlinWallClock(new Date(NaN))).toBe('');
+  });
+});
+
+describe('getBerlinHour', () => {
+  it('uses the Berlin offset in winter and summer', () => {
+    expect(getBerlinHour(new Date('2026-01-15T13:30:00.000Z'))).toBe(14);
+    expect(getBerlinHour(new Date('2026-07-15T12:30:00.000Z'))).toBe(14);
+  });
+
+  it('returns the Berlin hour around midnight', () => {
+    expect(getBerlinHour(new Date('2026-01-14T23:30:00.000Z'))).toBe(0);
+  });
+
+  it('returns 0 for an invalid date instead of throwing', () => {
+    expect(getBerlinHour(new Date(NaN))).toBe(0);
   });
 });

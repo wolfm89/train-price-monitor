@@ -25,7 +25,8 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const [formError, setFormError] = useState('');
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const { addAlert } = useAlert();
@@ -34,7 +35,8 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
   const resetAndClose = () => {
     setEmail('');
     setPassword('');
-    setErrorMessage('');
+    setFieldErrors({});
+    setFormError('');
     onClose();
   };
 
@@ -42,25 +44,24 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
     event.preventDefault();
     if (submitting) return;
 
-    if (!email.trim()) {
-      setErrorMessage('Enter your email address.');
-      emailRef.current?.focus();
-      return;
-    }
-    if (!password) {
-      setErrorMessage('Enter your password.');
-      passwordRef.current?.focus();
+    const nextErrors: { email?: string; password?: string } = {};
+    if (!email.trim()) nextErrors.email = 'Enter your email address.';
+    if (!password) nextErrors.password = 'Enter your password.';
+    if (nextErrors.email || nextErrors.password) {
+      setFieldErrors(nextErrors);
+      (nextErrors.email ? emailRef : passwordRef).current?.focus();
       return;
     }
 
+    setFieldErrors({});
+    setFormError('');
     setSubmitting(true);
-    setErrorMessage('');
     try {
-      await signIn(email, password);
+      await signIn(email.trim(), password);
       addAlert('Sign in successful!', AlertSeverity.Success);
       resetAndClose();
     } catch (err: unknown) {
-      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setFormError(err instanceof Error ? err.message : String(err));
       passwordRef.current?.focus();
     } finally {
       setSubmitting(false);
@@ -84,9 +85,12 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
             value={email}
             onChange={(e) => {
               setEmail(e.target.value);
-              setErrorMessage('');
+              setFieldErrors((prev) => ({ ...prev, email: undefined }));
+              setFormError('');
             }}
             inputRef={emailRef}
+            error={Boolean(fieldErrors.email)}
+            helperText={fieldErrors.email ?? ''}
             required
           />
           <TextField
@@ -100,14 +104,17 @@ const LoginModal: React.FC<Props> = ({ open, onClose }) => {
             value={password}
             onChange={(e) => {
               setPassword(e.target.value);
-              setErrorMessage('');
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+              setFormError('');
             }}
             inputRef={passwordRef}
+            error={Boolean(fieldErrors.password)}
+            helperText={fieldErrors.password ?? ''}
             required
           />
-          {errorMessage && (
+          {formError && (
             <Alert severity="error" sx={{ mt: 1.5 }}>
-              {errorMessage}
+              {formError}
             </Alert>
           )}
           <Link component={RouterLink} to="/forgot-password" color="inherit">

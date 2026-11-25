@@ -169,28 +169,28 @@ playwright_browser_run_code_unsafe {
 playwright_browser_take_screenshot { filename: "search-results.png", type: "png" }
 ```
 
-Results should show a table with Departure Time / Arrival Time / Duration / Means of Transport / Price / WATCH buttons.
+Results should show one card per connection with departure/arrival time, duration, means of transport, price and a **+ Watch** action.
 
 ### Add a journey to the watchlist
 
-The WATCH buttons are **inside a `<table>`**. Do NOT use `button:has-text("Watch")` — that also matches the "Journey Watchlist" nav button. Use:
+Search results are cards, not a table. Target the row action by its accessible name; every row has a contextual “Add the … connection to your watchlist” label:
 
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
-    await page.locator('table button').first().click();
+    await page.getByRole('button', { name: /Add the .* connection to your watchlist/ }).first().click();
     await page.waitForTimeout(500);
   }`
 }
 ```
 
-A "Set Limit Price" dialog opens showing the current price. Enter a limit price **above** the current price:
+A "Set limit price" dialog opens showing the current price. Enter a limit price **above** the current price:
 
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
-    await page.getByRole('spinbutton', { name: 'Limit Price' }).fill('200');
-    await page.getByRole('button', { name: 'Confirm' }).click();
+    await page.getByRole('textbox', { name: 'Limit price' }).fill('200');
+    await page.getByRole('button', { name: 'Save limit' }).click();
     await page.waitForTimeout(4000);
   }`
 }
@@ -198,7 +198,7 @@ playwright_browser_run_code_unsafe {
 
 ### Inspect the GraphQL mutation in network requests
 
-After clicking Confirm, use `playwright_browser_network_requests` to find the POST to `/graphql` and verify its body:
+After clicking Save limit, use `playwright_browser_network_requests` to find the POST to `/graphql` and verify its body:
 
 ```
 playwright_browser_network_requests { filter: "/graphql", static: false }
@@ -214,14 +214,14 @@ The mutation body should contain `fromId`/`toId` (not `from`/`to`). The response
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
-    await page.getByRole('link', { name: 'Journey Watchlist' }).click();
+    await page.getByRole('link', { name: 'My Journeys' }).click();
     await page.waitForTimeout(3000);
   }`
 }
 playwright_browser_take_screenshot { filename: "watchlist.png", type: "png" }
 ```
 
-The accordion header should show human-readable station names (e.g. "München Hbf to Berlin Hbf"), a limit price, and a current price. Expand the accordion to verify departure / arrival / means of transport.
+The ticket card shows the station names, limit/current price, departure/arrival and means of transport. There is no accordion.
 
 ### Check notifications panel
 
@@ -229,12 +229,14 @@ Click the bell icon in the header to open the notifications popover. With a fres
 
 ### Clean up test data
 
-Delete any journey monitors added during testing:
+Delete any journey monitors added during testing with the ticket's kebab menu:
 
 ```
 playwright_browser_run_code_unsafe {
   code: `async (page) => {
-    await page.locator('button[aria-label="delete"]').click();
+    await page.getByRole('button', { name: 'more options' }).first().click();
+    await page.getByText('Remove from watchlist').click();
+    await page.getByRole('button', { name: 'Remove', exact: true }).click();
     await page.waitForTimeout(1000);
   }`
 }
@@ -290,8 +292,8 @@ If the servers were already running before this session (checked in Step 2), lea
 
 ## Known gotchas
 
-- **`button:has-text("Watch")` matches the nav button too** — always use `table button` or `button[type="submit"]` to target table-row buttons
-- **`getByLabel` can match a dialog container and its input** — use `getByRole('spinbutton', { name: '...' })` for number inputs
+- **Search results are cards, not a table** — target a row action by its contextual accessible name (`/Add the .* connection to your watchlist/`), not by the shared visible `+ Watch` text.
+- **The limit-price input is a textbox with decimal inputmode** — use `getByRole('textbox', { name: 'Limit price' })`, not `spinbutton`.
 - **Backend logs no incoming requests by default** — use `playwright_browser_network_requests` to verify GraphQL traffic instead
 - **Cold start after deploy** — the first Lambda invocation post-deploy takes ~15s; not relevant for local testing but worth noting
 - **`mise run //frontend:dev` navigating directly to `/search` redirects to `/`** — always use the nav link after login, not `playwright_browser_navigate` to a protected route

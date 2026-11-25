@@ -63,7 +63,7 @@ const JourneysPage: React.FC = () => {
     reexecuteUserJourneysQuery({ requestPolicy: 'network-only' });
   }, [reexecuteUserJourneysQuery]);
 
-  // Notification, email and "Review ↗" links point at /journeys#<journeyId>.
+  // Notification, email and "Review →" links point at /journeys#<journeyId>.
   // The ticket only exists after the watchlist query resolves, so wait for it,
   // then scroll and briefly outline the matching ticket. An unknown hash is a
   // no-op.

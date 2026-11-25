@@ -21,6 +21,9 @@ declare module '@mui/material/Typography' {
   }
 }
 
+const INFO_MAIN = '#5b7a9e';
+const INFO_DARK = '#3f5670';
+
 export const theme = createTheme({
   palette: {
     mode: 'light',
@@ -46,8 +49,8 @@ export const theme = createTheme({
       dark: '#7d4900',
     },
     info: {
-      main: '#5b7a9e',
-      dark: '#3f5670',
+      main: INFO_MAIN,
+      dark: INFO_DARK,
     },
     background: {
       default: '#f8f8f4',
@@ -106,12 +109,58 @@ export const theme = createTheme({
   components: {
     MuiCssBaseline: {
       styleOverrides: {
+        'a, button, [role="button"]': {
+          touchAction: 'manipulation',
+          WebkitTapHighlightColor: 'transparent',
+          '&:active': { opacity: 0.85 },
+        },
         '@media (prefers-reduced-motion: reduce)': {
           '*, *::before, *::after': {
             animationDuration: '0.01ms !important',
             animationIterationCount: '1 !important',
             transitionDuration: '0.01ms !important',
             scrollBehavior: 'auto !important',
+          },
+        },
+      },
+    },
+    // ButtonBase zeroes the native outline; restore a visible keyboard focus
+    // ring for every Button, IconButton, clickable Chip and MenuItem. The ring
+    // is inset so it stays visible on both light surfaces and the red AppBar.
+    MuiButtonBase: {
+      styleOverrides: {
+        root: {
+          '&.Mui-focusVisible': {
+            outline: '2px solid currentColor',
+            outlineOffset: '-3px',
+          },
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+        },
+      },
+    },
+    // The brand primary is red, which makes a focused field look exactly like
+    // an invalid one. Use the informational blue for focus and keep red for
+    // errors only.
+    MuiOutlinedInput: {
+      styleOverrides: {
+        root: {
+          '&.Mui-focused:not(.Mui-error) .MuiOutlinedInput-notchedOutline': {
+            borderColor: INFO_MAIN,
+          },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          '&.Mui-focused:not(.Mui-error)': {
+            color: INFO_DARK,
           },
         },
       },

@@ -48,4 +48,10 @@ describe('theme contrast', () => {
     const tint = blend(theme.palette.info.main, theme.palette.background.ticket, 0.12);
     expect(contrastRatio(theme.palette.info.dark, tint)).toBeGreaterThanOrEqual(4.5);
   });
+
+  it('keeps the focus indicator above the 3:1 non-text threshold', () => {
+    expect(contrastRatio(theme.palette.info.main, theme.palette.background.paper)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(theme.palette.info.main, theme.palette.background.ticket)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(theme.palette.info.dark, theme.palette.background.paper)).toBeGreaterThanOrEqual(4.5);
+  });
 });

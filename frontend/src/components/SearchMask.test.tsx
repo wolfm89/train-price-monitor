@@ -83,6 +83,18 @@ describe('SearchMask', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Departure must be in the future.');
   });
 
+  it('marks only the time field when the date is valid but the time is missing', () => {
+    const onSearch = vi.fn();
+    render(<SearchMask onSearch={onSearch} initialSearch={futureSearch} />);
+
+    fireEvent.change(screen.getByLabelText('Departure time'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(onSearch).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose a departure time.')).toBeInTheDocument();
+    expect(screen.queryByText('Choose a departure date.')).not.toBeInTheDocument();
+  });
+
   it('does not submit when no transport modes are selected', async () => {
     const onSearch = vi.fn();
     render(<SearchMask onSearch={onSearch} initialSearch={futureSearch} />);

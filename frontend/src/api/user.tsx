@@ -97,6 +97,8 @@ export const UserJourneysQuery = gql`
         unavailable
         from
         to
+        fromId
+        toId
         firstClass
         bike
         deutschlandTicketDiscount

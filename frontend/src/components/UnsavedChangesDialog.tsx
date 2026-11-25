@@ -23,9 +23,9 @@ export default function UnsavedChangesDialog({
         <DialogContentText>{message}</DialogContentText>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onStay}>Stay</Button>
+        <Button onClick={onStay}>Keep editing</Button>
         <Button onClick={onLeave} color="error" variant="contained">
-          Leave
+          Discard changes
         </Button>
       </DialogActions>
     </Dialog>

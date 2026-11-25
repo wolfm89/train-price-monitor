@@ -212,6 +212,10 @@ type JourneyMonitor {
   journey: Journey
   from: String
   to: String
+  # DB station identifiers kept on the Journey item. The watchlist uses them to
+  # build a reliable bahn.de deep link (`soid`/`zoid`) without a network call.
+  fromId: String
+  toId: String
   firstClass: Boolean
   bike: Boolean
   deutschlandTicketDiscount: Boolean

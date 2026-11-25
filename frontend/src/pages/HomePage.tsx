@@ -22,6 +22,7 @@ import { useMutation, useQuery } from 'urql';
 import { Journey } from '../components/JourneyTicket';
 import LoadingStatus from '../components/LoadingStatus';
 import { formatCurrency, formatDate } from '../utils/format';
+import { getBerlinHour } from '../utils/berlinTime';
 
 interface Props {}
 
@@ -267,7 +268,7 @@ function AlertBanner({ journey, overage }: AlertBannerProps) {
           '&:hover': { bgcolor: 'rgba(168,35,35,0.08)' },
         }}
       >
-        Review ↗
+        Review {'\u2192'}
       </Button>
     </Box>
   );
@@ -549,7 +550,7 @@ interface LoggedInDashboardProps {
 function LoggedInDashboard({ userName, journeyMonitors }: LoggedInDashboardProps) {
   const theme = useTheme();
   const getGreeting = () => {
-    const hour = new Date().getHours();
+    const hour = getBerlinHour();
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
