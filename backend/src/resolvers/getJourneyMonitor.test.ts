@@ -1,3 +1,4 @@
+import './getJourneyMonitor.testSetup';
 import assert from 'node:assert/strict';
 
 import type { StoredJourney } from '../model/trainPriceMonitor';
