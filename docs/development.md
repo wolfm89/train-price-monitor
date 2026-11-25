@@ -27,9 +27,10 @@ mise run env:local
 ```
 
 The script verifies `sts:GetCallerIdentity`, reads the prefixed CloudFormation outputs and writes
-the ignored `backend/.env` and `frontend/.env`. It needs
-`cloudformation:DescribeStacks` and `cognito-idp:ListUserPoolClients`. Set `STACK_NAME` if the stack
-is not `InfrastructureStack`. See [deployment.md](deployment.md#outputs-and-local-environment).
+the ignored `backend/.env`, `frontend/.env` and `frontend/.env.production` (the production GraphQL
+endpoint). It needs `cloudformation:DescribeStacks` and `cognito-idp:ListUserPoolClients`. Set
+`STACK_NAME` if the stack is not `InfrastructureStack`. See
+[deployment.md](deployment.md#outputs-and-local-environment).
 
 Do not commit `.env` files. The canonical variable reference is [configuration.md](configuration.md).
 

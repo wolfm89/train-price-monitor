@@ -79,7 +79,7 @@ path. Decodo is only wired into the backend; the poller has no fallback key. See
 
 | Variable                                 | Scope         | Default / deployed      | Set by           | Purpose                                                                                             |
 | ---------------------------------------- | ------------- | ----------------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
-| `REACT_APP_GRAPHQL_ENDPOINT`             | Frontend      | production API URL      | CI               | API Gateway base URL for production builds; the client appends `graphql`. Dev uses the proxy below. |
+| `REACT_APP_GRAPHQL_ENDPOINT`             | Frontend      | production API URL      | CI / `env:local` | API Gateway base URL for production builds; the client appends `graphql`. Dev uses the proxy below. |
 | `VITE_DEV_BACKEND_URL`                   | Dev / preview | `http://127.0.0.1:4000` | Compose / shell  | Target of the dev server and `vite preview` `/graphql` proxy. Compose sets `http://backend:4000`.   |
 | `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` | Dev only      | —                       | shell            | Extra hostnames for the dev server (comma separated); `localhost`/IPs are always allowed.           |
 | `REACT_APP_COGNITO_USER_POOL_ID`         | Frontend      | —                       | CI / `env:local` | Cognito user pool ID.                                                                               |
@@ -88,8 +88,9 @@ path. Decodo is only wired into the backend; the poller has no fallback key. See
 
 Vite accepts the unprefixed `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` and
 `COGNITO_IDENTITY_POOL_ID` names in local `.env` files and maps them to the build-time
-`REACT_APP_*` defines. `env:local` writes the unprefixed names; CI supplies the `REACT_APP_*`
-values directly.
+`REACT_APP_*` defines. `env:local` writes the unprefixed Cognito names to `frontend/.env` and
+`REACT_APP_GRAPHQL_ENDPOINT` to `frontend/.env.production`; CI supplies the `REACT_APP_*` values
+directly.
 
 ## Scraper
 

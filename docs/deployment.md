@@ -111,6 +111,7 @@ CloudFormation output keys are generated logical IDs with a hash suffix, for exa
   `COGNITO_USER_POOL_ID`.
 - `frontend/.env`: Cognito user/identity pool and client IDs plus `AWS_REGION` (the current app does
   not read `AWS_REGION`; it is kept in the generated file for local tooling).
+- `frontend/.env.production`: `REACT_APP_GRAPHQL_ENDPOINT` from `BackendGraphqlApiEndpoint`.
   The dev server needs no `.env.development`: it proxies `/graphql` to
   `VITE_DEV_BACKEND_URL` (default `http://127.0.0.1:4000`).
 

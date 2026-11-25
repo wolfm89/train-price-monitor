@@ -9,16 +9,19 @@ declare -A CLOUD_FORMATION_OUTPUTS=(
   [TPM_SQS_QUEUE_URL]=BackendQueueUrl
   [COGNITO_USER_POOL_ID]=CognitoAuthUserPoolId
   [COGNITO_IDENTITY_POOL_ID]=CognitoAuthIdentityPoolId
+  [REACT_APP_GRAPHQL_ENDPOINT]=BackendGraphqlApiEndpoint
 )
 
 declare -A ENV_FILE_FIELDS=(
   [backend/.env]='AWS_PROFILE PROFILE_IMAGE_BUCKET_NAME TPM_SQS_QUEUE_URL COGNITO_USER_POOL_ID'
   [frontend/.env]='COGNITO_USER_POOL_ID COGNITO_CLIENT_ID COGNITO_IDENTITY_POOL_ID AWS_REGION'
+  [frontend/.env.production]='REACT_APP_GRAPHQL_ENDPOINT'
 )
 
 ENV_FILES=(
   backend/.env
   frontend/.env
+  frontend/.env.production
 )
 
 require_value() {
