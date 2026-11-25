@@ -110,10 +110,10 @@ CloudFormation output keys are generated logical IDs with a hash suffix, for exa
 - `backend/.env`: `AWS_PROFILE`, `PROFILE_IMAGE_BUCKET_NAME`, `TPM_SQS_QUEUE_URL`,
   `COGNITO_USER_POOL_ID`.
 - `frontend/.env`: Cognito user/identity pool and client IDs plus `AWS_REGION` (the current app does
-  not read `AWS_REGION`; it is kept in the generated file for local tooling).
+  not read `AWS_REGION`; it is kept in the generated file for local tooling). The dev server needs
+  no `.env.development`: it proxies `/graphql` to `VITE_DEV_BACKEND_URL` (default
+  `http://127.0.0.1:4000`).
 - `frontend/.env.production`: `REACT_APP_GRAPHQL_ENDPOINT` from `BackendGraphqlApiEndpoint`.
-  The dev server needs no `.env.development`: it proxies `/graphql` to
-  `VITE_DEV_BACKEND_URL` (default `http://127.0.0.1:4000`).
 
 Set `STACK_NAME` if the stack is not named `InfrastructureStack`. The script verifies the AWS
 identity with `sts:GetCallerIdentity` and needs `cloudformation:DescribeStacks` and
