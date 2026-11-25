@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Header from './Header';
@@ -90,5 +90,14 @@ describe('Header', () => {
     renderHeader();
 
     expect(screen.getByRole('link', { name: 'Search' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('keeps navigation and utilities in separate groups', () => {
+    renderHeader();
+
+    const navigation = screen.getByRole('navigation', { name: 'Main' });
+    expect(within(navigation).getByRole('link', { name: 'Search' })).toBeInTheDocument();
+    expect(within(navigation).getByRole('link', { name: 'My Journeys' })).toBeInTheDocument();
+    expect(within(navigation).queryByRole('button', { name: /Notifications/ })).not.toBeInTheDocument();
   });
 });
