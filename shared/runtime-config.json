@@ -2,7 +2,7 @@
   "bronze_prefix": "prices",
   "scraper": {
     "batch_size": 20,
-    "abort_threshold_ms": 250000,
+    "abort_threshold_ms": 240000,
     "poller_timeout_seconds": 300,
     "poller_memory_mib": 384,
     "hydrator_memory_mib": 128,

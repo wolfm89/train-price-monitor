@@ -80,7 +80,12 @@ describe('ScraperStack', () => {
     });
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'TPM-Scraper-PollerThrottledByDb',
-      Threshold: 10,
+      Threshold: 0,
+    });
+    template.hasResourceProperties('AWS::Logs::MetricFilter', {
+      MetricTransformations: Match.arrayWith([
+        Match.objectLike({ MetricName: 'PollerThrottled', MetricValue: '$.transport.breakerOpened' }),
+      ]),
     });
   });
 

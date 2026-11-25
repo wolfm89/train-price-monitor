@@ -88,7 +88,7 @@ describe('Dashboards', () => {
       'Latency — poller, hydrator and compactor duration',
       'Traffic — scrapes per run',
       'Errors — failed target scrapes',
-      'Saturation — DB throttling',
+      'Saturation — DB breaker opens',
       'Data — price rows per run',
       'Storage — bucket size (daily)',
       'Storage — objects (daily)',
@@ -99,10 +99,9 @@ describe('Dashboards', () => {
     }
 
     // The gauge's warn band must sit above the projected maximum run time
-    // (~195 s at batch 20 and 3.5 s spacing) and just below the abort, not at the
-    // old 180 s.
-    expect(scraper).toContain('200000');
-    expect(scraper).toContain('250000');
+    // (188-210 s at batch 20 and 3.5 s spacing) and just below the abort.
+    expect(scraper).toContain('220000');
+    expect(scraper).toContain('240000');
 
     const app = bodies.get(DASHBOARD_NAMES.app) ?? '';
     for (const title of [

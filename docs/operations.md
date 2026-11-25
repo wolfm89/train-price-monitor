@@ -21,9 +21,9 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | `TPM-Scraper-PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
 | `TPM-Scraper-PollerErrors`        | The poller Lambda is failing.                                                               |
-| `TPM-Scraper-PollerThrottledByDb` | More than 10 throttled DB calls in two consecutive runs; a few proxy retries are normal.    |
+| `TPM-Scraper-PollerThrottledByDb` | The poller DB breaker opened in two consecutive runs; DB is refusing the egress.            |
 | `TPM-Scraper-PollerNoPrices`      | No direct successful scrape for 45 minutes.                                                 |
-| `TPM-Scraper-PollerBatchAborted`  | A run hit the 250 s abort; the log line, not a raw duration threshold.                      |
+| `TPM-Scraper-PollerBatchAborted`  | A run hit the 240 s abort; the log line, not a raw duration threshold.                      |
 | `TPM-App-SearchErrors`            | GraphQL search errors in the API.                                                           |
 | `TPM-App-UsingDecodoFallback`     | The direct DB transport has been degraded for two consecutive hours.                        |
 | `TPM-App-RefresherErrors`         | The hourly/daily SQS worker is failing.                                                     |
@@ -40,7 +40,7 @@ alarm metrics.
 
 ## Dashboards
 
-- `TrainPriceMonitor-Scraper`: run duration vs the 250 s abort, scrapes per run, failed target
+- `TrainPriceMonitor-Scraper`: run duration vs the 240 s abort, scrapes per run, failed target
   scrapes, pipeline errors, DB throttling/backlog, price rows written, S3 storage and the last failed
   scrapes.
 - `TrainPriceMonitor-App`: API p50/p90/p99 and integration latency, requests, GraphQL errors, 4xx/5xx,
@@ -79,15 +79,15 @@ then.
    when `DECODO_API_KEY_PARAM` resolves. The poller uses the same proxy and has no Decodo key.
 3. On a proxy block the poller ends the batch; untouched targets are retried by the next run. Do not
    raise `SCRAPER_BATCH_SIZE`. A few `directThrottled` retries per run are normal; the alarm fires
-   above 10 in two consecutive runs.
+   when the poller's breaker opens in two consecutive runs.
 4. If the proxy region is blocked, test a new egress first, then set `CDK_DB_PROXY_REGION` to it.
    `eu-central-1` is currently blocked. Deploy the caller stacks with the new ARN first, then delete
    the old proxy stack:
    `aws cloudformation delete-stack --region us-east-1 --stack-name DbProxyStack`.
    The old log group is retained.
-5. On 2026-11-24 the Navigator API throttled 25-target batches; the poller now uses 20 targets and
-   3.5 s spacing. If `PollerThrottled` returns near the same cumulative call count since UTC
-   midnight, reduce calls/day rather than the gap.
+5. On 2026-11-25 a proxied 25-target batch hit the 240 s abort. The poller now uses 20 targets,
+   3.5 s spacing and the 240 s guard. If the DB breaker opens repeatedly, reduce calls/day rather
+   than the gap.
 
 ### Poller not running / no prices
 
@@ -103,7 +103,8 @@ then.
 1. Check Lambda `ConcurrentExecutions` and account concurrency limits. The API and refresher share
    the account's concurrency pool; a traffic spike or a stuck refresher can starve the API.
 2. Reduce traffic, stop the refresher temporarily, or request a quota increase. The backend does not
-   use reserved concurrency.
+   use reserved concurrency, but the DB proxy reserves 10; a proxy concurrency rejection surfaces as
+   a search error and the backend falls back to Decodo.
 
 ### Refresher errors or DLQ
 

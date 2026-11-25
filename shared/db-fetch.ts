@@ -357,7 +357,7 @@ function isFingerprintBlocked(status: number, bodyText: string): boolean {
 }
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
-function isThrottled(status: number, bodyText: string): boolean {
+export function isThrottled(status: number, bodyText: string): boolean {
   return status === 429 || isFingerprintBlocked(status, bodyText);
 }
 
@@ -584,20 +584,26 @@ async function invokeProxy(
 ): Promise<FetchCompatibleResponse> {
   if (!lambdaSdk) lambdaSdk = await import('@aws-sdk/client-lambda');
   if (!lambdaClient) {
-    lambdaClient = new lambdaSdk.LambdaClient({ region: process.env.DB_PROXY_REGION || 'us-east-1' });
+    lambdaClient = new lambdaSdk.LambdaClient({
+      region: process.env.DB_PROXY_REGION || 'us-east-1',
+      // The transport owns retries; do not multiply them at the SDK layer.
+      maxAttempts: 1,
+    });
   }
 
+  // The SDK has no request timeout by default. Bound the invoke by the
+  // per-attempt timeout and the caller's remaining budget so a slow proxy cannot
+  // hold a user request past the API Gateway cap.
+  const remaining = deadline - Date.now();
+  const requestTimeout = Math.max(1, Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000), remaining));
   const payload = JSON.stringify({
     url,
     method: init.method ?? 'GET',
     headers: init.headers ?? {},
     body: init.body,
+    acceptEncoding: 'gzip',
+    timeoutMs: requestTimeout,
   });
-  // The SDK has no request timeout by default. Bound the invoke by the
-  // per-attempt timeout and the caller's remaining budget so a slow proxy cannot
-  // hold a user request past the API Gateway cap.
-  const remaining = deadline - Date.now();
-  const requestTimeout = Math.max(1_000, Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000), remaining));
   const result = await lambdaClient.send(
     new lambdaSdk.InvokeCommand({
       FunctionName: functionName,
@@ -616,7 +622,7 @@ async function invokeProxy(
     } catch {
       // Keep the FunctionError name when the payload is not JSON.
     }
-    if (/throttl|OPS_BLOCKED|breaker/i.test(message)) throw new DbThrottledError(message);
+    if (isProxyThrottleError(message)) throw new DbThrottledError(message);
     throw new Error(`DB proxy failed: ${message}`);
   }
 
@@ -635,10 +641,7 @@ async function invokeProxy(
   }
   if (typeof parsed.status !== 'number') throw new Error('DB proxy returned an invalid response');
 
-  const body =
-    parsed.encoding === 'gzip'
-      ? zlib.gunzipSync(Buffer.from(parsed.body ?? '', 'base64'))
-      : Buffer.from(parsed.body ?? '');
+  const body = decodeProxyBody(parsed.encoding, parsed.body);
   const headers: Array<[string, string]> = parsed.contentType ? [['content-type', parsed.contentType]] : [];
   return new FetchCompatibleResponse(
     parsed.status,
@@ -646,6 +649,16 @@ async function invokeProxy(
     body.toString('utf8'),
     headers
   );
+}
+
+/** True when a proxy error means DB is throttling/refusing the egress. */
+export function isProxyThrottleError(message: string): boolean {
+  return /throttl|OPS_BLOCKED|breaker/i.test(message);
+}
+
+/** Decodes the optional gzip/base64 proxy body; plain strings pass through. */
+export function decodeProxyBody(encoding: 'gzip' | undefined, body: string | undefined): Buffer {
+  return encoding === 'gzip' ? zlib.gunzipSync(Buffer.from(body ?? '', 'base64')) : Buffer.from(body ?? '');
 }
 
 async function proxyFetch(
@@ -676,6 +689,14 @@ async function proxyFetch(
       lastError = null;
       if (!throttled && response.status < 500) return response;
     } catch (error) {
+      if (error instanceof DbThrottledError) {
+        // The proxy's own breaker is open. It answers in ~100 ms; retrying is
+        // noise, and this is a block, not a generic failure.
+        stats.directThrottled++;
+        lastError = error;
+        lastResponse = null;
+        break;
+      }
       stats.directFailed++;
       lastError = error;
       lastResponse = null;
@@ -692,6 +713,7 @@ async function proxyFetch(
   recordFailure();
   const fallback = await viaFallback(url, init, deadline);
   if (fallback) return fallback;
+  if (lastError instanceof DbThrottledError) throw lastError;
   if (breakerOpen()) throw new DbThrottledError();
   if (lastResponse) return lastResponse;
   throw lastError instanceof Error ? lastError : new Error('DB proxy request failed');

@@ -38,6 +38,7 @@ describe('shared configuration', () => {
     const dbGapMs = 3_500;
     const dbTotalBudgetMs = 45_000;
     const uploadMs = 1_000;
+    expect(SCRAPER_CONFIG.abort_threshold_ms + dbGapMs + dbTotalBudgetMs + uploadMs).toBeLessThanOrEqual(290_000);
     expect(SCRAPER_CONFIG.abort_threshold_ms + dbGapMs + dbTotalBudgetMs + uploadMs).toBeLessThanOrEqual(
       SCRAPER_CONFIG.poller_timeout_seconds * 1000
     );

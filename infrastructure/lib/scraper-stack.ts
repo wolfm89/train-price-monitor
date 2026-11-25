@@ -123,7 +123,7 @@ export class ScraperStack extends cdk.Stack {
       memorySize: SCRAPER_CONFIG.poller_memory_mib,
       // A 20-target batch is ~40 paced calls. With the cross-region proxy the
       // observed run is ~195-210 s. The ABORT_THRESHOLD_MS guard in
-      // scraper/src/poller.ts (250 s) is checked before a target, leaving the
+      // scraper/src/poller.ts (240 s) is checked before a target, leaving the
       // current target and the final S3 upload inside the timeout.
       timeout: cdk.Duration.seconds(SCRAPER_CONFIG.poller_timeout_seconds),
       logGroup: pollerLogGroup,
@@ -283,7 +283,9 @@ export class ScraperStack extends cdk.Stack {
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
       metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerThrottled',
-      metricValue: '$.transport.directThrottled',
+      // The breaker opens on a real DB block; retry counts are noisy (1-9 per
+      // healthy run) and are intentionally not alarmed.
+      metricValue: '$.transport.breakerOpened',
     });
     // One metric per scraped target (the transport counters are per DB call, and
     // there are two calls per target). Used by the dashboard and within the free
@@ -382,9 +384,9 @@ export class ScraperStack extends cdk.Stack {
     const dbThrottling = new cloudwatch.Alarm(this, 'PollerThrottledByDb', {
       alarmName: 'TPM-Scraper-PollerThrottledByDb',
       alarmDescription:
-        'More than 10 DB calls were throttled in two consecutive runs (a few retries through the proxy are normal).',
+        'The poller DB circuit breaker opened in two consecutive runs: DB is refusing the proxy egress.',
       metric: throttled,
-      threshold: 10,
+      threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       evaluationPeriods: 2,
       datapointsToAlarm: 2,
