@@ -1,7 +1,7 @@
 """Reproducible feature-family study on the development folds.
 
-The study is deliberately narrow: one pre-registered definition per family, the frozen PR 6
-recipe, and development folds only. A family is kept only if the PR 6 replacement rule accepts it
+The study is deliberately narrow: one pre-registered definition per family, the frozen recipe,
+and development folds only. A family is kept only if the recipe replacement rule accepts it
 at full availability and a coverage stress test does not make it significantly worse near
 departure. No evaluation or sparse-era fold is read.
 """
@@ -614,9 +614,9 @@ def _stress_targets(
 def _study_report(result: dict[str, Any]) -> str:
     """Render the feature study as Markdown."""
     lines = [
-        "# Feature study (PR 6b)",
+        "# Feature study",
         "",
-        "Development folds only. Every arm refits the frozen PR 6 recipe (histogram gradient",
+        "Development folds only. Every arm refits the frozen recipe (histogram gradient",
         "boosting plus temperature calibration); the calibrator is not re-selected per arm.",
         "",
         "## Method",
@@ -636,12 +636,12 @@ def _study_report(result: dict[str, Any]) -> str:
         "  stress target prefers the actual forward-set analog availability and fills the missing",
         "  7-30 d bands from the coverage profile.",
         "- The stress scores the dense-era-trained model without retraining; masking is random within",
-        "  a band, while real missingness clusters by route and time. The PR 7 sparse-era folds are",
+        "  a band, while real missingness clusters by route and time. Future sparse-era folds are",
         "  the real check.",
         "",
         "## Families",
         "",
-        "| Family | Compared with | Δ log loss [95 % CI] | Δ Brier [95 % CI] | PR 6 rule | Stress | Decision |",
+        "| Family | Compared with | Δ log loss [95 % CI] | Δ Brier [95 % CI] | Recipe rule | Stress | Decision |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in result["families"]:
@@ -717,18 +717,18 @@ def _study_report(result: dict[str, Any]) -> str:
     target = result["stress"]["target_source"]
     if analog is not None and analog["rule_passed"] and analog["stress_status"] == "fail" and near_failed:
         lines.append(
-            "I1 helps at full availability but makes near-departure predictions worse at the measured "
+            "Analog departures help at full availability but make near-departure predictions worse at the measured "
             f"stress availability ({target}); it stays off."
         )
     elif analog is not None and analog["decision"] == "keep":
-        lines.append("I1 passes both checks; add it to the recipe and run one evaluation scoring run.")
+        lines.append("Analog departures pass both checks; add them to the recipe and run one evaluation scoring run.")
     kept = [item["name"] for item in result["families"] if item["decision"] == "keep"]
     if kept:
         lines.append("")
         lines.append(f"Families to add: {', '.join(kept)}; run one evaluation scoring run.")
     else:
         lines.append("")
-        lines.append("No family was added; the PR 6 recipe is unchanged by this study.")
+        lines.append("No family was added; the recipe is unchanged by this study.")
     calendar = result.get("calendar_coverage") or {}
     if calendar.get("public_holiday_rows") == 0:
         lines.append("")
@@ -891,13 +891,13 @@ def run_feature_study(
         keep = bool(item["rule_passed"] and stress_ok and item["stress_status"] != "not_run")
         item["decision"] = "keep" if keep else "drop"
         if keep and arm.kind == "calendar":
-            item["reason"] = "passes the PR 6 replacement rule; calendar features have no coverage skew"
+            item["reason"] = "passes the recipe replacement rule; calendar features have no coverage skew"
         elif keep:
-            item["reason"] = "passes the PR 6 replacement rule and the coverage stress test"
+            item["reason"] = "passes the recipe replacement rule and the coverage stress test"
         elif not item["informative"]:
             item["reason"] = "no public holiday in the development test window; this is a null test"
         elif not item["rule_passed"]:
-            item["reason"] = f"PR 6 rule failed: {rule_reason}"
+            item["reason"] = f"recipe rule failed: {rule_reason}"
         elif item["stress_status"] == "fail":
             item["reason"] = "the coverage stress test is significantly worse at 1-7 d or overall"
         else:

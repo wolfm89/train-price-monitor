@@ -145,7 +145,7 @@ class CalendarConfig:
 class FeaturesConfig:
     """Optional feature-family switches.
 
-    The I1 analog-departure family is off by default. ``offsets_days`` stays populated while the
+    The analog-departure family is off by default. ``offsets_days`` stays populated while the
     switch is off so a study run can be reproduced without editing the input file.
     """
 

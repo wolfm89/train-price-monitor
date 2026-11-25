@@ -1,4 +1,4 @@
-"""I1 analog-departure features: the same train on an earlier departure.
+"""Analog-departure features: the same train on an earlier departure.
 
 The analog is the same route, class and first-train number on ``D - k`` with a planned departure
 within 15 minutes of the snapshot's time of day, observed at or before the snapshot time. The

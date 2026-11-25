@@ -92,7 +92,7 @@ FULL_CALENDAR: tuple[Feature, ...] = (
 
 
 def analog_features(offsets: tuple[int, ...]) -> tuple[Feature, ...]:
-    """Return the I1 analog-departure columns for the requested day offsets."""
+    """Return the analog-departure columns for the requested day offsets."""
     features: list[Feature] = []
     for offset in offsets:
         features.extend(

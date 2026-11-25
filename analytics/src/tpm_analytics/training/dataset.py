@@ -713,7 +713,7 @@ def _create_views(
         )
         # The primary next-day check is the scrape closest to ``t + 24 h``; a tie goes to the earlier
         # scrape. The 20-24 h point is the crossed-back and decision-value diagnostic; the 22-26 h
-        # point stays the PR 2 sensitivity diagnostic.
+        # point stays the legacy sensitivity diagnostic.
         for name, lower, upper in (
             ("check_points", label.check_window_hours[0], label.check_window_hours[1]),
             ("check_points_2024", 20, 24),

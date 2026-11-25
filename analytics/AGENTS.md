@@ -125,7 +125,7 @@ v2-only and mixed-schema input.
   needs, never the train or calibration panels; verify `pkl_sha256` before reuse. The hash ships
   beside the file, so it proves integrity, not authenticity. A cache-free 5 % backtest peaked at
   6.35 GiB in an earlier twin; the final cold run reached 6.24 GiB (the development run 6.30 GiB).
-  The dataset build sets the peak. PR 5's cold runs recorded 11.0-11.5 GiB under concurrent load,
+  The dataset build sets the peak. Earlier cold runs recorded 11.0-11.5 GiB under concurrent load,
   so treat any single figure as per-phase and measure before scaling; 10 % has not been measured.
 - **Recipe selection is development-only.** `training/selection.py` performs a joint search over
   every model x calibration pair on the development folds and refuses any other role. Comparison
@@ -135,15 +135,15 @@ v2-only and mixed-schema input.
   `base_rate < logistic < hist_gradient_boosting` and
   `sigmoid = temperature < isotonic < covariate`; climatology is a reference row, never selectable.
   The full table goes to `recipe.json`; only the rule settings enter the recipe hash.
-- **Feature study (PR 6b).** The reproducible study is `--feature-study`; the arms are `analog_d1`
+- **Feature study.** The reproducible study is `--feature-study`; the arms are `analog_d1`
   vs base, `analog_d1 + analog_d7` vs `analog_d1`, and the three calendar sets vs base. Every arm
-  refits the frozen HGB + temperature recipe (early stopping, no calibrator re-selection). The I1
+  refits the frozen HGB + temperature recipe (early stopping, no calibrator re-selection). The
   switch is `features.analog_departures` (`enabled: false` by default, offsets 1 and 7); when on,
   the builder reads analog route-days from full v1 silver, not the sampled panel. The definition is
   causal and pre-registered: same route/class/first train, planned departure within 15 minutes on
   `D - k`, observation at or before the snapshot, price analog at the closest lead within 12 h, rise
   analog whose own next-day point (20-28 h, closest to +24 h) is also at or before the snapshot.
-  Keep a family only if the PR 6 replacement rule accepts it at full availability **and** the
+  Keep a family only if the recipe replacement rule accepts it at full availability **and** the
   coverage stress test (columns masked to the measured availability by band) does not make it
   significantly worse overall or at 1-7 days. The stress target uses the forward-set availability
   for 1-7 days and fills the 7-30 day bands from the coverage profile; the profile itself is an
@@ -151,7 +151,8 @@ v2-only and mixed-schema input.
   requires the point estimate not to be positive. `candidate_feature` marks study-only columns in
   `column_roles.json`. The switch builds the columns; only the study harness consumes the analog
   family in its arms. The analog source is v1-only, so the revisit trigger must be measured on
-  v1 actual availability, not the v1+v2 grid, and the v2 port is a prerequisite for O8 pairs.
+  v1 actual availability, not the v1+v2 grid, and the v2 port is a prerequisite for paired
+  next-day scrapes.
 - **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on
   logit(score), TTD-band dummies, band x logit interactions and log(1 + headroom)). The covariate
   calibrator must be monotone in score in every band and non-increasing in headroom; otherwise it
@@ -161,7 +162,7 @@ v2-only and mixed-schema input.
   methods and its 1e-3 output clip; its split digests, validation predictions, `calibration.csv`
   and headline metrics stay identical to `pr4-final`, while new config fields change the recorded
   config hash. The base-rate/logistic candidate tables and the paired-vs-logistic interval are not
-  pinned because PR 6 upgraded those candidates.
+  pinned because the later selection step upgraded those candidates.
 - **Thresholds.** One per headroom x TTD band on the calibration block's out-of-fold scores: the
   highest recall whose one-sided 95 % Wilson lower bound on precision is at least
   `threshold_precision_floor` with at least `threshold_min_alerts` (30) alerts. A cell with no

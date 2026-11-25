@@ -403,7 +403,8 @@ only with `--evaluate-test`; development folds are always reported. The static s
 (Brier 0.0911551, log loss 0.2975124, threshold 0.4844156, precision/recall) must not move. The pin
 covers the chosen model/calibrator, validation predictions, `calibration.csv`, the four split
 digests and those headline metrics. The base-rate/logistic candidate tables and the
-paired-vs-logistic interval are **not** pinned because PR 6 upgraded those candidates. Model
+paired-vs-logistic interval are **not** pinned because the later selection step upgraded those
+candidates. Model
 serialisation, provenance files and the config hash differ; the hash changes because the config
 gained `threshold_min_alerts`, while the report also loses the risk-band sentence (which changes
 report bytes, not the config hash).
@@ -418,7 +419,7 @@ directory to force a clean refit. Verify `pkl_sha256` before reuse; the hash shi
 cache directory, so it proves integrity, not authenticity.
 
 A cache-free 5 % development run (`pr6-dev`) peaked at 6.30 GiB; an earlier twin reached 6.35 GiB;
-the final cold run (`pr6-final-r3`) reached 6.24 GiB. The dataset build sets the peak. PR 5's cold
+the final cold run (`pr6-final-r3`) reached 6.24 GiB. The dataset build sets the peak. Earlier cold
 runs recorded 11.0-11.5 GiB under concurrent load, so measure the phase you care about. The review
 budget is 6.6 GiB. 10 % has not been measured; raise the memory limit before trying 25 or 50 %.
 
@@ -438,7 +439,8 @@ test precision/recall, the share of cells that held the floor on test (point-est
 the development and evaluation rates are both reported), and precision at fixed recalls per band.
 The Wilson bound is **nominal**: it assumes independent rows, while alerts within a departure date
 share the same fare movement. The measured design effect is 1.4-3.2x, a boundary rule is expected
-to hold on roughly half of new cells, and a departure-date cluster bound replaces this in PR 7.
+to hold on roughly half of new cells, and a departure-date cluster bound should replace this at
+scale.
 Treat the hold rate as descriptive; cells with fewer than 100 test alerts or under 5 % recall are
 nominal only. Pooled precision and recall use each row's own fold and cell threshold; the
 intervals are conditional on the fitted thresholds. Cell rows relabel every test row at the cell's
@@ -453,10 +455,10 @@ perfect-breach oracles, perfect timing against booking now and the mean cost of 
 departure the policy is roughly break-even against booking now at low headroom and loses several
 euros at 20-30 % headroom; the oracle columns are point estimates. Grouped permutation importance
 covers the configured feature families on the pooled development test blocks (the calendar family
-is empty when `calendar.feature_set` is `none`; the analog families are present only when the I1
+is empty when `calendar.feature_set` is `none`; the analog families are present only when the
 switch is on); the `limit` family is the label's own headroom parameter, not a market driver. The sample is allocated equally across all development departure dates, so
 the mean is date-weighted; permutation is global across dates. The date spread is reported next to
-the repeat spread; within-date permutation is a PR 7 refinement.
+the repeat spread; within-date permutation is a future refinement.
 
 `--forward` builds the unscored October-November forward Parquet (24 h-7 d, grid columns only, no
 labels or check fares). The smoke build uses a documented 5 % route-day sample because the
@@ -465,7 +467,7 @@ all-route build exceeds the host memory ceiling; a later sample-scale run raises
 `forward_predictions.parquet` plus `forward_smoke.json`; it computes no labels or metrics.
 
 `--feature-study` is the reproducible feature-family study. It builds one dataset with every
-candidate column (`calendar.feature_set = full` plus the I1 analog columns), fits the frozen
+candidate column (`calendar.feature_set = full` plus the analog-departure columns), fits the frozen
 HGB + temperature recipe on the development folds only and refuses `--evaluate-test`. It requires
 `--forward-availability`: the keep decision uses the measured forward-set analog availability,
 not the grid upper bound. The fixed
@@ -474,7 +476,7 @@ arms are `analog_d1` vs base, `analog_d1 + analog_d7` vs `analog_d1`, and
 `feature_study.json` and `feature_study.md` with paired overall and per-band intervals,
 availability by band/era, the coverage profile and a decision per family.
 
-The I1 analog switch is `features.analog_departures` (`enabled: false`, `offsets_days: [1, 7]` by
+The analog-departure switch is `features.analog_departures` (`enabled: false`, `offsets_days: [1, 7]` by
 default) and stays off. When enabled, the builder reads the analog route-days from the **full v1
 silver**, not the sampled panel; enabling it in a normal build adds the columns to the model spec,
 but the study harness is the supported way to test them. The analog is the same route, class and first-train number on
@@ -485,13 +487,14 @@ The feature is exactly causal; departure times are compared on the circular Euro
 time of day to the second. Tie-breaks are closest lead, larger lead, closest departure time,
 lowest price, then the analog's series key. `--feature-study` forces the switch on for the study build; the
 coverage profile measures the D-1 scrape grid over the latest 28 days of silver. A family is kept
-only if it passes the PR 6 replacement rule at full availability **and** the coverage stress test
+only if it passes the recipe replacement rule at full availability **and** the coverage stress test
 does not make it significantly worse overall or at 1-7 days, with a non-positive point estimate.
 The stress target uses the actual availability measured on `--forward-availability` for 1-7 days
 and fills the 7-30 day bands from the coverage profile; the grid-level profile is an
 observation-weighted v1+v2 upper bound, not the snapshot population. The analog source is v1-only:
 rerun the study when the **v1 actual** 1-7 day analog availability reaches 80 % or after four weeks
-of lead-phase paired scrapes, and port the analog builder to v2 before expecting the O8 v2 pairs to
+of lead-phase paired scrapes, and port the analog builder to v2 before expecting the paired
+scraper data to
 help. The study build needs `TRAIN_DUCKDB_MAX_TEMP_SIZE=64GB`; the 20 GB default is not enough. `--cache-dir` resumes backtest folds. `--dataset-cache-dir` reuses a
 matching dataset build (default `artifacts/.cache/datasets`); reuse is allowed only on a clean tree,
 verifies every split hash and records the reuse key. Pass `--no-dataset-cache` for an independent
