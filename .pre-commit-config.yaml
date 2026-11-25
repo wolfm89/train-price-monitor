@@ -1,3 +1,7 @@
+default_install_hook_types: [pre-commit, post-checkout]
+# Keep the existing hooks out of the post-checkout stage; only worktree-init runs there.
+default_stages: [pre-commit, manual]
+
 default_language_version:
   node: system
 
@@ -51,6 +55,14 @@ repos:
   # They run in CI and on demand: pre-commit run --all-files --hook-stage manual
   - repo: local
     hooks:
+      # Seeds ignored local files into new linked worktrees. See scripts/worktree-init.sh.
+      - id: worktree-init
+        name: seed worktree local files
+        entry: bash scripts/worktree-init.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [post-checkout]
       - id: typecheck-frontend
         name: tsc (frontend)
         entry: npm --prefix frontend run typecheck
