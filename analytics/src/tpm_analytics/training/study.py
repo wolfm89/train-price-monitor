@@ -411,6 +411,17 @@ def coverage_profile(
           AND schema_version IN (1, 2)
         """
     )
+    connection.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE coverage_grid_v1 AS
+        SELECT DISTINCT route_id, departure_date, observed_at
+        FROM {source_sql}
+        WHERE observed_at BETWEEN TIMESTAMP '{(start_at - timedelta(hours=36)).isoformat(sep=" ")}'
+                               AND TIMESTAMP '{end_at.isoformat(sep=" ")}'
+          AND observed_at < departure_planned
+          AND schema_version = 1
+        """
+    )
     rows = connection.execute(
         f"""
         WITH hits AS (
@@ -423,14 +434,21 @@ def coverage_profile(
                       AND g.departure_date = coverage_src.departure_date - 1
                       AND g.observed_at BETWEEN coverage_src.observed_at - INTERVAL 36 HOUR
                                              AND coverage_src.observed_at - INTERVAL 12 HOUR
-                ) AS hit
+                ) AS hit,
+                EXISTS (
+                    SELECT 1 FROM coverage_grid_v1 g
+                    WHERE g.route_id = coverage_src.route_id
+                      AND g.departure_date = coverage_src.departure_date - 1
+                      AND g.observed_at BETWEEN coverage_src.observed_at - INTERVAL 36 HOUR
+                                             AND coverage_src.observed_at - INTERVAL 12 HOUR
+                ) AS hit_v1
             FROM coverage_src
         )
         SELECT
             band,
             count(*) AS rows,
             avg(hit::INT) AS share,
-            avg(CASE WHEN schema_version = 1 THEN hit::INT END) AS share_v1
+            avg(CASE WHEN schema_version = 1 THEN hit_v1::INT END) AS share_v1
         FROM hits
         GROUP BY band
         ORDER BY band
