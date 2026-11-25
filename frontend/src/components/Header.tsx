@@ -27,13 +27,14 @@ const navBtnSx = {
   color: 'rgba(255,255,255,0.85)',
   fontSize: 13,
   fontWeight: 500,
-  borderRadius: '6px',
+  borderRadius: '8px',
   border: '1.5px solid rgba(255,255,255,0.35)',
-  px: { xs: 1.25, sm: 1.5 },
-  py: 0.625,
+  px: { xs: 1.25, sm: 1.75 },
+  py: 0,
   minWidth: { xs: 44, sm: 0 },
-  minHeight: 44,
+  minHeight: { xs: 44, sm: 40 },
   textTransform: 'none' as const,
+  whiteSpace: 'nowrap' as const,
   '& .MuiButton-startIcon': {
     marginRight: { xs: 0, sm: '8px' }, // collapse icon trailing margin when no text follows on mobile
     marginLeft: { xs: 0, sm: '-4px' }, // reset MUI's default -4px left margin on mobile so icon stays centered
@@ -47,12 +48,12 @@ const navBtnSx = {
 
 const navBtnActiveSx = {
   ...navBtnSx,
-  backgroundColor: 'rgba(255,255,255,0.18)',
-  borderColor: 'rgba(255,255,255,0.55)',
+  backgroundColor: 'rgba(0,0,0,0.18)',
+  borderColor: 'rgba(255,255,255,0.7)',
   color: '#fff',
   '&:hover': {
-    backgroundColor: 'rgba(255,255,255,0.24)',
-    borderColor: 'rgba(255,255,255,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.26)',
+    borderColor: 'rgba(255,255,255,0.85)',
     color: '#fff',
   },
 };
@@ -136,13 +137,12 @@ const Header = () => {
   const initials = user ? `${user.given_name?.[0] ?? ''}${user.family_name?.[0] ?? ''}`.toUpperCase() : '';
 
   return (
-    <AppBar position="static" elevation={0} sx={{ height: NAV_HEIGHT }}>
+    <AppBar position="static" elevation={0} sx={{ minHeight: NAV_HEIGHT }}>
       <Toolbar
         disableGutters
         sx={{
-          height: NAV_HEIGHT,
           minHeight: `${NAV_HEIGHT}px !important`,
-          px: 3,
+          px: { xs: 2, sm: 3 },
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -151,20 +151,28 @@ const Header = () => {
           mx: 'auto',
         }}
       >
-        <Link
+        <Box
+          component={Link}
           to="/"
-          style={{
+          aria-label="Train Price Monitor"
+          sx={{
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
-            gap: 9,
+            justifyContent: 'center',
+            gap: 1.125,
             color: 'inherit',
-            padding: '4px 8px 4px 0',
-            borderRadius: 6,
+            borderRadius: '8px',
+            minWidth: { xs: 44, sm: 'auto' },
+            minHeight: { xs: 44, sm: 40 },
+            flexShrink: 0,
+            '&:focus-visible': { outline: '2px solid rgba(255,255,255,0.85)', outlineOffset: 2 },
           }}
         >
           <Box
             sx={{
+              width: 40,
+              height: 40,
               bgcolor: 'background.paper',
               borderRadius: '8px',
               p: '3px',
@@ -176,10 +184,10 @@ const Header = () => {
           >
             <img
               src={process.env.PUBLIC_URL + '/logo-header.webp'}
-              alt="Train Price Monitor Logo"
-              width={38}
-              height={38}
-              style={{ display: 'block' }}
+              alt=""
+              width={34}
+              height={34}
+              style={{ display: 'block', borderRadius: '5px' }}
             />
           </Box>
           {!isScreenSmall && (
@@ -187,7 +195,7 @@ const Header = () => {
               Train Price Monitor
             </Typography>
           )}
-        </Link>
+        </Box>
 
         {/* The auth check is async; rendering the logged-out controls before it
             resolves makes them flash and then disappear for signed-in users. */}
@@ -197,91 +205,98 @@ const Header = () => {
           </Button>
         )}
         {isInitialCheckDone && user && (
-          <Box component="nav" aria-label="Main" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Button
-              component={Link}
-              to="/search"
-              startIcon={<SearchIcon />}
-              aria-label="Search"
-              aria-current={location.pathname === '/search' ? 'page' : undefined}
-              sx={location.pathname === '/search' ? navBtnActiveSx : navBtnSx}
-            >
-              {!isScreenSmall && 'Search'}
-            </Button>
-            <Button
-              component={Link}
-              to="/journeys"
-              startIcon={<TrainIcon />}
-              aria-label="My Journeys"
-              aria-current={location.pathname === '/journeys' ? 'page' : undefined}
-              sx={location.pathname === '/journeys' ? navBtnActiveSx : navBtnSx}
-            >
-              {!isScreenSmall && 'My Journeys'}
-            </Button>
-            <IconButton
-              size="small"
-              aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
-              aria-haspopup="dialog"
-              aria-expanded={open}
-              aria-controls={open ? 'notification-popover' : undefined}
-              onClick={handleNotificationClick}
-              sx={{
-                color: 'rgba(255,255,255,0.85)',
-                border: '1.5px solid rgba(255,255,255,0.35)',
-                borderRadius: '6px',
-                p: { xs: '5px', sm: '6px' },
-                minWidth: 44,
-                minHeight: 44,
-                '&:hover': {
-                  color: '#fff',
-                  backgroundColor: 'rgba(255,255,255,0.13)',
-                  borderColor: 'rgba(255,255,255,0.55)',
-                },
-              }}
-            >
-              <Badge
-                badgeContent={unreadCount}
-                color="error"
-                aria-hidden="true"
-                sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16 } }}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box component="nav" aria-label="Main" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Button
+                component={Link}
+                to="/search"
+                startIcon={<SearchIcon />}
+                aria-label="Search"
+                aria-current={location.pathname === '/search' ? 'page' : undefined}
+                sx={location.pathname === '/search' ? navBtnActiveSx : navBtnSx}
               >
-                <NotificationsIcon sx={{ fontSize: 20 }} />
-              </Badge>
-            </IconButton>
-            <IconButton
-              aria-label="Account menu"
-              aria-haspopup="menu"
-              aria-expanded={Boolean(accountAnchorEl)}
-              aria-controls="account-menu"
-              onClick={handleAccountClick}
-              sx={{
-                ml: 0,
-                p: 0,
-                minWidth: 44,
-                minHeight: 44,
-                color: 'rgba(255,255,255,0.85)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Avatar
-                alt="Profile Picture"
-                src={userProfilePictureUrl || undefined}
+                {!isScreenSmall && 'Search'}
+              </Button>
+              <Button
+                component={Link}
+                to="/journeys"
+                startIcon={<TrainIcon />}
+                aria-label="My Journeys"
+                aria-current={location.pathname === '/journeys' ? 'page' : undefined}
+                sx={location.pathname === '/journeys' ? navBtnActiveSx : navBtnSx}
+              >
+                {!isScreenSmall && 'My Journeys'}
+              </Button>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.5 } }}>
+              <IconButton
+                aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+                aria-haspopup="dialog"
+                aria-expanded={open}
+                aria-controls={open ? 'notification-popover' : undefined}
+                onClick={handleNotificationClick}
                 sx={{
-                  width: { xs: 34, sm: 28 },
-                  height: { xs: 34, sm: 28 },
-                  fontSize: 10,
-                  fontWeight: 700,
-                  bgcolor: 'secondary.light',
-                  color: 'secondary.dark',
-                  border: '2px solid rgba(255,255,255,0.25)',
+                  color: 'rgba(255,255,255,0.85)',
+                  border: '1.5px solid rgba(255,255,255,0.35)',
+                  borderRadius: '8px',
+                  width: { xs: 44, sm: 40 },
+                  height: { xs: 44, sm: 40 },
+                  p: 0,
+                  '&:hover': {
+                    color: '#fff',
+                    backgroundColor: 'rgba(255,255,255,0.13)',
+                    borderColor: 'rgba(255,255,255,0.55)',
+                  },
                 }}
-                slotProps={{ img: { crossOrigin: 'anonymous' } }}
               >
-                {initials}
-              </Avatar>
-            </IconButton>
+                <Badge
+                  badgeContent={unreadCount}
+                  color="error"
+                  aria-hidden="true"
+                  sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16, boxShadow: '0 0 0 2px #fff' } }}
+                >
+                  <NotificationsIcon sx={{ fontSize: 20 }} />
+                </Badge>
+              </IconButton>
+              <IconButton
+                aria-label="Account menu"
+                aria-haspopup="menu"
+                aria-expanded={Boolean(accountAnchorEl)}
+                aria-controls="account-menu"
+                onClick={handleAccountClick}
+                sx={{
+                  p: 0,
+                  width: { xs: 44, sm: 40 },
+                  height: { xs: 44, sm: 40 },
+                  borderRadius: '50%',
+                  color: 'rgba(255,255,255,0.85)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.13)' },
+                  '&:hover .MuiAvatar-root': { boxShadow: '0 0 0 2px rgba(255,255,255,0.65)' },
+                  '&.Mui-focusVisible': { outline: '2px solid #fff', outlineOffset: 2 },
+                  '&.Mui-focusVisible .MuiAvatar-root': { boxShadow: '0 0 0 2px #fff' },
+                }}
+              >
+                <Avatar
+                  alt=""
+                  src={userProfilePictureUrl || undefined}
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    bgcolor: 'secondary.light',
+                    color: 'secondary.dark',
+                    border: '2px solid rgba(255,255,255,0.65)',
+                  }}
+                  slotProps={{ img: { crossOrigin: 'anonymous' } }}
+                >
+                  {initials}
+                </Avatar>
+              </IconButton>
+            </Box>
           </Box>
         )}
       </Toolbar>
