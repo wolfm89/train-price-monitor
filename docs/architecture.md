@@ -74,7 +74,7 @@ the DB transport in `shared/`.
 - **Hydrator** (02:00 UTC) seeds `ROUTE#<route>#DATE#<date>` items for the next 60 days. Conditional
   writes avoid overwriting existing targets. A full seed is available for backfills.
 - **Poller** (every 15 minutes) queries the `ByDue` GSI once per TTD tier in NEAR → MID → FAR order,
-  so near departures win when capacity is short. It reads up to 25 targets, makes two DB Vendo
+  so near departures win when capacity is short. It reads up to 20 targets, makes two DB Vendo
   bestprice calls per target (first and second class), writes a `batch_*.parquet` file to
   `prices/year=/month=/day=/`, and reschedules each target. Targets whose departure day has passed
   are deleted instead of scraped.
@@ -202,9 +202,11 @@ problem: when every profile fails, another profile or Lambda IP will not help.
 On 2026-11-25 the Navigator API also began refusing eu-central-1 Lambda and Decodo egress. The
 `DbProxyStack` runs a small Lambda in `CDK_DB_PROXY_REGION` (default `us-east-1`) that reaches the
 Navigator API with `tls12`; the poller and backend invoke it with `lambda:InvokeFunction` through
-`DB_PROXY_FUNCTION`. This is a different AWS egress, not a vendor proxy: no VPC, NAT, alarm or fixed
-cost. Setting `CDK_DB_PROXY_REGION=eu-central-1` switches the stack back, but that egress is
-currently blocked.
+`DB_PROXY_FUNCTION`. The proxy is bounded at 20 s (below the API's 29 s cap), the caller aborts the
+invoke at `DB_REQUEST_TIMEOUT_MS`, and the response body is gzipped to keep cross-region traffic
+small. This is a different AWS egress, not a vendor proxy: no VPC, NAT, alarm or fixed cost.
+Setting `CDK_DB_PROXY_REGION=eu-central-1` switches the stack and the caller env back, but that
+egress is currently blocked; test a new region before switching.
 
 ## Design decisions
 
@@ -222,8 +224,9 @@ currently blocked.
   pointer moves. Representativeness warnings are diagnostic and never roll back a verified dataset.
 - **Browser-like TLS, no browser.** DB's edge matches the TLS ClientHello. The shared transport uses
   Node `https` with several browser-like profiles and rotates on `403 OPS_BLOCKED`; Decodo is the
-  backend-only fallback. See [DB transport](#db-transport) for the measured history and
-  `shared/db-fetch.ts` for the implementation.
+  backend-only fallback. When DB refuses the app-region egress, the app-owned `DbProxyStack` Lambda
+  reaches the Navigator API from a region DB accepts. See [DB transport](#db-transport) for the
+  measured history and `shared/db-fetch.ts` for the implementation.
 - **Alert budget.** Ten alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
   deliberate ceiling.
 

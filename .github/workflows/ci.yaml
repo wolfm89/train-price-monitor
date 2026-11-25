@@ -90,6 +90,9 @@ jobs:
         working-directory: backend
       - run: npm run lint
         working-directory: backend
+      # shared/ has no node_modules; lint it from the root config installed above.
+      - name: Lint shared
+        run: npx --no-install eslint shared
       - run: npm test
         working-directory: backend
       - run: npm run build

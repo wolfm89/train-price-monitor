@@ -5,14 +5,16 @@
     "infrastructure": "bin/infrastructure.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc --noEmit -p tsconfig.lambda.json",
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "cdk",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint lib/ test/"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.lambda.json",
+    "lint": "eslint lib/ test/ lambda/"
   },
   "devDependencies": {
+    "@aws-sdk/client-lambda": "^3.1177.0",
+    "@aws-sdk/client-ssm": "^3.1177.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.2",
     "@typescript-eslint/eslint-plugin": "^8.58.1",

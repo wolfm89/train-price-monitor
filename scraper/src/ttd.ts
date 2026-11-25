@@ -3,8 +3,8 @@ import { type TtdTier } from './types.js';
 // Scrape intervals are capacity-derived, not aspirational.
 //
 // DB tolerates only a modest request rate per egress IP (bursts are throttled for
-// minutes), and the poller spaces its calls accordingly: a 25-target batch every
-// 15 minutes is ~2,400 scrapes/day, above the ~1,654/day these intervals demand
+// minutes), and the poller spaces its calls accordingly: a 20-target batch every
+// 15 minutes is ~1,920 scrapes/day, above the ~1,654/day these intervals demand
 // for a 60-day horizon (140 routes => 8,400 rows), so the schedule is met and the
 // backlog drains in about a week. The poller serves NEAR first (see `dueKey`), so
 // if capacity ever falls short it is the far end of the horizon that slips.
@@ -45,8 +45,8 @@ const DEPARTURE_SAFETY_MARGIN_MS = 90 * MINUTE_MS;
 
 /**
  * Every route sharing a departure date hits the near-entry clamp and the final
- * scrape at the same instant. Spread both over a window: the poller serves 25
- * targets per 15 minutes, so 140 targets due together take ~1.4 hours to drain.
+ * scrape at the same instant. Spread both over a window: the poller serves 20
+ * targets per 15 minutes, so 140 targets due together take ~1.75 hours to drain.
  */
 const NEAR_ENTRY_SPREAD_MS = 6 * HOUR_MS;
 const FINAL_SCRAPE_WINDOW_MS = 3 * HOUR_MS;

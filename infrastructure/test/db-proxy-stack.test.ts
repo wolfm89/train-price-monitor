@@ -11,12 +11,14 @@ test('DbProxyStack creates the us-east-1 Navigator proxy', () => {
   template.hasResourceProperties('AWS::Lambda::Function', {
     FunctionName: 'TrainPriceMonitor-DbProxy',
     Runtime: 'nodejs24.x',
-    Timeout: 30,
+    Timeout: 20,
+    ReservedConcurrentExecutions: 5,
     Environment: {
       Variables: Match.objectLike({
         DB_TLS_PROFILE: 'tls12',
         DB_MAX_ATTEMPTS: '1',
-        DB_TOTAL_BUDGET_MS: '25000',
+        DB_TOTAL_BUDGET_MS: '18000',
+        DB_REQUEST_TIMEOUT_MS: '15000',
       }),
     },
   });

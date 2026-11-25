@@ -13,18 +13,18 @@ deployed functions receive most runtime values from CDK; do not set them by hand
 
 ## CDK deployment inputs
 
-| Variable                    | Scope          | Default / deployed                                 | Set by         | Purpose                                                                             |
-| --------------------------- | -------------- | -------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
-| `CDK_APP_NAME`              | Infrastructure | required                                           | developer / CI | Application name, Cognito domain and resource names.                                |
-| `CDK_DOMAIN_NAME`           | Infrastructure | required                                           | developer / CI | Custom frontend domain and ACM certificate.                                         |
-| `CDK_SES_FROM_EMAIL`        | Infrastructure | required                                           | developer / CI | SES sender and cognito `fromEmail`.                                                 |
-| `CDK_DECODO_API_KEY_PARAM`  | Infrastructure | `/train-price-monitor/decodo-api-key`              | developer / CI | SSM SecureString name for the Decodo key.                                           |
-| `CDK_DB_PROXY_REGION`       | Infrastructure | `us-east-1`                                        | developer / CI | Region for `DbProxyStack`; set `eu-central-1` to switch back.                       |
-| `CDK_SCRAPER_PAUSED`        | Infrastructure | unset                                              | developer / CI | `1` disables poller and hydrator schedules; compactor stays on.                     |
-| `CDK_ANALYTICS_PAUSED`      | Infrastructure | CI defaults to `1` when the repo variable is unset | developer / CI | `1` disables the weekly silver schedule. Set `0` after first-run checks.            |
-| `CDK_TRANSFORM_VERSION`     | Infrastructure | empty                                              | CI             | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`. |
-| `CDK_SES_PRODUCTION_ACCESS` | Infrastructure | unset                                              | developer / CI | `1` once SES production access is granted; disables the sandbox workaround.         |
-| `AWS_REGION`                | Infrastructure | `eu-central-1`                                     | developer / CI | Deployment region for the four application stacks.                                  |
+| Variable                    | Scope          | Default / deployed                                 | Set by         | Purpose                                                                                  |
+| --------------------------- | -------------- | -------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
+| `CDK_APP_NAME`              | Infrastructure | required                                           | developer / CI | Application name, Cognito domain and resource names.                                     |
+| `CDK_DOMAIN_NAME`           | Infrastructure | required                                           | developer / CI | Custom frontend domain and ACM certificate.                                              |
+| `CDK_SES_FROM_EMAIL`        | Infrastructure | required                                           | developer / CI | SES sender and cognito `fromEmail`.                                                      |
+| `CDK_DECODO_API_KEY_PARAM`  | Infrastructure | `/train-price-monitor/decodo-api-key`              | developer / CI | SSM SecureString name for the Decodo key.                                                |
+| `CDK_DB_PROXY_REGION`       | Infrastructure | `us-east-1`                                        | developer / CI | Region for `DbProxyStack`. Test a new egress first; `eu-central-1` is currently blocked. |
+| `CDK_SCRAPER_PAUSED`        | Infrastructure | unset                                              | developer / CI | `1` disables poller and hydrator schedules; compactor stays on.                          |
+| `CDK_ANALYTICS_PAUSED`      | Infrastructure | CI defaults to `1` when the repo variable is unset | developer / CI | `1` disables the weekly silver schedule. Set `0` after first-run checks.                 |
+| `CDK_TRANSFORM_VERSION`     | Infrastructure | empty                                              | CI             | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`.      |
+| `CDK_SES_PRODUCTION_ACCESS` | Infrastructure | unset                                              | developer / CI | `1` once SES production access is granted; disables the sandbox workaround.              |
+| `AWS_REGION`                | Infrastructure | `eu-central-1`                                     | developer / CI | Deployment region for the four application stacks.                                       |
 
 CI also uses `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION`, the AWS credential/role secrets, the
 frontend `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and
@@ -55,29 +55,34 @@ frontend `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and
 
 Shared by the backend and scraper.
 
-| Variable                       | Scope             | Default / deployed                                      | Set by          | Purpose                                                                       |
-| ------------------------------ | ----------------- | ------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
-| `DB_MIN_GAP_MS`                | Backend + scraper | `1000` code; API `300`, refresher `1500`, poller `3500` | CDK / developer | Minimum spacing between request starts.                                       |
-| `DB_MAX_IN_FLIGHT`             | Backend + scraper | `2`                                                     | CDK / developer | Concurrent DB requests.                                                       |
-| `DB_MAX_ATTEMPTS`              | Backend + scraper | `2`; API `1`                                            | CDK / developer | Direct/proxy attempts per request.                                            |
-| `DB_RETRY_BACKOFF_MS`          | Backend + scraper | `3000`                                                  | developer       | Pause before a retry, multiplied by the attempt number.                       |
-| `DB_REQUEST_TIMEOUT_MS`        | Backend + scraper | `20000`; API `8000`                                     | CDK / developer | Per-attempt timeout.                                                          |
-| `DB_BREAKER_THRESHOLD`         | Backend + scraper | `3`                                                     | developer       | Consecutive failed requests that open the circuit breaker.                    |
-| `DB_BREAKER_COOLDOWN_MS`       | Backend + scraper | `180000`                                                | developer       | How long the breaker stays open.                                              |
-| `DB_TOTAL_BUDGET_MS`           | Backend + scraper | API `24000`, refresher `110000`, poller `45000`         | CDK             | Wall-clock budget per request, direct plus fallback.                          |
-| `DB_TLS_PROFILE`               | Backend + scraper | `tls12` in CDK; code default `firefox`                  | CDK / developer | First TLS profile: `firefox`, `safari`, `chrome`, `tls13`, `tls12`, `legacy`. |
-| `DB_PROFILE_BLOCK_COOLDOWN_MS` | Backend + scraper | `900000`                                                | developer       | How long a profile that returned `OPS_BLOCKED` is skipped.                    |
-| `DB_PROXY_FUNCTION`            | Backend + scraper | ARN of `DbProxyStack`                                   | CDK             | Invoke this Lambda for DB requests instead of direct HTTPS.                   |
-| `DB_PROXY_REGION`              | Backend + scraper | `us-east-1`                                             | CDK             | Region of `DB_PROXY_FUNCTION`; follows `CDK_DB_PROXY_REGION`.                 |
+| Variable                       | Scope             | Default / deployed                                             | Set by          | Purpose                                                                       |
+| ------------------------------ | ----------------- | -------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
+| `DB_MIN_GAP_MS`                | Backend + scraper | `1000` code; API `300`, refresher `1500`, poller `3500`        | CDK / developer | Minimum spacing between request starts.                                       |
+| `DB_MAX_IN_FLIGHT`             | Backend + scraper | `2`                                                            | CDK / developer | Concurrent DB requests.                                                       |
+| `DB_MAX_ATTEMPTS`              | Backend + scraper | `2`; API `1`                                                   | CDK / developer | Direct/proxy attempts per request.                                            |
+| `DB_RETRY_BACKOFF_MS`          | Backend + scraper | `3000`                                                         | developer       | Pause before a retry, multiplied by the attempt number.                       |
+| `DB_REQUEST_TIMEOUT_MS`        | Backend + scraper | `20000`; API `8000`; proxy `15000`                             | CDK / developer | Per-attempt timeout; in proxy mode bounds the Lambda invoke.                  |
+| `DB_BREAKER_THRESHOLD`         | Backend + scraper | `3`                                                            | developer       | Consecutive failed requests that open the circuit breaker.                    |
+| `DB_BREAKER_COOLDOWN_MS`       | Backend + scraper | `180000`                                                       | developer       | How long the breaker stays open.                                              |
+| `DB_TOTAL_BUDGET_MS`           | Backend + scraper | API `24000`, refresher `110000`, poller `45000`, proxy `18000` | CDK             | Wall-clock budget per request, direct plus fallback.                          |
+| `DB_TLS_PROFILE`               | Backend + scraper | `tls12` in CDK; code default `firefox`                         | CDK / developer | First TLS profile: `firefox`, `safari`, `chrome`, `tls13`, `tls12`, `legacy`. |
+| `DB_PROFILE_BLOCK_COOLDOWN_MS` | Backend + scraper | `900000`                                                       | developer       | How long a profile that returned `OPS_BLOCKED` is skipped.                    |
+| `DB_PROXY_FUNCTION`            | Backend + scraper | ARN of `DbProxyStack`                                          | CDK             | Invoke this Lambda for DB requests instead of direct HTTPS.                   |
+| `DB_PROXY_REGION`              | Backend + scraper | `us-east-1`                                                    | CDK             | Region of `DB_PROXY_FUNCTION`; follows `CDK_DB_PROXY_REGION`.                 |
 
-The direct path is Node `https` with a browser-like ClientHello. Decodo is only wired into the
-backend; the poller has no fallback key. See [architecture.md](architecture.md#design-decisions).
+`DB_REQUEST_TIMEOUT_MS` is the caller's invoke deadline. The proxy caps its own DB request at 15 s so
+it can return a structured response before its 20 s Lambda timeout.
+
+The direct path is Node `https` with a browser-like ClientHello. In production the backend and poller
+use the `DbProxyStack` Lambda; local development and a region with an accepted egress use the direct
+path. Decodo is only wired into the backend; the poller has no fallback key. See
+[architecture.md](architecture.md#design-decisions).
 
 ## Frontend build
 
 | Variable                                 | Scope         | Default / deployed      | Set by           | Purpose                                                                                             |
 | ---------------------------------------- | ------------- | ----------------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
-| `REACT_APP_GRAPHQL_ENDPOINT`             | Frontend      | production API URL      | CI               | API Gateway base URL for production builds; the client appends `graphql`. Dev uses the proxy below. |
+| `REACT_APP_GRAPHQL_ENDPOINT`             | Frontend      | production API URL      | CI / `env:local` | API Gateway base URL for production builds; the client appends `graphql`. Dev uses the proxy below. |
 | `VITE_DEV_BACKEND_URL`                   | Dev / preview | `http://127.0.0.1:4000` | Compose / shell  | Target of the dev server and `vite preview` `/graphql` proxy. Compose sets `http://backend:4000`.   |
 | `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` | Dev only      | —                       | shell            | Extra hostnames for the dev server (comma separated); `localhost`/IPs are always allowed.           |
 | `REACT_APP_COGNITO_USER_POOL_ID`         | Frontend      | —                       | CI / `env:local` | Cognito user pool ID.                                                                               |
@@ -86,8 +91,9 @@ backend; the poller has no fallback key. See [architecture.md](architecture.md#d
 
 Vite accepts the unprefixed `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` and
 `COGNITO_IDENTITY_POOL_ID` names in local `.env` files and maps them to the build-time
-`REACT_APP_*` defines. `env:local` writes the unprefixed names; CI supplies the `REACT_APP_*`
-values directly.
+`REACT_APP_*` defines. `env:local` writes the unprefixed Cognito names to `frontend/.env` and
+`REACT_APP_GRAPHQL_ENDPOINT` to `frontend/.env.production`; CI supplies the `REACT_APP_*` values
+directly.
 
 ## Scraper
 

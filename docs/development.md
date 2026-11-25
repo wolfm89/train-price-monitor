@@ -27,9 +27,10 @@ mise run env:local
 ```
 
 The script verifies `sts:GetCallerIdentity`, reads the prefixed CloudFormation outputs and writes
-the ignored `backend/.env` and `frontend/.env`. It needs
-`cloudformation:DescribeStacks` and `cognito-idp:ListUserPoolClients`. Set `STACK_NAME` if the stack
-is not `InfrastructureStack`. See [deployment.md](deployment.md#outputs-and-local-environment).
+the ignored `backend/.env`, `frontend/.env` and `frontend/.env.production` (the production GraphQL
+endpoint). It needs `cloudformation:DescribeStacks` and `cognito-idp:ListUserPoolClients`. Set
+`STACK_NAME` if the stack is not `InfrastructureStack`. See
+[deployment.md](deployment.md#outputs-and-local-environment).
 
 Do not commit `.env` files. The canonical variable reference is [configuration.md](configuration.md).
 
@@ -134,6 +135,12 @@ pre-commit run --all-files --hook-stage manual   # includes tsc and ty
 
 Prettier, ESLint, ruff and uv-lock run on the changed files. The manual stage adds the slower
 typechecks.
+
+`pre-commit install` also installs the `post-checkout` hook. In a new linked worktree it links or
+copies the ignored local files (`.env`, `.env.keys`, `frontend/.env.production`) from the main
+worktree and, when both generated env files are absent, runs `mise run env:local`. AWS failures are
+reported but do not block checkout. Set `WORKTREE_INIT_SKIP_ENV=1` to skip the AWS call. `.env.keys`
+is a manual provider-key stash for transport experiments; nothing loads it automatically.
 
 ## Code generation
 

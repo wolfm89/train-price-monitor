@@ -27,13 +27,14 @@ const BUCKET_NAME = process.env.SCRAPER_BUCKET_NAME!;
  * Max targets per invocation. Each target = 2 API calls (2nd and 1st class).
  *
  * Tunable via env so the cadence/batch trade-off can be adjusted without a code
- * change. DB is reached directly over HTTP with a browser-like TLS client (see
- * ../../shared/db-fetch.ts), which spaces requests (~3.5 s apart in this function,
- * see the CDK stack) because sustained traffic gets the Lambda's IP throttled.
+ * change. DB is reached through the shared transport (and the DB proxy in
+ * production, see ../../shared/db-fetch.ts), which spaces requests (~3.5 s
+ * apart in this function, see the CDK stack) because sustained traffic gets the
+ * Lambda's IP throttled.
  *
- * 25 targets is ~50 calls, about 195 s including pacing and request overhead. The
- * TTD intervals need ~1,654 scrapes a day for a 60-day horizon; 25 every 15
- * minutes is ~2,400, so the schedule is met and the backlog drains. Raise it only
+ * 20 targets is ~40 calls, about 195 s including pacing and proxy overhead. The
+ * TTD intervals need ~1,654 scrapes a day for a 60-day horizon; 20 every 15
+ * minutes is ~1,920, so the schedule is met and the backlog drains. Raise it only
  * while the `transport` counters in the "Poller finished" log stay clean.
  */
 const scraperConfig = runtimeConfig.scraper;

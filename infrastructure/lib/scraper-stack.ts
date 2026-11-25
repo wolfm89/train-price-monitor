@@ -12,7 +12,16 @@ import {
   aws_sns as sns,
 } from 'aws-cdk-lib';
 import { DASHBOARD_START, scraperWidgets } from './dashboards';
-import { DASHBOARD_NAMES, DB_PROXY_REGION, METRIC_NAMESPACE, SCHEDULES, SCRAPER_CONFIG, SILVER_CONFIG } from './config';
+import {
+  DASHBOARD_NAMES,
+  DB_PROXY_REGION,
+  METRIC_NAMESPACE,
+  POLLER_DB_GAP_MS,
+  POLLER_DB_TOTAL_BUDGET_MS,
+  SCHEDULES,
+  SCRAPER_CONFIG,
+  SILVER_CONFIG,
+} from './config';
 
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
@@ -121,28 +130,27 @@ export class ScraperStack extends cdk.Stack {
       code: lambda.DockerImageCode.fromImageAsset('../scraper'),
       architecture: lambda.Architecture.X86_64,
       memorySize: SCRAPER_CONFIG.poller_memory_mib,
-      // A 25-target batch is ~50 paced calls (~175 s at 3.5 s spacing). The
-      // observed maximum at 2.5 s was ~146 s; project ~195 s here. The
-      // ABORT_THRESHOLD_MS guard in scraper/src/poller.ts (250 s) is checked
-      // before a target, leaving the current target and the final S3 upload
-      // inside the timeout.
+      // A 20-target batch is ~40 paced calls. With the cross-region proxy the
+      // observed run is ~195-210 s. The ABORT_THRESHOLD_MS guard in
+      // scraper/src/poller.ts (240 s) is checked before a target, leaving the
+      // current target and the final S3 upload inside the timeout.
       timeout: cdk.Duration.seconds(SCRAPER_CONFIG.poller_timeout_seconds),
       logGroup: pollerLogGroup,
       environment: {
         SCRAPER_TABLE_NAME: table.tableName,
         SCRAPER_BUCKET_NAME: bucket.bucketName,
         POWERTOOLS_SERVICE_NAME: 'scraper-poller',
-        // 25 targets = 50 API calls per run (~2,400 scrapes/day), comfortably
-        // above the ~1,654 the TTD intervals need, so the backlog drains in about
-        // a week. Raise it only while the transport stats in the "Poller finished"
-        // log stay clean.
+        // 20 targets = 40 API calls per run (~1,920 scrapes/day), comfortably
+        // above the ~1,654 the TTD intervals need, so the backlog drains.
+        // Raise it only while the transport stats in the "Poller finished" log
+        // stay clean.
         SCRAPER_BATCH_SIZE: String(POLLER_BATCH_SIZE),
         // Spacing and concurrency of DB calls (see shared/db-fetch.ts). Measured:
         // 6 parallel calls were fine, a 60-call burst got the IP throttled for
         // minutes, 24 calls one at a time with 2.5 s gaps passed. The Navigator
         // API later throttled sustained 50-call batches at 2.5 s, so the poller
         // now uses 3.5 s.
-        DB_MIN_GAP_MS: '3500',
+        DB_MIN_GAP_MS: String(POLLER_DB_GAP_MS),
         DB_MAX_IN_FLIGHT: '2',
         // Start with the profile that is currently accepted; the transport still
         // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
@@ -151,9 +159,10 @@ export class ScraperStack extends cdk.Stack {
         // the app-region and Decodo egress. See shared/db-fetch.ts.
         ...(props?.dbProxyFunctionArn ? { DB_PROXY_FUNCTION: props.dbProxyFunctionArn, DB_PROXY_REGION } : {}),
         // One target makes two calls staggered by DB_MIN_GAP_MS; 45 s is the
-        // per-request budget. The poller aborts at its threshold before the
-        // Lambda timeout.
-        DB_TOTAL_BUDGET_MS: '45000',
+        // per-request budget. The proxy invoke is bounded by
+        // DB_REQUEST_TIMEOUT_MS (20 s default). The poller aborts at its
+        // threshold before the Lambda timeout.
+        DB_TOTAL_BUDGET_MS: String(POLLER_DB_TOTAL_BUDGET_MS),
         // No Decodo key on purpose: the poller is bulk work and must never spend
         // the free allowance. When DB throttles it stops the batch instead.
       },
@@ -236,7 +245,7 @@ export class ScraperStack extends cdk.Stack {
 
     new events.Rule(this, 'PollerSchedule', {
       enabled: !scraperPaused,
-      // Every 15 minutes with a small batch: ~2,400 scrapes/day, above what the
+      // Every 15 minutes with a small batch: ~1,920 scrapes/day, above what the
       // TTD intervals demand. Bigger or more frequent bursts risk getting the
       // Lambda's egress IP throttled by DB.
       schedule: events.Schedule.rate(cdk.Duration.minutes(SCHEDULES.pollerMinutes)),
@@ -283,7 +292,9 @@ export class ScraperStack extends cdk.Stack {
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
       metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerThrottled',
-      metricValue: '$.transport.directThrottled',
+      // The breaker opens on a real DB block; retry counts are noisy (1-9 per
+      // healthy run) and are intentionally not alarmed.
+      metricValue: '$.transport.breakerOpened',
     });
     // One metric per scraped target (the transport counters are per DB call, and
     // there are two calls per target). Used by the dashboard and within the free
@@ -382,7 +393,7 @@ export class ScraperStack extends cdk.Stack {
     const dbThrottling = new cloudwatch.Alarm(this, 'PollerThrottledByDb', {
       alarmName: 'TPM-Scraper-PollerThrottledByDb',
       alarmDescription:
-        'DB has throttled the poller in two consecutive runs (early warning before the fingerprint is blocked).',
+        'The poller DB circuit breaker opened in two consecutive runs: DB is refusing the proxy egress.',
       metric: throttled,
       threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,

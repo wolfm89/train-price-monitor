@@ -2,7 +2,8 @@
 
 Code and values used by more than one module. There is no `node_modules` here: each consuming
 module type-checks these files through its own tsconfig `include` and bundles them with esbuild.
-The root [`AGENTS.md`](../AGENTS.md) still applies; this file covers the shared pieces.
+Lint uses the root ESLint config via `mise run //shared:lint`. The root [`AGENTS.md`](../AGENTS.md)
+still applies; this file covers the shared pieces.
 
 ## Files
 
@@ -17,14 +18,14 @@ The root [`AGENTS.md`](../AGENTS.md) still applies; this file covers the shared 
 `403 OPS_BLOCKED`. Browsers, headless browsers, unblocking vendors and unblocker APIs were all
 tried and are refused; only Node's `https` client with a browser-like cipher list passes. The
 measured history and the list of refused approaches are in
-[docs/architecture.md](../docs/architecture.md#db-transport). Do not retry a browser, proxy or
-vendor.
+[docs/architecture.md](../docs/architecture.md#db-transport). Do not retry a browser or vendor proxy;
+the only proxy is the app-owned us-east-1 Lambda bridge described below.
 
 **What works.** Node's own `https` client with a browser-like cipher list; DB matches the TLS
 ClientHello. The measured profiles and endpoint results are in
 [docs/architecture.md](../docs/architecture.md#db-transport). Keep the profile list and rotation
 order there; the transport must rotate on a block rather than pinning one profile. No browser,
-proxy, native module or vendor account.
+vendor proxy, native module or vendor account; the app-owned Lambda proxy below is the exception.
 
 **Headers.** For the bahn.de web API only `Content-Type`/`Accept` plus `Origin`/`Referer` are sent;
 db-vendo-client's User-Agent and correlation headers turn an accepted web request into a 403. The
@@ -48,16 +49,16 @@ ends its batch.
 because DB refuses the app-region and Decodo egress. The proxy region is `CDK_DB_PROXY_REGION`
 (default `us-east-1`).
 
-**Decodo fallback (backend only).** The API and refresher use the Navigator profile directly and
-fall back to Decodo when the direct path is throttled. They have `DECODO_API_KEY_PARAM` and use
-Decodo's `/scrape` (premium pool; the standard pool cannot send custom headers and is refused) when
-the direct path is throttled. The poller has no key on purpose: bulk work must never spend the free
-allowance (5K calls/month). `DB_TRANSPORT=decodo` forces the fallback. The key lives in an SSM
-SecureString that CI writes from the repository secret `DECODO_API_KEY`; functions receive only the
-parameter name, so it never appears in a template, `cdk diff` or a function environment. IAM grants
-exactly `ssm:GetParameter` on that parameter; no `kms:Decrypt` is needed with the AWS-managed
-`aws/ssm` key. Rotation: update the repo secret and re-run the deploy job; running environments
-converge within `DECODO_KEY_TTL_MS` (15 min).
+**Decodo fallback (backend only).** The API and refresher use the Navigator profile through the DB
+proxy (or directly in local development) and fall back to Decodo when the direct path is throttled.
+They have `DECODO_API_KEY_PARAM` and use Decodo's `/scrape` (premium pool; the standard pool cannot
+send custom headers and is refused) when the direct path is throttled. The poller has no key on
+purpose: bulk work must never spend the free allowance (5K calls/month). `DB_TRANSPORT=decodo`
+forces the fallback. The key lives in an SSM SecureString that CI writes from the repository secret
+`DECODO_API_KEY`; functions receive only the parameter name, so it never appears in a template,
+`cdk diff` or a function environment. IAM grants exactly `ssm:GetParameter` on that parameter; no
+`kms:Decrypt` is needed with the AWS-managed `aws/ssm` key. Rotation: update the repo secret and
+re-run the deploy job; running environments converge within `DECODO_KEY_TTL_MS` (15 min).
 
 **Fingerprint rotation.** Fingerprints get blocked once popular. On `403 OPS_BLOCKED` the transport
 rotates to the next profile, remembers the working one for the environment and skips a blocked
@@ -76,8 +77,8 @@ development never touches SSM.
   dependency; that is the problem this file exists to avoid.
 - Do not remove the `cross-fetch` alias in `../backend/` or `../scraper/`, and do not send
   additional headers without re-measuring against the live DB endpoint.
-- After a transport change, run backend and scraper `typecheck`, `lint` and `test`, then build both
-  bundles and confirm neither contains a native module.
+- After a transport change, run `mise run //shared:lint`, backend and scraper `typecheck`, `lint`
+  and `test`, then build both bundles and confirm neither contains a native module.
 - `runtime-config.json` is read by both runtimes and by CDK. Change it together with
   `docs/configuration.md` and check `../infrastructure/lib/config.ts`; do not fork a value into a
   module-local copy.

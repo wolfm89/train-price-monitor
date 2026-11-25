@@ -1,0 +1,3 @@
+[tasks.lint]
+description = "Lint shared TypeScript with the root ESLint config"
+run = "npx --no-install eslint ."

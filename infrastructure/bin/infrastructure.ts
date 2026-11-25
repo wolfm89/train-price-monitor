@@ -49,7 +49,18 @@ const dbProxyStack = new DbProxyStack(app, 'DbProxyStack', {
     region: DB_PROXY_REGION,
   },
 });
-const dbProxyFunctionArn = `arn:aws:lambda:${DB_PROXY_REGION}:${process.env.CDK_DEFAULT_ACCOUNT}:function:${DB_PROXY_FUNCTION_NAME}`;
+const dbProxyFunctionArn = cdk.Arn.format(
+  {
+    partition: 'aws',
+    service: 'lambda',
+    region: DB_PROXY_REGION,
+    account: cdk.Aws.ACCOUNT_ID,
+    resource: 'function',
+    resourceName: DB_PROXY_FUNCTION_NAME,
+    arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+  },
+  dbProxyStack
+);
 
 const infrastructureStack = new InfrastructureStack(
   app,

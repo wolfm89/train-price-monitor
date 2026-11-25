@@ -32,8 +32,8 @@ scraper only writes `prices/`.
 
 ### Poller (`src/poller.ts`)
 
-- Runs every 15 minutes with a batch of 25 targets (50 DB calls).
-- Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 25
+- Runs every 15 minutes with a batch of 20 targets (40 DB calls).
+- Queries the DynamoDB GSI (`ByDue`) once per tier in priority order (NEAR, MID, FAR), up to 20
   targets (plus 8 expired-scan slack), so near departures are served first when capacity is short.
 - Deletes targets whose departure day has passed instead of scraping them.
 - Makes two API calls per target to the DB Vendo bestprice endpoint (1st and 2nd class).
@@ -174,7 +174,7 @@ The schedule can be paused with `CDK_SCRAPER_PAUSED=1`; the compactor stays enab
 | ----------------- | ------------------------------------------------------------ |
 | DynamoDB table    | `ScraperSchedule` — provisioned (5 RCU / 5 WCU), TTL enabled |
 | S3 bucket         | Parquet price data, transitions to IA after 90 days          |
-| Poller Lambda     | Docker image (x86_64, 512 MB, 300s timeout)                  |
+| Poller Lambda     | Docker image (x86_64, 384 MB, 300s timeout)                  |
 | Hydrator Lambda   | Node.js 24 (ARM64, 128 MB, 15 min timeout)                   |
 | Compactor Lambda  | Node.js 24 (ARM64, 1536 MB, 300s timeout)                    |
 | EventBridge rules | Poller (15 min), Hydrator (02:00 UTC), Compactor (03:00 UTC) |

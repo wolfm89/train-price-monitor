@@ -38,7 +38,11 @@ Six stacks: `CertificateStack` in `us-east-1`; `DbProxyStack` in `CDK_DB_PROXY_R
 [docs/deployment.md](../docs/deployment.md).
 
 `DbProxyStack` is the DB egress proxy: one `NodejsFunction` that reaches the Navigator API from a
-region DB accepts. It adds no VPC, NAT, alarm or metric.
+region DB accepts. It adds no VPC, NAT, alarm or metric. It is capped at 20 s and 10 reserved
+concurrent executions, and gzips the response when the caller advertises gzip. Keep the poller at
+20 targets / 384 MB: projected Lambda usage is ~258-341k GB-s/month (64-85% of the 400k free tier),
+and the existing budget forecast was $0.924 before the fix. Cross-region response data is the only
+real incremental dollar cost; re-check the forecast after a full day.
 
 Add new stacks under `lib/` and wire them in `bin/infrastructure.ts`. Extend `cdk.Stack`, use
 descriptive construct IDs, prefer L2 constructs and accept `props?: cdk.StackProps`.

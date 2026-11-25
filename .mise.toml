@@ -2,7 +2,7 @@ min_version = "2024.9.5"
 monorepo_root = true
 
 [monorepo]
-config_roots = ["frontend", "backend", "infrastructure", "scraper", "analytics"]
+config_roots = ["frontend", "backend", "infrastructure", "scraper", "analytics", "shared"]
 
 [tools]
 node    = "24"

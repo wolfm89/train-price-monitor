@@ -19,7 +19,7 @@ import { METRIC_NAMESPACE } from './config';
  * Latency budgets: interactive API calls target p50 < 200 ms (good) with a
  * 500 ms limit; live DB searches target p99/max < 8 s on a separate axis so
  * the search tail does not flatten the interactive curves. The scraper's
- * budgets are its own limits: 250 s abort, 300 s timeout.
+ * budgets are its own limits: 240 s abort, 300 s timeout.
  *
  * Everything stays inside the CloudWatch free tier (3 dashboards, 50 metrics
  * each). Default window: 48 hours, two nightly compactions.
@@ -37,8 +37,8 @@ const VALUE_HEIGHT = 6;
 
 // The poller's own limits, in one place so the graph, the gauge and the alarms
 // cannot drift apart as the batch size changes.
-const RUN_WARN_MS = 200_000;
-const RUN_ABORT_MS = 250_000;
+const RUN_WARN_MS = 220_000;
+const RUN_ABORT_MS = 240_000;
 const RUN_TIMEOUT_MS = 300_000;
 
 const GREEN = '#2ca02c';
@@ -132,7 +132,7 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   const throttledFilled = new cloudwatch.MathExpression({
     expression: 'FILL(throttledCount, 0)',
     usingMetrics: { throttledCount: throttled },
-    label: 'throttled calls',
+    label: 'breaker opens',
     period: cdk.Duration.minutes(15),
   });
   const abortedFilled = new cloudwatch.MathExpression({
@@ -201,7 +201,11 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
   });
 
   return [
-    [header('**Scraper** · batch 25 targets every 15 min · priority NEAR → MID → FAR · abort 250 s · timeout 300 s')],
+    [
+      header(
+        `**Scraper** · batch ${props.batchSize} targets every 15 min · priority NEAR → MID → FAR · abort ${RUN_ABORT_MS / 1000} s · timeout ${RUN_TIMEOUT_MS / 1000} s`
+      ),
+    ],
     [alarmStatus(props.alarms)],
     [
       new cloudwatch.GraphWidget({
@@ -220,9 +224,8 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
         metrics: [runMsMax],
         leftYAxis: { min: 0, max: RUN_TIMEOUT_MS },
         annotations: [
-          // 180 s was the warn band at batch 18-22; at batch 25 the observed max
-          // at 2.5 s was ~146 s and the projected max at 3.5 s is ~195 s, so
-          // warning there would paint a healthy pipeline amber.
+          // 180 s was the warn band at batch 18-22; at batch 20 the projected max
+          // is 188-210 s, so 220 s sits between a healthy run and the abort.
           { value: RUN_WARN_MS, label: 'warn', color: AMBER },
           { value: RUN_ABORT_MS, label: 'abort', color: RED },
         ],
@@ -273,10 +276,10 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Saturation — DB throttling, batch aborts and backlog',
+        title: 'Saturation — DB breaker opens, batch aborts and backlog',
         left: [throttledFilled, abortedFilled],
         right: [backlog],
-        leftYAxis: { min: 0, label: 'throttles / aborts' },
+        leftYAxis: { min: 0, label: 'breaker opens / aborts' },
         rightYAxis: { min: 0, max: 1, label: 'backlog (1 = behind)' },
         width: GRAPH_WIDTH,
         height: GRAPH_HEIGHT,

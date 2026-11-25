@@ -122,8 +122,9 @@ export class Backend extends Construct {
       memorySize: 512,
       environment: {
         ...commonEnvironment,
-        // A user is waiting: one short direct attempt, then straight to Decodo.
-        // Worst case is ~8 s direct + ~10 s Decodo, inside the 29 s cap.
+        // A user is waiting: one short proxy invoke, then straight to Decodo.
+        // The invoke is aborted at 8 s, leaving ~16 s for the fallback inside
+        // the 29 s cap.
         DB_MAX_ATTEMPTS: '1',
         DB_REQUEST_TIMEOUT_MS: '8000',
         DB_MIN_GAP_MS: '300',
