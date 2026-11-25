@@ -1,5 +1,8 @@
 import * as esbuild from 'esbuild';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'url';
+
+const require = createRequire(import.meta.url);
 
 // These packages are provided by the Lambda Node.js 24 runtime (they live in
 // /var/runtime/node_modules inside the image) and must not be bundled.
@@ -10,6 +13,9 @@ const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk
 const pollerExternal = [...external];
 
 const dbFetchShim = fileURLToPath(new URL('../../shared/db-fetch.ts', import.meta.url));
+// The shared transport is outside this package, so resolve the Lambda client
+// from the scraper's dependencies and bundle it.
+const lambdaClient = require.resolve('@aws-sdk/client-lambda');
 
 const sharedConfig = {
   bundle: true,
@@ -38,6 +44,7 @@ await esbuild.build({
   // request-building/response-parsing logic.
   alias: {
     'cross-fetch': dbFetchShim,
+    '@aws-sdk/client-lambda': lambdaClient,
   },
   // Banner required because of a CJS/ESM mismatch in the dependency tree:
   //

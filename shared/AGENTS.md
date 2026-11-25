@@ -42,6 +42,12 @@ calling DB for `DB_BREAKER_COOLDOWN_MS`; hammering a throttled IP only extends t
 Decodo key the request falls back to Decodo; without one it throws `DbThrottledError` and the poller
 ends its batch.
 
+**Cross-region proxy.** When `DB_PROXY_FUNCTION` is set, `fetch` invokes that Lambda (region
+`DB_PROXY_REGION`) instead of opening HTTPS itself; the handler lives in
+`../infrastructure/lambda/db-proxy` and uses the same direct path. The poller and backend use it
+because DB refuses the app-region and Decodo egress. The proxy region is `CDK_DB_PROXY_REGION`
+(default `us-east-1`).
+
 **Decodo fallback (backend only).** The API and refresher use the Navigator profile directly and
 fall back to Decodo when the direct path is throttled. They have `DECODO_API_KEY_PARAM` and use
 Decodo's `/scrape` (premium pool; the standard pool cannot send custom headers and is refused) when

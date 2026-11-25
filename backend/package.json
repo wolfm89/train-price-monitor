@@ -23,6 +23,7 @@
   "author": "",
   "license": "GPL-3.0",
   "devDependencies": {
+    "@aws-sdk/client-lambda": "^3.1177.0",
     "@graphql-codegen/cli": "^8.0.0",
     "@graphql-codegen/typescript": "^7.0.1",
     "@graphql-codegen/typescript-resolvers": "^7.0.0",

@@ -12,7 +12,7 @@ import {
   aws_sns as sns,
 } from 'aws-cdk-lib';
 import { DASHBOARD_START, scraperWidgets } from './dashboards';
-import { DASHBOARD_NAMES, METRIC_NAMESPACE, SCHEDULES, SCRAPER_CONFIG, SILVER_CONFIG } from './config';
+import { DASHBOARD_NAMES, DB_PROXY_REGION, METRIC_NAMESPACE, SCHEDULES, SCRAPER_CONFIG, SILVER_CONFIG } from './config';
 
 interface ScraperStackProps extends cdk.StackProps {
   /** Pin the S3 bucket name (useful locally; undefined → CDK-generated name in prod). */
@@ -21,6 +21,8 @@ interface ScraperStackProps extends cdk.StackProps {
   hydratorLookaheadDays?: number;
   /** ARN of the alert topic (owned by AlertingStack). */
   alertTopicArn?: string;
+  /** ARN of the DB proxy Lambda (owned by DbProxyStack). */
+  dbProxyFunctionArn?: string;
 }
 
 export class ScraperStack extends cdk.Stack {
@@ -144,7 +146,10 @@ export class ScraperStack extends cdk.Stack {
         DB_MAX_IN_FLIGHT: '2',
         // Start with the profile that is currently accepted; the transport still
         // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
-        DB_TLS_PROFILE: 'tls13',
+        DB_TLS_PROFILE: 'tls12',
+        // DB accepts the Navigator API from the configured proxy region but refuses
+        // the app-region and Decodo egress. See shared/db-fetch.ts.
+        ...(props?.dbProxyFunctionArn ? { DB_PROXY_FUNCTION: props.dbProxyFunctionArn, DB_PROXY_REGION } : {}),
         // One target makes two calls staggered by DB_MIN_GAP_MS; 45 s is the
         // per-request budget. The poller aborts at its threshold before the
         // Lambda timeout.
@@ -210,6 +215,15 @@ export class ScraperStack extends cdk.Stack {
     table.grantReadWriteData(hydratorFn);
     bucket.grantPut(pollerFn);
     bucket.grantReadWrite(compactorFn);
+
+    if (props?.dbProxyFunctionArn) {
+      pollerFn.addToRolePolicy(
+        new cdk.aws_iam.PolicyStatement({
+          actions: ['lambda:InvokeFunction'],
+          resources: [props.dbProxyFunctionArn],
+        })
+      );
+    }
 
     // -------------------------------------------------------------------------
     // EventBridge rules

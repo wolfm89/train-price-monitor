@@ -273,6 +273,10 @@ export const APP_NAME = 'TrainPriceMonitor';
 export const APP_DISPLAY_NAME = 'Train Price Monitor';
 export const METRIC_NAMESPACE = APP_NAME;
 
+/** DB egress proxy. Defaults to us-east-1; set CDK_DB_PROXY_REGION=eu-central-1 to switch. */
+export const DB_PROXY_REGION = process.env.CDK_DB_PROXY_REGION?.trim() || 'us-east-1';
+export const DB_PROXY_FUNCTION_NAME = `${APP_NAME}-DbProxy`;
+
 export const ALERT_TOPIC_NAME = `${APP_NAME}Alerts`;
 export const MONTHLY_BUDGET_NAME = `${APP_NAME}-Monthly`;
 export const MONTHLY_BUDGET_USD = 1;
