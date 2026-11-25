@@ -25,8 +25,8 @@ Each watchlist ticket can build a bahn.de booking link locally from the route, d
 and D-Ticket flag already shown on the ticket. Nothing is sent before the user clicks it; on click
 bahn.de receives those search details and the browser's IP address. The link opens in a new tab with
 `rel="noopener noreferrer"` (no referrer), carries no account identifier, email, name or token, and
-is not logged. When this ships, the public policy must list this click-through as a DB recipient
-(both languages and the "Stand / Last updated" date).
+is not logged. The public policy names bahn.de as the recipient of this user-initiated
+click-through in both languages, with a current "Stand / Last updated" date.
 
 ## Rules for changes
 
