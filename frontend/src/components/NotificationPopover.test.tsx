@@ -71,5 +71,24 @@ describe('NotificationPopover', () => {
     const dialog = screen.getByRole('dialog', { name: 'Notifications' });
     expect(dialog).toHaveStyle({ maxHeight: 'min(70vh, 520px)', display: 'flex' });
     expect(dialog).toHaveStyle({ overflow: 'hidden' });
+
+    const list = screen.getByTestId('notification-list');
+    expect(list).toHaveStyle({ overflowY: 'auto', overscrollBehavior: 'contain' });
+  });
+
+  it('uses calendar wording for recent and yesterday timestamps', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-24T12:00:00Z'));
+    try {
+      renderPopover([
+        { ...priceAlert, id: 'recent', timestamp: new Date('2026-11-24T09:59:30Z') },
+        { ...priceAlert, id: 'yesterday', timestamp: new Date('2026-11-23T10:00:00Z') },
+      ]);
+
+      expect(screen.getByText('2 hours ago')).toBeInTheDocument();
+      expect(screen.getByText(/^Yesterday, /)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

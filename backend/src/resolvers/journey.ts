@@ -239,6 +239,8 @@ export const monitorJourney: NonNullable<MutationResolvers['monitorJourney']> = 
       limitPrice: args.limitPrice,
       expires: args.expires,
       unavailable: true,
+      fromId: args.fromId,
+      toId: args.toId,
       journey: undefined,
     };
   }
@@ -361,6 +363,8 @@ async function refreshJourneyMonitorInner(
     limitPrice: dbJourney.Item.limitPrice,
     expires: new Date(dbJourney.Item.expires),
     unavailable: false,
+    fromId: dbJourney.Item.fromId,
+    toId: dbJourney.Item.toId,
     journey: { refreshToken: dbJourney.Item.refreshToken },
   };
 
@@ -711,6 +715,8 @@ async function deleteJourneyMonitorInner(
     limitPrice: dbJourney.Item.limitPrice,
     expires: new Date(dbJourney.Item.expires),
     unavailable: false,
+    fromId: dbJourney.Item.fromId,
+    toId: dbJourney.Item.toId,
     journey: { refreshToken: dbJourney.Item.refreshToken },
   };
 

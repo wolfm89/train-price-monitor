@@ -33,6 +33,7 @@ import {
 import { useQuery } from 'urql';
 import debounce from 'lodash/debounce';
 import { LocationSearchQuery } from '../api/location';
+import VisuallyHidden from './VisuallyHidden';
 import { berlinWallTimeToDate, berlinWallTimeToIso } from '../utils/berlinTime';
 import { formatInputDate, formatTime } from '../utils/format';
 import type { SearchQueryVars } from '../utils/searchQueryVars';
@@ -365,6 +366,10 @@ const SearchMask: React.FC<Props> = ({
             ? 'Select at least one transport mode.'
             : '';
   const isValid = validationMessage === '';
+  const dateError = showValidation && !hasDate;
+  const timeError = showValidation && (!hasTime || (hasDate && hasTime && !isFuture));
+  const timeHelper = timeError ? (!hasTime ? 'Choose a departure time.' : 'Departure must be in the future.') : '';
+  const showProductsError = showValidation && !isValid && hasFrom && hasTo && hasDate && hasTime && isFuture;
   const todayInBerlin = formatInputDate(new Date());
 
   const focusFirstInvalid = () => {
@@ -491,9 +496,12 @@ const SearchMask: React.FC<Props> = ({
                   placeholder="Station"
                   fullWidth
                   error={showValidation && !hasFrom}
+                  helperText={showValidation && !hasFrom ? 'Choose a departure station.' : '\u00A0'}
                   inputProps={{
                     ...params.inputProps,
                     'aria-label': 'From station',
+                    name: 'from',
+                    autoComplete: 'off',
                   }}
                   slotProps={{
                     input: {
@@ -546,9 +554,12 @@ const SearchMask: React.FC<Props> = ({
                   placeholder="Station"
                   fullWidth
                   error={showValidation && !hasTo}
+                  helperText={showValidation && !hasTo ? 'Choose an arrival station.' : '\u00A0'}
                   inputProps={{
                     ...params.inputProps,
                     'aria-label': 'To station',
+                    name: 'to',
+                    autoComplete: 'off',
                   }}
                   slotProps={{
                     input: {
@@ -599,9 +610,15 @@ const SearchMask: React.FC<Props> = ({
                 onChange={(e) => setDepartureDay(e.target.value)}
                 fullWidth
                 size="small"
-                error={showValidation && (!hasDate || !isFuture)}
+                error={dateError}
+                helperText={dateError ? 'Choose a departure date.' : '\u00A0'}
                 slotProps={{
-                  htmlInput: { 'aria-label': 'Departure date', min: todayInBerlin },
+                  htmlInput: {
+                    'aria-label': 'Departure date',
+                    min: todayInBerlin,
+                    name: 'departureDate',
+                    autoComplete: 'off',
+                  },
                   input: {
                     startAdornment: (
                       <InputAdornment position="start">
@@ -622,9 +639,10 @@ const SearchMask: React.FC<Props> = ({
                 value={departureTime}
                 onChange={(e) => setDepartureTime(e.target.value)}
                 fullWidth
-                error={showValidation && !hasTime}
+                error={timeError}
+                helperText={timeHelper || '\u00A0'}
                 slotProps={{
-                  htmlInput: { 'aria-label': 'Departure time' },
+                  htmlInput: { 'aria-label': 'Departure time', name: 'departureTime', autoComplete: 'off' },
                   input: {
                     startAdornment: (
                       <InputAdornment position="start">
@@ -687,14 +705,18 @@ const SearchMask: React.FC<Props> = ({
             </Button>
           </Box>
           {showValidation && !isValid && (
-            <Typography
-              id="search-validation"
-              role="status"
-              aria-live="polite"
-              sx={{ fontSize: 12, color: 'error.main', mt: 1.5 }}
-            >
-              {validationMessage}
-            </Typography>
+            <>
+              <VisuallyHidden>
+                <Typography id="search-validation" role="status" aria-live="polite">
+                  {validationMessage}
+                </Typography>
+              </VisuallyHidden>
+              {showProductsError && (
+                <Typography sx={{ fontSize: 12, color: 'error.main', mt: 1.5 }}>
+                  Select at least one transport mode.
+                </Typography>
+              )}
+            </>
           )}
         </Box>
       </Paper>

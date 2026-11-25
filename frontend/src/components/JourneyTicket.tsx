@@ -1,14 +1,16 @@
-import React from 'react';
-import { Box, Chip, CircularProgress, IconButton, Paper, Typography, Theme } from '@mui/material';
+import React, { useMemo } from 'react';
+import { Box, Button, Chip, CircularProgress, IconButton, Paper, Typography, Theme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PedalBikeIcon from '@mui/icons-material/PedalBike';
 import TrainIcon from '@mui/icons-material/Train';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
-import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
+import { buildBahnDeTicketUrl } from '../utils/bahnLink';
 import { formatCurrency, formatDate, formatDuration, formatTime } from '../utils/format';
+import { LoyaltyCardInput, AGE_GROUP_OPTIONS, cardShortLabel } from '../utils/travelPreferences';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,6 +22,8 @@ export interface Journey {
   unavailable: boolean;
   from?: string | null;
   to?: string | null;
+  fromId?: string | null;
+  toId?: string | null;
   firstClass?: boolean | null;
   bike?: boolean | null;
   deutschlandTicketDiscount?: boolean | null;
@@ -465,7 +469,8 @@ function NoTrackBanner({ unavailable }: NoTrackBannerProps) {
         display: 'flex',
         alignItems: 'flex-start',
         gap: 1,
-        borderRadius: '0 0 8px 8px',
+        borderBottomLeftRadius: 'inherit',
+        borderBottomRightRadius: 'inherit',
       })}
     >
       <WarningAmberIcon sx={{ fontSize: 16, color: 'warning.main', mt: '1px', flexShrink: 0 }} />
@@ -503,6 +508,8 @@ export default function JourneyTicket({
     limitPrice,
     from,
     to,
+    fromId,
+    toId,
     journey,
     unavailable,
     firstClass,
@@ -511,6 +518,22 @@ export default function JourneyTicket({
     ageGroup,
     loyaltyCard,
   } = monitor;
+
+  const ticketUrl = useMemo(
+    () =>
+      buildBahnDeTicketUrl({
+        from,
+        to,
+        fromId,
+        toId,
+        departure: journey?.departure,
+        firstClass,
+        deutschlandTicketDiscount,
+        ageGroup,
+        loyaltyCard,
+      }),
+    [from, to, fromId, toId, journey?.departure, firstClass, deutschlandTicketDiscount, ageGroup, loyaltyCard]
+  );
 
   return (
     <Box id={id} tabIndex={-1} sx={{ position: 'relative', scrollMarginTop: '88px' }}>
@@ -556,6 +579,39 @@ export default function JourneyTicket({
           />
         ) : (
           <NoTrackBanner unavailable={unavailable} />
+        )}
+
+        {ticketUrl && (
+          <Button
+            component="a"
+            href={ticketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            fullWidth
+            endIcon={<OpenInNewIcon sx={{ fontSize: 16 }} />}
+            aria-label={`Buy ticket on bahn.de for ${from ?? 'unknown'} to ${to ?? 'unknown'} (opens in new tab)`}
+            sx={(theme) => ({
+              justifyContent: 'flex-start',
+              gap: 0.75,
+              px: { xs: 1.5, sm: 2.5 },
+              py: { xs: 1.5, sm: 1.25 },
+              borderTop: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 0,
+              borderBottomLeftRadius: 'inherit',
+              borderBottomRightRadius: 'inherit',
+              color: 'primary.main',
+              fontSize: 13,
+              fontWeight: 600,
+              textTransform: 'none',
+              transition: 'background-color 0.15s',
+              '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.08) },
+              '&:active': { backgroundColor: alpha(theme.palette.primary.main, 0.14) },
+              '&.Mui-focusVisible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: '-2px' },
+            })}
+          >
+            Buy ticket on bahn.de
+          </Button>
         )}
       </Paper>
     </Box>

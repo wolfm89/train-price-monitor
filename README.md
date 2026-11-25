@@ -37,6 +37,7 @@ report.
 - Watch a journey with an individual price limit and travel preferences.
 - Hourly fare checks with in-app notifications and email alerts (on by default).
 - Current price, limit and journey status on the watchlist; expired journeys are cleaned up.
+- One click from a watched journey to a prefilled bahn.de booking search for that route and departure.
 - Download your stored data or delete your account from the profile page.
 - Historical Parquet collection, silver analytics builds and a weekly quality report.
 - Automatic cleanup of expired journeys and price-alert notifications.
