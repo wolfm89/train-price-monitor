@@ -34,6 +34,7 @@ const navBtnSx = {
   minWidth: { xs: 44, sm: 0 },
   minHeight: { xs: 44, sm: 40 },
   textTransform: 'none' as const,
+  whiteSpace: 'nowrap' as const,
   '& .MuiButton-startIcon': {
     marginRight: { xs: 0, sm: '8px' }, // collapse icon trailing margin when no text follows on mobile
     marginLeft: { xs: 0, sm: '-4px' }, // reset MUI's default -4px left margin on mobile so icon stays centered
@@ -47,12 +48,11 @@ const navBtnSx = {
 
 const navBtnActiveSx = {
   ...navBtnSx,
-  backgroundColor: 'rgba(255,255,255,0.24)',
+  backgroundColor: 'rgba(0,0,0,0.18)',
   borderColor: 'rgba(255,255,255,0.7)',
   color: '#fff',
-  fontWeight: 600,
   '&:hover': {
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.26)',
     borderColor: 'rgba(255,255,255,0.85)',
     color: '#fff',
   },
@@ -137,13 +137,12 @@ const Header = () => {
   const initials = user ? `${user.given_name?.[0] ?? ''}${user.family_name?.[0] ?? ''}`.toUpperCase() : '';
 
   return (
-    <AppBar position="static" elevation={0} sx={{ height: NAV_HEIGHT }}>
+    <AppBar position="static" elevation={0} sx={{ minHeight: NAV_HEIGHT }}>
       <Toolbar
         disableGutters
         sx={{
-          height: NAV_HEIGHT,
           minHeight: `${NAV_HEIGHT}px !important`,
-          px: 3,
+          px: { xs: 2, sm: 3 },
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -155,15 +154,19 @@ const Header = () => {
         <Box
           component={Link}
           to="/"
+          aria-label="Train Price Monitor"
           sx={{
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: 1.125,
             color: 'inherit',
-            borderRadius: 1,
+            borderRadius: '8px',
+            minWidth: { xs: 44, sm: 'auto' },
             minHeight: { xs: 44, sm: 40 },
             flexShrink: 0,
+            '&:focus-visible': { outline: '2px solid rgba(255,255,255,0.85)', outlineOffset: 2 },
           }}
         >
           <Box
@@ -172,6 +175,7 @@ const Header = () => {
               height: 40,
               bgcolor: 'background.paper',
               borderRadius: '8px',
+              p: '3px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -180,10 +184,10 @@ const Header = () => {
           >
             <img
               src={process.env.PUBLIC_URL + '/logo-header.webp'}
-              alt="Train Price Monitor Logo"
-              width={40}
-              height={40}
-              style={{ display: 'block', borderRadius: '6px' }}
+              alt=""
+              width={34}
+              height={34}
+              style={{ display: 'block', borderRadius: '5px' }}
             />
           </Box>
           {!isScreenSmall && (
@@ -201,7 +205,7 @@ const Header = () => {
           </Button>
         )}
         {isInitialCheckDone && user && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 } }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Box component="nav" aria-label="Main" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Button
                 component={Link}
@@ -224,9 +228,8 @@ const Header = () => {
                 {!isScreenSmall && 'My Journeys'}
               </Button>
             </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5 } }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.5 } }}>
               <IconButton
-                size="small"
                 aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
                 aria-haspopup="dialog"
                 aria-expanded={open}
@@ -250,7 +253,7 @@ const Header = () => {
                   badgeContent={unreadCount}
                   color="error"
                   aria-hidden="true"
-                  sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16 } }}
+                  sx={{ '& .MuiBadge-badge': { fontSize: 10, minWidth: 16, height: 16, boxShadow: '0 0 0 2px #fff' } }}
                 >
                   <NotificationsIcon sx={{ fontSize: 20 }} />
                 </Badge>
@@ -265,14 +268,19 @@ const Header = () => {
                   p: 0,
                   width: { xs: 44, sm: 40 },
                   height: { xs: 44, sm: 40 },
+                  borderRadius: '50%',
                   color: 'rgba(255,255,255,0.85)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.13)' },
+                  '&:hover .MuiAvatar-root': { boxShadow: '0 0 0 2px rgba(255,255,255,0.65)' },
+                  '&.Mui-focusVisible': { outline: '2px solid #fff', outlineOffset: 2 },
+                  '&.Mui-focusVisible .MuiAvatar-root': { boxShadow: '0 0 0 2px #fff' },
                 }}
               >
                 <Avatar
-                  alt="Profile Picture"
+                  alt=""
                   src={userProfilePictureUrl || undefined}
                   sx={{
                     width: 40,
@@ -281,7 +289,7 @@ const Header = () => {
                     fontWeight: 700,
                     bgcolor: 'secondary.light',
                     color: 'secondary.dark',
-                    border: '2px solid rgba(255,255,255,0.25)',
+                    border: '2px solid rgba(255,255,255,0.65)',
                   }}
                   slotProps={{ img: { crossOrigin: 'anonymous' } }}
                 >
