@@ -149,8 +149,8 @@ v2-only and mixed-schema input.
   for 1-7 days and fills the 7-30 day bands from the coverage profile; the profile itself is an
   observation-weighted v1+v2 grid upper bound, not the snapshot population. The decision also
   requires the point estimate not to be positive. `candidate_feature` marks study-only columns in
-  `column_roles.json`. The switch builds the columns; only the study harness consumes the analog
-  family in its arms. The analog source is v1-only, so the revisit trigger must be measured on
+  `column_roles.json`. The switch builds the columns and, in a normal run, adds them to the model
+  spec; the study harness selects the arms explicitly. The analog source is v1-only, so the revisit trigger must be measured on
   v1 actual availability, not the v1+v2 grid, and the v2 port is a prerequisite for paired
   next-day scrapes.
 - **Calibration.** Four methods: sigmoid, temperature, isotonic and covariate (logistic on

@@ -121,6 +121,7 @@ from tpm_analytics.training.study import (
     coverage_profile,
     forward_analog_availability,
     mask_family,
+    run_feature_study,
     study_arms,
 )
 
@@ -638,6 +639,71 @@ def test_analog_lead_window_boundary(tmp_path: Path) -> None:
     assert outside[0] is None
 
 
+def test_analog_tie_break_prefers_the_closer_departure_time(tmp_path: Path) -> None:
+    rows = _analog_rows()
+    rows = [
+        item
+        for item in rows
+        if not (item["route_id"] == "analog" and item["departure_planned"] == datetime(2026, 7, 9, 10, 0))
+    ]
+    for observed, departure, fare in (
+        (datetime(2026, 7, 7, 10, 5), datetime(2026, 7, 9, 10, 5), 80.0),
+        (datetime(2026, 7, 7, 10, 10), datetime(2026, 7, 9, 10, 10), 70.0),
+    ):
+        rows.append(
+            _row(
+                observed_at=observed,
+                departure=departure,
+                route="analog",
+                train="ICE1",
+                fare=fare,
+            )
+        )
+    source = tmp_path / "dep-gap.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    values = _analog_snapshot_values(source, config_path, tmp_path / "dep-gap")
+    assert values[0] == pytest.approx(100.0 / 80.0)
+
+
+def test_analog_next_day_window_rejects_19_and_29_hours(tmp_path: Path) -> None:
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    for label, next_observed in (
+        ("nineteen", datetime(2026, 7, 8, 5, 0)),
+        ("twenty-nine", datetime(2026, 7, 8, 15, 0)),
+    ):
+        rows = [
+            item
+            for item in _analog_rows()
+            if not (
+                item["route_id"] == "analog"
+                and item["observed_at"] in (datetime(2026, 7, 8, 8, 0), datetime(2026, 7, 8, 12, 0))
+            )
+        ]
+        rows.append(
+            _row(
+                observed_at=next_observed,
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=120.0,
+            )
+        )
+        source = tmp_path / f"{label}.parquet"
+        _write_silver(source, rows)
+        values = _analog_snapshot_values(source, config_path, tmp_path / label)
+        assert values[0] == pytest.approx(100.0 / 80.0)
+        assert values[2] is None
+
+
 def test_analog_tie_break_prefers_later_lead(tmp_path: Path) -> None:
     rows = _analog_rows()
     # Replace the exact-lead analog with two observations one hour either side. The larger lead
@@ -683,29 +749,29 @@ def test_analog_tie_break_prefers_later_lead(tmp_path: Path) -> None:
 def test_analog_midnight_wrap_and_second_precision(tmp_path: Path) -> None:
     rows = [
         _row(
-            observed_at=datetime(2026, 7, 8, 0, 5),
-            departure=datetime(2026, 7, 10, 0, 5),
+            observed_at=datetime(2026, 7, 7, 22, 5),
+            departure=datetime(2026, 7, 9, 22, 5),
             route="midnight",
             train="ICE1",
             fare=100.0,
         ),
         _row(
-            observed_at=datetime(2026, 7, 9, 0, 5),
-            departure=datetime(2026, 7, 10, 0, 5),
+            observed_at=datetime(2026, 7, 8, 22, 5),
+            departure=datetime(2026, 7, 9, 22, 5),
             route="midnight",
             train="ICE1",
             fare=110.0,
         ),
         _row(
-            observed_at=datetime(2026, 7, 7, 23, 50),
-            departure=datetime(2026, 7, 9, 23, 50),
+            observed_at=datetime(2026, 7, 6, 21, 50),
+            departure=datetime(2026, 7, 8, 21, 50),
             route="midnight",
             train="ICE1",
             fare=80.0,
         ),
         _row(
-            observed_at=datetime(2026, 7, 8, 0, 5),
-            departure=datetime(2026, 7, 9, 23, 50),
+            observed_at=datetime(2026, 7, 7, 22, 5),
+            departure=datetime(2026, 7, 8, 21, 50),
             route="midnight",
             train="ICE1",
             fare=90.0,
@@ -734,7 +800,7 @@ def test_analog_midnight_wrap_and_second_precision(tmp_path: Path) -> None:
             """
             SELECT analog_d1_price_ratio, analog_d1_lead_gap_h
             FROM read_parquet(?)
-            WHERE route_id = 'midnight' AND snapshot_at = TIMESTAMP '2026-07-08 00:05:00'
+            WHERE route_id = 'midnight' AND snapshot_at = TIMESTAMP '2026-07-07 22:05:00'
             """,
             [str(tmp_path / "midnight-run" / "dataset" / "train.parquet")],
         ).fetchone()
@@ -800,6 +866,101 @@ def _filler_rows(departure: datetime) -> list[dict[str, object]]:
             fare=85.0,
         ),
     ]
+
+
+def test_analog_source_uses_the_panel_dedup_rule(tmp_path: Path) -> None:
+    rows = _analog_rows()
+    rows.append(
+        _row(
+            observed_at=datetime(2026, 7, 7, 10, 0),
+            departure=datetime(2026, 7, 9, 10, 0),
+            route="analog",
+            train="ICE1",
+            fare=70.0,
+        )
+    )
+    source = tmp_path / "dedup.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    values = _analog_snapshot_values(source, config_path, tmp_path / "dedup")
+    # The panel's same-scrape rule keeps the highest fare, not the lowest.
+    assert values[0] == pytest.approx(100.0 / 80.0)
+
+
+def test_analog_departure_match_uses_berlin_local_time_across_dst(tmp_path: Path) -> None:
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["splits"]["test_end"] = "2026-10-31"
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    def build(label: str, analog_utc: datetime, analog_fare: float) -> tuple[Any, ...]:
+        rows = [
+            _row(
+                observed_at=datetime(2026, 10, 23, 9, 0),
+                departure=datetime(2026, 10, 25, 9, 0),
+                route="dst",
+                train="ICE1",
+                fare=100.0,
+            ),
+            _row(
+                observed_at=datetime(2026, 10, 24, 9, 0),
+                departure=datetime(2026, 10, 25, 9, 0),
+                route="dst",
+                train="ICE1",
+                fare=110.0,
+            ),
+            _row(
+                observed_at=analog_utc - timedelta(days=2),
+                departure=analog_utc,
+                route="dst",
+                train="ICE1",
+                fare=analog_fare,
+            ),
+            _row(
+                observed_at=analog_utc - timedelta(days=1),
+                departure=analog_utc,
+                route="dst",
+                train="ICE1",
+                fare=analog_fare + 20.0,
+            ),
+        ]
+        for departure in (datetime(2026, 7, 10, 10, 0), datetime(2026, 7, 15, 10, 0), datetime(2026, 7, 22, 10, 0)):
+            rows.extend(_filler_rows(departure))
+        source = tmp_path / f"dst-{label}.parquet"
+        _write_silver(source, rows)
+        config = load_config(config_path)
+        out = tmp_path / f"dst-{label}"
+        connection = duckdb.connect()
+        try:
+            build_dataset(
+                connection,
+                SourceSpec(glob=str(source), label=f"dst-{label}", build_id=None, manifest_sha256=None),
+                config,
+                out,
+                run_id=f"dst-{label}",
+            )
+            row = connection.execute(
+                "SELECT analog_d1_price_ratio FROM read_parquet(?) "
+                "WHERE route_id = 'dst' AND snapshot_at = TIMESTAMP '2026-10-23 09:00:00'",
+                [str(out / "dataset" / "test.parquet")],
+            ).fetchone()
+        finally:
+            connection.close()
+        assert row is not None
+        return tuple(row)
+
+    # 2026-10-24 10:00 Berlin is CEST (UTC 08:00); the snapshot departs 2026-10-25 10:00 Berlin
+    # after the switch, CET (UTC 09:00). Local gap 0, UTC gap 60 min.
+    assert build("match", datetime(2026, 10, 24, 8, 0), 80.0)[0] == pytest.approx(100.0 / 80.0)
+    # The only analog departs 11:00 Berlin: one local hour away, so it is not an analog even
+    # though its UTC time-of-day equals the snapshot's.
+    assert build("mismatch", datetime(2026, 10, 24, 9, 0), 70.0)[0] is None
 
 
 def test_analog_d7_uses_the_week_earlier_departure(tmp_path: Path) -> None:
@@ -891,6 +1052,61 @@ def test_analog_next_day_point_uses_the_analog_journey(tmp_path: Path) -> None:
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     values = _analog_snapshot_values(source, config_path, tmp_path / "decoy")
     assert values[2] == pytest.approx(120.0 / 80.0)
+
+
+def test_analog_next_day_partition_keeps_distinct_series(tmp_path: Path) -> None:
+    rows = [
+        _row(
+            observed_at=datetime(2026, 7, 8, 10, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route="analog",
+            train="ICE1",
+            fare=100.0,
+        ),
+        _row(
+            observed_at=datetime(2026, 7, 9, 8, 0),
+            departure=datetime(2026, 7, 10, 10, 0),
+            route="analog",
+            train="ICE1",
+            fare=110.0,
+        ),
+    ]
+    for observed, fare, arrival, next_observed, next_fare in (
+        (datetime(2026, 7, 7, 10, 0), 90.0, datetime(2026, 7, 9, 14, 0), datetime(2026, 7, 8, 8, 0), 120.0),
+        (datetime(2026, 7, 7, 10, 0), 80.0, datetime(2026, 7, 9, 15, 0), datetime(2026, 7, 8, 8, 0), 200.0),
+    ):
+        rows.append(
+            _row(
+                observed_at=observed,
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=fare,
+                arrival_planned=arrival,
+            )
+        )
+        rows.append(
+            _row(
+                observed_at=next_observed,
+                departure=datetime(2026, 7, 9, 10, 0),
+                route="analog",
+                train="ICE1",
+                fare=next_fare,
+                arrival_planned=arrival,
+            )
+        )
+    for departure in (datetime(2026, 7, 15, 10, 0), datetime(2026, 7, 22, 10, 0), datetime(2026, 7, 29, 10, 0)):
+        rows.extend(_filler_rows(departure))
+    source = tmp_path / "series.parquet"
+    _write_silver(source, rows)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    raw["calendar"]["feature_set"] = "none"
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [1]}}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    values = _analog_snapshot_values(source, config_path, tmp_path / "series")
+    assert values[0] == pytest.approx(100.0 / 80.0)
+    assert values[2] == pytest.approx(200.0 / 80.0)
 
 
 def test_present_handles_compact_bytes_sentinels() -> None:
@@ -1191,6 +1407,109 @@ def test_study_arms_are_fixed_and_stress_prefers_the_forward_set() -> None:
         study_arms((1, 3))
 
 
+def test_run_feature_study_decisions_and_masked_incumbent(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = load_config(DEFAULT_CONFIG_PATH)
+    count = 20
+    labels = np.zeros(count, dtype=np.int8)
+    clusters = np.array(["2026-06-30", "2026-07-01"] * (count // 2), dtype=str)
+    bands = np.array(["1-3d"] * count, dtype=object)
+    test_panel = TabularData(
+        features={
+            "origin_public_holiday": np.zeros(count),
+            "dest_public_holiday": np.zeros(count),
+        },
+        y=labels,
+        series=np.array(["s"] * count, dtype=str),
+        route_day=np.array(["r"] * count, dtype=str),
+        price=np.full(count, 100.0),
+        check_price=np.full(count, 110.0),
+        future_max=np.full(count, 120.0),
+        future_observations=np.ones(count, dtype=np.int16),
+        headroom=np.ones(count, dtype=np.int16),
+        departure_date=np.array(["2026-07-01"] * count, dtype=str),
+        snapshot_at=np.array(["2026-06-30 10:00:00"] * count, dtype=str),
+        observation_era=np.array(["dense"] * count, dtype=str),
+        observation_week=np.array(["2026-W27"] * count, dtype=str),
+    )
+    monkeypatch.setattr(
+        "tpm_analytics.training.study._pooled_test", lambda panel, config: (labels, clusters, bands, test_panel)
+    )
+    monkeypatch.setattr("tpm_analytics.training.study._availability_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr("tpm_analytics.training.study._band_intervals", lambda *args, **kwargs: [])
+
+    def fake_scores(
+        panel: TabularData, config: Any, spec: Any, arms: Any
+    ) -> tuple[dict[str, list[Any]], dict[str, Any]]:
+        value = {
+            "base": 0.50,
+            "analog_d1": 0.40,
+            "analog_d1_d7": 0.30,
+            "calendar_public": 0.49,
+            "calendar_public_school": 0.50,
+            "calendar_full": 0.50,
+        }
+        scores = {arm.name: [np.full(count, value[arm.name])] for arm in arms}
+        return scores, {arm.name: [] for arm in arms}
+
+    def fake_masked(fitted: Any, arm: Any, targets: Any, config: Any) -> Any:
+        return np.full(count, 0.60 if arm.name == "analog_d1" else 0.70)
+
+    def fake_interval(
+        labels: Any, challenger: Any, incumbent: Any, clusters: Any, *, replicates: int, seed: int
+    ) -> dict[str, Any]:
+        diff = float(np.mean(challenger) - np.mean(incumbent))
+        return {
+            "log_loss": [diff, diff + 0.001],
+            "brier": [diff, diff + 0.001],
+            "mean_log_loss": diff,
+            "mean_brier": diff,
+            "clusters": 2,
+            "replicates": replicates,
+        }
+
+    monkeypatch.setattr("tpm_analytics.training.study._pooled_scores", fake_scores)
+    monkeypatch.setattr("tpm_analytics.training.study._masked_scores", fake_masked)
+    monkeypatch.setattr("tpm_analytics.training.study._interval", fake_interval)
+    result = run_feature_study(
+        test_panel,
+        config,
+        coverage={
+            "bands": [{"band": "1-3d", "share": 0.6, "share_v1": 0.6, "rows": 10}],
+            "window_start": "a",
+            "window_end": "b",
+            "days": 28,
+            "rows": 10,
+        },
+        forward={
+            "bands": [
+                {
+                    "band": "1-3d",
+                    "price": 0.6,
+                    "rise": 0.3,
+                    "d1_price": 0.6,
+                    "d1_rise": 0.3,
+                    "d1d7_price": 0.25,
+                    "d1d7_rise": 0.1,
+                }
+            ]
+        },
+    )
+    decisions = result["decisions"]
+    assert decisions["analog_d1"] == "drop"
+    assert decisions["analog_d1_d7"] == "drop"
+    assert decisions["calendar_public"] == "drop"
+    assert decisions["calendar_public_school"] == "drop"
+    assert result["no_family_added"] is True
+    combined = next(item for item in result["families"] if item["name"] == "analog_d1_d7")
+    assert combined["stress"]["reference"] == "analog_d1_masked"
+    assert combined["rule_passed"] is True
+    assert combined["stress_status"] == "fail"
+    null_calendar = next(item for item in result["families"] if item["name"] == "calendar_public")
+    assert null_calendar["rule_passed"] is True
+    assert null_calendar["informative"] is False
+    assert "null test" in null_calendar["reason"]
+
+
 def test_feature_study_report_verdict_covers_every_family() -> None:
     result = {
         "run_id": "synthetic",
@@ -1223,13 +1542,42 @@ def test_feature_study_report_verdict_covers_every_family() -> None:
             },
         ],
         "availability": {"panel": [], "coverage": []},
-        "calendar_coverage": {"public_holiday_rows": 0},
+        "calendar_coverage": {"public_holiday_rows": 10},
         "no_family_added": False,
     }
     text = _study_report(result)
     assert "Families to add: calendar_public" in text
     assert "No family was added" not in text
+    assert "null test" not in text
+
+
+def test_feature_study_report_marks_a_null_calendar_test() -> None:
+    result = {
+        "run_id": "synthetic",
+        "folds": ["dev"],
+        "settings": {"replicates": 10, "seed": 1, "cluster": "departure_date"},
+        "coverage": {"window_start": "a", "window_end": "b", "days": 28, "rows": 0},
+        "stress": {"target_source": "forward_set"},
+        "families": [
+            {
+                "name": "calendar_public",
+                "reference": "base",
+                "comparison": {"log_loss": [-0.1, -0.0], "mean_log_loss": -0.05},
+                "bands": [],
+                "rule_passed": True,
+                "stress_status": "not_applicable",
+                "decision": "drop",
+                "reason": "no public holiday",
+                "informative": False,
+            }
+        ],
+        "availability": {"panel": [], "coverage": []},
+        "calendar_coverage": {"public_holiday_rows": 0},
+        "no_family_added": True,
+    }
+    text = _study_report(result)
     assert "null test" in text
+    assert "No family was added" in text
 
 
 def test_feature_study_report_no_family_added() -> None:
@@ -4395,6 +4743,9 @@ def test_dataset_cache_key_covers_build_inputs(tmp_path: Path) -> None:
     source = SourceSpec(glob="x", label="x", build_id="a", manifest_sha256="m")
     base = _dataset_cache_key(config, "x", "sha", False, source)
     assert base != _dataset_cache_key(config, "x", "sha", True, source)
+    assert base != _dataset_cache_key(config, "x", "sha", False, source, study=True)
+    changed_features = replace(config, features=replace(config.features, analog_departures_enabled=True))
+    assert base != _dataset_cache_key(changed_features, "x", "sha", False, source)
     assert base != _dataset_cache_key(config, "x", "other", False, source)
     changed = replace(config, model=replace(config.model, max_iter=config.model.max_iter + 1))
     assert base == _dataset_cache_key(changed, "x", "sha", False, source)
@@ -5732,6 +6083,10 @@ def test_config_rejects_invalid_analog_offsets(tmp_path: Path) -> None:
     path = tmp_path / "analog-order.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ConfigError, match="strictly increasing"):
+        load_config(path)
+    raw["features"] = {"analog_departures": {"enabled": True, "offsets_days": [3]}}
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ConfigError, match="only 1 and 7"):
         load_config(path)
     raw["features"] = {"analog_departures": {"enabled": "yes"}}
     path.write_text(json.dumps(raw), encoding="utf-8")

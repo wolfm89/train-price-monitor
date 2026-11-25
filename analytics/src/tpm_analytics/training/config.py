@@ -157,8 +157,8 @@ class FeaturesConfig:
         offsets = self.analog_departure_offsets_days
         if not offsets:
             raise ConfigError("features.analog_departures.offsets_days must not be empty")
-        if any(offset < 1 or offset > 30 for offset in offsets):
-            raise ConfigError("features.analog_departures.offsets_days must be between 1 and 30")
+        if any(offset not in {1, 7} for offset in offsets):
+            raise ConfigError("features.analog_departures.offsets_days supports only 1 and 7 days")
         if tuple(sorted(set(offsets))) != offsets:
             raise ConfigError("features.analog_departures.offsets_days must be strictly increasing and unique")
 

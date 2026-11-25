@@ -523,6 +523,15 @@ def forward_analog_availability(
           ON t.series_key = f.series_key AND t.observed_at = f.snapshot_at
         """
     )
+    match = connection.execute(
+        "SELECT avg(CASE WHEN train_number IS NOT NULL THEN 1.0 ELSE 0.0 END) FROM study_forward_full"
+    ).fetchone()
+    match_share = float(match[0]) if match is not None and match[0] is not None else 0.0
+    if match_share == 0.0:
+        raise ModelError(
+            "no forward series_key matched a v1 silver row; the forward set is probably v2 or "
+            "comes from a different build"
+        )
     create_analog_features(connection, source_sql, "study_forward_full", offsets)
     price = " AND ".join(f"a.analog_d{offset}_price_ratio IS NOT NULL" for offset in offsets)
     rise = " AND ".join(f"a.analog_d{offset}_next_ratio IS NOT NULL" for offset in offsets)
@@ -572,6 +581,7 @@ def forward_analog_availability(
     return {
         "forward_path": str(forward_path),
         "forward_sha256": hashlib.sha256(forward_path.read_bytes()).hexdigest(),
+        "train_number_match_share": match_share,
         "rows": sum(int(row[1]) for row in rows),
         "departure_start": None if bounds is None else str(bounds[0]),
         "departure_end": None if bounds is None else str(bounds[1]),
@@ -656,6 +666,9 @@ def _study_report(result: dict[str, Any]) -> str:
         "- The stress scores the dense-era-trained model without retraining; masking is random within",
         "  a band, while real missingness clusters by route and time. Future sparse-era folds are",
         "  the real check.",
+        "- The combined D-1 + D-7 arm is stressed against D-1 at the same masked coverage, so the",
+        "  interval measures the incremental D-7 effect. For the 7-30 d fill the joint target equals",
+        "  the v1 share (D-7 is treated as present wherever D-1 is), which is optimistic.",
         "",
         "## Families",
         "",
@@ -702,8 +715,20 @@ def _study_report(result: dict[str, Any]) -> str:
             f"| panel | {row['arm']} | {row['band']} | {row['era']} | {row['rows']} | "
             f"{_pct(row.get('present'))} | {_pct(row.get('price'))} | {_pct(row.get('rise'))} |"
         )
-    for row in result["availability"]["coverage"]:
-        lines.append(f"| coverage | — | {row['band']} | — | {row['rows']} | {_pct(row['share'])} | — | — |")
+    coverage = result["availability"].get("coverage") or []
+    if coverage:
+        lines.extend(
+            [
+                "",
+                "Coverage profile (D-1 route-day scrape 12-36 h before the snapshot). The stress",
+                "target uses the v1 share for the 7-30 d bands.",
+                "",
+                "| TTD band | Rows | v1+v2 | v1 |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for row in coverage:
+            lines.append(f"| {row['band']} | {row['rows']} | {_pct(row['share'])} | {_pct(row.get('share_v1'))} |")
     forward = result["availability"].get("forward")
     if forward:
         lines.extend(
@@ -764,8 +789,9 @@ def _study_report(result: dict[str, Any]) -> str:
                 f"- Git: {provenance.get('git_sha') or '—'} (dirty: {provenance.get('git_dirty')})",
                 f"- Silver: {provenance.get('silver_build_id') or '—'} "
                 f"(manifest {str(provenance.get('silver_manifest_sha256') or '—')[:12]})",
-                f"- Config: {str(provenance.get('config_sha256') or '—')[:12]}",
-                f"- Dataset: {str(provenance.get('dataset_manifest_sha256') or '—')[:12]} "
+                f"- Build config: {str(provenance.get('build_config_sha256') or '—')[:12]}; "
+                f"study config: {str(provenance.get('study_config_sha256') or '—')[:12]}",
+                f"- Dataset files: {str(provenance.get('dataset_files_sha256') or '—')[:12]} "
                 f"(reused: {provenance.get('dataset_reused')})",
                 f"- Sample rate: {provenance.get('sample_rate')}; strict chains: {provenance.get('strict_chains')}",
                 f"- Forward input: {provenance.get('forward_path') or '—'} "
@@ -829,6 +855,7 @@ def run_feature_study(
     }
     families: list[dict[str, Any]] = []
     decisions: dict[str, str] = {}
+    stressed_scores: dict[str, Array] = {}
     for index, arm in enumerate(arms):
         if arm.reference is None:
             continue
@@ -869,10 +896,21 @@ def run_feature_study(
             targets, target_source, target_sources = _stress_targets(forward, coverage, arm.name)
             forward_near = any(target_sources.get(band) == "forward_set" for band in ("1-3d", "3-5d", "5-7d"))
             stressed = _masked_scores(fitted[arm.name], arm, targets, config)
+            # The combined arm must be compared with the D-1 arm at the same coverage, not with
+            # its full-availability scores: the D-1 keep set is identical in both masks.
+            if arm.name == "analog_d1_d7":
+                incumbent = stressed_scores.get("analog_d1")
+                if incumbent is None:
+                    raise ModelError("the D-1 stress scores must be computed before the combined arm")
+                stress_reference = "analog_d1_masked"
+            else:
+                incumbent = scores[arm.reference]
+                stress_reference = arm.reference
+                stressed_scores["analog_d1"] = stressed
             overall = _interval(
                 labels,
                 stressed,
-                scores[arm.reference],
+                incumbent,
                 clusters,
                 replicates=replicates,
                 seed=seed + 300 + index,
@@ -881,7 +919,7 @@ def run_feature_study(
             near_interval = _interval(
                 labels[near],
                 stressed[near],
-                scores[arm.reference][near],
+                incumbent[near],
                 clusters[near],
                 replicates=replicates,
                 seed=seed + 400 + index,
@@ -899,6 +937,7 @@ def run_feature_study(
                 "target_source": target_source,
                 "target_sources": target_sources,
                 "targets": targets,
+                "reference": stress_reference,
                 "forward_near": forward_near,
                 "overall": overall,
                 "near_1_7d": near_interval,
@@ -906,16 +945,18 @@ def run_feature_study(
             }
             item["stress_status"] = "pass" if ok else "fail"
         stress_ok = item["stress_status"] in {"pass", "not_applicable", "not_run"}
-        keep = bool(item["rule_passed"] and stress_ok and item["stress_status"] != "not_run")
+        keep = bool(item["rule_passed"] and stress_ok and item["stress_status"] != "not_run" and item["informative"])
         item["decision"] = "keep" if keep else "drop"
-        if keep and arm.kind == "calendar":
+        if not item["informative"]:
+            item["reason"] = "no public holiday in the development test window; this is a null test"
+        elif keep and arm.kind == "calendar":
             item["reason"] = "passes the recipe replacement rule; calendar features have no coverage skew"
         elif keep:
             item["reason"] = "passes the recipe replacement rule and the coverage stress test"
-        elif not item["informative"]:
-            item["reason"] = "no public holiday in the development test window; this is a null test"
         elif not item["rule_passed"]:
             item["reason"] = f"recipe rule failed: {rule_reason}"
+        elif item["stress"] is not None and not item["stress"].get("forward_near", False):
+            item["reason"] = "no forward-set 1-7 d availability target; the stress is not evaluable"
         elif item["stress_status"] == "fail":
             item["reason"] = "the coverage stress test is significantly worse at 1-7 d or overall"
         else:

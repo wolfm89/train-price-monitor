@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import duckdb
 
-from tpm_analytics.training.identity import berlin_local_sql, series_key_sql
+from tpm_analytics.training.identity import SAME_SCRAPE_ORDER, berlin_local_sql, series_key_sql
 
 ANALOG_LEAD_WINDOW_HOURS = 12
 ANALOG_DEPARTURE_TOLERANCE_MINUTES = 15
@@ -51,22 +51,30 @@ def _create_analog_source(
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE analog_source AS
-        SELECT
-            observed_at,
-            route_id,
-            service_class,
-            train_number,
-            departure_planned,
-            departure_date,
-            fare_lowest_eur AS price_eur,
-            date_diff('second', observed_at, departure_planned) / 3600.0 AS hours_to_departure,
-            CAST(epoch({berlin_local_sql("departure_planned")}) AS BIGINT) % 86400 AS dep_second,
-            {series_key_sql()} AS series_key
-        FROM {source_sql}
-        WHERE schema_version = 1
-          AND fare_lowest_eur IS NOT NULL
-          AND observed_at < departure_planned
-          AND (route_id, departure_date) IN ({route_days})
+        SELECT * FROM (
+            SELECT
+                observed_at,
+                route_id,
+                service_class,
+                train_number,
+                departure_planned,
+                arrival_planned,
+                transfers_actual,
+                load_factor_ordinal,
+                departure_date,
+                fare_lowest_eur AS price_eur,
+                date_diff('second', observed_at, departure_planned) / 3600.0 AS hours_to_departure,
+                CAST(epoch({berlin_local_sql("departure_planned")}) AS BIGINT) % 86400 AS dep_second,
+                {series_key_sql()} AS series_key
+            FROM {source_sql}
+            WHERE schema_version = 1
+              AND fare_lowest_eur IS NOT NULL
+              AND observed_at < departure_planned
+              AND (route_id, departure_date) IN ({route_days})
+        )
+        QUALIFY row_number() OVER (
+            PARTITION BY series_key, observed_at ORDER BY {SAME_SCRAPE_ORDER}
+        ) = 1
         """
     )
 
@@ -129,7 +137,8 @@ def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: 
         """
     )
     # The analog's own next-day point: 20-28 h after its observation, closest to +24 h, at or
-    # before the snapshot time. It must come from the analog journey, not another train.
+    # before the snapshot time. It must come from the analog journey, not another train. Two
+    # equidistant scrapes keep the higher fare, matching the panel's same-scrape canonical row.
     connection.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE analog_d{offset}_next AS
@@ -140,7 +149,7 @@ def _create_offset_views(connection: duckdb.DuckDBPyConnection, snapshot_table: 
                 n.price_eur AS next_price,
                 row_number() OVER (
                     PARTITION BY c.series_key, c.snapshot_at, c.bin_regime, c.bin_index,
-                                 c.analog_at, c.analog_departure
+                                 c.analog_at, c.analog_departure, c.analog_series_key
                     ORDER BY
                         abs(date_diff('second', c.analog_at + INTERVAL 24 HOUR, n.observed_at)),
                         n.observed_at,
