@@ -53,6 +53,25 @@ describe('ScraperStack', () => {
     expect(variables.some((name) => name.startsWith('DECODO') || name.startsWith('BROWSER'))).toBe(false);
   });
 
+  test('Poller invokes the us-east-1 DB proxy when configured', () => {
+    const proxyArn = 'arn:aws:lambda:us-east-1:111111111111:function:TrainPriceMonitor-DbProxy';
+    const stack = new ScraperStack(new cdk.App(), 'ProxyScraperStack', {
+      env: { account: '111111111111', region: 'eu-central-1' },
+      dbProxyFunctionArn: proxyArn,
+    });
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      PackageType: 'Image',
+      Environment: {
+        Variables: Match.objectLike({
+          DB_PROXY_FUNCTION: proxyArn,
+          DB_PROXY_REGION: 'us-east-1',
+          DB_TLS_PROFILE: 'tls12',
+        }),
+      },
+    });
+  });
+
   test('Schedule table exposes the ByDue priority index', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {

@@ -5,6 +5,8 @@ import { AlertingStack } from '../lib/alerting';
 import { AnalyticsStack } from '../lib/analytics-stack';
 import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { CertificateStack } from '../lib/certificate-stack';
+import { DbProxyStack } from '../lib/db-proxy-stack';
+import { DB_PROXY_FUNCTION_NAME, DB_PROXY_REGION } from '../lib/config';
 import { ScraperStack } from '../lib/scraper-stack';
 
 const app = new cdk.App();
@@ -41,7 +43,15 @@ const alertingStack = new AlertingStack(app, 'AlertingStack', {
   },
 });
 
-new InfrastructureStack(
+const dbProxyStack = new DbProxyStack(app, 'DbProxyStack', {
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: DB_PROXY_REGION,
+  },
+});
+const dbProxyFunctionArn = `arn:aws:lambda:${DB_PROXY_REGION}:${process.env.CDK_DEFAULT_ACCOUNT}:function:${DB_PROXY_FUNCTION_NAME}`;
+
+const infrastructureStack = new InfrastructureStack(
   app,
   'InfrastructureStack',
   {
@@ -55,8 +65,10 @@ new InfrastructureStack(
     },
     crossRegionReferences: true,
     alertTopicArn: alertingStack.topic.topicArn,
+    dbProxyFunctionArn,
   }
 );
+infrastructureStack.addDependency(dbProxyStack);
 
 const scraperStack = new ScraperStack(app, 'ScraperStack', {
   env: {
@@ -64,7 +76,9 @@ const scraperStack = new ScraperStack(app, 'ScraperStack', {
     region: process.env.CDK_DEFAULT_REGION,
   },
   alertTopicArn: alertingStack.topic.topicArn,
+  dbProxyFunctionArn,
 });
+scraperStack.addDependency(dbProxyStack);
 
 // Short form matches the handler's sql-<hash> fallback. CI sets GITHUB_SHA; a manual
 // deploy can override with CDK_TRANSFORM_VERSION.

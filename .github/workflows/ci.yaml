@@ -399,6 +399,7 @@ jobs:
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+          CDK_DB_PROXY_REGION: ${{ vars.CDK_DB_PROXY_REGION }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
           CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}
@@ -412,6 +413,7 @@ jobs:
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
           CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
+          CDK_DB_PROXY_REGION: ${{ vars.CDK_DB_PROXY_REGION }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
           CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}

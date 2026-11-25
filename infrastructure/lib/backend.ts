@@ -18,7 +18,7 @@ import {
 import { tableDefinitions } from './dynamodb-tables';
 import { decodoApiKeyParamName, grantDecodoApiKeyRead } from './decodo';
 import { DASHBOARD_START, appWidgets } from './dashboards';
-import { DASHBOARD_NAMES, METRIC_NAMESPACE } from './config';
+import { DASHBOARD_NAMES, DB_PROXY_REGION, METRIC_NAMESPACE } from './config';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
@@ -29,7 +29,8 @@ export class Backend extends Construct {
     userPool: UserPool,
     frontendDomainName: string,
     sesFromEmail: string,
-    alertTopic?: sns.ITopic
+    alertTopic?: sns.ITopic,
+    dbProxyFunctionArn?: string
   ) {
     super(scope, id);
 
@@ -98,7 +99,10 @@ export class Backend extends Construct {
       NODE_OPTIONS: '--enable-source-maps',
       // Start with the profile that is currently accepted; the transport still
       // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
-      DB_TLS_PROFILE: 'tls13',
+      DB_TLS_PROFILE: 'tls12',
+      // DB accepts the Navigator API from the configured proxy region but refuses
+      // the app-region and Decodo egress. See shared/db-fetch.ts.
+      ...(dbProxyFunctionArn ? { DB_PROXY_FUNCTION: dbProxyFunctionArn, DB_PROXY_REGION } : {}),
       // DB is reached directly with a browser-like TLS client; when DB throttles
       // the environment the request falls back to Decodo. Name of the SSM
       // SecureString holding the Decodo key; the value itself is never in the
@@ -159,6 +163,17 @@ export class Backend extends Construct {
     });
     // Journey search and the hourly refresh both fall back to Decodo.
     grantDecodoApiKeyRead(this, 'DecodoApiKey', [lambdaFunction, refresherFunction]);
+
+    if (dbProxyFunctionArn) {
+      for (const fn of [lambdaFunction, refresherFunction]) {
+        fn.addToRolePolicy(
+          new cdk.aws_iam.PolicyStatement({
+            actions: ['lambda:InvokeFunction'],
+            resources: [dbProxyFunctionArn],
+          })
+        );
+      }
+    }
 
     const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
       retention: logs.RetentionDays.TWO_WEEKS,

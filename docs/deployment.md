@@ -21,13 +21,14 @@ Never commit credentials or generated `.env` files.
 
 ## Stacks
 
-| Stack                 | Region         | What it creates                                                                                                                                                                                 |
-| --------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CertificateStack`    | `us-east-1`    | ACM certificate for the custom domain and CloudFront.                                                                                                                                           |
-| `AlertingStack`       | `eu-central-1` | `TrainPriceMonitorAlerts` SNS topic, Pushover forwarder and the `$1` monthly budget.                                                                                                            |
-| `InfrastructureStack` | `eu-central-1` | CloudFront, private frontend S3, Cognito user/identity pools, API Gateway + GraphQL Lambda, DynamoDB, profile S3, SQS + DLQ, refresher Lambda, SES identity, API/access logs, `ToolkitCleaner`. |
-| `ScraperStack`        | `eu-central-1` | Schedule table + `ByDue` GSI, scraper S3 bucket, Hydrator/Poller/Compactor and three EventBridge rules.                                                                                         |
-| `AnalyticsStack`      | `eu-central-1` | Weekly silver Docker Lambda, EventBridge Scheduler, IAM, SNS failure path.                                                                                                                      |
+| Stack                 | Region                                      | What it creates                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CertificateStack`    | `us-east-1`                                 | ACM certificate for the custom domain and CloudFront.                                                                                                                                           |
+| `DbProxyStack`        | `CDK_DB_PROXY_REGION` (default `us-east-1`) | DB egress proxy Lambda for the Navigator API; no VPC, NAT or alarms.                                                                                                                            |
+| `AlertingStack`       | `eu-central-1`                              | `TrainPriceMonitorAlerts` SNS topic, Pushover forwarder and the `$1` monthly budget.                                                                                                            |
+| `InfrastructureStack` | `eu-central-1`                              | CloudFront, private frontend S3, Cognito user/identity pools, API Gateway + GraphQL Lambda, DynamoDB, profile S3, SQS + DLQ, refresher Lambda, SES identity, API/access logs, `ToolkitCleaner`. |
+| `ScraperStack`        | `eu-central-1`                              | Schedule table + `ByDue` GSI, scraper S3 bucket, Hydrator/Poller/Compactor and three EventBridge rules.                                                                                         |
+| `AnalyticsStack`      | `eu-central-1`                              | Weekly silver Docker Lambda, EventBridge Scheduler, IAM, SNS failure path.                                                                                                                      |
 
 `AnalyticsStack` and `ScraperStack` share the scraper S3 bucket. The alert topic is imported by the
 application, scraper and analytics stacks.
@@ -47,6 +48,8 @@ Useful values:
 - `CDK_TRANSFORM_VERSION` records the short commit SHA in the silver manifest; empty falls back to
   `sql-<hash>`.
 - `CDK_DECODO_API_KEY_PARAM` defaults to `/train-price-monitor/decodo-api-key`.
+- `CDK_DB_PROXY_REGION` selects the DB proxy region (`us-east-1` default; `eu-central-1` to switch
+  back). Changing it creates a `DbProxyStack` in the new region; delete the old region's stack.
 
 ## Bootstrap
 

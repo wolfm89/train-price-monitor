@@ -21,5 +21,5 @@
     "types": ["node", "jest"],
     "typeRoots": ["./node_modules/@types"]
   },
-  "exclude": ["node_modules", "cdk.out"]
+  "exclude": ["node_modules", "cdk.out", "lambda/db-proxy"]
 }

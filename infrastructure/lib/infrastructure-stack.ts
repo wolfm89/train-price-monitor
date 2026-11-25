@@ -9,6 +9,8 @@ import { Frontend, FrontendProps } from './frontend';
 interface InfrastructureStackProps extends cdk.StackProps {
   /** ARN of the alert topic (owned by AlertingStack). */
   alertTopicArn?: string;
+  /** ARN of the DB proxy Lambda (owned by DbProxyStack). */
+  dbProxyFunctionArn?: string;
 }
 
 export class InfrastructureStack extends cdk.Stack {
@@ -27,7 +29,15 @@ export class InfrastructureStack extends cdk.Stack {
       : undefined;
 
     const cognitoAuth = new CognitoAuth(this, 'CognitoAuth', sesFromEmail);
-    new Backend(this, 'Backend', cognitoAuth.userPool, frontendProps.domainName, sesFromEmail, alertTopic);
+    new Backend(
+      this,
+      'Backend',
+      cognitoAuth.userPool,
+      frontendProps.domainName,
+      sesFromEmail,
+      alertTopic,
+      props?.dbProxyFunctionArn
+    );
     new Frontend(this, 'Frontend', frontendProps);
     // Runs daily: every deploy adds a new asset image to the CDK bootstrap ECR
     // repository. ToolkitCleaner only removes assets no deployed stack still references;

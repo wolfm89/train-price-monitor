@@ -87,6 +87,8 @@ then.
 5. On 2026-11-24 the Navigator API throttled the poller after ~22 h at 2.5 s spacing. The poller
    now uses 3.5 s. If `PollerThrottled` returns near the same cumulative call count since UTC
    midnight, treat it as a daily budget and reduce calls/day (batch size or cadence), not the gap.
+6. If the proxy region itself is blocked, set `CDK_DB_PROXY_REGION` to another region and redeploy;
+   delete the old region's `DbProxyStack`. Check its log group for proxy errors.
 
 ### Poller not running / no prices
 

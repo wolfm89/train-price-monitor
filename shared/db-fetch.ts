@@ -45,6 +45,8 @@
  *  DB_TLS_PROFILE           first TLS profile to try: firefox (default), safari,
  *                           chrome, tls13, tls12. A 403 OPS_BLOCKED rotates on.
  *  DB_PROFILE_BLOCK_COOLDOWN_MS  how long a blocked profile is skipped (default 900000)
+ *  DB_PROXY_FUNCTION        invoke this Lambda for DB requests instead of direct HTTPS
+ *  DB_PROXY_REGION          region of DB_PROXY_FUNCTION (default us-east-1)
  *  DB_TRANSPORT             `decodo` forces the fallback path (kill switch)
  *  DECODO_API_KEY[_PARAM]   Decodo credentials (literal, or SSM SecureString name)
  *  DECODO_KEY_TTL_MS        how long a resolved SSM key is cached (default 15 min)
@@ -567,6 +569,92 @@ async function viaFallback(url: string, init: FetchInit, deadline: number): Prom
 }
 
 // ---------------------------------------------------------------------------
+// Cross-region proxy: invoke a Lambda whose egress DB accepts.
+// ---------------------------------------------------------------------------
+
+type LambdaSdk = typeof import('@aws-sdk/client-lambda');
+let lambdaSdk: LambdaSdk | null = null;
+let lambdaClient: InstanceType<LambdaSdk['LambdaClient']> | null = null;
+
+async function invokeProxy(functionName: string, url: string, init: FetchInit): Promise<FetchCompatibleResponse> {
+  if (!lambdaSdk) lambdaSdk = await import('@aws-sdk/client-lambda');
+  if (!lambdaClient) {
+    lambdaClient = new lambdaSdk.LambdaClient({ region: process.env.DB_PROXY_REGION || 'us-east-1' });
+  }
+
+  const payload = JSON.stringify({
+    url,
+    method: init.method ?? 'GET',
+    headers: init.headers ?? {},
+    body: init.body,
+  });
+  const result = await lambdaClient.send(
+    new lambdaSdk.InvokeCommand({
+      FunctionName: functionName,
+      InvocationType: 'RequestResponse',
+      Payload: Buffer.from(payload),
+    })
+  );
+  if (result.FunctionError) throw new Error(`DB proxy failed: ${result.FunctionError}`);
+
+  const raw = result.Payload ? Buffer.from(result.Payload).toString('utf8') : '';
+  const parsed = JSON.parse(raw) as { status?: number; contentType?: string | null; body?: string };
+  if (typeof parsed.status !== 'number') throw new Error('DB proxy returned an invalid response');
+
+  const headers: Array<[string, string]> = parsed.contentType ? [['content-type', parsed.contentType]] : [];
+  return new FetchCompatibleResponse(parsed.status, '', parsed.body ?? '', headers);
+}
+
+async function proxyFetch(
+  functionName: string,
+  url: string,
+  init: FetchInit,
+  deadline: number
+): Promise<FetchCompatibleResponse> {
+  const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
+  let lastResponse: FetchCompatibleResponse | null = null;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
+    const release = await acquireSlot();
+    try {
+      const response = await invokeProxy(functionName, url, init);
+      const bodyText = await response.text();
+      const throttled = isThrottled(response.status, bodyText);
+
+      if (!throttled && response.ok) {
+        recordSuccess();
+        stats.directOk++;
+        return response;
+      }
+      if (throttled) stats.directThrottled++;
+      else stats.directFailed++;
+      lastResponse = response;
+      lastError = null;
+      if (!throttled && response.status < 500) return response;
+    } catch (error) {
+      stats.directFailed++;
+      lastError = error;
+      lastResponse = null;
+    } finally {
+      release();
+    }
+
+    if (attempt < maxAttempts && Date.now() < deadline) {
+      stats.retries++;
+      await sleep(Math.min(intFromEnv('DB_RETRY_BACKOFF_MS', 3000) * attempt, Math.max(0, deadline - Date.now())));
+    }
+  }
+
+  recordFailure();
+  const fallback = await viaFallback(url, init, deadline);
+  if (fallback) return fallback;
+  if (breakerOpen()) throw new DbThrottledError();
+  if (lastResponse) return lastResponse;
+  throw lastError instanceof Error ? lastError : new Error('DB proxy request failed');
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -584,6 +672,9 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
     if (fallback) return fallback;
     throw new DbThrottledError();
   }
+
+  const proxyFunction = process.env.DB_PROXY_FUNCTION;
+  if (proxyFunction) return proxyFetch(proxyFunction, url, init, deadline);
 
   const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
   let lastResponse: FetchCompatibleResponse | null = null;

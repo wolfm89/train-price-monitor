@@ -199,6 +199,13 @@ from the same Lambda egress and serves the same `tagesbestPreisIntervalle`; Deco
 backend's fallback if the direct path fails. This is an egress/IP restriction, not a fingerprint
 problem: when every profile fails, another profile or Lambda IP will not help.
 
+On 2026-11-25 the Navigator API also began refusing eu-central-1 Lambda and Decodo egress. The
+`DbProxyStack` runs a small Lambda in `CDK_DB_PROXY_REGION` (default `us-east-1`) that reaches the
+Navigator API with `tls12`; the poller and backend invoke it with `lambda:InvokeFunction` through
+`DB_PROXY_FUNCTION`. This is a different AWS egress, not a vendor proxy: no VPC, NAT, alarm or fixed
+cost. Setting `CDK_DB_PROXY_REGION=eu-central-1` switches the stack back, but that egress is
+currently blocked.
+
 ## Design decisions
 
 - **Serverless, no VPC.** Every workload is Lambda, API Gateway, DynamoDB, S3, SQS, SES or

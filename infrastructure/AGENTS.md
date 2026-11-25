@@ -32,9 +32,13 @@ or bakes stale bundles because those `dist/`/`build/` directories are consumed a
 
 ## Stacks
 
-Five stacks: `CertificateStack` in `us-east-1`; `AlertingStack`, `InfrastructureStack`,
-`ScraperStack` and `AnalyticsStack` in `eu-central-1`. Responsibilities, outputs, bootstrap and
-rollback are in [docs/deployment.md](../docs/deployment.md).
+Six stacks: `CertificateStack` in `us-east-1`; `DbProxyStack` in `CDK_DB_PROXY_REGION` (default
+`us-east-1`); `AlertingStack`, `InfrastructureStack`, `ScraperStack` and `AnalyticsStack` in
+`eu-central-1`. Responsibilities, outputs, bootstrap and rollback are in
+[docs/deployment.md](../docs/deployment.md).
+
+`DbProxyStack` is the DB egress proxy: one `NodejsFunction` that reaches the Navigator API from a
+region DB accepts. It adds no VPC, NAT, alarm or metric.
 
 Add new stacks under `lib/` and wire them in `bin/infrastructure.ts`. Extend `cdk.Stack`, use
 descriptive construct IDs, prefer L2 constructs and accept `props?: cdk.StackProps`.
