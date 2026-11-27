@@ -5,15 +5,21 @@
  * stay untouched).
  *
  * Why not Node's own fetch: DB's edge (Akamai) matches the TLS ClientHello and
- * answers `403 OPS_BLOCKED` to Node's default client, curl, Chrome-imitating
- * clients and headless browsers alike. What passes is Node's own https client
- * with a browser-like cipher list — repeatedly, on keep-alive and fresh
- * connections. The exact list/order is what DB matches: the 2026-10-20
- * Chrome-like order was refused on 2026-10-21 while Firefox, Safari and a
- * different Chrome order still returned 201 on the real tagesbestpreis POST.
- * The transport therefore carries several profiles, rotates to the first one DB
- * accepts, remembers it for the environment, and skips a blocked profile for a
- * cooldown. No browser, no proxy, no vendor account.
+ * answers `403`/`452 OPS_BLOCKED` to Node's default client, curl and several
+ * browser-like cipher lists. What passes is Node's own https client with a
+ * browser-like cipher list — repeatedly, on keep-alive and fresh connections.
+ * The exact list/order is what DB matches; the accepted order changes without
+ * notice (tls12 was accepted on 2026-11-25 and refused again on 2026-11-27).
+ * The transport therefore carries several profiles and, for every request,
+ * tries them in a configurable order until one is accepted, remembering the
+ * winner for the environment and skipping a refused profile for a cooldown.
+ *
+ * Egress: DB refuses some regions and rate-limits others. The caller can be
+ * configured with several proxy Lambdas (`DB_PROXY_FUNCTIONS`, one per region).
+ * Each request tries the healthiest proxy region first and fails over to the
+ * next one on a throttle/refusal, so a block or a 429 in one region does not
+ * stop the app. A region that fails is skipped for a cooldown instead of being
+ * hammered.
  *
  * Measured constraints this file encodes:
  *  - For the bahn.de web API, only `Content-Type`/`Accept` plus `Origin`/`Referer`
@@ -25,31 +31,23 @@
  *  - Once an environment is throttled, hammering it only extends the ban. After a
  *    few consecutive failures the transport opens a circuit breaker.
  *
- * Fallback: when a Decodo API key is configured (`DECODO_API_KEY` or an SSM
- * SecureString named by `DECODO_API_KEY_PARAM`), requests that the direct path
- * cannot get through are executed by Decodo's managed /scrape instead (premium
- * pool; its standard pool cannot send custom headers and is refused by DB). Only
- * the user-facing backend functions are configured with a key — the poller is
- * bulk work and must never spend the free Decodo allowance, so it stops instead
- * (see DbThrottledError).
- *
  * Environment (all optional):
- *  DB_MIN_GAP_MS            minimum spacing between request starts (default 1000)
- *  DB_MAX_IN_FLIGHT         concurrent requests (default 2)
- *  DB_MAX_ATTEMPTS          direct attempts per request (default 2)
- *  DB_RETRY_BACKOFF_MS      pause before a retry, multiplied by the attempt (default 3000)
- *  DB_REQUEST_TIMEOUT_MS    per-attempt timeout; in proxy mode bounds the Lambda invoke (default 20000)
- *  DB_TOTAL_BUDGET_MS       wall-clock budget for one request, direct + fallback (default 24000)
- *  DB_BREAKER_THRESHOLD     consecutive failed requests that open the breaker (default 3)
- *  DB_BREAKER_COOLDOWN_MS   how long the breaker stays open (default 180000)
- *  DB_TLS_PROFILE           first TLS profile to try: firefox (default), safari,
- *                           chrome, tls13, tls12. A 403 OPS_BLOCKED rotates on.
- *  DB_PROFILE_BLOCK_COOLDOWN_MS  how long a blocked profile is skipped (default 900000)
- *  DB_PROXY_FUNCTION        invoke this Lambda for DB requests instead of direct HTTPS
- *  DB_PROXY_REGION          region of DB_PROXY_FUNCTION (default us-east-1)
- *  DB_TRANSPORT             `decodo` forces the fallback path (kill switch)
- *  DECODO_API_KEY[_PARAM]   Decodo credentials (literal, or SSM SecureString name)
- *  DECODO_KEY_TTL_MS        how long a resolved SSM key is cached (default 15 min)
+ *  DB_MIN_GAP_MS                  minimum spacing between request starts (default 1000)
+ *  DB_MAX_IN_FLIGHT               concurrent requests (default 2)
+ *  DB_MAX_ATTEMPTS                rounds over the proxy regions per request (default 2)
+ *  DB_RETRY_BACKOFF_MS            pause before the next round, multiplied by the round (default 3000)
+ *  DB_REQUEST_TIMEOUT_MS          per-attempt timeout; in proxy mode bounds the Lambda invoke (default 20000)
+ *  DB_TOTAL_BUDGET_MS             wall-clock budget for one request (default 24000)
+ *  DB_BREAKER_THRESHOLD           consecutive failed requests that open the breaker (default 3)
+ *  DB_BREAKER_COOLDOWN_MS         how long the breaker stays open (default 180000)
+ *  DB_REGION_COOLDOWN_MS          how long a proxy region is skipped after a refusal (default 120000)
+ *  DB_TLS_PROFILES                comma-separated profile order (default chrome,legacy,firefox,safari,tls13,tls12)
+ *  DB_TLS_PROFILE                 legacy alias: put this profile first
+ *  DB_PROFILE_BLOCK_COOLDOWN_MS   how long a refused profile is skipped (default 900000)
+ *  DB_PROFILE_THROTTLE_ROTATIONS  extra profiles tried after a 429 (default 2)
+ *  DB_PROXY_FUNCTIONS             comma-separated proxy Lambda ARNs, one per region (preferred)
+ *  DB_PROXY_FUNCTION              single proxy Lambda ARN (legacy alias)
+ *  DB_PROXY_REGION                region of a single ARN when it cannot be parsed (default us-east-1)
  */
 import https from 'node:https';
 import zlib from 'node:zlib';
@@ -107,14 +105,25 @@ class FetchCompatibleRequest {
 }
 
 /**
- * Thrown when DB is throttling this execution environment and no fallback is
- * configured. Bulk callers should stop their batch instead of retrying: every
- * further request only extends the throttle.
+ * Thrown when every egress option (all proxy regions × all TLS profiles) is
+ * throttling this environment. Bulk callers should stop their batch instead of
+ * retrying: every further request only extends the throttle.
  */
 export class DbThrottledError extends Error {
   constructor(message = 'DB is throttling this environment (circuit breaker open)') {
     super(message);
     this.name = 'DbThrottledError';
+  }
+}
+
+/**
+ * The proxy's Lambda concurrency reservation is full. This is our own capacity
+ * pressure, not a DB block: callers should retry later, not stop the batch.
+ */
+export class DbProxyBusyError extends Error {
+  constructor(message = 'DB proxy is busy (Lambda concurrency limit)') {
+    super(message);
+    this.name = 'DbProxyBusyError';
   }
 }
 
@@ -125,12 +134,14 @@ export interface DbTransportStats {
   retries: number;
   breakerOpened: number;
   breakerSkips: number;
+  /** Fingerprint blocks (452/OPS_BLOCKED) or proxy-reported DbThrottledError. */
+  blocks: number;
   /** The proxy rejected an invoke because its concurrency limit was full. */
   proxyBusy: number;
-  /** How often a request had to switch to the next TLS profile after OPS_BLOCKED. */
+  /** How often DB refused the preferred profile and the next one was used. */
   profileRotations: number;
-  fallbackOk: number;
-  fallbackFailed: number;
+  /** How often the request had to move to the next proxy region. */
+  regionRotations: number;
 }
 
 export interface DbTransportSnapshot extends DbTransportStats {
@@ -145,22 +156,33 @@ const stats: DbTransportStats = {
   retries: 0,
   breakerOpened: 0,
   breakerSkips: 0,
+  blocks: 0,
   proxyBusy: 0,
   profileRotations: 0,
-  fallbackOk: 0,
-  fallbackFailed: 0,
+  regionRotations: 0,
 };
+
+/** The profile that last completed a request, for logs and the dashboard. */
+let currentProfileName: string | null = null;
 
 /** Returns the counters accumulated since the last call and resets them. */
 export function takeDbTransportStats(): DbTransportSnapshot {
-  const snapshot = { ...stats, tlsProfile: TLS_PROFILES[activeProfileIndex].name };
+  const snapshot = { ...stats, tlsProfile: currentProfileName ?? configuredProfileOrder()[0]?.name ?? 'firefox' };
   for (const key of Object.keys(stats) as Array<keyof DbTransportStats>) stats[key] = 0;
   return snapshot;
 }
 
+/** The profile the environment is currently using (proxy handler reports it to the caller). */
+export function activeTlsProfileName(): string {
+  return currentProfileName ?? configuredProfileOrder()[0]?.name ?? 'firefox';
+}
+
 function intFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  // `Number` rejects partial values such as "3s"; parseInt would accept them.
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -223,12 +245,11 @@ function recordFailure(): void {
 //
 // DB matches the TLS ClientHello, so the cipher list/order decides whether a
 // request gets through. No single list lasts forever: the public
-// db-vendo-client#46 Chrome order was blocked on 2026-10-21 (403 OPS_BLOCKED)
-// while Firefox, Safari and a different Chrome order still returned 201 on the
-// real tagesbestpreis POST. The transport therefore carries several profiles
-// and rotates on a block; the first accepted profile becomes sticky for the
-// environment, and a blocked one is skipped for a cooldown instead of being
-// retried on every request.
+// db-vendo-client#46 Chrome order was blocked on 2026-10-21, the `tls12` profile
+// that the proxy pinned since 2026-11-25 was refused again on 2026-11-27 while
+// `chrome` and `legacy` still returned 200. The transport therefore carries all
+// profiles in one configurable order, rotates on a refusal *and* on a 429, and
+// skips a refused profile for a cooldown instead of retrying it every call.
 // ---------------------------------------------------------------------------
 
 interface TlsProfile {
@@ -302,7 +323,8 @@ const TLS_PROFILES: TlsProfile[] = [
   },
   {
     // The public 2026-10-20 workaround list. DB blocked it on 2026-10-21, but
-    // blocks have lifted before, so it stays as the last-resort candidate.
+    // blocks have lifted before; on 2026-11-27 it was accepted again, so it is
+    // part of the rotation rather than a dead last resort.
     name: 'legacy',
     ciphers: [
       'TLS_AES_128_GCM_SHA256',
@@ -314,9 +336,24 @@ const TLS_PROFILES: TlsProfile[] = [
   },
 ];
 
-const preferredProfileName = process.env.DB_TLS_PROFILE?.trim();
-const preferredProfileIndex = TLS_PROFILES.findIndex((profile) => profile.name === preferredProfileName);
-let activeProfileIndex = preferredProfileIndex >= 0 ? preferredProfileIndex : 0;
+const DEFAULT_PROFILE_ORDER = 'chrome,legacy,firefox,safari,tls13,tls12';
+
+/** Profiles in the order they should be tried: explicit override, active winner, configured order. */
+function configuredProfileOrder(): TlsProfile[] {
+  const names = [
+    process.env.DB_TLS_PROFILE?.trim(),
+    currentProfileName,
+    ...(process.env.DB_TLS_PROFILES?.trim() || DEFAULT_PROFILE_ORDER).split(','),
+    ...TLS_PROFILES.map((profile) => profile.name),
+  ].filter((name): name is string => Boolean(name && name.trim()));
+
+  const ordered: TlsProfile[] = [];
+  for (const name of names) {
+    const profile = TLS_PROFILES.find((candidate) => candidate.name === name.trim());
+    if (profile && !ordered.includes(profile)) ordered.push(profile);
+  }
+  return ordered;
+}
 
 /** Profiles that recently answered OPS_BLOCKED, with the time they may be retried. */
 const blockedProfiles = new Map<string, number>();
@@ -341,26 +378,41 @@ function agentFor(profile: TlsProfile): https.Agent {
   return created;
 }
 
-function isProfileBlocked(profile: TlsProfile): boolean {
-  return (blockedProfiles.get(profile.name) ?? 0) > Date.now();
+/**
+ * Health is scoped to the endpoint: DB can refuse one Navigator endpoint on a
+ * fingerprint/region while accepting another. A block seen on `recon` must not
+ * disable `tagesbestpreis` in the same warm container.
+ */
+function endpointScope(url: string): string {
+  const target = new URL(url);
+  return `${target.host}${target.pathname}`;
 }
 
-function markProfileBlocked(profile: TlsProfile): void {
-  blockedProfiles.set(profile.name, Date.now() + intFromEnv('DB_PROFILE_BLOCK_COOLDOWN_MS', 15 * 60_000));
+function profileHealthKey(profile: TlsProfile, scope: string): string {
+  return `${profile.name}|${scope}`;
 }
 
-/** Active profile first, then the rest in declaration order, skipping blocked ones. */
-function availableProfiles(): TlsProfile[] {
-  const active = TLS_PROFILES[activeProfileIndex];
-  return [active, ...TLS_PROFILES.filter((profile) => profile !== active)].filter(
-    (profile) => !isProfileBlocked(profile)
+function isProfileBlocked(profile: TlsProfile, scope: string): boolean {
+  return (blockedProfiles.get(profileHealthKey(profile, scope)) ?? 0) > Date.now();
+}
+
+function markProfileBlocked(profile: TlsProfile, scope: string): void {
+  blockedProfiles.set(
+    profileHealthKey(profile, scope),
+    Date.now() + intFromEnv('DB_PROFILE_BLOCK_COOLDOWN_MS', 15 * 60_000)
   );
 }
 
+/** Preferred order first, skipping profiles that recently answered OPS_BLOCKED for this endpoint. */
+function availableProfiles(scope: string): TlsProfile[] {
+  return configuredProfileOrder().filter((profile) => !isProfileBlocked(profile, scope));
+}
+
 function isFingerprintBlocked(status: number, bodyText: string): boolean {
-  // The bahn.de web API answers 403; the DB Navigator API answers 452. Both use
-  // the same OPS_BLOCKED body and mean "this profile is refused, rotate".
-  return (status === 403 || status === 452) && /OPS_BLOCKED/.test(bodyText);
+  // The bahn.de web API answers 403; the DB Navigator API answers 452. A 452
+  // is always the edge's block code, even if the body changes, so rotate on it
+  // unconditionally. A 403 only means "blocked" with the OPS_BLOCKED body.
+  return status === 452 || (status === 403 && /OPS_BLOCKED/i.test(bodyText));
 }
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
@@ -376,16 +428,35 @@ function pick(headers: Record<string, string> | undefined, name: string): string
 }
 
 function decodeBody(buffer: Buffer, encoding: string | undefined): Buffer {
-  if (!encoding) return buffer;
-  if (encoding === 'gzip') return zlib.gunzipSync(buffer);
-  if (encoding === 'deflate') return zlib.inflateSync(buffer);
-  if (encoding === 'br') return zlib.brotliDecompressSync(buffer);
-  return buffer;
+  const values = (encoding ?? '')
+    .toLowerCase()
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (values.length === 0) return buffer;
+  if (values.length > 1) throw new Error(`Unsupported DB content-encoding: ${encoding}`);
+  const value = values[0];
+  if (value === 'gzip' || value === 'x-gzip') return zlib.gunzipSync(buffer);
+  if (value === 'deflate') return zlib.inflateSync(buffer);
+  if (value === 'br') return zlib.brotliDecompressSync(buffer);
+  throw new Error(`Unsupported DB content-encoding: ${encoding}`);
 }
 
-function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<FetchCompatibleResponse> {
+function directOnce(
+  url: string,
+  init: FetchInit,
+  profile: TlsProfile,
+  deadline: number
+): Promise<FetchCompatibleResponse> {
   const target = new URL(url);
-  const timeoutMs = intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000);
+  const remaining = deadline - Date.now();
+  if (remaining < 1_000) {
+    return Promise.reject(new Error('DB request budget exhausted before the attempt'));
+  }
+  // The https timeout option is an idle timeout; cap it to the remaining
+  // budget and add an absolute timer below so a trickling response cannot hold
+  // the invocation until the Lambda timeout.
+  const timeoutMs = Math.max(1, Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000), remaining));
 
   const headers: Record<string, string> = {
     Origin: target.origin,
@@ -399,6 +470,21 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
   if (correlationId) headers['X-Correlation-ID'] = correlationId;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const succeed = (response: FetchCompatibleResponse): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(response);
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error('DB request timed out')), timeoutMs);
+
     const request = https.request(
       url,
       { method: (init.method ?? 'GET').toUpperCase(), headers, agent: agentFor(profile), timeout: timeoutMs },
@@ -407,15 +493,15 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
         // A connection that dies after the headers emits 'error'/'aborted' on the
         // response, not on the request; without this the promise never settles and
         // the transport slot is held until the Lambda times out.
-        response.on('error', reject);
-        response.on('aborted', () => reject(new Error('DB response aborted')));
+        response.on('error', fail);
+        response.on('aborted', () => fail(new Error('DB response aborted')));
         response.on('data', (chunk: Buffer) => chunks.push(chunk));
         response.on('end', () => {
           let body: Buffer;
           try {
             body = decodeBody(Buffer.concat(chunks), String(response.headers['content-encoding'] ?? ''));
           } catch (error) {
-            reject(error);
+            fail(error instanceof Error ? error : new Error(String(error)));
             return;
           }
 
@@ -425,7 +511,7 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
             else if (value !== undefined) responseHeaders.push([name, String(value)]);
           }
 
-          resolve(
+          succeed(
             new FetchCompatibleResponse(
               response.statusCode ?? 0,
               response.statusMessage ?? '',
@@ -437,142 +523,11 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
       }
     );
 
-    request.on('error', reject);
+    request.on('error', fail);
     request.on('timeout', () => request.destroy(new Error('DB request timed out')));
     if (init.body) request.write(init.body);
     request.end();
   });
-}
-
-// ---------------------------------------------------------------------------
-// Fallback: Decodo Web Data API (managed browser-like egress, premium pool).
-// ---------------------------------------------------------------------------
-
-const DECODO_SCRAPE_URL = 'https://data.decodo.com/v1/scrape';
-
-let decodoKeyCache: { value: string; expiresAt: number } | null = null;
-let decodoKeyRequest: Promise<string | null> | null = null;
-
-/**
- * Resolves the Decodo API key: a literal for local development, otherwise the SSM
- * SecureString named by DECODO_API_KEY_PARAM (written by CI from a repo secret).
- * Cached, so a rotated key takes effect within the TTL.
- */
-async function resolveDecodoKey(): Promise<string | null> {
-  const literal = process.env.DECODO_API_KEY;
-  if (literal) return literal;
-
-  const parameterName = process.env.DECODO_API_KEY_PARAM;
-  if (!parameterName) return null;
-
-  if (decodoKeyCache && Date.now() < decodoKeyCache.expiresAt) return decodoKeyCache.value;
-
-  if (!decodoKeyRequest) {
-    decodoKeyRequest = (async (): Promise<string | null> => {
-      const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
-      const result = await new SSMClient({}).send(
-        new GetParameterCommand({ Name: parameterName, WithDecryption: true })
-      );
-      const value = result.Parameter?.Value;
-      if (!value) throw new Error(`SSM parameter ${parameterName} is empty`);
-      decodoKeyCache = { value, expiresAt: Date.now() + intFromEnv('DECODO_KEY_TTL_MS', 15 * 60_000) };
-      return value;
-    })().finally(() => {
-      decodoKeyRequest = null;
-    });
-  }
-
-  return decodoKeyRequest;
-}
-
-/**
- * Executes one request through Decodo. Both a DB refusal and an empty result are
- * retried: the vendor picks a new egress IP per request, and some of those IPs
- * are refused by the target even though the next one would pass.
- */
-async function decodoFetch(
-  key: string,
-  url: string,
-  init: FetchInit,
-  deadline: number
-): Promise<FetchCompatibleResponse> {
-  const headers: Record<string, string> = {};
-  for (const [name, value] of Object.entries(init.headers ?? {})) {
-    // Hop-by-hop headers describe our connection to Decodo, not the request to DB.
-    if (/^(host|content-length|connection|accept-encoding|content-encoding)$/i.test(name)) continue;
-    headers[name] = value;
-  }
-
-  const MAX_ATTEMPTS = 2;
-  let lastNoResultError: Error | null = null;
-
-  for (let attempt = 1; ; attempt++) {
-    // Share one wall-clock budget with the direct path: the API Lambda lives
-    // behind a 29 s gateway cap, so a late throttling response must not start
-    // another full 18 s attempt.
-    const remaining = deadline - Date.now();
-    if (remaining < 1_000) {
-      if (lastNoResultError) throw lastNoResultError;
-      throw new Error('DB request budget exhausted before the fallback');
-    }
-
-    const response = await globalThis.fetch(DECODO_SCRAPE_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        url,
-        http_method: (init.method ?? 'GET').toUpperCase(),
-        proxy_pool: 'premium',
-        headers,
-        force_headers: true,
-        ...(init.body ? { payload: Buffer.from(init.body).toString('base64') } : {}),
-      }),
-      signal: AbortSignal.timeout(Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000) + 10_000, remaining)),
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      return new FetchCompatibleResponse(response.status, response.statusText, text, []);
-    }
-
-    const envelope = JSON.parse(text) as {
-      results?: Array<{ content?: string; status_code?: number; headers?: Record<string, string> }>;
-      error?: unknown;
-    };
-    const result = envelope.results?.[0];
-    if (!result) {
-      // HTTP 200 with an empty result set means the proxy IP Decodo picked was
-      // refused by the target (its error text says so). Retrying picks another
-      // IP; throwing here made the fallback fail on a single unlucky egress.
-      const vendorError = typeof envelope.error === 'string' ? envelope.error.slice(0, 200) : '';
-      lastNoResultError = new Error(`Decodo returned no result${vendorError ? `: ${vendorError}` : ''}`);
-      if (attempt < MAX_ATTEMPTS && deadline - Date.now() > 3_000) continue;
-      throw lastNoResultError;
-    }
-
-    const status = result.status_code ?? 200;
-    const bodyText = result.content ?? '';
-    if (isThrottled(status, bodyText) && attempt < MAX_ATTEMPTS && deadline - Date.now() > 3_000) continue;
-
-    return new FetchCompatibleResponse(status, '', bodyText, Object.entries(result.headers ?? {}));
-  }
-}
-
-async function viaFallback(url: string, init: FetchInit, deadline: number): Promise<FetchCompatibleResponse | null> {
-  const key = await resolveDecodoKey();
-  if (!key) return null;
-
-  try {
-    const response = await decodoFetch(key, url, init, deadline);
-    // The vendor answers 401/402 when the key is wrong or the quota is gone; those
-    // are failures, not successful fallbacks.
-    if (response.ok) stats.fallbackOk++;
-    else stats.fallbackFailed++;
-    return response;
-  } catch (error) {
-    stats.fallbackFailed++;
-    throw error;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +536,77 @@ async function viaFallback(url: string, init: FetchInit, deadline: number): Prom
 
 type LambdaSdk = typeof import('@aws-sdk/client-lambda');
 let lambdaSdk: LambdaSdk | null = null;
-let lambdaClient: InstanceType<LambdaSdk['LambdaClient']> | null = null;
+const lambdaClients = new Map<string, InstanceType<LambdaSdk['LambdaClient']>>();
+
+interface ProxyTarget {
+  arn: string;
+  region: string;
+}
+
+interface ProxyHealth {
+  blockedUntil: number;
+  preferredProfile: string | null;
+}
+
+const proxyHealth = new Map<string, ProxyHealth>();
+
+function proxyTargets(): ProxyTarget[] {
+  // An empty DB_PROXY_FUNCTIONS must fall back to the legacy single ARN, not
+  // disable the proxy (which would send requests out from the app region).
+  const raw = (process.env.DB_PROXY_FUNCTIONS?.trim() || process.env.DB_PROXY_FUNCTION?.trim() || '').trim();
+  if (!raw) return [];
+  const fallbackRegion = process.env.DB_PROXY_REGION?.trim() || 'us-east-1';
+  const seen = new Set<string>();
+  const targets: ProxyTarget[] = [];
+  for (const value of raw.split(',')) {
+    const arn = value.trim();
+    if (!arn || seen.has(arn)) continue;
+    seen.add(arn);
+    const parts = arn.split(':');
+    const region = parts.length >= 4 && parts[3] ? parts[3] : fallbackRegion;
+    targets.push({ arn, region });
+  }
+  return targets;
+}
+
+function lambdaClientFor(region: string): InstanceType<LambdaSdk['LambdaClient']> {
+  let client = lambdaClients.get(region);
+  if (!client) {
+    if (!lambdaSdk) throw new Error('Lambda SDK is not loaded');
+    client = new lambdaSdk.LambdaClient({
+      region,
+      // The transport owns retries; do not multiply them at the SDK layer.
+      maxAttempts: 1,
+    });
+    lambdaClients.set(region, client);
+  }
+  return client;
+}
+
+function proxyHealthKey(target: ProxyTarget, scope: string): string {
+  return `${target.arn}|${scope}`;
+}
+
+/** Regions that are not cooling down for this endpoint, in configured order. */
+function availableProxyTargets(targets: ProxyTarget[], scope: string): ProxyTarget[] {
+  const now = Date.now();
+  return targets.filter((target) => (proxyHealth.get(proxyHealthKey(target, scope))?.blockedUntil ?? 0) <= now);
+}
+
+function markProxyUnhealthy(target: ProxyTarget, scope: string): void {
+  const key = proxyHealthKey(target, scope);
+  const health = proxyHealth.get(key) ?? { blockedUntil: 0, preferredProfile: null };
+  health.blockedUntil = Date.now() + intFromEnv('DB_REGION_COOLDOWN_MS', 120_000);
+  proxyHealth.set(key, health);
+}
+
+function markProxyHealthy(target: ProxyTarget, scope: string, usedProfile: string | null): void {
+  const key = proxyHealthKey(target, scope);
+  const health = proxyHealth.get(key) ?? { blockedUntil: 0, preferredProfile: null };
+  health.blockedUntil = 0;
+  if (usedProfile) health.preferredProfile = usedProfile;
+  proxyHealth.set(key, health);
+}
 
 /** Bounds one proxy invoke by the configured timeout and the caller's remaining budget. */
 export function proxyInvokeTimeout(
@@ -593,19 +618,13 @@ export function proxyInvokeTimeout(
 }
 
 async function invokeProxy(
-  functionName: string,
+  target: ProxyTarget,
   url: string,
   init: FetchInit,
-  deadline: number
-): Promise<FetchCompatibleResponse> {
+  deadline: number,
+  profile: string | null
+): Promise<{ response: FetchCompatibleResponse; usedProfile: string | null }> {
   if (!lambdaSdk) lambdaSdk = await import('@aws-sdk/client-lambda');
-  if (!lambdaClient) {
-    lambdaClient = new lambdaSdk.LambdaClient({
-      region: process.env.DB_PROXY_REGION || 'us-east-1',
-      // The transport owns retries; do not multiply them at the SDK layer.
-      maxAttempts: 1,
-    });
-  }
 
   // The SDK has no request timeout by default. Bound the invoke by the
   // per-attempt timeout and the caller's remaining budget so a slow proxy cannot
@@ -618,10 +637,11 @@ async function invokeProxy(
     body: init.body,
     acceptEncoding: 'gzip',
     timeoutMs: requestTimeout,
+    ...(profile ? { profile } : {}),
   });
-  const result = await lambdaClient.send(
+  const result = await lambdaClientFor(target.region).send(
     new lambdaSdk.InvokeCommand({
-      FunctionName: functionName,
+      FunctionName: target.arn,
       InvocationType: 'RequestResponse',
       Payload: Buffer.from(payload),
     }),
@@ -648,6 +668,7 @@ async function invokeProxy(
     contentType?: string | null;
     encoding?: 'gzip';
     body?: string;
+    usedProfile?: string;
   };
   try {
     parsed = JSON.parse(raw) as typeof parsed;
@@ -657,18 +678,29 @@ async function invokeProxy(
   if (typeof parsed.status !== 'number') throw new Error('DB proxy returned an invalid response');
 
   const body = decodeProxyBody(parsed.encoding, parsed.body);
+  const bodyText = body.toString('utf8');
+  if (
+    typeof parsed.usedProfile === 'string' &&
+    parsed.usedProfile &&
+    !isThrottled(parsed.status, bodyText) &&
+    parsed.status < 500
+  ) {
+    currentProfileName = parsed.usedProfile;
+    if (profile && profile !== parsed.usedProfile) stats.profileRotations++;
+  }
+
   const headers: Array<[string, string]> = parsed.contentType ? [['content-type', parsed.contentType]] : [];
-  return new FetchCompatibleResponse(
-    parsed.status,
-    parsed.statusText || String(parsed.status),
-    body.toString('utf8'),
-    headers
-  );
+  return {
+    response: new FetchCompatibleResponse(parsed.status, parsed.statusText || String(parsed.status), bodyText, headers),
+    usedProfile: typeof parsed.usedProfile === 'string' && parsed.usedProfile ? parsed.usedProfile : null,
+  };
 }
 
 /** True when a proxy error means DB is throttling/refusing the egress. */
 export function isProxyThrottleError(message: string): boolean {
-  return /throttl|OPS_BLOCKED|breaker/i.test(message);
+  // Do not match generic network errors (ECONNREFUSED contains "refused"):
+  // those are proxy failures, not a DB block.
+  return /OPS_BLOCKED|throttl|breaker/i.test(message);
 }
 
 /** True when Lambda rejected the invoke because the proxy's concurrency limit was full. */
@@ -677,7 +709,7 @@ export function isProxyBusyError(error: unknown): boolean {
     typeof error === 'object' && error !== null && 'name' in error
       ? String((error as { name?: unknown }).name ?? '')
       : '';
-  return name === 'TooManyRequestsException' || name === 'ResourceConflictException';
+  return name === 'TooManyRequestsException';
 }
 
 /** Decodes the optional gzip/base64 proxy body; plain strings pass through. */
@@ -686,78 +718,130 @@ export function decodeProxyBody(encoding: 'gzip' | undefined, body: string | und
 }
 
 async function proxyFetch(
-  functionName: string,
+  targets: ProxyTarget[],
   url: string,
   init: FetchInit,
   deadline: number
 ): Promise<FetchCompatibleResponse> {
-  const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
+  const maxRounds = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
+  const scope = endpointScope(url);
   let lastResponse: FetchCompatibleResponse | null = null;
+  let lastRateLimitResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
-  let lastWasProxyBusy = false;
-  let failureRecorded = false;
+  let sawBlocked = false;
+  let sawRateLimit = false;
+  let sawNonThrottleFailure = false;
+  let sawBusy = false;
+  let attempted = 0;
 
-  for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
-    const release = await acquireSlot();
-    try {
-      const response = await invokeProxy(functionName, url, init, deadline);
-      const bodyText = await response.text();
-      const throttled = isThrottled(response.status, bodyText);
+  for (let round = 0; round < maxRounds && Date.now() < deadline; round++) {
+    const available = availableProxyTargets(targets, scope);
+    if (available.length === 0) break;
 
-      if (!throttled && response.ok) {
-        recordSuccess();
-        stats.directOk++;
-        return response;
-      }
-      lastWasProxyBusy = false;
-      if (throttled) stats.directThrottled++;
-      else stats.directFailed++;
-      lastResponse = response;
-      lastError = null;
-      if (!throttled && response.status < 500) return response;
-    } catch (error) {
-      if (isProxyBusyError(error)) {
-        // Our own concurrency cap, not a DB block. Retry within the budget; do
-        // not open the breaker or spend the Decodo fallback on it.
-        stats.proxyBusy++;
-        lastWasProxyBusy = true;
-        lastError = error;
-        lastResponse = null;
-      } else if (error instanceof DbThrottledError) {
-        // The proxy's own breaker is open. It answers in ~100 ms; retrying is
-        // noise, and this is a block, not a generic failure.
-        stats.directThrottled++;
-        lastError = error;
-        lastResponse = null;
-        openBreaker();
-        failureRecorded = true;
-        lastWasProxyBusy = false;
+    for (let index = 0; index < available.length && Date.now() < deadline; index++) {
+      const target = available[index];
+      if (target.arn !== targets[0]?.arn) stats.regionRotations++;
+      const profile = proxyHealth.get(proxyHealthKey(target, scope))?.preferredProfile ?? null;
+      const release = await acquireSlot();
+      if (Date.now() >= deadline) {
+        release();
         break;
-      } else {
-        lastWasProxyBusy = false;
-        stats.directFailed++;
-        lastError = error;
-        lastResponse = null;
       }
-    } finally {
-      release();
+      try {
+        attempted++;
+        const { response, usedProfile } = await invokeProxy(target, url, init, deadline, profile);
+        const bodyText = await response.text();
+        const blocked = isFingerprintBlocked(response.status, bodyText);
+        const rateLimited = response.status === 429;
+        const throttled = blocked || rateLimited;
+
+        if (!throttled && response.ok) {
+          recordSuccess();
+          stats.directOk++;
+          markProxyHealthy(target, scope, usedProfile);
+          return response;
+        }
+
+        if (blocked) {
+          stats.directThrottled++;
+          stats.blocks++;
+          sawBlocked = true;
+          markProxyUnhealthy(target, scope);
+        } else if (rateLimited) {
+          // A 429 is a rate limit, not a regional block: keep the region
+          // available so the next round (with its longer backoff) can retry it.
+          stats.directThrottled++;
+          sawRateLimit = true;
+          lastRateLimitResponse = response;
+        } else {
+          stats.directFailed++;
+          sawNonThrottleFailure = true;
+        }
+        lastResponse = response;
+        lastError = null;
+        if (!throttled && response.status < 500) return response;
+      } catch (error) {
+        if (isProxyBusyError(error)) {
+          // Our own concurrency cap, not a DB block. Do not penalise the region
+          // or record a DB failure; the outer loop retries while budget remains.
+          stats.proxyBusy++;
+          sawBusy = true;
+          lastError = error;
+          lastResponse = null;
+        } else if (error instanceof DbThrottledError) {
+          // The proxy's own breaker is open. It answers in ~100 ms; retrying is
+          // noise, and this is a block, not a generic failure.
+          stats.directThrottled++;
+          stats.blocks++;
+          sawBlocked = true;
+          markProxyUnhealthy(target, scope);
+          lastError = error;
+          lastResponse = null;
+        } else {
+          // Network/timeout/FunctionError: cool the region briefly so a broken
+          // proxy is not the first choice on every request.
+          stats.directFailed++;
+          sawNonThrottleFailure = true;
+          markProxyUnhealthy(target, scope);
+          lastError = error;
+          lastResponse = null;
+        }
+      } finally {
+        release();
+      }
+
+      if (index < available.length - 1) stats.retries++;
     }
 
-    if (attempt < maxAttempts && Date.now() < deadline) {
+    if (round < maxRounds - 1 && Date.now() < deadline) {
       stats.retries++;
-      await sleep(Math.min(intFromEnv('DB_RETRY_BACKOFF_MS', 3000) * attempt, Math.max(0, deadline - Date.now())));
+      const backoff = sawRateLimit
+        ? intFromEnv('DB_RATE_LIMIT_BACKOFF_MS', 5000)
+        : intFromEnv('DB_RETRY_BACKOFF_MS', 3000);
+      await sleep(Math.min(backoff * (round + 1), Math.max(0, deadline - Date.now())));
     }
   }
 
-  if (lastWasProxyBusy) {
-    throw new DbThrottledError('DB proxy is busy (Lambda concurrency limit)');
+  if (attempted === 0) {
+    // Every region is cooling down for this endpoint. Nothing new was learned
+    // about DB, so fail fast without extending the breaker.
+    throw new DbThrottledError();
   }
 
-  if (!failureRecorded) recordFailure();
-  const fallback = await viaFallback(url, init, deadline);
-  if (fallback) return fallback;
-  if (lastError instanceof DbThrottledError) throw lastError;
+  if (sawBlocked && !sawRateLimit && !sawNonThrottleFailure && !sawBusy) {
+    // A block with no other signal: stop the caller immediately.
+    openBreaker();
+    throw new DbThrottledError();
+  }
+
+  if (sawBusy && !sawNonThrottleFailure && !sawRateLimit) {
+    throw new DbProxyBusyError();
+  }
+
+  recordFailure();
   if (breakerOpen()) throw new DbThrottledError();
+  // Prefer the retryable rate-limit response over a block from the other region.
+  if (lastRateLimitResponse) return lastRateLimitResponse;
   if (lastResponse) return lastResponse;
   throw lastError instanceof Error ? lastError : new Error('DB proxy request failed');
 }
@@ -766,37 +850,27 @@ async function proxyFetch(
 // Entry point
 // ---------------------------------------------------------------------------
 
-export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
-  const deadline = Date.now() + intFromEnv('DB_TOTAL_BUDGET_MS', 24_000);
-
-  if (process.env.DB_TRANSPORT === 'decodo') {
-    const forced = await viaFallback(url, init, deadline);
-    if (forced) return forced;
-  }
-
-  if (breakerOpen()) {
-    stats.breakerSkips++;
-    const fallback = await viaFallback(url, init, deadline);
-    if (fallback) return fallback;
-    throw new DbThrottledError();
-  }
-
-  const proxyFunction = process.env.DB_PROXY_FUNCTION;
-  if (proxyFunction) return proxyFetch(proxyFunction, url, init, deadline);
-
+async function directFetch(url: string, init: FetchInit, deadline: number): Promise<FetchCompatibleResponse> {
   const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
+  const scope = endpointScope(url);
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
+  let allProfilesBlocked = false;
 
   // Do not start an attempt that the shared wall-clock budget can no longer hold.
   for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
     const release = await acquireSlot();
+    if (Date.now() >= deadline) {
+      release();
+      break;
+    }
     try {
-      const candidates = availableProfiles();
+      const candidates = availableProfiles(scope);
       if (candidates.length === 0) {
         // Every profile is cooling down after OPS_BLOCKED; do not spend the
-        // budget on another guaranteed refusal.
+        // budget on another guaranteed refusal. The caller must stop the batch.
         stats.directThrottled++;
+        allProfilesBlocked = true;
         lastResponse = null;
         lastError = null;
         break;
@@ -804,22 +878,42 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
 
       let response: FetchCompatibleResponse | null = null;
       let bodyText = '';
+      let throttleRotations = 0;
+      const maxThrottleRotations = intFromEnv('DB_PROFILE_THROTTLE_ROTATIONS', 2);
 
-      // Rotate through the profiles until DB accepts one. A blocked profile is
-      // put on cooldown, so the next request starts with the one that worked.
+      // Rotate through the profiles until DB accepts one. A refused profile is
+      // put on cooldown; a 429 also rotates (another fingerprint has its own
+      // bucket) but is not marked blocked.
       for (let index = 0; index < candidates.length; index++) {
         if (index > 0) stats.profileRotations++;
         const profile = candidates[index];
-        response = await directOnce(url, init, profile);
+        response = await directOnce(url, init, profile, deadline);
         bodyText = await response.text();
 
-        if (!isFingerprintBlocked(response.status, bodyText)) {
-          activeProfileIndex = TLS_PROFILES.indexOf(profile);
-          break;
+        if (isFingerprintBlocked(response.status, bodyText)) {
+          stats.blocks++;
+          markProfileBlocked(profile, scope);
+          if (index === candidates.length - 1 || Date.now() >= deadline) break;
+          // Space the profile attempts: six immediate ClientHellos from the
+          // same egress look like a burst to DB's rate limiter.
+          await sleep(Math.min(intFromEnv('DB_PROFILE_ROTATION_GAP_MS', 250), Math.max(0, deadline - Date.now())));
+          continue;
         }
 
-        markProfileBlocked(profile);
-        if (index === candidates.length - 1 || Date.now() >= deadline) break;
+        if (
+          response.status === 429 &&
+          throttleRotations < maxThrottleRotations &&
+          index < candidates.length - 1 &&
+          Date.now() < deadline
+        ) {
+          throttleRotations++;
+          continue;
+        }
+
+        if (!isThrottled(response.status, bodyText) && response.status < 500) {
+          currentProfileName = profile.name;
+        }
+        break;
       }
 
       if (!response) {
@@ -861,13 +955,43 @@ export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCom
     }
   }
 
+  if (allProfilesBlocked) {
+    stats.blocks++;
+    throw new DbThrottledError();
+  }
+  // A 429 is a rate limit, not a regional block: return it without opening this
+  // environment's breaker. The caller counts it and retries/fails over.
+  if (lastResponse?.status === 429) return lastResponse;
   recordFailure();
-
-  const fallback = await viaFallback(url, init, deadline);
-  if (fallback) return fallback;
   if (breakerOpen()) throw new DbThrottledError();
   if (lastResponse) return lastResponse;
   throw lastError instanceof Error ? lastError : new Error('DB request failed');
+}
+
+/**
+ * Optional run-level deadline. The refresher sets it once per SQS message so a
+ * journey started near the Lambda timeout cannot spend a fresh per-request
+ * budget and overrun the invocation.
+ */
+let runDeadline = 0;
+
+/** Bound all subsequent requests to a run-level deadline; `null` clears it. */
+export function setDbTransportDeadline(deadline: number | null): void {
+  runDeadline = deadline && deadline > 0 ? deadline : 0;
+}
+
+export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
+  const budgetDeadline = Date.now() + intFromEnv('DB_TOTAL_BUDGET_MS', 24_000);
+  const deadline = runDeadline > 0 ? Math.min(budgetDeadline, runDeadline) : budgetDeadline;
+
+  if (breakerOpen()) {
+    stats.breakerSkips++;
+    throw new DbThrottledError();
+  }
+
+  const targets = proxyTargets();
+  if (targets.length > 0) return proxyFetch(targets, url, init, deadline);
+  return directFetch(url, init, deadline);
 }
 
 export { FetchCompatibleRequest as Request };

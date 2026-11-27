@@ -20,11 +20,11 @@ import {
 } from './config';
 
 /**
- * Name of the SSM SecureStrings holding the Pushover credentials. Like the
- * Decodo key, the values never appear in a template: CI writes them from the
- * repository secrets `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY`, and the
- * forwarder reads them at runtime. Override the names with the
- * `pushover_token_param` / `pushover_user_param` context keys.
+ * Name of the SSM SecureStrings holding the Pushover credentials. The values
+ * never appear in a template: CI writes them from the repository secrets
+ * `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY`, and the forwarder reads them at
+ * runtime. Override the names with the `pushover_token_param` /
+ * `pushover_user_param` context keys.
  */
 export const DEFAULT_PUSHOVER_TOKEN_PARAM = '/train-price-monitor/pushover-token';
 export const DEFAULT_PUSHOVER_USER_PARAM = '/train-price-monitor/pushover-user-key';
@@ -310,7 +310,7 @@ export class AlertingStack extends cdk.Stack {
         conditions: {
           StringEquals: { 'aws:SourceAccount': this.account },
           ArnLike: {
-            'aws:SourceArn': `arn:${cdk.Stack.of(this).partition}:budgets::${this.account}:*`,
+            'aws:SourceArn': `arn:${cdk.Stack.of(this).partition}:budgets::${this.account}:budget/*`,
           },
         },
       })

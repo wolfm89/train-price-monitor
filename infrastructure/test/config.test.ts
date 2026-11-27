@@ -48,19 +48,66 @@ describe('shared configuration', () => {
     expect(SCRAPER_CONFIG.compactor_timeout_seconds).toBeGreaterThan(0);
   });
 
-  test('DB proxy region defaults to us-east-1 and follows CDK_DB_PROXY_REGION', async () => {
+  test('DB proxy regions default to both regions and follow CDK_DB_PROXY_REGIONS', async () => {
+    const previousRegions = process.env.CDK_DB_PROXY_REGIONS;
+    const previousProfiles = process.env.CDK_DB_TLS_PROFILES;
+    try {
+      delete process.env.CDK_DB_PROXY_REGIONS;
+      delete process.env.CDK_DB_TLS_PROFILES;
+      jest.resetModules();
+      let config = await import('../lib/config');
+      expect(config.DB_PROXY_REGIONS).toEqual(['us-east-1', 'eu-central-1']);
+      expect(config.DB_TLS_PROFILES.split(',')[0]).toBe('chrome');
+
+      process.env.CDK_DB_PROXY_REGIONS = 'eu-west-1, us-west-2';
+      process.env.CDK_DB_TLS_PROFILES = 'legacy,chrome';
+      jest.resetModules();
+      config = await import('../lib/config');
+      expect(config.DB_PROXY_REGIONS).toEqual(['eu-west-1', 'us-west-2']);
+      expect(config.DB_TLS_PROFILES).toBe('legacy,chrome');
+    } finally {
+      if (previousRegions === undefined) delete process.env.CDK_DB_PROXY_REGIONS;
+      else process.env.CDK_DB_PROXY_REGIONS = previousRegions;
+      if (previousProfiles === undefined) delete process.env.CDK_DB_TLS_PROFILES;
+      else process.env.CDK_DB_TLS_PROFILES = previousProfiles;
+      jest.resetModules();
+    }
+  });
+
+  test('dbProxyStackId keeps the unsuffixed id in the legacy region only', async () => {
     const previous = process.env.CDK_DB_PROXY_REGION;
     try {
       delete process.env.CDK_DB_PROXY_REGION;
       jest.resetModules();
-      expect((await import('../lib/config')).DB_PROXY_REGION).toBe('us-east-1');
+      let config = await import('../lib/config');
+      expect(config.dbProxyStackId('us-east-1')).toBe('DbProxyStack');
+      expect(config.dbProxyStackId('eu-central-1')).toBe('DbProxyStack-eu-central-1');
 
       process.env.CDK_DB_PROXY_REGION = 'eu-central-1';
       jest.resetModules();
-      expect((await import('../lib/config')).DB_PROXY_REGION).toBe('eu-central-1');
+      config = await import('../lib/config');
+      expect(config.dbProxyStackId('eu-central-1')).toBe('DbProxyStack');
+      expect(config.dbProxyStackId('us-east-1')).toBe('DbProxyStack-us-east-1');
     } finally {
       if (previous === undefined) delete process.env.CDK_DB_PROXY_REGION;
       else process.env.CDK_DB_PROXY_REGION = previous;
+      jest.resetModules();
+    }
+  });
+
+  test('deduplicates CDK_DB_PROXY_REGIONS and rejects an invalid region', async () => {
+    const previous = process.env.CDK_DB_PROXY_REGIONS;
+    try {
+      process.env.CDK_DB_PROXY_REGIONS = 'us-east-1, us-east-1,eu-central-1';
+      jest.resetModules();
+      expect((await import('../lib/config')).DB_PROXY_REGIONS).toEqual(['us-east-1', 'eu-central-1']);
+
+      process.env.CDK_DB_PROXY_REGIONS = 'not-a-region';
+      jest.resetModules();
+      await expect(import('../lib/config')).rejects.toThrow(/Invalid CDK_DB_PROXY_REGIONS/);
+    } finally {
+      if (previous === undefined) delete process.env.CDK_DB_PROXY_REGIONS;
+      else process.env.CDK_DB_PROXY_REGIONS = previous;
       jest.resetModules();
     }
   });

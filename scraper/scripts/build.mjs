@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 // /var/runtime/node_modules inside the image) and must not be bundled.
 // Externalizing them keeps the bundle small and avoids version conflicts with
 // the runtime-supplied SDK.
-const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3', '@aws-sdk/client-ssm'];
+const external = ['@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb', '@aws-sdk/client-s3'];
 
 const pollerExternal = [...external];
 

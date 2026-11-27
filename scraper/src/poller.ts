@@ -10,7 +10,7 @@ import { computeTtdTier, computeNextScrapeAt, dueKey, tierRank, TIER_QUERY_ORDER
 import { positiveIntFromEnv } from './env.js';
 import { fetchDayJourneys } from './client.js';
 import { ROUTE_CATALOG } from './routes.js';
-import { DbThrottledError, takeDbTransportStats } from '../../shared/db-fetch.js';
+import { DbProxyBusyError, DbThrottledError, takeDbTransportStats } from '../../shared/db-fetch.js';
 import runtimeConfig from '../../shared/runtime-config.json' with { type: 'json' };
 
 const logger = new Logger({ serviceName: 'scraper-poller' });
@@ -326,12 +326,63 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
     const observedAt = now;
 
     try {
-      // Two API calls: 2nd class and 1st class
-      const [journeys2nd, journeys1st] = await Promise.all([
+      // Two API calls: 2nd class and 1st class. allSettled (not all) so a fast
+      // 429 does not hide a DbThrottledError from the other class.
+      const results = await Promise.allSettled([
         fetchDayJourneys(route.originEva, route.destEva, departureDate, false),
         fetchDayJourneys(route.originEva, route.destEva, departureDate, true),
       ]);
 
+      if (results[0].status === 'rejected' || results[1].status === 'rejected') {
+        const failures = results.filter((result) => result.status === 'rejected');
+        const blocked = failures
+          .map((failure) => failure.reason)
+          .find((reason) => reason instanceof DbThrottledError || reason instanceof DbProxyBusyError);
+        if (blocked) throw blocked;
+
+        // A transient failure in one class must not discard the other class's
+        // rows. Keep them and retry the whole target shortly.
+        const partialRows: ParquetRow[] = [];
+        if (results[0].status === 'fulfilled') {
+          partialRows.push(
+            ...buildRows(
+              results[0].value,
+              2,
+              route.id,
+              route.originEva,
+              route.originName,
+              route.destEva,
+              route.destName,
+              observedAt
+            )
+          );
+        }
+        if (results[1].status === 'fulfilled') {
+          partialRows.push(
+            ...buildRows(
+              results[1].value,
+              1,
+              route.id,
+              route.originEva,
+              route.originName,
+              route.destEva,
+              route.destName,
+              observedAt
+            )
+          );
+        }
+        if (partialRows.length > 0) allBatchRows.push(...partialRows);
+        logger.warn('One class failed, preserving the other and retrying target later', {
+          route_id: target.route_id,
+          departure_date: target.departure_date,
+          classesFailed: failures.length,
+        });
+        await retryLater(target, 5 * 60 * 1000, observedAt);
+        continue;
+      }
+
+      const journeys2nd = results[0].value;
+      const journeys1st = results[1].value;
       const rows2nd = buildRows(
         journeys2nd,
         2,
@@ -371,9 +422,28 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         }
       }
 
+      // The NoPrices alarm measures priced targets, not successful HTTP calls:
+      // log the priced count for every target, including zero.
+      logger.info('Prices produced', {
+        route_id: target.route_id,
+        departure_date: target.departure_date,
+        rows: allRows.length,
+        pricedRows,
+      });
+
       // Reschedule only after the batch is safely in S3 (see below), so a crash
       // between the two does not mark a target scraped whose rows were lost.
       const newTier = computeTtdTier(target.departure_date, observedAt);
+      if (allRows.length === 0 && newTier === 'NEAR') {
+        // A near departure with no result at all is usually a degraded edge,
+        // not a real empty day. Do not advance it by the full TTD interval.
+        logger.warn('No journeys returned for a near target, retrying later', {
+          route_id: target.route_id,
+          departure_date: target.departure_date,
+        });
+        await retryLater(target, FAILURE_RETRY_MS, observedAt);
+        continue;
+      }
       scrapedTargets.push({ target, newTier });
 
       logger.info('Target scraped', {
@@ -386,6 +456,13 @@ async function pollerHandlerInner(start: number): Promise<boolean> {
         newTier,
       });
     } catch (err) {
+      if (err instanceof DbProxyBusyError) {
+        // Our own concurrency reservation, not a DB block: keep the batch and
+        // retry this target shortly.
+        logger.warn('DB proxy busy, retrying target later', { route_id: target.route_id });
+        await retryLater(target, 5 * 60 * 1000, observedAt);
+        continue;
+      }
       if (err instanceof DbThrottledError) {
         // DB is throttling this environment. Every further request would only
         // extend the throttle, so stop here: the untouched targets keep their

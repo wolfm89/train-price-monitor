@@ -6,7 +6,7 @@ import { AnalyticsStack } from '../lib/analytics-stack';
 import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { CertificateStack } from '../lib/certificate-stack';
 import { DbProxyStack } from '../lib/db-proxy-stack';
-import { DB_PROXY_FUNCTION_NAME, DB_PROXY_REGION } from '../lib/config';
+import { DB_PROXY_FUNCTION_NAME, DB_PROXY_REGIONS, dbProxyStackId } from '../lib/config';
 import { ScraperStack } from '../lib/scraper-stack';
 
 const app = new cdk.App();
@@ -15,9 +15,6 @@ const app = new cdk.App();
 if (process.env.CDK_APP_NAME) app.node.setContext('app_name', process.env.CDK_APP_NAME);
 if (process.env.CDK_DOMAIN_NAME) app.node.setContext('domain_name', process.env.CDK_DOMAIN_NAME);
 if (process.env.CDK_SES_FROM_EMAIL) app.node.setContext('ses_from_email', process.env.CDK_SES_FROM_EMAIL);
-// Name of the SSM SecureString holding the Decodo API key (non-secret).
-if (process.env.CDK_DECODO_API_KEY_PARAM)
-  app.node.setContext('decodo_api_key_param', process.env.CDK_DECODO_API_KEY_PARAM);
 // `1` disables the scraper's poller and hydrator schedules (they stay deployed).
 if (process.env.CDK_SCRAPER_PAUSED) app.node.setContext('scraper_paused', process.env.CDK_SCRAPER_PAUSED);
 // `1` disables the weekly silver schedule (it stays deployed).
@@ -43,23 +40,30 @@ const alertingStack = new AlertingStack(app, 'AlertingStack', {
   },
 });
 
-const dbProxyStack = new DbProxyStack(app, 'DbProxyStack', {
-  env: {
-    account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: DB_PROXY_REGION,
-  },
-});
-const dbProxyFunctionArn = cdk.Arn.format(
-  {
-    partition: 'aws',
-    service: 'lambda',
-    region: DB_PROXY_REGION,
-    account: cdk.Aws.ACCOUNT_ID,
-    resource: 'function',
-    resourceName: DB_PROXY_FUNCTION_NAME,
-    arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
-  },
-  dbProxyStack
+const dbProxyStacks = DB_PROXY_REGIONS.map(
+  (region) =>
+    new DbProxyStack(app, dbProxyStackId(region), {
+      env: {
+        account: process.env.CDK_DEFAULT_ACCOUNT,
+        region,
+      },
+    })
+);
+const dbProxyFunctionArns = DB_PROXY_REGIONS.map((region, index) =>
+  cdk.Arn.format(
+    {
+      // Derive the partition/account from this region's own stack so a
+      // mixed-partition list cannot produce an ARN in the wrong partition.
+      partition: dbProxyStacks[index].partition,
+      service: 'lambda',
+      region,
+      account: dbProxyStacks[index].account,
+      resource: 'function',
+      resourceName: DB_PROXY_FUNCTION_NAME,
+      arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+    },
+    dbProxyStacks[index]
+  )
 );
 
 const infrastructureStack = new InfrastructureStack(
@@ -76,10 +80,10 @@ const infrastructureStack = new InfrastructureStack(
     },
     crossRegionReferences: true,
     alertTopicArn: alertingStack.topic.topicArn,
-    dbProxyFunctionArn,
+    dbProxyFunctionArns,
   }
 );
-infrastructureStack.addDependency(dbProxyStack);
+for (const stack of dbProxyStacks) infrastructureStack.addDependency(stack);
 
 const scraperStack = new ScraperStack(app, 'ScraperStack', {
   env: {
@@ -87,9 +91,9 @@ const scraperStack = new ScraperStack(app, 'ScraperStack', {
     region: process.env.CDK_DEFAULT_REGION,
   },
   alertTopicArn: alertingStack.topic.topicArn,
-  dbProxyFunctionArn,
+  dbProxyFunctionArns,
 });
-scraperStack.addDependency(dbProxyStack);
+for (const stack of dbProxyStacks) scraperStack.addDependency(stack);
 
 // Short form matches the handler's sql-<hash> fallback. CI sets GITHUB_SHA; a manual
 // deploy can override with CDK_TRANSFORM_VERSION.

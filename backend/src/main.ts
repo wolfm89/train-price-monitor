@@ -176,7 +176,7 @@ export const handler = async (event: APIGatewayProxyEventV2 | SQSEvent, context:
         executeError = error;
       } finally {
         // Drain exactly once: a failed run must not leak its counters into the
-        // next warm invocation and misattribute Decodo usage.
+        // next warm invocation and misattribute transport counters.
         transport = takeDbTransportStats();
       }
 

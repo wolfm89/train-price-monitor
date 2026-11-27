@@ -347,9 +347,14 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       }),
     ],
     [
-      logsTable('Diagnostics — recent failed target scrapes', props.pollerLogGroup, [
+      logsTable('Diagnostics — recent failed or throttled target scrapes', props.pollerLogGroup, [
         'fields @timestamp, route_id, departure_date, err',
         'filter message = "Failed to scrape target"',
+        '  or message = "DB is throttling this environment, ending the batch early"',
+        '  or message = "Rate limited by Vendo API"',
+        '  or message = "DB proxy busy, retrying target later"',
+        '  or message = "One class failed, preserving the other and retrying target later"',
+        '  or message = "Failed to update schedule after upload"',
         'sort @timestamp desc',
         'limit 10',
       ]),
@@ -405,8 +410,8 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   const serverErrors = props.api
     .metricServerError({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
     .with({ label: '5xx' });
-  const fallbacks = metric(METRIC_NAMESPACE, 'SearchFallbackOk', cdk.Duration.minutes(5), 'Sum').with({
-    label: 'DB refused (Decodo)',
+  const regionRotations = metric(METRIC_NAMESPACE, 'TransportRegionRotations', cdk.Duration.minutes(5), 'Sum').with({
+    label: 'DB region failovers',
   });
   // Yoga returns HTTP 200 with an errors[] payload, so API Gateway's 5xx metric
   // misses resolver failures. The backend logs them at ERROR; the filter metric
@@ -429,10 +434,10 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     label: 'Refresher errors',
     period: cdk.Duration.minutes(5),
   });
-  const fallbacksFilled = new cloudwatch.MathExpression({
-    expression: 'FILL(fallbackCount, 0)',
-    usingMetrics: { fallbackCount: fallbacks },
-    label: 'DB refused (Decodo)',
+  const regionRotationsFilled = new cloudwatch.MathExpression({
+    expression: 'FILL(regionRotationCount, 0)',
+    usingMetrics: { regionRotationCount: regionRotations },
+    label: 'DB region failovers',
     period: cdk.Duration.minutes(5),
   });
 
@@ -493,7 +498,7 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
   return [
     [
       header(
-        '**App** · GraphQL API behind Cognito · DB direct with Decodo fallback · interactive p50 < 200 ms · search p99 < 8 s'
+        '**App** · GraphQL API behind Cognito · DB proxy with region + fingerprint failover · interactive p50 < 200 ms · search p99 < 8 s'
       ),
     ],
     [alarmStatus(props.alarms)],
@@ -545,8 +550,8 @@ export function appWidgets(props: AppDashboardProps): cloudwatch.IWidget[][] {
     ],
     [
       new cloudwatch.GraphWidget({
-        title: 'Errors — 4xx, 5xx, GraphQL errors, refresher errors and fallbacks',
-        left: [clientErrors, serverErrors, graphqlErrorsFilled, refresherErrorsFilled, fallbacksFilled],
+        title: 'Errors — 4xx, 5xx, GraphQL errors, refresher errors and region failovers',
+        left: [clientErrors, serverErrors, graphqlErrorsFilled, refresherErrorsFilled, regionRotationsFilled],
         view: cloudwatch.GraphWidgetView.TIME_SERIES,
         leftYAxis: { min: 0 },
         width: GRAPH_WIDTH,

@@ -20,10 +20,10 @@ export const bundleOptions = {
   sourcemap: true,
   logLevel: 'info',
   // db-vendo-client imports `cross-fetch`. The alias swaps in the Node-https
-  // transport with browser-like TLS profiles and the Decodo fallback; without it
-  // DB's edge answers 403 OPS_BLOCKED.
+  // transport with browser-like TLS profiles and the regional DB proxies;
+  // without it DB's edge answers 403 OPS_BLOCKED.
   alias: { 'cross-fetch': '../shared/db-fetch.ts', '@aws-sdk/client-lambda': lambdaClient },
   // Provided by the Node 24 runtime or needed at runtime as-is; bundling them
   // breaks the Lambdas (see AGENTS.md).
-  external: ['gps-distance', 'https-proxy-agent', 'luxon', '@aws-sdk/client-ssm', 'qs', 'slugg'],
+  external: ['gps-distance', 'https-proxy-agent', 'luxon', 'qs', 'slugg'],
 };

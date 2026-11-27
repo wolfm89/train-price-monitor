@@ -21,18 +21,17 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | `TPM-Scraper-PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
 | `TPM-Scraper-PollerErrors`        | The poller Lambda is failing.                                                               |
-| `TPM-Scraper-PollerThrottledByDb` | The poller DB breaker opened in two consecutive runs; the DB egress proxy is blocked.       |
-| `TPM-Scraper-PollerNoPrices`      | No successful scrape for 45 minutes.                                                        |
+| `TPM-Scraper-PollerThrottledByDb` | The poller saw DB fingerprint blocks in two consecutive runs; the proxy egress is refused.  |
+| `TPM-Scraper-PollerNoPrices`      | No target has returned prices for 45 minutes.                                               |
 | `TPM-Scraper-PollerBatchAborted`  | A run hit the 240 s abort; the log line, not a raw duration threshold.                      |
+| `TPM-Scraper-HydratorErrors`      | The nightly hydrator failed: no new scrape targets are being seeded.                        |
 | `TPM-App-SearchErrors`            | GraphQL search errors in the API.                                                           |
-| `TPM-App-UsingDecodoFallback`     | The DB transport has been degraded for two consecutive hours.                               |
-| `TPM-App-RefresherErrors`         | The hourly/daily SQS worker is failing.                                                     |
+| `TPM-App-RefresherErrors`         | The hourly/daily SQS worker failed in two consecutive hourly periods.                       |
 | `TPM-App-SearchThrottled`         | The GraphQL Lambda is being throttled (account concurrency limit reached).                  |
 | `TPM-App-RefresherDLQ`            | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
 
-`TPM-App-UsingDecodoFallback` aggregates the API's GraphQL response line and the refresher's SQS
-message line, so either path can raise it. A single fallback is not an incident; the alarm requires
-two consecutive hours.
+Ten alarms: the hydrator-errors alarm covers the nightly seed. Region failovers are shown on the
+dashboards (`TransportRegionRotations`) but are not alarmed: failing over is expected behavior.
 
 Do not add an eleventh alarm or custom metric without accepting the cost. Do not use metric math,
 Metrics Insights or anomaly-detection bands in alarms; they are billed differently from the free
@@ -74,18 +73,22 @@ then.
 
 ### DB throttling or `403 OPS_BLOCKED`
 
-1. Check `TPM-App-UsingDecodoFallback`, the poller transport counters, and the `DbProxyStack` log group.
-2. The backend reaches the Navigator API through the configured DB proxy and falls back to Decodo
-   when `DECODO_API_KEY_PARAM` resolves. The poller uses the same proxy and has no Decodo key.
+1. Check the poller transport counters (`directThrottled`, `blocks`, `breakerOpened`,
+   `regionRotations`, `profileRotations`) and the `DbProxyStack` log group in both regions. `blocks`
+   counts 452/OPS_BLOCKED; a 429 is a rate limit and is retried with backoff.
+2. The backend reaches the Navigator API through the proxied regions; the transport tries the
+   healthiest region and the configured fingerprint order.
 3. On a proxy block the poller ends the batch; untouched targets are retried by the next run. Do not
    raise `SCRAPER_BATCH_SIZE`. A few `directThrottled` retries per run are normal; the alarm fires
-   when the poller's breaker opens in two consecutive runs.
-4. If the proxy region is blocked, test a new egress first, then set `CDK_DB_PROXY_REGION` to it.
-   `eu-central-1` is currently blocked. Deploy the caller stacks with the new ARN first, then delete
-   the old proxy stack:
-   `aws cloudformation delete-stack --region us-east-1 --stack-name DbProxyStack`.
-   The old log group is retained.
-5. On 2026-11-25 a proxied 25-target batch took 255.7 s against the then-current 250 s guard. The
+   when `blocks` is non-zero in two consecutive runs.
+4. DB can refuse a fingerprint that worked earlier: on 2026-11-27 `tls12` returned `452 OPS_BLOCKED`
+   while `chrome` and `legacy` returned 200 from the same IP. The `tlsProfile` field in the poller's
+   transport counters shows the current winner. If every fingerprint is refused, update
+   `CDK_DB_TLS_PROFILES`; do not pin a single profile.
+5. If a proxy region is blocked, the transport skips it for `DB_REGION_COOLDOWN_MS` and then retries
+   automatically. To change the set, set `CDK_DB_PROXY_REGIONS` and deploy. Removing a region from
+   the list leaves its whole stack deployed; delete it explicitly (its log group is retained).
+6. On 2026-11-25 a proxied 25-target batch took 255.7 s against the then-current 250 s guard. The
    poller now uses 20 targets, 3.5 s spacing and the 240 s guard. If the DB breaker opens
    repeatedly, reduce calls/day rather than the gap.
 
@@ -103,8 +106,8 @@ then.
 1. Check Lambda `ConcurrentExecutions` and account concurrency limits. The API and refresher share
    the account's concurrency pool; a traffic spike or a stuck refresher can starve the API.
 2. Reduce traffic, stop the refresher temporarily, or request a quota increase. The backend does not
-   use reserved concurrency, but the DB proxy reserves 10; a proxy concurrency rejection surfaces as
-   a search error and the backend falls back to Decodo.
+   use reserved concurrency, but each DB proxy reserves 6; a proxy concurrency rejection surfaces as
+   a search error, and the transport tries the next region.
 
 ### Refresher errors or DLQ
 

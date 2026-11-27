@@ -16,9 +16,8 @@ import {
   aws_lambda_event_sources as sources,
 } from 'aws-cdk-lib';
 import { tableDefinitions } from './dynamodb-tables';
-import { decodoApiKeyParamName, grantDecodoApiKeyRead } from './decodo';
 import { DASHBOARD_START, appWidgets } from './dashboards';
-import { DASHBOARD_NAMES, DB_PROXY_REGION, METRIC_NAMESPACE } from './config';
+import { DASHBOARD_NAMES, DB_TLS_PROFILES, METRIC_NAMESPACE } from './config';
 import { UserPool } from 'aws-cdk-lib/aws-cognito';
 import { ResponseType } from 'aws-cdk-lib/aws-apigateway';
 
@@ -30,7 +29,7 @@ export class Backend extends Construct {
     frontendDomainName: string,
     sesFromEmail: string,
     alertTopic?: sns.ITopic,
-    dbProxyFunctionArn?: string
+    dbProxyFunctionArns: string[] = []
   ) {
     super(scope, id);
 
@@ -97,17 +96,12 @@ export class Backend extends Construct {
       SES_FROM_EMAIL: sesFromEmail,
       SES_SANDBOX: sesSandbox ? 'true' : 'false',
       NODE_OPTIONS: '--enable-source-maps',
-      // Start with the profile that is currently accepted; the transport still
-      // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
-      DB_TLS_PROFILE: 'tls12',
-      // DB accepts the Navigator API from the configured proxy region but refuses
-      // the app-region and Decodo egress. See shared/db-fetch.ts.
-      ...(dbProxyFunctionArn ? { DB_PROXY_FUNCTION: dbProxyFunctionArn, DB_PROXY_REGION } : {}),
-      // DB is reached directly with a browser-like TLS client; when DB throttles
-      // the environment the request falls back to Decodo. Name of the SSM
-      // SecureString holding the Decodo key; the value itself is never in the
-      // template (see decodo.ts and shared/db-fetch.ts).
-      DECODO_API_KEY_PARAM: decodoApiKeyParamName(this),
+      // Fingerprints in the order the transport tries them. DB accepts different
+      // orders over time, so the list is dynamic rather than a single pinned one.
+      DB_TLS_PROFILES,
+      // One proxy Lambda per region; the transport fails over on a refusal or a
+      // 429 (see shared/db-fetch.ts).
+      ...(dbProxyFunctionArns.length > 0 ? { DB_PROXY_FUNCTIONS: dbProxyFunctionArns.join(',') } : {}),
     };
 
     // Both functions run the same image (the pre-built bundle plus production
@@ -122,11 +116,10 @@ export class Backend extends Construct {
       memorySize: 512,
       environment: {
         ...commonEnvironment,
-        // A user is waiting: one short proxy invoke, then straight to Decodo.
-        // The invoke is aborted at 8 s, leaving ~16 s for the fallback inside
-        // the 29 s cap.
-        DB_MAX_ATTEMPTS: '1',
-        DB_REQUEST_TIMEOUT_MS: '8000',
+        // A user is waiting: two rounds over the two proxy regions, each
+        // invoke capped at 5 s (2 x 2 x 5 s + backoff fits the 24 s budget).
+        DB_MAX_ATTEMPTS: '2',
+        DB_REQUEST_TIMEOUT_MS: '5000',
         DB_MIN_GAP_MS: '300',
         // API Gateway cuts the integration at 29 s; leave 5 s for start-up.
         DB_TOTAL_BUDGET_MS: '24000',
@@ -162,15 +155,12 @@ export class Backend extends Construct {
       table.grantReadWriteData(lambdaFunction);
       table.grantReadWriteData(refresherFunction);
     });
-    // Journey search and the hourly refresh both fall back to Decodo.
-    grantDecodoApiKeyRead(this, 'DecodoApiKey', [lambdaFunction, refresherFunction]);
-
-    if (dbProxyFunctionArn) {
+    if (dbProxyFunctionArns.length > 0) {
       for (const fn of [lambdaFunction, refresherFunction]) {
         fn.addToRolePolicy(
           new cdk.aws_iam.PolicyStatement({
             actions: ['lambda:InvokeFunction'],
-            resources: [dbProxyFunctionArn],
+            resources: dbProxyFunctionArns,
           })
         );
       }
@@ -348,54 +338,46 @@ export class Backend extends Construct {
 
     // -------------------------------------------------------------------------
     // Alarms and dashboard (CloudWatch free tier: 10 alarms, 10 custom metrics
-    // across both stacks; 5 alarms and 3 custom metrics are defined here)
+    // across both stacks; 4 alarms and 3 custom metrics are defined here, and
+    // the scraper stack adds the other 6 alarms and 7 metrics. All ten alarm
+    // slots are used.)
     // -------------------------------------------------------------------------
 
-    // The transport logs a `transport` object on every GraphQL response; a
-    // non-zero `fallbackOk` means DB refused the direct path and Decodo served
-    // the request instead — the user-facing path is degraded even though the
-    // request succeeded.
-    new logs.MetricFilter(this, 'SearchFallbackFilter', {
+    // Region failovers are diagnostic, not an incident: non-zero means the
+    // preferred proxy region was refused/throttled and the next one served the
+    // request. The dashboard shows them next to the error rates.
+    new logs.MetricFilter(this, 'SearchRegionRotationsFilter', {
       logGroup: apiLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL response'),
       metricNamespace: METRIC_NAMESPACE,
-      metricName: 'SearchFallbackOk',
-      metricValue: '$.transport.fallbackOk',
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
       defaultValue: 0,
     });
-    // The refresher is the component most likely to burn the Decodo allowance
-    // unattended. Its SQS handler logs the transport counters on "SQS message
-    // processed"; publishing to the same metric name keeps the custom-metric
-    // count at 10 while making refresher fallbacks visible to the alarm and
-    // the App dashboard.
-    new logs.MetricFilter(this, 'RefresherFallbackFilter', {
+    new logs.MetricFilter(this, 'RefresherRegionRotationsFilter', {
       logGroup: refresherLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processed'),
       metricNamespace: METRIC_NAMESPACE,
-      metricName: 'SearchFallbackOk',
-      metricValue: '$.transport.fallbackOk',
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
       defaultValue: 0,
     });
-    // A thrown transport/Yoga failure logs "GraphQL request failed" instead of
-    // "GraphQL response"; publish that snapshot to the same metric so a failed
-    // request cannot hide a Decodo fallback from the alarm.
-    new logs.MetricFilter(this, 'SearchFallbackFailureFilter', {
+    // Failure lines carry the same drained snapshot; without them a run where
+    // every region was refused would not appear in the failover metric.
+    new logs.MetricFilter(this, 'SearchRegionRotationsFailureFilter', {
       logGroup: apiLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL request failed'),
       metricNamespace: METRIC_NAMESPACE,
-      metricName: 'SearchFallbackOk',
-      metricValue: '$.transport.fallbackOk',
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
       defaultValue: 0,
     });
-    // The refresher's failure log carries the same drained snapshot; publish it
-    // too, otherwise a fallback followed by an exception disappears from the
-    // alarm until the next healthy run.
-    new logs.MetricFilter(this, 'RefresherFallbackFailureFilter', {
+    new logs.MetricFilter(this, 'RefresherRegionRotationsFailureFilter', {
       logGroup: refresherLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processing failed'),
       metricNamespace: METRIC_NAMESPACE,
-      metricName: 'SearchFallbackOk',
-      metricValue: '$.transport.fallbackOk',
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
       defaultValue: 0,
     });
 
@@ -432,21 +414,6 @@ export class Backend extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    const searchFallback = new cloudwatch.Alarm(this, 'SearchUsingDecodoFallback', {
-      alarmName: 'TPM-App-UsingDecodoFallback',
-      alarmDescription: 'The DB direct transport is degraded: search or refresher requests are falling back to Decodo.',
-      metric: new cloudwatch.Metric({
-        namespace: METRIC_NAMESPACE,
-        metricName: 'SearchFallbackOk',
-        period: cdk.Duration.hours(1),
-        statistic: 'Sum',
-      }),
-      threshold: 0,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: 2,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
-
     const refresherErrors = new cloudwatch.Alarm(this, 'RefresherErrors', {
       alarmName: 'TPM-App-RefresherErrors',
       alarmDescription: 'The hourly watchlist refresh failed (journeys stay stale and alerts are late).',
@@ -472,9 +439,9 @@ export class Backend extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // The 10th free alarm slot: a failed SQS refresh that exhausted its retries
-    // must not sit silently in the DLQ. The log-based RefresherErrors alarm only
-    // covers failures the handler caught.
+    // A failed SQS refresh that exhausted its retries must not sit silently in
+    // the DLQ. The log-based RefresherErrors alarm only covers failures the
+    // handler caught.
     const refresherDlq = new cloudwatch.Alarm(this, 'RefresherDlq', {
       alarmName: 'TPM-App-RefresherDLQ',
       alarmDescription:
@@ -490,7 +457,7 @@ export class Backend extends Construct {
     });
 
     // CloudWatch publishes to SNS through a dedicated action object.
-    for (const alarm of [searchErrors, searchFallback, refresherErrors, searchThrottled, refresherDlq]) {
+    for (const alarm of [searchErrors, refresherErrors, searchThrottled, refresherDlq]) {
       if (alertTopic) {
         alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
         // Recovery notifications are part of the forwarder; without an OK action
@@ -511,7 +478,7 @@ export class Backend extends Construct {
         dlq,
         apiLogGroup,
         refresherLogGroup,
-        alarms: [searchErrors, searchFallback, refresherErrors, searchThrottled, refresherDlq],
+        alarms: [searchErrors, refresherErrors, searchThrottled, refresherDlq],
       }),
     });
   }

@@ -93,7 +93,7 @@ describe('Dashboards', () => {
       'Storage — bucket size (daily)',
       'Storage — objects (daily)',
       'Alarms',
-      'Diagnostics — recent failed target scrapes',
+      'Diagnostics — recent failed or throttled target scrapes',
     ]) {
       expect(scraper).toContain(title);
     }

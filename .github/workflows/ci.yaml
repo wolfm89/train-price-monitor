@@ -6,6 +6,7 @@ name: CI/CD
 #
 # On a pull request: the five module jobs plus an image build.
 # On a push to main: the same module jobs, then deploy.
+# On a manual dispatch with deploy=true: the same checks, then deploy the selected ref.
 #
 # The image build is pull-request-only because a deploy builds and publishes
 # those images through CDK anyway. It exists because the Lambda images copy
@@ -23,6 +24,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the selected ref after the checks pass'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -273,10 +279,21 @@ jobs:
   deploy:
     timeout-minutes: 60
     name: Deploy
-    # Never on pull requests, and only once every module job is green.
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    # Never on pull requests, and only once every module job is green. A manual
+    # dispatch can deploy the selected ref only when `deploy` is explicitly set.
+    #
+    # SECURITY: repository secrets are available to any branch workflow. Keep a
+    # protected `production` environment (required reviewers, main-only) so a
+    # branch dispatch needs approval; the environment is declared here.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
     needs: [frontend, backend, scraper, infrastructure, analytics]
     runs-on: ubuntu-26.04
+    environment: production
+    # One deploy at a time across refs; a branch deploy and a main deploy must
+    # not interleave on the same CloudFormation stacks.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -330,38 +347,12 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-external-id: ${{ secrets.AWS_ROLE_EXTERNAL_ID }}
-          role-duration-seconds: 1200
+          role-duration-seconds: 3600
           role-session-name: GithubWorkflow
 
-      # The Decodo API key is never in a CDK template: CI writes it to an SSM
-      # SecureString and the functions read it at runtime via
-      # DECODO_API_KEY_PARAM. Secrets are not available in `if:` expressions, so
-      # the emptiness check happens in the shell.
-      - name: Sync Decodo API key to SSM
-        env:
-          DECODO_API_KEY: ${{ secrets.DECODO_API_KEY }}
-          DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
-        run: |
-          set -euo pipefail
-          PARAM="${DECODO_API_KEY_PARAM:-/train-price-monitor/decodo-api-key}"
-          if [[ -z "${DECODO_API_KEY}" ]]; then
-            echo "::warning::DECODO_API_KEY is not set; leaving ${PARAM} untouched. The Decodo fallback for search and refresh will not work until it exists."
-            exit 0
-          fi
-          # Rotating the key is just: update the repo secret and re-run this job;
-          # running functions pick it up within DECODO_KEY_TTL_MS. Only the
-          # parameter version is printed, never the value.
-          VERSION="$(aws ssm put-parameter \
-            --name "$PARAM" \
-            --type SecureString \
-            --value "$DECODO_API_KEY" \
-            --overwrite \
-            --query Version --output text)"
-          echo "Wrote ${PARAM} (version ${VERSION})"
-
-      # Pushover credentials for the alarm forwarder (AlertingStack). Same
-      # pattern as the Decodo key: CI writes them to SSM SecureStrings and the
-      # forwarder reads them at runtime, so neither value is ever in a template.
+      # Pushover credentials for the alarm forwarder (AlertingStack). CI writes
+      # them to SSM SecureStrings and the forwarder reads them at runtime, so
+      # neither value is ever in a template.
       - name: Sync Pushover credentials to SSM
         env:
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
@@ -401,8 +392,8 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
-          CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
-          CDK_DB_PROXY_REGION: ${{ vars.CDK_DB_PROXY_REGION }}
+          CDK_DB_PROXY_REGIONS: ${{ vars.CDK_DB_PROXY_REGIONS }}
+          CDK_DB_TLS_PROFILES: ${{ vars.CDK_DB_TLS_PROFILES }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
           CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}
@@ -415,8 +406,8 @@ jobs:
           CDK_APP_NAME: ${{ secrets.CDK_APP_NAME }}
           CDK_DOMAIN_NAME: ${{ secrets.CDK_DOMAIN_NAME }}
           CDK_SES_FROM_EMAIL: ${{ secrets.CDK_SES_FROM_EMAIL }}
-          CDK_DECODO_API_KEY_PARAM: ${{ vars.CDK_DECODO_API_KEY_PARAM }}
-          CDK_DB_PROXY_REGION: ${{ vars.CDK_DB_PROXY_REGION }}
+          CDK_DB_PROXY_REGIONS: ${{ vars.CDK_DB_PROXY_REGIONS }}
+          CDK_DB_TLS_PROFILES: ${{ vars.CDK_DB_TLS_PROFILES }}
           CDK_SCRAPER_PAUSED: ${{ vars.CDK_SCRAPER_PAUSED }}
           CDK_ANALYTICS_PAUSED: ${{ vars.CDK_ANALYTICS_PAUSED || '1' }}
           CDK_TRANSFORM_VERSION: ${{ github.sha }}

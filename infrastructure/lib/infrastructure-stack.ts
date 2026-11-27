@@ -9,8 +9,8 @@ import { Frontend, FrontendProps } from './frontend';
 interface InfrastructureStackProps extends cdk.StackProps {
   /** ARN of the alert topic (owned by AlertingStack). */
   alertTopicArn?: string;
-  /** ARN of the DB proxy Lambda (owned by DbProxyStack). */
-  dbProxyFunctionArn?: string;
+  /** ARNs of the DB proxy Lambdas, one per region (owned by DbProxyStack). */
+  dbProxyFunctionArns?: string[];
 }
 
 export class InfrastructureStack extends cdk.Stack {
@@ -36,7 +36,7 @@ export class InfrastructureStack extends cdk.Stack {
       frontendProps.domainName,
       sesFromEmail,
       alertTopic,
-      props?.dbProxyFunctionArn
+      props?.dbProxyFunctionArns
     );
     new Frontend(this, 'Frontend', frontendProps);
     // Runs daily: every deploy adds a new asset image to the CDK bootstrap ECR
