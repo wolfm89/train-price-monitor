@@ -8,16 +8,20 @@ AWS CDK v2 TypeScript stacks for Train Price Monitor.
 
 ## Stacks
 
-| Stack                 | Region         | Description                                                                                                              |
-| --------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `CertificateStack`    | `us-east-1`    | ACM certificate for the CloudFront custom domain.                                                                        |
-| `AlertingStack`       | `eu-central-1` | SNS alert topic, Pushover forwarder and the $1 monthly account budget.                                                   |
-| `InfrastructureStack` | `eu-central-1` | CloudFront/S3 frontend, Cognito, API Gateway/GraphQL Lambda, DynamoDB, profile S3, SQS/refresher, SES, `ToolkitCleaner`. |
-| `ScraperStack`        | `eu-central-1` | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions.                                                |
-| `AnalyticsStack`      | `eu-central-1` | Weekly silver build: image Lambda, EventBridge Scheduler, IAM, SNS failure path.                                         |
+| Stack                   | Region                 | Description                                                                                                              |
+| ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `CertificateStack`      | `us-east-1`            | ACM certificate for the CloudFront custom domain.                                                                        |
+| `DbProxyStack`          | legacy region          | DB egress proxy; the unsuffixed id is kept in `CDK_DB_PROXY_REGION` (default `us-east-1`).                               |
+| `DbProxyStack-<region>` | `CDK_DB_PROXY_REGIONS` | Additional DB egress proxies; the transport fails over between them.                                                     |
+| `AlertingStack`         | `eu-central-1`         | SNS alert topic, Pushover forwarder and the $1 monthly account budget.                                                   |
+| `InfrastructureStack`   | `eu-central-1`         | CloudFront/S3 frontend, Cognito, API Gateway/GraphQL Lambda, DynamoDB, profile S3, SQS/refresher, SES, `ToolkitCleaner`. |
+| `ScraperStack`          | `eu-central-1`         | Scraper pipeline: DynamoDB schedule table, S3 bucket, 3 Lambda functions.                                                |
+| `AnalyticsStack`        | `eu-central-1`         | Weekly silver build: image Lambda, EventBridge Scheduler, IAM, SNS failure path.                                         |
 
 `InfrastructureStack` also runs `ToolkitCleaner` daily: it removes unused CDK ECR and S3 assets
-after checking deployed CloudFormation templates, keeping assets created in the last 10 days.
+after checking deployed CloudFormation templates, keeping assets created in the last 10 days. It runs
+in `eu-central-1` only, so the `us-east-1` proxy assets are not cleaned automatically; run
+`npx cdk gc --unstable=gc` in `us-east-1` periodically if the bootstrap bucket grows.
 
 Scraper sizing/tuning and retention values live in `../shared/runtime-config.json`; analytics sizing,
 retention, retry and report values live in `../analytics/src/tpm_analytics/data/silver-config.json`.

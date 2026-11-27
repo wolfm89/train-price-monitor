@@ -168,8 +168,11 @@ export function activeTlsProfileName(): string {
 }
 
 function intFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  // `Number` rejects partial values such as "3s"; parseInt would accept them.
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -325,12 +328,12 @@ const TLS_PROFILES: TlsProfile[] = [
 
 const DEFAULT_PROFILE_ORDER = 'chrome,legacy,firefox,safari,tls13,tls12';
 
-/** Profiles in the order they should be tried: env preference, active winner, then the rest. */
+/** Profiles in the order they should be tried: explicit override, active winner, configured order. */
 function configuredProfileOrder(): TlsProfile[] {
   const names = [
     process.env.DB_TLS_PROFILE?.trim(),
-    ...(process.env.DB_TLS_PROFILES?.trim() || DEFAULT_PROFILE_ORDER).split(','),
     currentProfileName,
+    ...(process.env.DB_TLS_PROFILES?.trim() || DEFAULT_PROFILE_ORDER).split(','),
     ...TLS_PROFILES.map((profile) => profile.name),
   ].filter((name): name is string => Boolean(name && name.trim()));
 
@@ -379,9 +382,10 @@ function availableProfiles(): TlsProfile[] {
 }
 
 function isFingerprintBlocked(status: number, bodyText: string): boolean {
-  // The bahn.de web API answers 403; the DB Navigator API answers 452. Both use
-  // the same OPS_BLOCKED body and mean "this profile is refused, rotate".
-  return (status === 403 || status === 452) && /OPS_BLOCKED/.test(bodyText);
+  // The bahn.de web API answers 403; the DB Navigator API answers 452. A 452
+  // is always the edge's block code, even if the body changes, so rotate on it
+  // unconditionally. A 403 only means "blocked" with the OPS_BLOCKED body.
+  return status === 452 || (status === 403 && /OPS_BLOCKED/i.test(bodyText));
 }
 
 /** A refusal that says nothing about the request itself: DB is throttling or blocking this client. */
@@ -397,16 +401,35 @@ function pick(headers: Record<string, string> | undefined, name: string): string
 }
 
 function decodeBody(buffer: Buffer, encoding: string | undefined): Buffer {
-  if (!encoding) return buffer;
-  if (encoding === 'gzip') return zlib.gunzipSync(buffer);
-  if (encoding === 'deflate') return zlib.inflateSync(buffer);
-  if (encoding === 'br') return zlib.brotliDecompressSync(buffer);
-  return buffer;
+  const values = (encoding ?? '')
+    .toLowerCase()
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (values.length === 0) return buffer;
+  if (values.length > 1) throw new Error(`Unsupported DB content-encoding: ${encoding}`);
+  const value = values[0];
+  if (value === 'gzip' || value === 'x-gzip') return zlib.gunzipSync(buffer);
+  if (value === 'deflate') return zlib.inflateSync(buffer);
+  if (value === 'br') return zlib.brotliDecompressSync(buffer);
+  throw new Error(`Unsupported DB content-encoding: ${encoding}`);
 }
 
-function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<FetchCompatibleResponse> {
+function directOnce(
+  url: string,
+  init: FetchInit,
+  profile: TlsProfile,
+  deadline: number
+): Promise<FetchCompatibleResponse> {
   const target = new URL(url);
-  const timeoutMs = intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000);
+  const remaining = deadline - Date.now();
+  if (remaining < 1_000) {
+    return Promise.reject(new Error('DB request budget exhausted before the attempt'));
+  }
+  // The https timeout option is an idle timeout; cap it to the remaining
+  // budget and add an absolute timer below so a trickling response cannot hold
+  // the invocation until the Lambda timeout.
+  const timeoutMs = Math.max(1, Math.min(intFromEnv('DB_REQUEST_TIMEOUT_MS', 20_000), remaining));
 
   const headers: Record<string, string> = {
     Origin: target.origin,
@@ -420,6 +443,21 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
   if (correlationId) headers['X-Correlation-ID'] = correlationId;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const succeed = (response: FetchCompatibleResponse): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(response);
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error('DB request timed out')), timeoutMs);
+
     const request = https.request(
       url,
       { method: (init.method ?? 'GET').toUpperCase(), headers, agent: agentFor(profile), timeout: timeoutMs },
@@ -428,15 +466,15 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
         // A connection that dies after the headers emits 'error'/'aborted' on the
         // response, not on the request; without this the promise never settles and
         // the transport slot is held until the Lambda times out.
-        response.on('error', reject);
-        response.on('aborted', () => reject(new Error('DB response aborted')));
+        response.on('error', fail);
+        response.on('aborted', () => fail(new Error('DB response aborted')));
         response.on('data', (chunk: Buffer) => chunks.push(chunk));
         response.on('end', () => {
           let body: Buffer;
           try {
             body = decodeBody(Buffer.concat(chunks), String(response.headers['content-encoding'] ?? ''));
           } catch (error) {
-            reject(error);
+            fail(error instanceof Error ? error : new Error(String(error)));
             return;
           }
 
@@ -446,7 +484,7 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
             else if (value !== undefined) responseHeaders.push([name, String(value)]);
           }
 
-          resolve(
+          succeed(
             new FetchCompatibleResponse(
               response.statusCode ?? 0,
               response.statusMessage ?? '',
@@ -458,7 +496,7 @@ function directOnce(url: string, init: FetchInit, profile: TlsProfile): Promise<
       }
     );
 
-    request.on('error', reject);
+    request.on('error', fail);
     request.on('timeout', () => request.destroy(new Error('DB request timed out')));
     if (init.body) request.write(init.body);
     request.end();
@@ -486,14 +524,22 @@ interface ProxyHealth {
 const proxyHealth = new Map<string, ProxyHealth>();
 
 function proxyTargets(): ProxyTarget[] {
-  const raw = (process.env.DB_PROXY_FUNCTIONS ?? process.env.DB_PROXY_FUNCTION ?? '').trim();
+  // An empty DB_PROXY_FUNCTIONS must fall back to the legacy single ARN, not
+  // disable the proxy (which would send requests out from the app region).
+  const raw = (process.env.DB_PROXY_FUNCTIONS?.trim() || process.env.DB_PROXY_FUNCTION?.trim() || '').trim();
   if (!raw) return [];
   const fallbackRegion = process.env.DB_PROXY_REGION?.trim() || 'us-east-1';
-  return raw
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map((arn) => ({ arn, region: arn.split(':')[3] || fallbackRegion }));
+  const seen = new Set<string>();
+  const targets: ProxyTarget[] = [];
+  for (const value of raw.split(',')) {
+    const arn = value.trim();
+    if (!arn || seen.has(arn)) continue;
+    seen.add(arn);
+    const parts = arn.split(':');
+    const region = parts.length >= 4 && parts[3] ? parts[3] : fallbackRegion;
+    targets.push({ arn, region });
+  }
+  return targets;
 }
 
 function lambdaClientFor(region: string): InstanceType<LambdaSdk['LambdaClient']> {
@@ -510,16 +556,13 @@ function lambdaClientFor(region: string): InstanceType<LambdaSdk['LambdaClient']
   return client;
 }
 
-/** Healthy regions first, unhealthy ones only after their cooldown, config order otherwise. */
-function orderedProxyTargets(targets: ProxyTarget[]): ProxyTarget[] {
+/** Regions that are not cooling down, in configured order. */
+function availableProxyTargets(targets: ProxyTarget[]): ProxyTarget[] {
   const now = Date.now();
-  return targets
-    .map((target, index) => ({ target, index, blocked: (proxyHealth.get(target.arn)?.blockedUntil ?? 0) > now }))
-    .sort((left, right) => Number(left.blocked) - Number(right.blocked) || left.index - right.index)
-    .map((entry) => entry.target);
+  return targets.filter((target) => (proxyHealth.get(target.arn)?.blockedUntil ?? 0) <= now);
 }
 
-function markProxyThrottled(target: ProxyTarget): void {
+function markProxyUnhealthy(target: ProxyTarget): void {
   const health = proxyHealth.get(target.arn) ?? { blockedUntil: 0, preferredProfile: null };
   health.blockedUntil = Date.now() + intFromEnv('DB_REGION_COOLDOWN_MS', 120_000);
   proxyHealth.set(target.arn, health);
@@ -601,27 +644,30 @@ async function invokeProxy(
   }
   if (typeof parsed.status !== 'number') throw new Error('DB proxy returned an invalid response');
 
-  if (typeof parsed.usedProfile === 'string' && parsed.usedProfile) {
+  const body = decodeProxyBody(parsed.encoding, parsed.body);
+  const bodyText = body.toString('utf8');
+  if (
+    typeof parsed.usedProfile === 'string' &&
+    parsed.usedProfile &&
+    !isThrottled(parsed.status, bodyText) &&
+    parsed.status < 500
+  ) {
     currentProfileName = parsed.usedProfile;
     if (profile && profile !== parsed.usedProfile) stats.profileRotations++;
   }
 
-  const body = decodeProxyBody(parsed.encoding, parsed.body);
   const headers: Array<[string, string]> = parsed.contentType ? [['content-type', parsed.contentType]] : [];
   return {
-    response: new FetchCompatibleResponse(
-      parsed.status,
-      parsed.statusText || String(parsed.status),
-      body.toString('utf8'),
-      headers
-    ),
+    response: new FetchCompatibleResponse(parsed.status, parsed.statusText || String(parsed.status), bodyText, headers),
     usedProfile: typeof parsed.usedProfile === 'string' && parsed.usedProfile ? parsed.usedProfile : null,
   };
 }
 
 /** True when a proxy error means DB is throttling/refusing the egress. */
 export function isProxyThrottleError(message: string): boolean {
-  return /throttl|OPS_BLOCKED|breaker|refus/i.test(message);
+  // Do not match generic network errors (ECONNREFUSED contains "refused"):
+  // those are proxy failures, not a DB block.
+  return /OPS_BLOCKED|throttl|breaker/i.test(message);
 }
 
 /** True when Lambda rejected the invoke because the proxy's concurrency limit was full. */
@@ -630,7 +676,7 @@ export function isProxyBusyError(error: unknown): boolean {
     typeof error === 'object' && error !== null && 'name' in error
       ? String((error as { name?: unknown }).name ?? '')
       : '';
-  return name === 'TooManyRequestsException' || name === 'ResourceConflictException';
+  return name === 'TooManyRequestsException';
 }
 
 /** Decodes the optional gzip/base64 proxy body; plain strings pass through. */
@@ -647,16 +693,26 @@ async function proxyFetch(
   const maxRounds = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
-  let lastWasProxyBusy = false;
+  let sawThrottle = false;
+  let sawNonThrottleFailure = false;
+  let sawBusy = false;
+  let attempted = 0;
 
   for (let round = 0; round < maxRounds && Date.now() < deadline; round++) {
-    const ordered = orderedProxyTargets(targets);
-    for (let index = 0; index < ordered.length && Date.now() < deadline; index++) {
-      const target = ordered[index];
+    const available = availableProxyTargets(targets);
+    if (available.length === 0) break;
+
+    for (let index = 0; index < available.length && Date.now() < deadline; index++) {
+      const target = available[index];
       if (index > 0) stats.regionRotations++;
       const profile = proxyHealth.get(target.arn)?.preferredProfile ?? null;
       const release = await acquireSlot();
+      if (Date.now() >= deadline) {
+        release();
+        break;
+      }
       try {
+        attempted++;
         const { response, usedProfile } = await invokeProxy(target, url, init, deadline, profile);
         const bodyText = await response.text();
         const throttled = isThrottled(response.status, bodyText);
@@ -668,34 +724,39 @@ async function proxyFetch(
           return response;
         }
 
-        lastWasProxyBusy = false;
         if (throttled) {
           stats.directThrottled++;
-          markProxyThrottled(target);
+          sawThrottle = true;
+          markProxyUnhealthy(target);
         } else {
           stats.directFailed++;
+          sawNonThrottleFailure = true;
         }
         lastResponse = response;
         lastError = null;
         if (!throttled && response.status < 500) return response;
       } catch (error) {
         if (isProxyBusyError(error)) {
-          // Our own concurrency cap, not a DB block. Retry within the budget; do
-          // not open the breaker or penalise the region.
+          // Our own concurrency cap, not a DB block. Do not penalise the region
+          // or record a DB failure; the outer loop retries while budget remains.
           stats.proxyBusy++;
-          lastWasProxyBusy = true;
+          sawBusy = true;
           lastError = error;
           lastResponse = null;
         } else if (error instanceof DbThrottledError) {
           // The proxy's own breaker is open. It answers in ~100 ms; retrying is
           // noise, and this is a block, not a generic failure.
           stats.directThrottled++;
-          markProxyThrottled(target);
+          sawThrottle = true;
+          markProxyUnhealthy(target);
           lastError = error;
           lastResponse = null;
         } else {
-          lastWasProxyBusy = false;
+          // Network/timeout/FunctionError: cool the region briefly so a broken
+          // proxy is not the first choice on every request.
           stats.directFailed++;
+          sawNonThrottleFailure = true;
+          markProxyUnhealthy(target);
           lastError = error;
           lastResponse = null;
         }
@@ -703,11 +764,7 @@ async function proxyFetch(
         release();
       }
 
-      if (index < ordered.length - 1) stats.retries++;
-    }
-
-    if (lastWasProxyBusy) {
-      throw new DbThrottledError('DB proxy is busy (Lambda concurrency limit)');
+      if (index < available.length - 1) stats.retries++;
     }
 
     if (round < maxRounds - 1 && Date.now() < deadline) {
@@ -716,8 +773,19 @@ async function proxyFetch(
     }
   }
 
+  if (attempted === 0 || sawThrottle) {
+    // Every region was cooling down, or DB throttled at least one of them:
+    // stop the caller immediately instead of returning a raw 429/452 that the
+    // poller would treat as a per-target error and keep hammering.
+    openBreaker();
+    throw new DbThrottledError();
+  }
+
+  if (sawBusy && !sawNonThrottleFailure) {
+    throw new DbThrottledError('DB proxy is busy (Lambda concurrency limit)');
+  }
+
   recordFailure();
-  if (lastError instanceof DbThrottledError) throw lastError;
   if (breakerOpen()) throw new DbThrottledError();
   if (lastResponse) return lastResponse;
   throw lastError instanceof Error ? lastError : new Error('DB proxy request failed');
@@ -731,16 +799,22 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
   const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
+  let allProfilesBlocked = false;
 
   // Do not start an attempt that the shared wall-clock budget can no longer hold.
   for (let attempt = 1; attempt <= maxAttempts && Date.now() < deadline; attempt++) {
     const release = await acquireSlot();
+    if (Date.now() >= deadline) {
+      release();
+      break;
+    }
     try {
       const candidates = availableProfiles();
       if (candidates.length === 0) {
         // Every profile is cooling down after OPS_BLOCKED; do not spend the
-        // budget on another guaranteed refusal.
+        // budget on another guaranteed refusal. The caller must stop the batch.
         stats.directThrottled++;
+        allProfilesBlocked = true;
         lastResponse = null;
         lastError = null;
         break;
@@ -757,7 +831,7 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
       for (let index = 0; index < candidates.length; index++) {
         if (index > 0) stats.profileRotations++;
         const profile = candidates[index];
-        response = await directOnce(url, init, profile);
+        response = await directOnce(url, init, profile, deadline);
         bodyText = await response.text();
 
         if (isFingerprintBlocked(response.status, bodyText)) {
@@ -766,12 +840,19 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
           continue;
         }
 
-        if (response.status === 429 && throttleRotations < maxThrottleRotations && index < candidates.length - 1) {
+        if (
+          response.status === 429 &&
+          throttleRotations < maxThrottleRotations &&
+          index < candidates.length - 1 &&
+          Date.now() < deadline
+        ) {
           throttleRotations++;
           continue;
         }
 
-        currentProfileName = profile.name;
+        if (!isThrottled(response.status, bodyText) && response.status < 500) {
+          currentProfileName = profile.name;
+        }
         break;
       }
 
@@ -814,6 +895,7 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
     }
   }
 
+  if (allProfilesBlocked) throw new DbThrottledError();
   recordFailure();
   if (breakerOpen()) throw new DbThrottledError();
   if (lastResponse) return lastResponse;

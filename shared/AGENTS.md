@@ -19,7 +19,7 @@ still applies; this file covers the shared pieces.
 tried and are refused; only Node's `https` client with a browser-like cipher list passes. The
 measured history and the list of refused approaches are in
 [docs/architecture.md](../docs/architecture.md#db-transport). Do not retry a browser or vendor proxy;
-the only proxy is the app-owned us-east-1 Lambda bridge described below.
+the only proxies are the app-owned regional Lambda bridges described below.
 
 **What works.** Node's own `https` client with a browser-like cipher list; DB matches the TLS
 ClientHello. The measured profiles and endpoint results are in
@@ -60,8 +60,8 @@ refused the breaker takes over and the poller ends its batch.
 
 **Packaging.** The transport is pure Node (`node:https`), so neither bundle contains a native
 module. The backend and poller Lambdas run x86_64 Docker images with the pre-built bundle copied in
-unchanged. `@aws-sdk/client-lambda` is external in both bundles and provided by the runtime; the
-transport imports it lazily, so local development with no proxy configured never loads it.
+unchanged. Both esbuild configs alias `@aws-sdk/client-lambda` and bundle it; the transport imports
+it lazily, so local development with no proxy configured never loads it.
 
 ## Rules for changes
 

@@ -278,12 +278,29 @@ export const METRIC_NAMESPACE = APP_NAME;
  * order and fails over on a refusal or a 429, so a block in one region does not
  * stop the app. Override the list with `CDK_DB_PROXY_REGIONS` (comma-separated).
  */
-const configuredProxyRegions = (process.env.CDK_DB_PROXY_REGIONS?.trim() || '')
-  .split(',')
-  .map((region) => region.trim())
-  .filter(Boolean);
+const configuredProxyRegions = [
+  ...new Set(
+    (process.env.CDK_DB_PROXY_REGIONS?.trim() || '')
+      .split(',')
+      .map((region) => region.trim())
+      .filter(Boolean)
+  ),
+];
+for (const region of configuredProxyRegions) {
+  if (!/^[a-z]{2,}(-[a-z]+)+-\d+$/.test(region)) {
+    throw new Error(`Invalid CDK_DB_PROXY_REGIONS entry: ${region}`);
+  }
+}
 export const DB_PROXY_REGIONS =
   configuredProxyRegions.length > 0 ? configuredProxyRegions : ['us-east-1', 'eu-central-1'];
+
+/** The pre-existing stack kept the unsuffixed id in `CDK_DB_PROXY_REGION` (default us-east-1). */
+export const DB_PROXY_LEGACY_REGION = process.env.CDK_DB_PROXY_REGION?.trim() || 'us-east-1';
+
+/** Stack id for a proxy region: the legacy region keeps `DbProxyStack`, others are suffixed. */
+export function dbProxyStackId(region: string): string {
+  return region === DB_PROXY_LEGACY_REGION ? 'DbProxyStack' : `DbProxyStack-${region}`;
+}
 export const DB_PROXY_FUNCTION_NAME = `${APP_NAME}-DbProxy`;
 
 /**

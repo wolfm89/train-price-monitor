@@ -6,7 +6,7 @@ import { AnalyticsStack } from '../lib/analytics-stack';
 import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { CertificateStack } from '../lib/certificate-stack';
 import { DbProxyStack } from '../lib/db-proxy-stack';
-import { DB_PROXY_FUNCTION_NAME, DB_PROXY_REGIONS } from '../lib/config';
+import { DB_PROXY_FUNCTION_NAME, DB_PROXY_REGIONS, dbProxyStackId } from '../lib/config';
 import { ScraperStack } from '../lib/scraper-stack';
 
 const app = new cdk.App();
@@ -42,7 +42,7 @@ const alertingStack = new AlertingStack(app, 'AlertingStack', {
 
 const dbProxyStacks = DB_PROXY_REGIONS.map(
   (region) =>
-    new DbProxyStack(app, region === 'us-east-1' ? 'DbProxyStack' : `DbProxyStack-${region}`, {
+    new DbProxyStack(app, dbProxyStackId(region), {
       env: {
         account: process.env.CDK_DEFAULT_ACCOUNT,
         region,
@@ -52,7 +52,7 @@ const dbProxyStacks = DB_PROXY_REGIONS.map(
 const dbProxyFunctionArns = DB_PROXY_REGIONS.map((region) =>
   cdk.Arn.format(
     {
-      partition: 'aws',
+      partition: dbProxyStacks[0].partition,
       service: 'lambda',
       region,
       account: cdk.Aws.ACCOUNT_ID,

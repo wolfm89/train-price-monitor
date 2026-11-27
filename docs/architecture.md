@@ -22,13 +22,15 @@ third-party fallback.
 
 ## Deployment topology
 
-| Stack                 | Region         | Responsibility                                                                                                           |
-| --------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `CertificateStack`    | `us-east-1`    | ACM certificate for the CloudFront custom domain.                                                                        |
-| `AlertingStack`       | `eu-central-1` | SNS alert topic, Pushover forwarder and the $1 monthly budget.                                                           |
-| `InfrastructureStack` | `eu-central-1` | CloudFront/S3 frontend, Cognito, API Gateway/GraphQL Lambda, DynamoDB, profile S3, SQS/refresher, SES, `ToolkitCleaner`. |
-| `ScraperStack`        | `eu-central-1` | Scraper schedules, Hydrator/Poller/Compactor and the schedule table.                                                     |
-| `AnalyticsStack`      | `eu-central-1` | Weekly silver Lambda, EventBridge Scheduler, IAM, SNS failure path.                                                      |
+| Stack                   | Region                 | Responsibility                                                                                                           |
+| ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `CertificateStack`      | `us-east-1`            | ACM certificate for the CloudFront custom domain.                                                                        |
+| `DbProxyStack`          | `us-east-1`            | DB egress proxy (legacy region keeps the unsuffixed stack id).                                                           |
+| `DbProxyStack-<region>` | `CDK_DB_PROXY_REGIONS` | Additional DB egress proxies; the transport fails over between them.                                                     |
+| `AlertingStack`         | `eu-central-1`         | SNS alert topic, Pushover forwarder and the $1 monthly budget.                                                           |
+| `InfrastructureStack`   | `eu-central-1`         | CloudFront/S3 frontend, Cognito, API Gateway/GraphQL Lambda, DynamoDB, profile S3, SQS/refresher, SES, `ToolkitCleaner`. |
+| `ScraperStack`          | `eu-central-1`         | Scraper schedules, Hydrator/Poller/Compactor and the schedule table.                                                     |
+| `AnalyticsStack`        | `eu-central-1`         | Weekly silver Lambda, EventBridge Scheduler, IAM, SNS failure path.                                                      |
 
 The scraper and analytics stacks share the scraper S3 bucket. The alert topic is referenced by the
 application, scraper and analytics stacks. Deployment details are in [deployment.md](deployment.md).
@@ -156,10 +158,10 @@ CloudWatch alarms, AWS Budgets, silver build failures and quality warnings publi
 to Pushover. Alarm state changes and build failures are high priority with the siren; recovery,
 quality warnings and budget alerts are normal priority.
 
-There are ten CloudWatch alarms, ten custom metrics and two dashboards. The alarm and custom-metric
-allowances are fully used, and the third dashboard slot is free. Do not add an eleventh alarm or
-custom metric without accepting the cost. See [operations.md](operations.md) for the alarm list and
-runbooks.
+There are nine CloudWatch alarms, ten custom metrics and two dashboards. One alarm slot and the
+third dashboard slot are free; the custom-metric allowance is fully used. Do not add an eleventh
+alarm or custom metric without accepting the cost. See [operations.md](operations.md) for the alarm
+list and runbooks.
 
 ## DB transport
 
@@ -235,7 +237,7 @@ pacing remains the floor for the rate limit.
   `429`; the app-owned `DbProxyStack` Lambdas provide egress from two regions and the caller fails
   over between them. See [DB transport](#db-transport) for the measured history and
   `shared/db-fetch.ts` for the implementation.
-- **Alert budget.** Ten alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
+- **Alert budget.** Nine alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
   deliberate ceiling.
 
 ## Diagrams

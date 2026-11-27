@@ -35,10 +35,11 @@ export class DbProxyStack extends cdk.Stack {
       // Keep the proxy shorter than the API's 29 s cap. The caller aborts the
       // invoke at DB_REQUEST_TIMEOUT_MS; the handler caps the inner request at 15 s.
       timeout: cdk.Duration.seconds(20),
-      // One shared egress for the poller and the API. The transport measured six
-      // parallel calls as the safe ceiling, so five leaves margin. Overflow
-      // invokes are classified as proxy-busy, not DB failures.
-      reservedConcurrentExecutions: 5,
+      // Worst case is six in flight (API 2 + refresher 2 + poller 2), so the
+      // reservation covers exactly that; more would exceed the measured safe
+      // DB concurrency. Overflow invokes are classified as proxy-busy, not DB
+      // failures.
+      reservedConcurrentExecutions: 6,
       logGroup,
       environment: {
         // The caller sends the fingerprint that worked last time; this list is

@@ -74,6 +74,44 @@ describe('shared configuration', () => {
     }
   });
 
+  test('dbProxyStackId keeps the unsuffixed id in the legacy region only', async () => {
+    const previous = process.env.CDK_DB_PROXY_REGION;
+    try {
+      delete process.env.CDK_DB_PROXY_REGION;
+      jest.resetModules();
+      let config = await import('../lib/config');
+      expect(config.dbProxyStackId('us-east-1')).toBe('DbProxyStack');
+      expect(config.dbProxyStackId('eu-central-1')).toBe('DbProxyStack-eu-central-1');
+
+      process.env.CDK_DB_PROXY_REGION = 'eu-central-1';
+      jest.resetModules();
+      config = await import('../lib/config');
+      expect(config.dbProxyStackId('eu-central-1')).toBe('DbProxyStack');
+      expect(config.dbProxyStackId('us-east-1')).toBe('DbProxyStack-us-east-1');
+    } finally {
+      if (previous === undefined) delete process.env.CDK_DB_PROXY_REGION;
+      else process.env.CDK_DB_PROXY_REGION = previous;
+      jest.resetModules();
+    }
+  });
+
+  test('deduplicates CDK_DB_PROXY_REGIONS and rejects an invalid region', async () => {
+    const previous = process.env.CDK_DB_PROXY_REGIONS;
+    try {
+      process.env.CDK_DB_PROXY_REGIONS = 'us-east-1, us-east-1,eu-central-1';
+      jest.resetModules();
+      expect((await import('../lib/config')).DB_PROXY_REGIONS).toEqual(['us-east-1', 'eu-central-1']);
+
+      process.env.CDK_DB_PROXY_REGIONS = 'not-a-region';
+      jest.resetModules();
+      await expect(import('../lib/config')).rejects.toThrow(/Invalid CDK_DB_PROXY_REGIONS/);
+    } finally {
+      if (previous === undefined) delete process.env.CDK_DB_PROXY_REGIONS;
+      else process.env.CDK_DB_PROXY_REGIONS = previous;
+      jest.resetModules();
+    }
+  });
+
   test('keeps the DuckDB memory and temp budgets inside Lambda limits', () => {
     const lambda = SILVER_CONFIG.lambda;
     expect(sizeMib(lambda.duckdb_memory_limit)).toBeLessThan(lambda.memory_mib);

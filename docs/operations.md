@@ -1,7 +1,7 @@
 # Operations
 
 Operational alerts, dashboards, budget and runbooks. The application is designed to stay inside the
-AWS free tier: ten CloudWatch alarms, ten custom metrics, two dashboards and a **$1.00 USD** monthly
+AWS free tier: nine CloudWatch alarms, ten custom metrics, two dashboards and a **$1.00 USD** monthly
 budget.
 
 ## Alert path
@@ -84,8 +84,8 @@ then.
    transport counters shows the current winner. If every fingerprint is refused, update
    `CDK_DB_TLS_PROFILES`; do not pin a single profile.
 5. If a proxy region is blocked, the transport skips it for `DB_REGION_COOLDOWN_MS` and then retries
-   automatically. To change the set, set `CDK_DB_PROXY_REGIONS` and deploy; old regional stacks keep
-   their log groups if they are removed from the list.
+   automatically. To change the set, set `CDK_DB_PROXY_REGIONS` and deploy. Removing a region from
+   the list leaves its whole stack deployed; delete it explicitly (its log group is retained).
 6. On 2026-11-25 a proxied 25-target batch took 255.7 s against the then-current 250 s guard. The
    poller now uses 20 targets, 3.5 s spacing and the 240 s guard. If the DB breaker opens
    repeatedly, reduce calls/day rather than the gap.

@@ -339,7 +339,8 @@ export class Backend extends Construct {
     // -------------------------------------------------------------------------
     // Alarms and dashboard (CloudWatch free tier: 10 alarms, 10 custom metrics
     // across both stacks; 4 alarms and 3 custom metrics are defined here, and
-    // the scraper stack adds the other 5 alarms and 7 metrics)
+    // the scraper stack adds the other 5 alarms and 7 metrics. One alarm slot
+    // stays free.)
     // -------------------------------------------------------------------------
 
     // Region failovers are diagnostic, not an incident: non-zero means the
@@ -356,6 +357,24 @@ export class Backend extends Construct {
     new logs.MetricFilter(this, 'RefresherRegionRotationsFilter', {
       logGroup: refresherLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processed'),
+      metricNamespace: METRIC_NAMESPACE,
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
+      defaultValue: 0,
+    });
+    // Failure lines carry the same drained snapshot; without them a run where
+    // every region was refused would not appear in the failover metric.
+    new logs.MetricFilter(this, 'SearchRegionRotationsFailureFilter', {
+      logGroup: apiLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'GraphQL request failed'),
+      metricNamespace: METRIC_NAMESPACE,
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
+      defaultValue: 0,
+    });
+    new logs.MetricFilter(this, 'RefresherRegionRotationsFailureFilter', {
+      logGroup: refresherLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'SQS message processing failed'),
       metricNamespace: METRIC_NAMESPACE,
       metricName: 'TransportRegionRotations',
       metricValue: '$.transport.regionRotations',
@@ -420,9 +439,9 @@ export class Backend extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // The 10th free alarm slot: a failed SQS refresh that exhausted its retries
-    // must not sit silently in the DLQ. The log-based RefresherErrors alarm only
-    // covers failures the handler caught.
+    // A failed SQS refresh that exhausted its retries must not sit silently in
+    // the DLQ. The log-based RefresherErrors alarm only covers failures the
+    // handler caught.
     const refresherDlq = new cloudwatch.Alarm(this, 'RefresherDlq', {
       alarmName: 'TPM-App-RefresherDLQ',
       alarmDescription:

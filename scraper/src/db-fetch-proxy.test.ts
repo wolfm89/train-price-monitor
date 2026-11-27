@@ -21,11 +21,12 @@ test('classifies proxy throttle errors', () => {
   assert.equal(isProxyThrottleError('452 OPS_BLOCKED'), true);
   assert.equal(isProxyThrottleError('breaker open'), true);
   assert.equal(isProxyThrottleError('DB proxy failed: Unhandled'), false);
+  assert.equal(isProxyThrottleError('connect ECONNREFUSED 10.0.0.1:443'), false);
 });
 
 test('classifies proxy concurrency rejections', () => {
   assert.equal(isProxyBusyError({ name: 'TooManyRequestsException' }), true);
-  assert.equal(isProxyBusyError({ name: 'ResourceConflictException' }), true);
+  assert.equal(isProxyBusyError({ name: 'ResourceConflictException' }), false);
   assert.equal(isProxyBusyError(new Error('TooManyRequestsException')), false);
   assert.equal(isProxyBusyError({ name: 'AccessDeniedException' }), false);
 });
@@ -41,6 +42,7 @@ test('classifies throttling DB statuses', () => {
   assert.equal(isThrottled(429, ''), true);
   assert.equal(isThrottled(403, '{"code":"OPS_BLOCKED"}'), true);
   assert.equal(isThrottled(452, '{"code":"OPS_BLOCKED"}'), true);
+  assert.equal(isThrottled(452, '{"error":"changed body"}'), true);
   assert.equal(isThrottled(403, '{"error":"forbidden"}'), false);
   assert.equal(isThrottled(500, ''), false);
 });

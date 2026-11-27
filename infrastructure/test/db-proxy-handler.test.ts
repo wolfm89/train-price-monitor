@@ -81,6 +81,19 @@ describe('DB proxy handler', () => {
     expect(process.env.DB_TLS_PROFILE).toBe('legacy');
   });
 
+  test('restores the environment when the DB request throws', async () => {
+    process.env.DB_TOTAL_BUDGET_MS = '123';
+    process.env.DB_REQUEST_TIMEOUT_MS = '456';
+    process.env.DB_TLS_PROFILE = 'legacy';
+    fetchMock.mockRejectedValue(new Error('boom'));
+
+    await expect(handler({ url: 'https://example.test', profile: 'chrome', timeoutMs: 5000 })).rejects.toThrow('boom');
+
+    expect(process.env.DB_TOTAL_BUDGET_MS).toBe('123');
+    expect(process.env.DB_REQUEST_TIMEOUT_MS).toBe('456');
+    expect(process.env.DB_TLS_PROFILE).toBe('legacy');
+  });
+
   test('ignores an invalid profile hint', async () => {
     fetchMock.mockImplementation(async () => {
       expect(process.env.DB_TLS_PROFILE).toBeUndefined();

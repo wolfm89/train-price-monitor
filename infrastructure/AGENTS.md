@@ -39,7 +39,7 @@ outputs, bootstrap and rollback are in [docs/deployment.md](../docs/deployment.m
 
 `DbProxyStack` is the DB egress proxy: one `NodejsFunction` per configured region that reaches the
 Navigator API and reports the TLS fingerprint that served the request. It adds no VPC, NAT, alarm or
-metric. It is capped at 20 s and 5 reserved concurrent executions, and gzips the response when the
+metric. It is capped at 20 s and 6 reserved concurrent executions, and gzips the response when the
 caller advertises gzip. Keep the poller at
 20 targets / 384 MB: projected Lambda usage is ~258-341k GB-s/month (64-85% of the 400k free tier),
 and the existing budget forecast was $0.924 before the fix. Cross-region response data is the only

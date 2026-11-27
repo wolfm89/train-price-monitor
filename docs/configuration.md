@@ -24,7 +24,7 @@ deployed functions receive most runtime values from CDK; do not set them by hand
 | `CDK_ANALYTICS_PAUSED`      | Infrastructure | CI defaults to `1` when the repo variable is unset | developer / CI | `1` disables the weekly silver schedule. Set `0` after first-run checks.                 |
 | `CDK_TRANSFORM_VERSION`     | Infrastructure | empty                                              | CI             | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`.      |
 | `CDK_SES_PRODUCTION_ACCESS` | Infrastructure | unset                                              | developer / CI | `1` once SES production access is granted; disables the sandbox workaround.              |
-| `AWS_REGION`                | Infrastructure | `eu-central-1`                                     | developer / CI | Deployment region for the four application stacks.                                       |
+| `AWS_REGION`                | Infrastructure | `eu-central-1`                                     | developer / CI | Primary region for the application stacks; proxies deploy to `CDK_DB_PROXY_REGIONS`.     |
 
 CI also uses `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION`, the AWS credential/role secrets, the
 frontend `REACT_APP_*` build values, `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY`. See
@@ -61,7 +61,7 @@ Shared by the backend and scraper.
 | `DB_BREAKER_THRESHOLD`          | Backend + scraper | `3`                                                            | developer       | Consecutive failed requests that open the circuit breaker.                        |
 | `DB_BREAKER_COOLDOWN_MS`        | Backend + scraper | `180000`                                                       | developer       | How long the breaker stays open.                                                  |
 | `DB_TOTAL_BUDGET_MS`            | Backend + scraper | API `24000`, refresher `110000`, poller `45000`, proxy `18000` | CDK             | Wall-clock budget for one request, including region retries.                      |
-| `DB_TLS_PROFILES`               | Backend + scraper | `chrome,legacy,firefox,safari,tls13,tls12`                     | CDK / developer | Fingerprint order: `firefox`, `safari`, `chrome`, `tls13`, `tls12`, `legacy`.     |
+| `DB_TLS_PROFILES`               | Backend + scraper | `chrome,legacy,firefox,safari,tls13,tls12`                     | CDK / developer | Ordered fingerprints: `chrome`, `legacy`, `firefox`, `safari`, `tls13`, `tls12`.  |
 | `DB_TLS_PROFILE`                | Backend + scraper | unset                                                          | developer       | Legacy alias that puts one profile first (the proxy uses it for the caller hint). |
 | `DB_PROFILE_THROTTLE_ROTATIONS` | Backend + scraper | `2`                                                            | developer       | Extra fingerprints tried after a `429` before returning the throttle.             |
 | `DB_PROFILE_BLOCK_COOLDOWN_MS`  | Backend + scraper | `900000`                                                       | developer       | How long a profile that returned `OPS_BLOCKED` is skipped.                        |

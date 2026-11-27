@@ -270,7 +270,8 @@ export class ScraperStack extends cdk.Stack {
     });
 
     // -------------------------------------------------------------------------
-    // Alarms and dashboard (CloudWatch free tier: 9 alarms, 4 custom metrics)
+    // Alarms and dashboard (CloudWatch free tier: 10 alarms, 10 custom metrics
+    // across both stacks; 5 alarms and 7 custom metrics are defined here)
     // -------------------------------------------------------------------------
     const alertTopic = props?.alertTopicArn
       ? sns.Topic.fromTopicArn(this, 'AlertTopic', props.alertTopicArn)

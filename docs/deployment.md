@@ -1,7 +1,9 @@
 # Deployment
 
-The application is five AWS CDK stacks. Four run in `eu-central-1`; the CloudFront certificate is
-in `us-east-1`. CI deploys `main`; manual deployments use the same checks and a reviewed `cdk diff`.
+The application is seven AWS CDK stacks in the default configuration: five run in `eu-central-1`
+(the four application stacks plus the eu-central-1 proxy), one DB proxy runs in `us-east-1`, and the
+CloudFront certificate is in `us-east-1`. CI deploys `main`; manual deployments use the same checks
+and a reviewed `cdk diff`.
 
 ## Prerequisites
 
@@ -48,9 +50,12 @@ Useful values:
 - `CDK_TRANSFORM_VERSION` records the short commit SHA in the silver manifest; empty falls back to
   `sql-<hash>`.
 - `CDK_DB_PROXY_REGIONS` lists the regions that get a proxy (`us-east-1,eu-central-1` default).
-  The first entry keeps the stack id `DbProxyStack`; additional regions use
-  `DbProxyStack-<region>`. Removing a region from the list leaves its stack deployed; delete it
-  explicitly, e.g. `aws cloudformation delete-stack --region eu-central-1 --stack-name DbProxyStack-eu-central-1`.
+  The legacy region (`CDK_DB_PROXY_REGION`, default `us-east-1`) keeps the stack id `DbProxyStack`;
+  other regions use `DbProxyStack-<region>`. If your existing proxy was deployed in another region,
+  set `CDK_DB_PROXY_REGION` to it for the first deploy; otherwise the new stack collides on the
+  `TrainPriceMonitor-DbProxy` function name. Removing a region from the list leaves its stack
+  deployed; delete it explicitly, e.g.
+  `aws cloudformation delete-stack --region eu-central-1 --stack-name DbProxyStack-eu-central-1`.
 - `CDK_DB_TLS_PROFILES` sets the fingerprint order (`chrome,legacy,firefox,safari,tls13,tls12`
   default). DB changes the accepted order over time; keep several entries and do not pin one.
 
@@ -143,8 +148,9 @@ Sunday 03:30 UTC, after the 03:00 compactor.
   disabled.
 - **Roll back an application deploy:** `cdk deploy` the previous commit; the S3/data resources are
   retained according to the stack policies. A rollback to a pre-proxy commit leaves the
-  `DbProxyStack`s orphaned and the callers on the direct path; keep them or delete them explicitly
-  (see the `CDK_DB_PROXY_REGIONS` note above).
+  `DbProxyStack`s orphaned and the callers on the blocked direct path; the only safe rollback is to
+  a proxy-aware commit (or restore the proxy env/IAM manually). Keep or delete the orphaned stacks
+  explicitly (see the `CDK_DB_PROXY_REGIONS` note above).
 - **Roll back a silver build:** move `silver/_latest.json` to an older manifest. Builds are kept for
   at least a day and the newest two are retained.
 - **Quality reports** are kept indefinitely; `silver/builds/` keeps two builds.
@@ -156,8 +162,10 @@ Sunday 03:30 UTC, after the 03:00 compactor.
   expecting mail. Set `CDK_SES_PRODUCTION_ACCESS=1` once production access is granted.
 - CI writes the Pushover token and user key to the two SSM parameters read by the forwarder. Neither
   value is in a CDK template or `cdk diff`.
-- There is no vendor credential; the DB transport only uses the app-owned
-  regional proxies.
+- There is no vendor credential in use; the DB transport only uses the app-owned regional proxies.
+  The old Decodo SSM SecureString `/train-price-monitor/decodo-api-key`, the GitHub `DECODO_API_KEY`
+  secret and the `CDK_DECODO_API_KEY_PARAM` variable may still exist after the deploy. After the
+  rollback window, delete the parameter, remove the secret/variable and revoke the vendor key.
 
 ## Cost guardrails
 
