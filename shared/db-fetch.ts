@@ -693,7 +693,8 @@ async function proxyFetch(
   const maxRounds = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
-  let sawThrottle = false;
+  let sawBlocked = false;
+  let sawRateLimit = false;
   let sawNonThrottleFailure = false;
   let sawBusy = false;
   let attempted = 0;
@@ -715,7 +716,9 @@ async function proxyFetch(
         attempted++;
         const { response, usedProfile } = await invokeProxy(target, url, init, deadline, profile);
         const bodyText = await response.text();
-        const throttled = isThrottled(response.status, bodyText);
+        const blocked = isFingerprintBlocked(response.status, bodyText);
+        const rateLimited = response.status === 429;
+        const throttled = blocked || rateLimited;
 
         if (!throttled && response.ok) {
           recordSuccess();
@@ -724,10 +727,15 @@ async function proxyFetch(
           return response;
         }
 
-        if (throttled) {
+        if (blocked) {
           stats.directThrottled++;
-          sawThrottle = true;
+          sawBlocked = true;
           markProxyUnhealthy(target);
+        } else if (rateLimited) {
+          // A 429 is a rate limit, not a regional block: keep the region
+          // available so the next round (with its backoff) can retry it.
+          stats.directThrottled++;
+          sawRateLimit = true;
         } else {
           stats.directFailed++;
           sawNonThrottleFailure = true;
@@ -747,7 +755,7 @@ async function proxyFetch(
           // The proxy's own breaker is open. It answers in ~100 ms; retrying is
           // noise, and this is a block, not a generic failure.
           stats.directThrottled++;
-          sawThrottle = true;
+          sawBlocked = true;
           markProxyUnhealthy(target);
           lastError = error;
           lastResponse = null;
@@ -773,15 +781,15 @@ async function proxyFetch(
     }
   }
 
-  if (attempted === 0 || sawThrottle) {
-    // Every region was cooling down, or DB throttled at least one of them:
-    // stop the caller immediately instead of returning a raw 429/452 that the
-    // poller would treat as a per-target error and keep hammering.
+  if (attempted === 0 || sawBlocked) {
+    // Every region was cooling down, or at least one returned a fingerprint
+    // block (452/OPS_BLOCKED) with no success. Stop immediately: the caller
+    // must not keep hammering a blocked egress.
     openBreaker();
     throw new DbThrottledError();
   }
 
-  if (sawBusy && !sawNonThrottleFailure) {
+  if (sawBusy && !sawNonThrottleFailure && !sawRateLimit) {
     throw new DbThrottledError('DB proxy is busy (Lambda concurrency limit)');
   }
 
