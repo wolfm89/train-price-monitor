@@ -43,8 +43,9 @@ human-only AWS deploy (it builds the bundles first); the Floci deploy below is a
 - Raise `SCRAPER_BATCH_SIZE` only while the `transport` counters in the "Poller finished" log show
   zero `breakerOpened` and no batch aborts. A few `directThrottled` retries are normal through the
   proxy; `TPM-Scraper-PollerThrottledByDb` fires when `breakerOpened` is non-zero in two runs.
-- **The poller has no Decodo key on purpose.** Bulk work must never spend the free fallback
-  allowance. On `DbThrottledError` it ends the batch and leaves the rest for the next run.
+- **There is no vendor fallback.** The poller uses the same regional DB proxies and fingerprint
+  rotation as the backend. On `DbThrottledError` it ends the batch and leaves the rest for the next
+  run.
 - Do not raise concurrency or reduce the gap to make a deadline; it gets the IP a longer ban.
 
 ## Packaging and data

@@ -39,37 +39,29 @@ pacing are in `../scraper/AGENTS.md`; the measured limits and the throttling his
 [docs/architecture.md](../docs/architecture.md#db-transport).
 
 **Circuit breaker.** After `DB_BREAKER_THRESHOLD` consecutive failed requests the environment stops
-calling DB for `DB_BREAKER_COOLDOWN_MS`; hammering a throttled IP only extends the ban. With a
-Decodo key the request falls back to Decodo; without one it throws `DbThrottledError` and the poller
-ends its batch.
+calling DB for `DB_BREAKER_COOLDOWN_MS`; hammering a throttled IP only extends the ban. When every
+option is exhausted the transport throws `DbThrottledError` and the poller ends its batch. There is
+no vendor fallback.
 
-**Cross-region proxy.** When `DB_PROXY_FUNCTION` is set, `fetch` invokes that Lambda (region
-`DB_PROXY_REGION`) instead of opening HTTPS itself; the handler lives in
-`../infrastructure/lambda/db-proxy` and uses the same direct path. The poller and backend use it
-because DB refuses the app-region and Decodo egress. The proxy region is `CDK_DB_PROXY_REGION`
-(default `us-east-1`).
+**Cross-region proxy.** `DB_PROXY_FUNCTIONS` is a comma-separated list of proxy Lambda ARNs, one per
+region (normally us-east-1 and eu-central-1); the legacy single `DB_PROXY_FUNCTION` is still read.
+The handler lives in `../infrastructure/lambda/db-proxy` and uses the same direct path. The caller
+tries the healthiest region first, fails over on a refusal or a 429, and skips a failed region for
+`DB_REGION_COOLDOWN_MS` (2 min). `DB_PROXY_REGION` is only the hint for a single unparsable ARN.
 
-**Decodo fallback (backend only).** The API and refresher use the Navigator profile through the DB
-proxy (or directly in local development) and fall back to Decodo when the direct path is throttled.
-They have `DECODO_API_KEY_PARAM` and use Decodo's `/scrape` (premium pool; the standard pool cannot
-send custom headers and is refused) when the direct path is throttled. The poller has no key on
-purpose: bulk work must never spend the free allowance (5K calls/month). `DB_TRANSPORT=decodo`
-forces the fallback. The key lives in an SSM SecureString that CI writes from the repository secret
-`DECODO_API_KEY`; functions receive only the parameter name, so it never appears in a template,
-`cdk diff` or a function environment. IAM grants exactly `ssm:GetParameter` on that parameter; no
-`kms:Decrypt` is needed with the AWS-managed `aws/ssm` key. Rotation: update the repo secret and
-re-run the deploy job; running environments converge within `DECODO_KEY_TTL_MS` (15 min).
-
-**Fingerprint rotation.** Fingerprints get blocked once popular. On `403 OPS_BLOCKED` the transport
-rotates to the next profile, remembers the working one for the environment and skips a blocked
-profile for `DB_PROFILE_BLOCK_COOLDOWN_MS` (15 min). If every profile is blocked the breaker takes
-over and the poller ends its batch; Decodo keeps search and refresh working meanwhile.
+**Dynamic fingerprints.** DB matches the TLS ClientHello and changes which order it accepts without
+notice: `tls12` worked on 2026-11-25 and was refused again on 2026-11-27, while `chrome` and
+`legacy` still returned 200. `DB_TLS_PROFILES` is the ordered list (default
+`chrome,legacy,firefox,safari,tls13,tls12`). The transport rotates on `403`/`452 OPS_BLOCKED` _and_
+on a `429`, remembers the winner for the environment, and skips a refused profile for
+`DB_PROFILE_BLOCK_COOLDOWN_MS` (15 min). The proxy accepts the winner as a per-invocation hint and
+reports `usedProfile` back, so each region keeps its own sticky fingerprint. If every option is
+refused the breaker takes over and the poller ends its batch.
 
 **Packaging.** The transport is pure Node (`node:https`), so neither bundle contains a native
 module. The backend and poller Lambdas run x86_64 Docker images with the pre-built bundle copied in
-unchanged. `@aws-sdk/client-ssm` is external in the backend bundle (present in the image) and
-provided by the Node.js 24 runtime for the scraper; the transport imports it lazily, so local
-development never touches SSM.
+unchanged. `@aws-sdk/client-lambda` is external in both bundles and provided by the runtime; the
+transport imports it lazily, so local development with no proxy configured never loads it.
 
 ## Rules for changes
 

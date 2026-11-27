@@ -8,8 +8,8 @@ deployed functions receive most runtime values from CDK; do not set them by hand
 - **Scope** is the module that reads the value.
 - **Default / deployed** is the code default, or the value injected by CDK/the deployment.
 - **Set by** is who normally provides it: `CDK`, `CI`, `developer`, or `Lambda`.
-- Values such as `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY` are secrets.
-  They live in repository secrets and are written to SSM SecureStrings by CI, never in a template.
+- Values such as `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY` are secrets. They live in
+  repository secrets and are written to SSM SecureStrings by CI, never in a template.
 
 ## CDK deployment inputs
 
@@ -18,8 +18,8 @@ deployed functions receive most runtime values from CDK; do not set them by hand
 | `CDK_APP_NAME`              | Infrastructure | required                                           | developer / CI | Application name, Cognito domain and resource names.                                     |
 | `CDK_DOMAIN_NAME`           | Infrastructure | required                                           | developer / CI | Custom frontend domain and ACM certificate.                                              |
 | `CDK_SES_FROM_EMAIL`        | Infrastructure | required                                           | developer / CI | SES sender and cognito `fromEmail`.                                                      |
-| `CDK_DECODO_API_KEY_PARAM`  | Infrastructure | `/train-price-monitor/decodo-api-key`              | developer / CI | SSM SecureString name for the Decodo key.                                                |
-| `CDK_DB_PROXY_REGION`       | Infrastructure | `us-east-1`                                        | developer / CI | Region for `DbProxyStack`. Test a new egress first; `eu-central-1` is currently blocked. |
+| `CDK_DB_PROXY_REGIONS`      | Infrastructure | `us-east-1,eu-central-1`                           | developer / CI | Regions that get a `DbProxyStack`; the transport tries them in order and fails over.     |
+| `CDK_DB_TLS_PROFILES`       | Infrastructure | `chrome,legacy,firefox,safari,tls13,tls12`         | developer / CI | Fingerprint order injected into every function; DB changes the accepted order over time. |
 | `CDK_SCRAPER_PAUSED`        | Infrastructure | unset                                              | developer / CI | `1` disables poller and hydrator schedules; compactor stays on.                          |
 | `CDK_ANALYTICS_PAUSED`      | Infrastructure | CI defaults to `1` when the repo variable is unset | developer / CI | `1` disables the weekly silver schedule. Set `0` after first-run checks.                 |
 | `CDK_TRANSFORM_VERSION`     | Infrastructure | empty                                              | CI             | Short commit SHA recorded in the silver manifest; empty falls back to `sql-<hash>`.      |
@@ -27,8 +27,8 @@ deployed functions receive most runtime values from CDK; do not set them by hand
 | `AWS_REGION`                | Infrastructure | `eu-central-1`                                     | developer / CI | Deployment region for the four application stacks.                                       |
 
 CI also uses `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION`, the AWS credential/role secrets, the
-frontend `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and
-`PUSHOVER_USER_KEY`. See [deployment.md](deployment.md).
+frontend `REACT_APP_*` build values, `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY`. See
+[deployment.md](deployment.md).
 
 ## Backend runtime
 
@@ -43,10 +43,6 @@ frontend `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and
 | `COGNITO_USER_POOL_ID`               | Backend (refresher) | —                                                                      | CDK / `env:local` | User pool for the daily unconfirmed-sign-up cleanup.                         |
 | `LOCAL_DEV`                          | Backend             | unset                                                                  | developer         | `1` runs an HTTP server instead of the Lambda handler.                       |
 | `PORT`                               | Backend             | `4000`                                                                 | developer         | Local HTTP port when `LOCAL_DEV=1`.                                          |
-| `DECODO_API_KEY_PARAM`               | Backend             | `/train-price-monitor/decodo-api-key`                                  | CDK               | SSM SecureString name for the Decodo fallback key.                           |
-| `DECODO_API_KEY`                     | Backend             | unset                                                                  | developer         | Literal key for local development; wins over `_PARAM`. Never commit.         |
-| `DECODO_KEY_TTL_MS`                  | Backend             | `900000`                                                               | developer         | How long a resolved Decodo key is cached.                                    |
-| `DB_TRANSPORT`                       | Backend             | unset                                                                  | developer         | `decodo` forces the fallback (kill switch).                                  |
 | `POWERTOOLS_LOG_LEVEL` / `LOG_LEVEL` | Backend             | `INFO` in Lambda; `DEBUG` when `NODE_ENV=development`                  | developer         | Log level; `POWERTOOLS_LOG_LEVEL` wins over `LOG_LEVEL`.                     |
 | `NODE_ENV`                           | Backend             | unset                                                                  | developer         | `development` selects the DEBUG default; do not set it in Lambda.            |
 | `POWERTOOLS_SERVICE_NAME`            | Scraper             | set by CDK (`scraper-poller`, `scraper-hydrator`, `scraper-compactor`) | CDK               | Service name in structured logs.                                             |
@@ -55,28 +51,32 @@ frontend `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN` and
 
 Shared by the backend and scraper.
 
-| Variable                       | Scope             | Default / deployed                                             | Set by          | Purpose                                                                       |
-| ------------------------------ | ----------------- | -------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- |
-| `DB_MIN_GAP_MS`                | Backend + scraper | `1000` code; API `300`, refresher `1500`, poller `3500`        | CDK / developer | Minimum spacing between request starts.                                       |
-| `DB_MAX_IN_FLIGHT`             | Backend + scraper | `2`                                                            | CDK / developer | Concurrent DB requests.                                                       |
-| `DB_MAX_ATTEMPTS`              | Backend + scraper | `2`; API `1`                                                   | CDK / developer | Direct/proxy attempts per request.                                            |
-| `DB_RETRY_BACKOFF_MS`          | Backend + scraper | `3000`                                                         | developer       | Pause before a retry, multiplied by the attempt number.                       |
-| `DB_REQUEST_TIMEOUT_MS`        | Backend + scraper | `20000`; API `8000`; proxy `15000`                             | CDK / developer | Per-attempt timeout; in proxy mode bounds the Lambda invoke.                  |
-| `DB_BREAKER_THRESHOLD`         | Backend + scraper | `3`                                                            | developer       | Consecutive failed requests that open the circuit breaker.                    |
-| `DB_BREAKER_COOLDOWN_MS`       | Backend + scraper | `180000`                                                       | developer       | How long the breaker stays open.                                              |
-| `DB_TOTAL_BUDGET_MS`           | Backend + scraper | API `24000`, refresher `110000`, poller `45000`, proxy `18000` | CDK             | Wall-clock budget per request, direct plus fallback.                          |
-| `DB_TLS_PROFILE`               | Backend + scraper | `tls12` in CDK; code default `firefox`                         | CDK / developer | First TLS profile: `firefox`, `safari`, `chrome`, `tls13`, `tls12`, `legacy`. |
-| `DB_PROFILE_BLOCK_COOLDOWN_MS` | Backend + scraper | `900000`                                                       | developer       | How long a profile that returned `OPS_BLOCKED` is skipped.                    |
-| `DB_PROXY_FUNCTION`            | Backend + scraper | ARN of `DbProxyStack`                                          | CDK             | Invoke this Lambda for DB requests instead of direct HTTPS.                   |
-| `DB_PROXY_REGION`              | Backend + scraper | `us-east-1`                                                    | CDK             | Region of `DB_PROXY_FUNCTION`; follows `CDK_DB_PROXY_REGION`.                 |
+| Variable                        | Scope             | Default / deployed                                             | Set by          | Purpose                                                                           |
+| ------------------------------- | ----------------- | -------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------- |
+| `DB_MIN_GAP_MS`                 | Backend + scraper | `1000` code; API `300`, refresher `1500`, poller `3500`        | CDK / developer | Minimum spacing between request starts.                                           |
+| `DB_MAX_IN_FLIGHT`              | Backend + scraper | `2`                                                            | CDK / developer | Concurrent DB requests.                                                           |
+| `DB_MAX_ATTEMPTS`               | Backend + scraper | `2`; API `1`                                                   | CDK / developer | Direct/proxy attempts per request.                                                |
+| `DB_RETRY_BACKOFF_MS`           | Backend + scraper | `3000`                                                         | developer       | Pause before a retry, multiplied by the attempt number.                           |
+| `DB_REQUEST_TIMEOUT_MS`         | Backend + scraper | `20000`; API `8000`; proxy `15000`                             | CDK / developer | Per-attempt timeout; in proxy mode bounds the Lambda invoke.                      |
+| `DB_BREAKER_THRESHOLD`          | Backend + scraper | `3`                                                            | developer       | Consecutive failed requests that open the circuit breaker.                        |
+| `DB_BREAKER_COOLDOWN_MS`        | Backend + scraper | `180000`                                                       | developer       | How long the breaker stays open.                                                  |
+| `DB_TOTAL_BUDGET_MS`            | Backend + scraper | API `24000`, refresher `110000`, poller `45000`, proxy `18000` | CDK             | Wall-clock budget for one request, including region retries.                      |
+| `DB_TLS_PROFILES`               | Backend + scraper | `chrome,legacy,firefox,safari,tls13,tls12`                     | CDK / developer | Fingerprint order: `firefox`, `safari`, `chrome`, `tls13`, `tls12`, `legacy`.     |
+| `DB_TLS_PROFILE`                | Backend + scraper | unset                                                          | developer       | Legacy alias that puts one profile first (the proxy uses it for the caller hint). |
+| `DB_PROFILE_THROTTLE_ROTATIONS` | Backend + scraper | `2`                                                            | developer       | Extra fingerprints tried after a `429` before returning the throttle.             |
+| `DB_PROFILE_BLOCK_COOLDOWN_MS`  | Backend + scraper | `900000`                                                       | developer       | How long a profile that returned `OPS_BLOCKED` is skipped.                        |
+| `DB_PROXY_FUNCTIONS`            | Backend + scraper | ARNs of both `DbProxyStack`s, comma-separated                  | CDK             | Proxy Lambdas to invoke; the transport tries them in order and fails over.        |
+| `DB_PROXY_FUNCTION`             | Backend + scraper | unset                                                          | developer       | Legacy single-ARN alias; `DB_PROXY_FUNCTIONS` wins when both are set.             |
+| `DB_PROXY_REGION`               | Backend + scraper | `us-east-1`                                                    | developer       | Region hint for a single ARN that cannot be parsed.                               |
+| `DB_REGION_COOLDOWN_MS`         | Backend + scraper | `120000`                                                       | developer       | How long a proxy region is skipped after a refusal or a `429`.                    |
 
 `DB_REQUEST_TIMEOUT_MS` is the caller's invoke deadline. The proxy caps its own DB request at 15 s so
 it can return a structured response before its 20 s Lambda timeout.
 
 The direct path is Node `https` with a browser-like ClientHello. In production the backend and poller
-use the `DbProxyStack` Lambda; local development and a region with an accepted egress use the direct
-path. Decodo is only wired into the backend; the poller has no fallback key. See
-[architecture.md](architecture.md#design-decisions).
+use the `DbProxyStack` Lambdas, one per region; local development and a region with an accepted
+egress use the direct path. There is no vendor fallback: the only options are the proxy regions and
+the TLS fingerprints above. See [architecture.md](architecture.md#db-transport).
 
 ## Frontend build
 

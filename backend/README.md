@@ -22,15 +22,15 @@ From the repository root, use `mise run //backend:dev` and `mise run //backend:t
 ## Runtime
 
 - **API Gateway path:** REST API with a Cognito user-pool authorizer. API Gateway caps the integration
-  at 29 s; the API Lambda is sized for a waiting user and uses one direct DB attempt before Decodo.
+  at 29 s; the API Lambda is sized for a waiting user and makes one round over the DB proxy regions.
 - **SQS path:** hourly `updateJourneyMonitors` and daily `deleteUnconfirmedSignups` messages. The
   refresher has a 120 s timeout and paces DB calls gently.
 - **Storage:** DynamoDB `TrainPriceMonitor` (users, journeys, notifications), S3 profile images, SQS
   queue and DLQ, SES email.
 - **DB access:** `db-vendo-client` through the shared `cross-fetch` alias, using the `dbnav`
-  Navigator profile. The shared transport uses Node `https` with browser-like TLS profiles; the
-  API/refresher can fall back to Decodo. See
-  [docs/architecture.md](../docs/architecture.md#design-decisions).
+  Navigator profile. The shared transport uses Node `https` with browser-like TLS profiles and
+  fails over between the regional DB proxies. See
+  [docs/architecture.md](../docs/architecture.md#db-transport).
 
 The handler exports `handler` from `src/main.ts` and supports API Gateway payload v1 and v2 plus SQS.
 `LOCAL_DEV=1` starts an HTTP server for local development.

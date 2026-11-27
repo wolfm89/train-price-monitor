@@ -12,23 +12,23 @@ in `us-east-1`. CI deploys `main`; manual deployments use the same checks and a 
   and the AWS CLI.
 - Repository secrets/variables for the CI deploy: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
   `AWS_ROLE_TO_ASSUME`, `AWS_ROLE_EXTERNAL_ID`, `CDK_APP_NAME`, `CDK_DOMAIN_NAME`,
-  `CDK_SES_FROM_EMAIL`, `REACT_APP_*` build values, `DECODO_API_KEY`, `PUSHOVER_API_TOKEN`,
-  `PUSHOVER_USER_KEY`, `DISTRIBUTION_ID`; variables `AWS_REGION=eu-central-1`,
-  `CDK_ANALYTICS_PAUSED`, `CDK_SCRAPER_PAUSED`, `CDK_SES_PRODUCTION_ACCESS`,
-  `CDK_DECODO_API_KEY_PARAM`. The deploy job invalidates the CloudFront `/*` path after deploying.
+  `CDK_SES_FROM_EMAIL`, `REACT_APP_*` build values, `PUSHOVER_API_TOKEN`, `PUSHOVER_USER_KEY`,
+  `DISTRIBUTION_ID`; variables `AWS_REGION=eu-central-1`, `CDK_ANALYTICS_PAUSED`,
+  `CDK_SCRAPER_PAUSED`, `CDK_SES_PRODUCTION_ACCESS`, `CDK_DB_PROXY_REGIONS`,
+  `CDK_DB_TLS_PROFILES`. The deploy job invalidates the CloudFront `/*` path after deploying.
 
 Never commit credentials or generated `.env` files.
 
 ## Stacks
 
-| Stack                 | Region                                      | What it creates                                                                                                                                                                                 |
-| --------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CertificateStack`    | `us-east-1`                                 | ACM certificate for the custom domain and CloudFront.                                                                                                                                           |
-| `DbProxyStack`        | `CDK_DB_PROXY_REGION` (default `us-east-1`) | DB egress proxy Lambda for the Navigator API; no VPC, NAT or alarms.                                                                                                                            |
-| `AlertingStack`       | `eu-central-1`                              | `TrainPriceMonitorAlerts` SNS topic, Pushover forwarder and the `$1` monthly budget.                                                                                                            |
-| `InfrastructureStack` | `eu-central-1`                              | CloudFront, private frontend S3, Cognito user/identity pools, API Gateway + GraphQL Lambda, DynamoDB, profile S3, SQS + DLQ, refresher Lambda, SES identity, API/access logs, `ToolkitCleaner`. |
-| `ScraperStack`        | `eu-central-1`                              | Schedule table + `ByDue` GSI, scraper S3 bucket, Hydrator/Poller/Compactor and three EventBridge rules.                                                                                         |
-| `AnalyticsStack`      | `eu-central-1`                              | Weekly silver Docker Lambda, EventBridge Scheduler, IAM, SNS failure path.                                                                                                                      |
+| Stack                                                       | Region                                               | What it creates                                                                                                                                                                                 |
+| ----------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CertificateStack`                                          | `us-east-1`                                          | ACM certificate for the custom domain and CloudFront.                                                                                                                                           |
+| `DbProxyStack` (+ `DbProxyStack-<region>` per extra region) | `CDK_DB_PROXY_REGIONS` (`us-east-1`, `eu-central-1`) | DB egress proxy Lambda for the Navigator API; no VPC, NAT or alarms.                                                                                                                            |
+| `AlertingStack`                                             | `eu-central-1`                                       | `TrainPriceMonitorAlerts` SNS topic, Pushover forwarder and the `$1` monthly budget.                                                                                                            |
+| `InfrastructureStack`                                       | `eu-central-1`                                       | CloudFront, private frontend S3, Cognito user/identity pools, API Gateway + GraphQL Lambda, DynamoDB, profile S3, SQS + DLQ, refresher Lambda, SES identity, API/access logs, `ToolkitCleaner`. |
+| `ScraperStack`                                              | `eu-central-1`                                       | Schedule table + `ByDue` GSI, scraper S3 bucket, Hydrator/Poller/Compactor and three EventBridge rules.                                                                                         |
+| `AnalyticsStack`                                            | `eu-central-1`                                       | Weekly silver Docker Lambda, EventBridge Scheduler, IAM, SNS failure path.                                                                                                                      |
 
 `AnalyticsStack` and `ScraperStack` share the scraper S3 bucket. The alert topic is imported by the
 application, scraper and analytics stacks.
@@ -47,11 +47,12 @@ Useful values:
 - `CDK_SES_PRODUCTION_ACCESS=1` switches off the SES sandbox workaround.
 - `CDK_TRANSFORM_VERSION` records the short commit SHA in the silver manifest; empty falls back to
   `sql-<hash>`.
-- `CDK_DECODO_API_KEY_PARAM` defaults to `/train-price-monitor/decodo-api-key`.
-- `CDK_DB_PROXY_REGION` selects the DB proxy region (`us-east-1` default). Test the new egress
-  first; `eu-central-1` is currently blocked. Deploy the caller stacks with the new ARN first, then
-  delete the old region's stack, e.g.
-  `aws cloudformation delete-stack --region us-east-1 --stack-name DbProxyStack`.
+- `CDK_DB_PROXY_REGIONS` lists the regions that get a proxy (`us-east-1,eu-central-1` default).
+  The first entry keeps the stack id `DbProxyStack`; additional regions use
+  `DbProxyStack-<region>`. Removing a region from the list leaves its stack deployed; delete it
+  explicitly, e.g. `aws cloudformation delete-stack --region eu-central-1 --stack-name DbProxyStack-eu-central-1`.
+- `CDK_DB_TLS_PROFILES` sets the fingerprint order (`chrome,legacy,firefox,safari,tls13,tls12`
+  default). DB changes the accepted order over time; keep several entries and do not pin one.
 
 ## Bootstrap
 
@@ -141,26 +142,27 @@ Sunday 03:30 UTC, after the 03:00 compactor.
 - **Pause analytics:** set `CDK_ANALYTICS_PAUSED=1` and redeploy. The schedule stays deployed but
   disabled.
 - **Roll back an application deploy:** `cdk deploy` the previous commit; the S3/data resources are
-  retained according to the stack policies. A rollback to a pre-proxy commit leaves `DbProxyStack`
-  orphaned and the callers on the blocked direct path; keep the stack or delete it explicitly (see
-  the `CDK_DB_PROXY_REGION` note above).
+  retained according to the stack policies. A rollback to a pre-proxy commit leaves the
+  `DbProxyStack`s orphaned and the callers on the direct path; keep them or delete them explicitly
+  (see the `CDK_DB_PROXY_REGIONS` note above).
 - **Roll back a silver build:** move `silver/_latest.json` to an older manifest. Builds are kept for
   at least a day and the newest two are retained.
 - **Quality reports** are kept indefinitely; `silver/builds/` keeps two builds.
 - **`ToolkitCleaner`** removes unused CDK ECR/S3 assets daily, keeping assets newer than 10 days.
 
-## SES, Decodo and Pushover
+## SES and Pushover
 
 - SES domain identity and DKIM are created by `InfrastructureStack`; add the DNS records before
   expecting mail. Set `CDK_SES_PRODUCTION_ACCESS=1` once production access is granted.
-- CI writes the Decodo key to the SSM SecureString named by `CDK_DECODO_API_KEY_PARAM`; the backend
-  functions read the name only. The poller deliberately has no Decodo key.
 - CI writes the Pushover token and user key to the two SSM parameters read by the forwarder. Neither
   value is in a CDK template or `cdk diff`.
+- There is no vendor credential; the DB transport only uses the app-owned
+  regional proxies.
 
 ## Cost guardrails
 
 The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD** with notifications at 50% actual and
 100% forecasted. The CloudWatch free tier allows ten alarms, ten custom metrics and three dashboards;
-the project uses ten, ten and two. Do not add an eleventh alarm or metric without accepting the cost.
+the project uses nine alarms, ten custom metrics and two. Do not add an eleventh alarm or metric
+without accepting the cost.
 See [operations.md](operations.md).

@@ -52,7 +52,7 @@ The deploy tasks wrap `cdk` with the correct dependencies and approval flags. Fo
 
 ## Environment
 
-The required CDK inputs and optional pause/SES/Decodo settings are in
+The required CDK inputs and optional pause/SES/proxy settings are in
 [Configuration](../docs/configuration.md#cdk-deployment-inputs). Never commit credentials or
 generated `.env` files.
 

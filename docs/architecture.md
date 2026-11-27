@@ -16,8 +16,9 @@ explains the runtime shape, the main flows and the trade-offs behind them. The d
   Pushover messages.
 
 The fare source is the Deutsche Bahn Vendo API. The backend and poller reach it through
-`shared/db-fetch.ts`, which uses Node's `https` client with browser-like TLS profiles; the API and
-refresher can fall back to Decodo when DB throttles the environment.
+`shared/db-fetch.ts`, which uses Node's `https` client with browser-like TLS profiles and an
+app-owned proxy Lambda per region. Fingerprints and regions are chosen dynamically; there is no
+third-party fallback.
 
 ## Deployment topology
 
@@ -44,7 +45,7 @@ application, scraper and analytics stacks. Deployment details are in [deployment
    pool authorizer; every user-scoped resolver also checks the stored `cognitoSub`.
 3. API Gateway proxies to the GraphQL Lambda (Docker image, 512 MB, 29 s). It reads and writes the
    single `TrainPriceMonitor` DynamoDB table and reads/writes profile images in S3. Journey search
-   calls DB Vendo directly, with Decodo as the fallback.
+   calls DB Vendo through the proxy, failing over between fingerprints and regions.
 4. The frontend uses urql with the Cognito token. The watchlist is rendered from the DynamoDB
    snapshot (`cached*` fields and `lastCheckedAt`) that the refresher maintains, so browsing the
    watchlist makes no DB call.
@@ -83,9 +84,9 @@ the DB transport in `shared/`.
   existing daily data. A run with no `batch_*` files is a no-op, so retries are safe.
 
 TTD intervals are capacity-derived: FAR 16 days, MID 8 days, NEAR 24 hours, with jitter. The poller
-uses a browser-like TLS profile and a paced request schedule; it has **no Decodo fallback** because
-bulk scraping must not spend the free fallback allowance. When DB throttles, the poller ends the
-batch and leaves the remaining targets for the next run.
+uses browser-like TLS profiles and a paced request schedule; it has **no vendor fallback**. When
+every fingerprint and proxy region is refused, the poller ends the batch and leaves the remaining
+targets for the next run.
 
 See [scraper/README.md](../scraper/README.md) for the Parquet schema, route catalog, tiers and Floci
 development.
@@ -175,38 +176,45 @@ What works is Node's own `https` client with a browser-like cipher list. DB matc
 ClientHello, so the exact list and order is what passes: Firefox, Safari, a full Chrome list,
 TLS-1.3-only and TLS-1.2-only orders all returned 201/200 on the real tagesbestpreis POST and the
 locations endpoint, from a residential IP and from Lambda in eu-central-1. Node's default order and
-the public 2026-10-20 Chrome order are refused. The transport carries six profiles (the five
-measured orders plus `legacy` as a last resort), tries `DB_TLS_PROFILE` first and rotates on a
-block.
+the public 2026-10-20 Chrome order are refused. The transport carries six profiles, tries them in
+the `DB_TLS_PROFILES` order (default `chrome,legacy,firefox,safari,tls13,tls12`) and rotates on a
+refusal or a `429`.
 
 The transport sends only the minimal headers DB accepts; db-vendo-client's own User-Agent and
 correlation headers turn an accepted request into a 403. Pacing is measured too: 6 parallel calls
 were fine, 60 at concurrency 6 got an IP a `429` for minutes, and 24 calls one at a time with 2.5 s
 gaps passed. The shared module spaces request starts and caps in-flight requests; after repeated
-failures the breaker stops calling DB for a cooldown. The backend and poller use the Navigator profile;
-the backend has a Decodo fallback, the poller deliberately has no key.
+failures the breaker stops calling DB for a cooldown. The backend and poller use the Navigator
+profile with the same transport; there is no vendor fallback.
 
 Fingerprints get blocked once popular (db-vendo-client#46 reports days to weeks; the 2026-10-20
-Chrome order was blocked on 2026-10-21), so the transport rotates firefox → safari → chrome → tls13
-→ tls12 → legacy and skips a blocked profile for 15 minutes.
+Chrome order was blocked on 2026-10-21), so the transport rotates through the configured order,
+remembers the winner and skips a refused profile for 15 minutes. The accepted order changes without
+notice: `tls12` worked from 2026-11-25 and was refused again on 2026-11-27, while `chrome` and
+`legacy` still returned 200 from the same egress IP.
 
 On 2026-11-23 the bahn.de web booking API (`/web/api/angebote/*`) began refusing every AWS Lambda
 egress IP tested — six fresh eu-central-1 environments plus eu-west-1 and us-east-1 — with
 `403 OPS_BLOCKED` on every TLS profile, while German residential egress still returned 201. The
 caller cannot choose a Lambda egress IP, and no tested region was accepted. The scraper and backend
 therefore use the DB Navigator API (`app.services-bahn.de`, `dbnav` profile), which returned 200
-from the same Lambda egress and serves the same `tagesbestPreisIntervalle`; Decodo remains the
-backend's fallback if the direct path fails. This is an egress/IP restriction, not a fingerprint
-problem: when every profile fails, another profile or Lambda IP will not help.
+from the same Lambda egress and serves the same `tagesbestPreisIntervalle`. This was an egress/IP
+restriction at the web API; the Navigator API later added its own fingerprint and rate checks
+(2026-11-27).
 
-On 2026-11-25 the Navigator API also began refusing eu-central-1 Lambda and Decodo egress. The
-`DbProxyStack` runs a small Lambda in `CDK_DB_PROXY_REGION` (default `us-east-1`) that reaches the
-Navigator API with `tls12`; the poller and backend invoke it with `lambda:InvokeFunction` through
-`DB_PROXY_FUNCTION`. The proxy is bounded at 20 s (below the API's 29 s cap), the caller aborts the
-invoke at `DB_REQUEST_TIMEOUT_MS`, and the response body is gzipped to keep cross-region traffic
+On 2026-11-25 the Navigator API also began refusing eu-central-1 Lambda egress. The app now deploys
+`DbProxyStack` once per region (`CDK_DB_PROXY_REGIONS`, default `us-east-1,eu-central-1`); the
+poller and backend invoke them with `lambda:InvokeFunction` through `DB_PROXY_FUNCTIONS`. The caller
+tries the healthiest region first and fails over on a refusal or a `429`, skipping the failed
+region for two minutes. Each proxy is bounded at 20 s (below the API's 29 s cap), the caller aborts
+the invoke at `DB_REQUEST_TIMEOUT_MS`, and the response body is gzipped to keep cross-region traffic
 small. This is a different AWS egress, not a vendor proxy: no VPC, NAT, alarm or fixed cost.
-Setting `CDK_DB_PROXY_REGION=eu-central-1` switches the stack and the caller env back, but that
-egress is currently blocked; test a new region before switching.
+
+On 2026-11-27 the Navigator API refused the pinned `tls12` ClientHello with `452 OPS_BLOCKED` in
+every tested region while `chrome` and `legacy` still returned 200 from the same IP, and the
+booking endpoints returned `429` under sustained load. The transport therefore starts with the
+working fingerprints instead of a fixed one and records the winner per region; the poller's 3.5 s
+pacing remains the floor for the rate limit.
 
 ## Design decisions
 
@@ -222,11 +230,11 @@ egress is currently blocked; test a new region before switching.
   listed batch can still race with the read; the 03:00 → 03:30 schedule normally leaves a 30-minute gap.
 - **Blocking gate, non-blocking report.** Structural/data-contract problems fail the build before the
   pointer moves. Representativeness warnings are diagnostic and never roll back a verified dataset.
-- **Browser-like TLS, no browser.** DB's edge matches the TLS ClientHello. The shared transport uses
-  Node `https` with several browser-like profiles and rotates on `403 OPS_BLOCKED`; Decodo is the
-  backend-only fallback. When DB refuses the app-region egress, the app-owned `DbProxyStack` Lambda
-  reaches the Navigator API from a region DB accepts. See [DB transport](#db-transport) for the
-  measured history and `shared/db-fetch.ts` for the implementation.
+- **Browser-like TLS, no browser and no vendor.** DB's edge matches the TLS ClientHello. The shared
+  transport uses Node `https` with several browser-like profiles and rotates on a refusal or a
+  `429`; the app-owned `DbProxyStack` Lambdas provide egress from two regions and the caller fails
+  over between them. See [DB transport](#db-transport) for the measured history and
+  `shared/db-fetch.ts` for the implementation.
 - **Alert budget.** Ten alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
   deliberate ceiling.
 

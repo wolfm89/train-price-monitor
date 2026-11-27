@@ -14,7 +14,7 @@ import {
 import { DASHBOARD_START, scraperWidgets } from './dashboards';
 import {
   DASHBOARD_NAMES,
-  DB_PROXY_REGION,
+  DB_TLS_PROFILES,
   METRIC_NAMESPACE,
   POLLER_DB_GAP_MS,
   POLLER_DB_TOTAL_BUDGET_MS,
@@ -30,8 +30,8 @@ interface ScraperStackProps extends cdk.StackProps {
   hydratorLookaheadDays?: number;
   /** ARN of the alert topic (owned by AlertingStack). */
   alertTopicArn?: string;
-  /** ARN of the DB proxy Lambda (owned by DbProxyStack). */
-  dbProxyFunctionArn?: string;
+  /** ARNs of the DB proxy Lambdas, one per region (owned by DbProxyStack). */
+  dbProxyFunctionArns?: string[];
 }
 
 export class ScraperStack extends cdk.Stack {
@@ -152,19 +152,17 @@ export class ScraperStack extends cdk.Stack {
         // now uses 3.5 s.
         DB_MIN_GAP_MS: String(POLLER_DB_GAP_MS),
         DB_MAX_IN_FLIGHT: '2',
-        // Start with the profile that is currently accepted; the transport still
-        // rotates through the rest if DB blocks it (see shared/db-fetch.ts).
-        DB_TLS_PROFILE: 'tls12',
-        // DB accepts the Navigator API from the configured proxy region but refuses
-        // the app-region and Decodo egress. See shared/db-fetch.ts.
-        ...(props?.dbProxyFunctionArn ? { DB_PROXY_FUNCTION: props.dbProxyFunctionArn, DB_PROXY_REGION } : {}),
+        // Fingerprints in the order the transport tries them. DB accepts different
+        // orders over time, so the list is dynamic rather than a single pinned one.
+        DB_TLS_PROFILES,
+        // One proxy Lambda per region; the transport fails over on a refusal or a
+        // 429 and never falls back to a vendor (see shared/db-fetch.ts).
+        ...(props?.dbProxyFunctionArns?.length ? { DB_PROXY_FUNCTIONS: props.dbProxyFunctionArns.join(',') } : {}),
         // One target makes two calls staggered by DB_MIN_GAP_MS; 45 s is the
         // per-request budget. The proxy invoke is bounded by
         // DB_REQUEST_TIMEOUT_MS (20 s default). The poller aborts at its
         // threshold before the Lambda timeout.
         DB_TOTAL_BUDGET_MS: String(POLLER_DB_TOTAL_BUDGET_MS),
-        // No Decodo key on purpose: the poller is bulk work and must never spend
-        // the free allowance. When DB throttles it stops the batch instead.
       },
     });
 
@@ -225,11 +223,11 @@ export class ScraperStack extends cdk.Stack {
     bucket.grantPut(pollerFn);
     bucket.grantReadWrite(compactorFn);
 
-    if (props?.dbProxyFunctionArn) {
+    if (props?.dbProxyFunctionArns?.length) {
       pollerFn.addToRolePolicy(
         new cdk.aws_iam.PolicyStatement({
           actions: ['lambda:InvokeFunction'],
-          resources: [props.dbProxyFunctionArn],
+          resources: props.dbProxyFunctionArns,
         })
       );
     }

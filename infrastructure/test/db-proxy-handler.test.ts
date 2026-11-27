@@ -1,9 +1,13 @@
 import { gzipSync } from 'node:zlib';
 import { handler } from '../lambda/db-proxy/index';
 
-jest.mock('../../shared/db-fetch', () => ({ fetch: jest.fn() }));
+jest.mock('../../shared/db-fetch', () => ({
+  fetch: jest.fn(),
+  activeTlsProfileName: jest.fn(() => 'chrome'),
+}));
 
-const fetchMock = jest.requireMock<{ fetch: jest.Mock }>('../../shared/db-fetch').fetch;
+const dbFetch = jest.requireMock<{ fetch: jest.Mock; activeTlsProfileName: jest.Mock }>('../../shared/db-fetch');
+const fetchMock = dbFetch.fetch;
 
 function proxyResponse(body: string, status = 200): unknown {
   return {
@@ -17,8 +21,10 @@ function proxyResponse(body: string, status = 200): unknown {
 describe('DB proxy handler', () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    dbFetch.activeTlsProfileName.mockReturnValue('chrome');
     delete process.env.DB_TOTAL_BUDGET_MS;
     delete process.env.DB_REQUEST_TIMEOUT_MS;
+    delete process.env.DB_TLS_PROFILE;
   });
 
   test('returns a plain body when the caller does not advertise gzip', async () => {
@@ -29,6 +35,7 @@ describe('DB proxy handler', () => {
     expect(result.encoding).toBeUndefined();
     expect(result.body).toBe('{"ok":true}');
     expect(result.contentType).toBe('application/json');
+    expect(result.usedProfile).toBe('chrome');
   });
 
   test('gzips the body only when the caller advertises gzip', async () => {
@@ -60,5 +67,26 @@ describe('DB proxy handler', () => {
     });
 
     await handler({ url: 'https://example.test', timeoutMs: 1 });
+  });
+
+  test('uses the caller profile hint only for this invocation', async () => {
+    process.env.DB_TLS_PROFILE = 'legacy';
+    fetchMock.mockImplementation(async () => {
+      expect(process.env.DB_TLS_PROFILE).toBe('chrome');
+      return proxyResponse('{}');
+    });
+
+    await handler({ url: 'https://example.test', profile: 'chrome' });
+
+    expect(process.env.DB_TLS_PROFILE).toBe('legacy');
+  });
+
+  test('ignores an invalid profile hint', async () => {
+    fetchMock.mockImplementation(async () => {
+      expect(process.env.DB_TLS_PROFILE).toBeUndefined();
+      return proxyResponse('{}');
+    });
+
+    await handler({ url: 'https://example.test', profile: 'not a profile' });
   });
 });

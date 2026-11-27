@@ -15,7 +15,7 @@ test('DbProxyStack creates the us-east-1 Navigator proxy', () => {
     ReservedConcurrentExecutions: 5,
     Environment: {
       Variables: Match.objectLike({
-        DB_TLS_PROFILE: 'tls12',
+        DB_TLS_PROFILES: 'chrome,legacy,firefox,safari,tls13,tls12',
         DB_MAX_ATTEMPTS: '1',
         DB_TOTAL_BUDGET_MS: '18000',
         DB_REQUEST_TIMEOUT_MS: '15000',

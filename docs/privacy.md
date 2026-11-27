@@ -21,10 +21,11 @@
 
 ## DB pricing requests
 
-The backend and poller reach DB through a Lambda in `CDK_DB_PROXY_REGION` (default `us-east-1`). The
-payload is station IDs, travel date and class; it carries no user id, email, name, token or cookie.
-The proxy does not log the URL or the body; it returns status, content type and a gzipped body to the
-caller only.
+The backend and poller reach DB through small Lambda proxies in `CDK_DB_PROXY_REGIONS` (default
+`us-east-1` and `eu-central-1`; the transport fails over between them). The payload is station IDs,
+travel date and class; it carries no user id, email, name, token or cookie. The proxies do not log
+the URL or the body; they return status, content type, the serving TLS fingerprint and a gzipped
+body to the caller only.
 
 ## Outbound bookings
 

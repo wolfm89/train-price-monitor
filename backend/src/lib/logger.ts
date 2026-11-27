@@ -2,7 +2,7 @@ import { Logger } from '@aws-lambda-powertools/logger';
 
 // NODE_ENV is unset in Lambda, so the old `(NODE_ENV || 'development')` check
 // silently made production DEBUG; setting NODE_ENV=production then made it WARN,
-// which suppressed the INFO lines the fallback metrics depend on.
+// which suppressed the INFO lines the transport metrics depend on.
 const isDevelopment = process.env.NODE_ENV === 'development';
 
 const logLevel = (process.env.POWERTOOLS_LOG_LEVEL ??

@@ -3,7 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScraperStack } from '../lib/scraper-stack';
-import { DB_PROXY_REGION, POLLER_DB_GAP_MS, SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
+import { DB_TLS_PROFILES, POLLER_DB_GAP_MS, SCRAPER_CONFIG, SILVER_CONFIG } from '../lib/config';
 
 // The stack bundles the pre-built scraper output as Lambda assets. The CDK tests
 // do not need real bundles, only that the (gitignored) directories exist.
@@ -33,7 +33,7 @@ describe('ScraperStack', () => {
     expect(rules.filter((r) => r.Properties.State === 'ENABLED')).toHaveLength(1);
   });
 
-  test('Poller paces DB calls and has no Decodo fallback', () => {
+  test('Poller paces DB calls and has no vendor fallback', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
@@ -55,26 +55,28 @@ describe('ScraperStack', () => {
   });
 
   test('Poller invokes the configured DB proxy and keeps the alarm threshold sane', () => {
-    const proxyArn = `arn:aws:lambda:${DB_PROXY_REGION}:111111111111:function:TrainPriceMonitor-DbProxy`;
+    const proxyArns = [
+      'arn:aws:lambda:us-east-1:111111111111:function:TrainPriceMonitor-DbProxy',
+      'arn:aws:lambda:eu-central-1:111111111111:function:TrainPriceMonitor-DbProxy',
+    ];
     const stack = new ScraperStack(new cdk.App(), 'ProxyScraperStack', {
       env: { account: '111111111111', region: 'eu-central-1' },
-      dbProxyFunctionArn: proxyArn,
+      dbProxyFunctionArns: proxyArns,
     });
     const template = Template.fromStack(stack);
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
       Environment: {
         Variables: Match.objectLike({
-          DB_PROXY_FUNCTION: proxyArn,
-          DB_PROXY_REGION,
-          DB_TLS_PROFILE: 'tls12',
+          DB_PROXY_FUNCTIONS: proxyArns.join(','),
+          DB_TLS_PROFILES,
         }),
       },
     });
     template.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: Match.arrayWith([
-          Match.objectLike({ Action: 'lambda:InvokeFunction', Resource: proxyArn, Effect: 'Allow' }),
+          Match.objectLike({ Action: 'lambda:InvokeFunction', Resource: proxyArns, Effect: 'Allow' }),
         ]),
       },
     });

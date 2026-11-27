@@ -48,19 +48,28 @@ describe('shared configuration', () => {
     expect(SCRAPER_CONFIG.compactor_timeout_seconds).toBeGreaterThan(0);
   });
 
-  test('DB proxy region defaults to us-east-1 and follows CDK_DB_PROXY_REGION', async () => {
-    const previous = process.env.CDK_DB_PROXY_REGION;
+  test('DB proxy regions default to both regions and follow CDK_DB_PROXY_REGIONS', async () => {
+    const previousRegions = process.env.CDK_DB_PROXY_REGIONS;
+    const previousProfiles = process.env.CDK_DB_TLS_PROFILES;
     try {
-      delete process.env.CDK_DB_PROXY_REGION;
+      delete process.env.CDK_DB_PROXY_REGIONS;
+      delete process.env.CDK_DB_TLS_PROFILES;
       jest.resetModules();
-      expect((await import('../lib/config')).DB_PROXY_REGION).toBe('us-east-1');
+      let config = await import('../lib/config');
+      expect(config.DB_PROXY_REGIONS).toEqual(['us-east-1', 'eu-central-1']);
+      expect(config.DB_TLS_PROFILES.split(',')[0]).toBe('chrome');
 
-      process.env.CDK_DB_PROXY_REGION = 'eu-central-1';
+      process.env.CDK_DB_PROXY_REGIONS = 'eu-west-1, us-west-2';
+      process.env.CDK_DB_TLS_PROFILES = 'legacy,chrome';
       jest.resetModules();
-      expect((await import('../lib/config')).DB_PROXY_REGION).toBe('eu-central-1');
+      config = await import('../lib/config');
+      expect(config.DB_PROXY_REGIONS).toEqual(['eu-west-1', 'us-west-2']);
+      expect(config.DB_TLS_PROFILES).toBe('legacy,chrome');
     } finally {
-      if (previous === undefined) delete process.env.CDK_DB_PROXY_REGION;
-      else process.env.CDK_DB_PROXY_REGION = previous;
+      if (previousRegions === undefined) delete process.env.CDK_DB_PROXY_REGIONS;
+      else process.env.CDK_DB_PROXY_REGIONS = previousRegions;
+      if (previousProfiles === undefined) delete process.env.CDK_DB_TLS_PROFILES;
+      else process.env.CDK_DB_TLS_PROFILES = previousProfiles;
       jest.resetModules();
     }
   });

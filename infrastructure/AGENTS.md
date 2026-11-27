@@ -32,14 +32,15 @@ or bakes stale bundles because those `dist/`/`build/` directories are consumed a
 
 ## Stacks
 
-Six stacks: `CertificateStack` in `us-east-1`; `DbProxyStack` in `CDK_DB_PROXY_REGION` (default
-`us-east-1`); `AlertingStack`, `InfrastructureStack`, `ScraperStack` and `AnalyticsStack` in
-`eu-central-1`. Responsibilities, outputs, bootstrap and rollback are in
-[docs/deployment.md](../docs/deployment.md).
+Seven stacks in the default configuration: `CertificateStack` in `us-east-1`; the two regional
+`DbProxyStack`s in `CDK_DB_PROXY_REGIONS` (default `us-east-1,eu-central-1`); `AlertingStack`,
+`InfrastructureStack`, `ScraperStack` and `AnalyticsStack` in `eu-central-1`. Responsibilities,
+outputs, bootstrap and rollback are in [docs/deployment.md](../docs/deployment.md).
 
-`DbProxyStack` is the DB egress proxy: one `NodejsFunction` that reaches the Navigator API from a
-region DB accepts. It adds no VPC, NAT, alarm or metric. It is capped at 20 s and 10 reserved
-concurrent executions, and gzips the response when the caller advertises gzip. Keep the poller at
+`DbProxyStack` is the DB egress proxy: one `NodejsFunction` per configured region that reaches the
+Navigator API and reports the TLS fingerprint that served the request. It adds no VPC, NAT, alarm or
+metric. It is capped at 20 s and 5 reserved concurrent executions, and gzips the response when the
+caller advertises gzip. Keep the poller at
 20 targets / 384 MB: projected Lambda usage is ~258-341k GB-s/month (64-85% of the 400k free tier),
 and the existing budget forecast was $0.924 before the fix. Cross-region response data is the only
 real incremental dollar cost; re-check the forecast after a full day.
@@ -52,9 +53,10 @@ descriptive construct IDs, prefer L2 constructs and accept `props?: cdk.StackPro
 - One topic, `TrainPriceMonitorAlerts`, receives every alarm state change, budget notification and
   analytics failure. `PushoverForwarder` is the only Pushover adapter; no other service may send
   alerts.
-- The free tier allows ten alarms, ten custom metrics and three dashboards. The project uses ten,
-  ten and two. Do not add an eleventh alarm or metric without accepting the cost ($0.10 and $0.30
-  per month), and do not use metric math, Metrics Insights or anomaly-detection bands in alarms.
+- The free tier allows ten alarms, ten custom metrics and three dashboards. The project uses nine
+  alarms, ten custom metrics and two dashboards. Do not add an eleventh alarm or metric without
+  accepting the cost ($0.10 and $0.30 per month), and do not use metric math, Metrics Insights or
+  anomaly-detection bands in alarms.
 - Do not add SSE with the AWS-managed `alias/aws/sns` key: CloudWatch alarms cannot use it. A
   customer-managed key would exceed the €1 budget.
 - The budget is `TrainPriceMonitor-Monthly`, $1.00 USD/month, ACTUAL 50 % and FORECASTED 100 %.

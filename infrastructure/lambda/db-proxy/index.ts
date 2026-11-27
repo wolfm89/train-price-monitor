@@ -1,5 +1,5 @@
 import { gzipSync } from 'node:zlib';
-import { fetch } from '../../../shared/db-fetch';
+import { activeTlsProfileName, fetch } from '../../../shared/db-fetch';
 
 export interface DbProxyRequest {
   url: string;
@@ -10,6 +10,11 @@ export interface DbProxyRequest {
   acceptEncoding?: string;
   /** The caller's remaining budget; bounds the proxy's own DB request. */
   timeoutMs?: number;
+  /**
+   * The TLS profile that worked last time for this caller. It is only a hint:
+   * the transport falls back to the configured order and rotates on a refusal.
+   */
+  profile?: string;
 }
 
 export interface DbProxyResponse {
@@ -18,14 +23,17 @@ export interface DbProxyResponse {
   contentType: string | null;
   encoding?: 'gzip';
   body: string;
+  /** The profile that served the request; the caller remembers it per region. */
+  usedProfile: string;
 }
 
 /**
  * Lambda handler for the DB egress proxy.
  *
- * DB's Akamai edge refuses some Lambda regions (and Decodo) on the Navigator
- * API. This function runs in the configured DB proxy region and performs the
- * HTTPS request from an egress DB accepts for that region.
+ * DB's Akamai edge refuses some Lambda regions on the Navigator API and
+ * rate-limits the egress it accepts. This function runs in one configured proxy
+ * region, performs the HTTPS request and reports the TLS fingerprint that
+ * served it so the caller can remember it for this region.
  *
  * The body is gzipped only when the caller advertises support, so callers
  * deployed before the gzip change keep receiving plain JSON during a rolling
@@ -44,8 +52,15 @@ export async function handler(event: DbProxyRequest): Promise<DbProxyResponse> {
   const timeoutMs = Math.min(Math.max(1_000, requestedTimeoutMs), 15_000);
   const previousTotal = process.env.DB_TOTAL_BUDGET_MS;
   const previousRequest = process.env.DB_REQUEST_TIMEOUT_MS;
+  const previousProfile = process.env.DB_TLS_PROFILE;
   process.env.DB_TOTAL_BUDGET_MS = String(timeoutMs);
   process.env.DB_REQUEST_TIMEOUT_MS = String(timeoutMs);
+  // Per-invocation hint: the caller remembers which profile worked for this
+  // region and sends it back. The transport still rotates to the rest on a
+  // refusal or a 429, so a stale hint is safe.
+  if (typeof event.profile === 'string' && /^[a-z0-9]{3,12}$/.test(event.profile)) {
+    process.env.DB_TLS_PROFILE = event.profile;
+  }
 
   try {
     const response = await fetch(event.url, {
@@ -58,6 +73,7 @@ export async function handler(event: DbProxyRequest): Promise<DbProxyResponse> {
       status: response.status,
       statusText: `${response.status} ${response.statusText}`.trim(),
       contentType: response.headers.get('content-type'),
+      usedProfile: activeTlsProfileName(),
     };
 
     if (event.acceptEncoding === 'gzip') {
@@ -73,5 +89,7 @@ export async function handler(event: DbProxyRequest): Promise<DbProxyResponse> {
     else process.env.DB_TOTAL_BUDGET_MS = previousTotal;
     if (previousRequest === undefined) delete process.env.DB_REQUEST_TIMEOUT_MS;
     else process.env.DB_REQUEST_TIMEOUT_MS = previousRequest;
+    if (previousProfile === undefined) delete process.env.DB_TLS_PROFILE;
+    else process.env.DB_TLS_PROFILE = previousProfile;
   }
 }

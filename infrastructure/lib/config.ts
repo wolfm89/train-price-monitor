@@ -273,9 +273,25 @@ export const APP_NAME = 'TrainPriceMonitor';
 export const APP_DISPLAY_NAME = 'Train Price Monitor';
 export const METRIC_NAMESPACE = APP_NAME;
 
-/** DB egress proxy. Defaults to us-east-1; set CDK_DB_PROXY_REGION=eu-central-1 to switch. */
-export const DB_PROXY_REGION = process.env.CDK_DB_PROXY_REGION?.trim() || 'us-east-1';
+/**
+ * DB egress proxies: one small Lambda per region. The transport tries them in
+ * order and fails over on a refusal or a 429, so a block in one region does not
+ * stop the app. Override the list with `CDK_DB_PROXY_REGIONS` (comma-separated).
+ */
+const configuredProxyRegions = (process.env.CDK_DB_PROXY_REGIONS?.trim() || '')
+  .split(',')
+  .map((region) => region.trim())
+  .filter(Boolean);
+export const DB_PROXY_REGIONS =
+  configuredProxyRegions.length > 0 ? configuredProxyRegions : ['us-east-1', 'eu-central-1'];
 export const DB_PROXY_FUNCTION_NAME = `${APP_NAME}-DbProxy`;
+
+/**
+ * TLS fingerprints the transport tries, in order. DB accepts different orders
+ * over time: `chrome` and `legacy` answered 200 on 2026-11-27 while `tls12`
+ * (the previous fixed choice) was refused with `452 OPS_BLOCKED`.
+ */
+export const DB_TLS_PROFILES = process.env.CDK_DB_TLS_PROFILES?.trim() || 'chrome,legacy,firefox,safari,tls13,tls12';
 
 /** Poller DB pacing; shared by the stack and the safety-margin test. */
 export const POLLER_DB_GAP_MS = 3_500;
