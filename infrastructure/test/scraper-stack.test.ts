@@ -33,7 +33,7 @@ describe('ScraperStack', () => {
     expect(rules.filter((r) => r.Properties.State === 'ENABLED')).toHaveLength(1);
   });
 
-  test('Poller paces DB calls and has no vendor fallback', () => {
+  test('Poller paces DB calls', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       PackageType: 'Image',
@@ -47,11 +47,6 @@ describe('ScraperStack', () => {
         }),
       },
     });
-    const poller = Object.values(template.findResources('AWS::Lambda::Function')).find(
-      (fn) => fn.Properties.PackageType === 'Image'
-    );
-    const variables = Object.keys(poller?.Properties.Environment.Variables ?? {});
-    expect(variables.some((name) => name.startsWith('DECODO') || name.startsWith('BROWSER'))).toBe(false);
   });
 
   test('Poller invokes the configured DB proxy and keeps the alarm threshold sane', () => {

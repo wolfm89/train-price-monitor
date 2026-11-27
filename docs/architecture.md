@@ -86,9 +86,8 @@ the DB transport in `shared/`.
   existing daily data. A run with no `batch_*` files is a no-op, so retries are safe.
 
 TTD intervals are capacity-derived: FAR 16 days, MID 8 days, NEAR 24 hours, with jitter. The poller
-uses browser-like TLS profiles and a paced request schedule; it has **no vendor fallback**. When
-every fingerprint and proxy region is refused, the poller ends the batch and leaves the remaining
-targets for the next run.
+uses browser-like TLS profiles and a paced request schedule. When every fingerprint and proxy
+region is refused, the poller ends the batch and leaves the remaining targets for the next run.
 
 See [scraper/README.md](../scraper/README.md) for the Parquet schema, route catalog, tiers and Floci
 development.
@@ -187,7 +186,7 @@ correlation headers turn an accepted request into a 403. Pacing is measured too:
 were fine, 60 at concurrency 6 got an IP a `429` for minutes, and 24 calls one at a time with 2.5 s
 gaps passed. The shared module spaces request starts and caps in-flight requests; after repeated
 failures the breaker stops calling DB for a cooldown. The backend and poller use the Navigator
-profile with the same transport; there is no vendor fallback.
+profile with the same transport.
 
 Fingerprints get blocked once popular (db-vendo-client#46 reports days to weeks; the 2026-10-20
 Chrome order was blocked on 2026-10-21), so the transport rotates through the configured order,
@@ -232,7 +231,7 @@ pacing remains the floor for the rate limit.
   listed batch can still race with the read; the 03:00 → 03:30 schedule normally leaves a 30-minute gap.
 - **Blocking gate, non-blocking report.** Structural/data-contract problems fail the build before the
   pointer moves. Representativeness warnings are diagnostic and never roll back a verified dataset.
-- **Browser-like TLS, no browser and no vendor.** DB's edge matches the TLS ClientHello. The shared
+- **Browser-like TLS, no browser.** DB's edge matches the TLS ClientHello. The shared
   transport uses Node `https` with several browser-like profiles and rotates on a refusal or a
   `429`; the app-owned `DbProxyStack` Lambdas provide egress from two regions and the caller fails
   over between them. See [DB transport](#db-transport) for the measured history and

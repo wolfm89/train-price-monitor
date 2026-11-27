@@ -40,8 +40,7 @@ pacing are in `../scraper/AGENTS.md`; the measured limits and the throttling his
 
 **Circuit breaker.** After `DB_BREAKER_THRESHOLD` consecutive failed requests the environment stops
 calling DB for `DB_BREAKER_COOLDOWN_MS`; hammering a throttled IP only extends the ban. When every
-option is exhausted the transport throws `DbThrottledError` and the poller ends its batch. There is
-no vendor fallback.
+option is exhausted the transport throws `DbThrottledError` and the poller ends its batch.
 
 **Cross-region proxy.** `DB_PROXY_FUNCTIONS` is a comma-separated list of proxy Lambda ARNs, one per
 region (normally us-east-1 and eu-central-1); the legacy single `DB_PROXY_FUNCTION` is still read.

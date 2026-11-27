@@ -44,9 +44,8 @@ human-only AWS deploy (it builds the bundles first); the Floci deploy below is a
   zero `blocks` and no batch aborts. A few `directThrottled` retries are normal through the proxy;
   `TPM-Scraper-PollerThrottledByDb` fires when `blocks` is non-zero in two runs. `breakerOpened` is
   diagnostic and can also count consecutive 429s.
-- **There is no vendor fallback.** The poller uses the same regional DB proxies and fingerprint
-  rotation as the backend. On `DbThrottledError` it ends the batch and leaves the rest for the next
-  run.
+- The poller uses the same regional DB proxies and fingerprint rotation as the backend. On
+  `DbThrottledError` it ends the batch and leaves the rest for the next run.
 - Do not raise concurrency or reduce the gap to make a deadline; it gets the IP a longer ban.
 
 ## Packaging and data

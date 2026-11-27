@@ -92,9 +92,8 @@ exhausted a 17.6 GB VM.
   disguises as CORS. Details in [backend/AGENTS.md](backend/AGENTS.md) and
   [scraper/AGENTS.md](scraper/AGENTS.md).
 - **DB transport.** All DB access goes through `shared/db-fetch.ts`; never replace it with a browser,
-  proxy, undici, `fetch` or another vendor. The only egress is the app-owned regional proxies and the
-  TLS fingerprints; there is no vendor fallback. Read `shared/AGENTS.md` before touching the
-  transport.
+  proxy, undici, `fetch` or another vendor. The egress is the app-owned regional proxies and the TLS
+  fingerprints. Read `shared/AGENTS.md` before touching the transport.
 - **Infrastructure.** Build and review `cdk diff` before any deploy; never run `cdk deploy` without
   a human reviewing the diff. Do not deploy to AWS from an agent session
   (`//infrastructure:deploy`, `//infrastructure:deploy-scraper`); the local Floci deploy

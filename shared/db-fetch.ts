@@ -31,10 +31,6 @@
  *  - Once an environment is throttled, hammering it only extends the ban. After a
  *    few consecutive failures the transport opens a circuit breaker.
  *
- * This file has no vendor fallback: no third-party proxy, no SSM lookup and no
- * second HTTP client. The only egress options are the app-owned proxy Lambdas
- * and the TLS profiles above.
- *
  * Environment (all optional):
  *  DB_MIN_GAP_MS                  minimum spacing between request starts (default 1000)
  *  DB_MAX_IN_FLIGHT               concurrent requests (default 2)

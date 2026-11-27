@@ -55,8 +55,7 @@ From the repository root: `mise run //backend:dev` and `mise run //backend:test`
   touching transport behavior.
 - The API and refresher reach DB through the configured `DbProxyStack`s
   (`DB_PROXY_FUNCTIONS`, one ARN per region). The transport tries the healthiest region and the
-  `DB_TLS_PROFILES` fingerprint order, and fails over on a refusal or a `429`. There is no vendor
-  fallback and no vendor credential.
+  `DB_TLS_PROFILES` fingerprint order, and fails over on a refusal or a `429`.
 - The bundle is `--format=cjs`. Do **not** externalize ESM-only packages: `require()` of ESM crashes
   Lambda with `UserCodeSyntaxError`, which API Gateway reports as a 502 and often disguises as CORS.
   `db-vendo-client` must stay bundled.

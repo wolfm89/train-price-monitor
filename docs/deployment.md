@@ -175,10 +175,7 @@ Sunday 03:30 UTC, after the 03:00 compactor.
   expecting mail. Set `CDK_SES_PRODUCTION_ACCESS=1` once production access is granted.
 - CI writes the Pushover token and user key to the two SSM parameters read by the forwarder. Neither
   value is in a CDK template or `cdk diff`.
-- There is no vendor credential in use; the DB transport only uses the app-owned regional proxies.
-  The old Decodo SSM SecureString `/train-price-monitor/decodo-api-key`, the GitHub `DECODO_API_KEY`
-  secret and the `CDK_DECODO_API_KEY_PARAM` variable may still exist after the deploy. After the
-  rollback window, delete the parameter, remove the secret/variable and revoke the vendor key.
+- The DB transport uses only the app-owned regional proxies.
 
 ## Cost guardrails
 

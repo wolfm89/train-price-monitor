@@ -77,8 +77,8 @@ it can return a structured response before its 20 s Lambda timeout.
 
 The direct path is Node `https` with a browser-like ClientHello. In production the backend and poller
 use the `DbProxyStack` Lambdas, one per region; local development and a region with an accepted
-egress use the direct path. There is no vendor fallback: the only options are the proxy regions and
-the TLS fingerprints above. See [architecture.md](architecture.md#db-transport).
+egress use the direct path. The proxy regions and the TLS fingerprints above are the egress
+options. See [architecture.md](architecture.md#db-transport).
 
 ## Frontend build
 

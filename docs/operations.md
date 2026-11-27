@@ -30,9 +30,8 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | `TPM-App-SearchThrottled`         | The GraphQL Lambda is being throttled (account concurrency limit reached).                  |
 | `TPM-App-RefresherDLQ`            | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
 
-Ten alarms: the vendor fallback was removed and a hydrator-errors alarm was added. Region
-failovers are shown on the dashboards (`TransportRegionRotations`) but are not alarmed: failing
-over is expected behavior.
+Ten alarms: the hydrator-errors alarm covers the nightly seed. Region failovers are shown on the
+dashboards (`TransportRegionRotations`) but are not alarmed: failing over is expected behavior.
 
 Do not add an eleventh alarm or custom metric without accepting the cost. Do not use metric math,
 Metrics Insights or anomaly-detection bands in alarms; they are billed differently from the free
@@ -78,12 +77,12 @@ then.
    `regionRotations`, `profileRotations`) and the `DbProxyStack` log group in both regions. `blocks`
    counts 452/OPS_BLOCKED; a 429 is a rate limit and is retried with backoff.
 2. The backend reaches the Navigator API through the proxied regions; the transport tries the
-   healthiest region and the configured fingerprint order, and there is no vendor fallback.
+   healthiest region and the configured fingerprint order.
 3. On a proxy block the poller ends the batch; untouched targets are retried by the next run. Do not
    raise `SCRAPER_BATCH_SIZE`. A few `directThrottled` retries per run are normal; the alarm fires
    when `blocks` is non-zero in two consecutive runs.
-4. On 2026-11-27 `tls12` (the previously pinned profile) was refused with `452 OPS_BLOCKED` while
-   `chrome` and `legacy` returned 200 from the same IP. The `tlsProfile` field in the poller's
+4. DB can refuse a fingerprint that worked earlier: on 2026-11-27 `tls12` returned `452 OPS_BLOCKED`
+   while `chrome` and `legacy` returned 200 from the same IP. The `tlsProfile` field in the poller's
    transport counters shows the current winner. If every fingerprint is refused, update
    `CDK_DB_TLS_PROFILES`; do not pin a single profile.
 5. If a proxy region is blocked, the transport skips it for `DB_REGION_COOLDOWN_MS` and then retries

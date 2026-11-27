@@ -166,8 +166,8 @@ The generated resolver types are committed; the SDL JSON and station index are n
 - **Frontend cannot sign in / Cognito IDs undefined:** run `mise run env:local`; restart Vite.
 - **AWS errors during `env:local`:** the SSO session expired; run `aws sso login` again.
 - **DB requests return `403`/`452 OPS_BLOCKED`:** the TLS fingerprint is blocked. The transport
-  rotates through `DB_TLS_PROFILES` and the proxy regions automatically; there is no vendor
-  fallback. If every option is refused, the poller ends its batch on throttling.
+  rotates through `DB_TLS_PROFILES` and the proxy regions automatically. If every option is
+  refused, the poller ends its batch on throttling.
 - **CORS errors:** `CORS_ALLOWED_ORIGINS` defaults to `http://localhost:3000` and
   `http://127.0.0.1:3000`; set it to the exact browser origin for a custom frontend.
 - **Backend image build fails on Apple Silicon:** the Lambda image is `linux/amd64`; ensure Docker
