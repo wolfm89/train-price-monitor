@@ -53,7 +53,7 @@ descriptive construct IDs, prefer L2 constructs and accept `props?: cdk.StackPro
 - One topic, `TrainPriceMonitorAlerts`, receives every alarm state change, budget notification and
   analytics failure. `PushoverForwarder` is the only Pushover adapter; no other service may send
   alerts.
-- The free tier allows ten alarms, ten custom metrics and three dashboards. The project uses nine
+- The free tier allows ten alarms, ten custom metrics and three dashboards. The project uses ten
   alarms, ten custom metrics and two dashboards. Do not add an eleventh alarm or metric without
   accepting the cost ($0.10 and $0.30 per month), and do not use metric math, Metrics Insights or
   anomaly-detection bands in alarms.

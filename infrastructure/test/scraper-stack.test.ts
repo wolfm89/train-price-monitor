@@ -86,7 +86,7 @@ describe('ScraperStack', () => {
     });
     template.hasResourceProperties('AWS::Logs::MetricFilter', {
       MetricTransformations: Match.arrayWith([
-        Match.objectLike({ MetricName: 'PollerThrottled', MetricValue: '$.transport.breakerOpened' }),
+        Match.objectLike({ MetricName: 'PollerThrottled', MetricValue: '$.transport.blocks' }),
       ]),
     });
   });
@@ -110,20 +110,25 @@ describe('ScraperStack', () => {
     expect(indexes).toEqual(['ByDue']);
   });
 
-  test('creates the five poller alarms and their log metrics', () => {
+  test('creates the six scraper alarms and their log metrics', () => {
     const template = synth();
-    template.resourceCountIs('AWS::CloudWatch::Alarm', 5);
-    const metricNames = Object.values(template.findResources('AWS::Logs::MetricFilter')).map(
-      (filter) => filter.Properties.MetricTransformations[0].MetricName
-    );
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 6);
+    const metricNames = [
+      ...new Set(
+        Object.values(template.findResources('AWS::Logs::MetricFilter')).map(
+          (filter) => filter.Properties.MetricTransformations[0].MetricName
+        )
+      ),
+    ];
     expect(metricNames.sort()).toEqual([
       'PollerAborted',
       'PollerBacklog',
-      'PollerDirectOk',
       'PollerFailedTargets',
+      'PollerPricedTargets',
       'PollerRowsWritten',
       'PollerTargetsScraped',
       'PollerThrottled',
+      'TransportRegionRotations',
     ]);
   });
 

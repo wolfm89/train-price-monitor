@@ -40,9 +40,33 @@ export interface DbProxyResponse {
  * deploy. The handler returns only status, content type and body: those are the
  * fields db-vendo-client's `request` uses.
  */
+const DB_PROXY_HOST = 'app.services-bahn.de';
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/** The proxy is not a generic relay: only the Navigator API, GET/POST, https/443. */
+function validateTarget(rawUrl: string, method: string): void {
+  let target: URL;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    throw new Error('DB proxy received an invalid URL');
+  }
+  if (target.protocol !== 'https:') throw new Error('DB proxy only forwards HTTPS URLs');
+  if (target.hostname !== DB_PROXY_HOST) throw new Error('DB proxy only forwards to the Navigator API host');
+  if (target.username || target.password) throw new Error('DB proxy rejects URL credentials');
+  if (target.port && target.port !== '443') throw new Error('DB proxy rejects non-443 ports');
+  if (!['GET', 'POST'].includes(method)) throw new Error('DB proxy only forwards GET and POST');
+}
+
 export async function handler(event: DbProxyRequest): Promise<DbProxyResponse> {
   if (!event || typeof event.url !== 'string' || event.url.length === 0) {
     throw new Error('DB proxy request is missing a URL');
+  }
+
+  const method = (event.method ?? 'GET').toUpperCase();
+  validateTarget(event.url, method);
+  if (typeof event.body === 'string' && Buffer.byteLength(event.body) > MAX_BODY_BYTES) {
+    throw new Error('DB proxy request body exceeds the size limit');
   }
 
   const requestedTimeoutMs =
@@ -64,11 +88,14 @@ export async function handler(event: DbProxyRequest): Promise<DbProxyResponse> {
 
   try {
     const response = await fetch(event.url, {
-      method: event.method ?? 'GET',
+      method,
       headers: event.headers ?? {},
       body: event.body,
     });
     const body = await response.text();
+    if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+      throw new Error('DB proxy response exceeds the size limit');
+    }
     const common = {
       status: response.status,
       statusText: `${response.status} ${response.statusText}`.trim(),

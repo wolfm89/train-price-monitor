@@ -5,6 +5,19 @@ The application is seven AWS CDK stacks in the default configuration: five run i
 CloudFront certificate is in `us-east-1`. CI deploys `main`; manual deployments use the same checks
 and a reviewed `cdk diff`.
 
+## CI deploy security
+
+- The deploy job runs in the `production` environment with a fixed
+  `deploy-production` concurrency group. Configure required reviewers and a
+  `main`-only deployment branch policy in the repository settings.
+- A manual `workflow_dispatch` with `deploy=true` can deploy the selected ref
+  with repository-scoped AWS secrets. Only grant write access to trusted users;
+  the branch's workflow definition is what runs, so environment protection rules
+  are not a substitute for that trust boundary.
+- Prefer GitHub OIDC over the long-lived `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` repository secrets; the current keys are available to
+  any branch workflow.
+
 ## Prerequisites
 
 - An AWS account with permission to create the stacks, IAM roles, Cognito, SES, SNS, EventBridge,
@@ -171,6 +184,6 @@ Sunday 03:30 UTC, after the 03:00 compactor.
 
 The account budget `TrainPriceMonitor-Monthly` is **$1.00 USD** with notifications at 50% actual and
 100% forecasted. The CloudWatch free tier allows ten alarms, ten custom metrics and three dashboards;
-the project uses nine alarms, ten custom metrics and two. Do not add an eleventh alarm or metric
+the project uses ten alarms, ten custom metrics and two. Do not add an eleventh alarm or metric
 without accepting the cost.
 See [operations.md](operations.md).

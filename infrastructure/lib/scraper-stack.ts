@@ -271,7 +271,8 @@ export class ScraperStack extends cdk.Stack {
 
     // -------------------------------------------------------------------------
     // Alarms and dashboard (CloudWatch free tier: 10 alarms, 10 custom metrics
-    // across both stacks; 5 alarms and 7 custom metrics are defined here)
+    // across both stacks; 6 alarms and 8 metric names are defined here (one
+    // metric name, TransportRegionRotations, is shared with the backend)
     // -------------------------------------------------------------------------
     const alertTopic = props?.alertTopicArn
       ? sns.Topic.fromTopicArn(this, 'AlertTopic', props.alertTopicArn)
@@ -279,21 +280,25 @@ export class ScraperStack extends cdk.Stack {
 
     // The poller logs one "Poller finished" line per run with the transport
     // counters; these filters turn them into metrics without any extra code.
-    new logs.MetricFilter(this, 'PollerDirectOkFilter', {
+    // Actual priced targets, not just successful DB calls: an empty 200 or a
+    // day without fares must count as zero, otherwise the NoPrices alarm stays
+    // green while nothing is scraped.
+    new logs.MetricFilter(this, 'PollerPricedTargetsFilter', {
       logGroup: pollerLogGroup,
-      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Prices produced'),
       metricNamespace: METRIC_NAMESPACE,
-      metricName: 'PollerDirectOk',
-      metricValue: '$.transport.directOk',
+      metricName: 'PollerPricedTargets',
+      metricValue: '$.pricedRows',
+      defaultValue: 0,
     });
     new logs.MetricFilter(this, 'PollerThrottledFilter', {
       logGroup: pollerLogGroup,
       filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
       metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerThrottled',
-      // The breaker opens on a real DB block; retry counts are noisy (1-9 per
-      // healthy run) and are intentionally not alarmed.
-      metricValue: '$.transport.breakerOpened',
+      // `blocks` counts 452/OPS_BLOCKED and proxy-reported blocks, not every
+      // breaker open: a 429 rate limit must not page as a fingerprint block.
+      metricValue: '$.transport.blocks',
     });
     // One metric per scraped target (the transport counters are per DB call, and
     // there are two calls per target). Used by the dashboard and within the free
@@ -313,6 +318,49 @@ export class ScraperStack extends cdk.Stack {
       metricNamespace: METRIC_NAMESPACE,
       metricName: 'PollerFailedTargets',
       metricValue: '1',
+    });
+    // The throttle/busy/schedule branches are also failed targets; without
+    // these filters the dashboard error rate reads 0% exactly when a block
+    // empties the batch.
+    for (const [id, message] of [
+      ['PollerThrottleFilter', 'DB is throttling this environment, ending the batch early'],
+      ['PollerRateLimitFilter', 'Rate limited by Vendo API'],
+      ['PollerBusyFilter', 'DB proxy busy, retrying target later'],
+      ['PollerPartialClassFilter', 'One class failed, preserving the other and retrying target later'],
+      ['PollerScheduleFailureFilter', 'Failed to update schedule after upload'],
+    ] as const) {
+      new logs.MetricFilter(this, id, {
+        logGroup: pollerLogGroup,
+        filterPattern: logs.FilterPattern.stringValue('$.message', '=', message),
+        metricNamespace: METRIC_NAMESPACE,
+        metricName: 'PollerFailedTargets',
+        metricValue: '1',
+      });
+    }
+    // Failover visibility for the scraper, matching the backend's metric name.
+    new logs.MetricFilter(this, 'PollerRegionRotationsFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller finished'),
+      metricNamespace: METRIC_NAMESPACE,
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
+      defaultValue: 0,
+    });
+    new logs.MetricFilter(this, 'PollerRegionRotationsFailureFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller failed'),
+      metricNamespace: METRIC_NAMESPACE,
+      metricName: 'TransportRegionRotations',
+      metricValue: '$.transport.regionRotations',
+      defaultValue: 0,
+    });
+    new logs.MetricFilter(this, 'PollerThrottledFailureFilter', {
+      logGroup: pollerLogGroup,
+      filterPattern: logs.FilterPattern.stringValue('$.message', '=', 'Poller failed'),
+      metricNamespace: METRIC_NAMESPACE,
+      metricName: 'PollerThrottled',
+      metricValue: '$.transport.blocks',
+      defaultValue: 0,
     });
 
     // Data volume: rows written per Parquet batch.
@@ -343,9 +391,9 @@ export class ScraperStack extends cdk.Stack {
       metricValue: '$.backlog',
     });
 
-    const directOk = new cloudwatch.Metric({
+    const pricedTargets = new cloudwatch.Metric({
       namespace: METRIC_NAMESPACE,
-      metricName: 'PollerDirectOk',
+      metricName: 'PollerPricedTargets',
       period: cdk.Duration.minutes(15),
       statistic: 'Sum',
     });
@@ -391,8 +439,7 @@ export class ScraperStack extends cdk.Stack {
 
     const dbThrottling = new cloudwatch.Alarm(this, 'PollerThrottledByDb', {
       alarmName: 'TPM-Scraper-PollerThrottledByDb',
-      alarmDescription:
-        'The poller DB circuit breaker opened in two consecutive runs: DB is refusing the proxy egress.',
+      alarmDescription: 'The poller saw DB fingerprint blocks in two consecutive runs: the proxy egress is refused.',
       metric: throttled,
       threshold: 0,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
@@ -405,7 +452,7 @@ export class ScraperStack extends cdk.Stack {
     const noPrices = new cloudwatch.Alarm(this, 'PollerNoPrices', {
       alarmName: 'TPM-Scraper-PollerNoPrices',
       alarmDescription: 'No target has returned prices for 45 minutes: DB is refusing every request.',
-      metric: directOk,
+      metric: pricedTargets,
       threshold: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
       evaluationPeriods: 3,
@@ -425,7 +472,20 @@ export class ScraperStack extends cdk.Stack {
       actionsEnabled,
     });
 
-    for (const alarm of [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted]) {
+    // The free-tier alarm allowance has one slot left: a failed hydrator stops
+    // seeding new targets, and the poller then drains the queue silently.
+    const hydratorErrors = new cloudwatch.Alarm(this, 'HydratorErrors', {
+      alarmName: 'TPM-Scraper-HydratorErrors',
+      alarmDescription: 'The nightly hydrator failed: no new scrape targets are being seeded.',
+      metric: hydratorFn.metricErrors({ period: cdk.Duration.minutes(15), statistic: 'Sum' }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      actionsEnabled,
+    });
+
+    for (const alarm of [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted, hydratorErrors]) {
       if (alertTopic) {
         alarm.addAlarmAction(new cloudwatch_actions.SnsAction(alertTopic));
         alarm.addOkAction(new cloudwatch_actions.SnsAction(alertTopic));
@@ -446,7 +506,7 @@ export class ScraperStack extends cdk.Stack {
         scheduleTable: table,
         dataBucket: bucket,
         pollerLogGroup,
-        alarms: [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted],
+        alarms: [notRunning, pollerErrors, dbThrottling, noPrices, batchAborted, hydratorErrors],
       }),
     });
 

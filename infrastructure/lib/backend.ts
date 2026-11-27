@@ -116,10 +116,10 @@ export class Backend extends Construct {
       memorySize: 512,
       environment: {
         ...commonEnvironment,
-        // A user is waiting: one round over the proxy regions, then fail. The
-        // immediate retry inside the transport covers the next region.
-        DB_MAX_ATTEMPTS: '1',
-        DB_REQUEST_TIMEOUT_MS: '8000',
+        // A user is waiting: two rounds over the two proxy regions, each
+        // invoke capped at 5 s (2 x 2 x 5 s + backoff fits the 24 s budget).
+        DB_MAX_ATTEMPTS: '2',
+        DB_REQUEST_TIMEOUT_MS: '5000',
         DB_MIN_GAP_MS: '300',
         // API Gateway cuts the integration at 29 s; leave 5 s for start-up.
         DB_TOTAL_BUDGET_MS: '24000',
@@ -339,8 +339,8 @@ export class Backend extends Construct {
     // -------------------------------------------------------------------------
     // Alarms and dashboard (CloudWatch free tier: 10 alarms, 10 custom metrics
     // across both stacks; 4 alarms and 3 custom metrics are defined here, and
-    // the scraper stack adds the other 5 alarms and 7 metrics. One alarm slot
-    // stays free.)
+    // the scraper stack adds the other 6 alarms and 7 metrics. All ten alarm
+    // slots are used.)
     // -------------------------------------------------------------------------
 
     // Region failovers are diagnostic, not an incident: non-zero means the

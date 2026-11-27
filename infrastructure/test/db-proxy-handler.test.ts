@@ -30,7 +30,7 @@ describe('DB proxy handler', () => {
   test('returns a plain body when the caller does not advertise gzip', async () => {
     fetchMock.mockResolvedValue(proxyResponse('{"ok":true}'));
 
-    const result = await handler({ url: 'https://example.test' });
+    const result = await handler({ url: 'https://app.services-bahn.de/mob/location/search' });
 
     expect(result.encoding).toBeUndefined();
     expect(result.body).toBe('{"ok":true}');
@@ -41,7 +41,7 @@ describe('DB proxy handler', () => {
   test('gzips the body only when the caller advertises gzip', async () => {
     fetchMock.mockResolvedValue(proxyResponse('{"ok":true}'));
 
-    const result = await handler({ url: 'https://example.test', acceptEncoding: 'gzip' });
+    const result = await handler({ url: 'https://app.services-bahn.de/mob/location/search', acceptEncoding: 'gzip' });
 
     expect(result.encoding).toBe('gzip');
     expect(result.body).toBe(gzipSync(Buffer.from('{"ok":true}', 'utf8')).toString('base64'));
@@ -54,7 +54,7 @@ describe('DB proxy handler', () => {
       return proxyResponse('{}');
     });
 
-    await handler({ url: 'https://example.test', timeoutMs: 60_000 });
+    await handler({ url: 'https://app.services-bahn.de/mob/location/search', timeoutMs: 60_000 });
 
     expect(process.env.DB_TOTAL_BUDGET_MS).toBeUndefined();
     expect(process.env.DB_REQUEST_TIMEOUT_MS).toBeUndefined();
@@ -66,7 +66,7 @@ describe('DB proxy handler', () => {
       return proxyResponse('{}');
     });
 
-    await handler({ url: 'https://example.test', timeoutMs: 1 });
+    await handler({ url: 'https://app.services-bahn.de/mob/location/search', timeoutMs: 1 });
   });
 
   test('uses the caller profile hint only for this invocation', async () => {
@@ -76,7 +76,7 @@ describe('DB proxy handler', () => {
       return proxyResponse('{}');
     });
 
-    await handler({ url: 'https://example.test', profile: 'chrome' });
+    await handler({ url: 'https://app.services-bahn.de/mob/location/search', profile: 'chrome' });
 
     expect(process.env.DB_TLS_PROFILE).toBe('legacy');
   });
@@ -87,11 +87,31 @@ describe('DB proxy handler', () => {
     process.env.DB_TLS_PROFILE = 'legacy';
     fetchMock.mockRejectedValue(new Error('boom'));
 
-    await expect(handler({ url: 'https://example.test', profile: 'chrome', timeoutMs: 5000 })).rejects.toThrow('boom');
+    await expect(
+      handler({ url: 'https://app.services-bahn.de/mob/location/search', profile: 'chrome', timeoutMs: 5000 })
+    ).rejects.toThrow('boom');
 
     expect(process.env.DB_TOTAL_BUDGET_MS).toBe('123');
     expect(process.env.DB_REQUEST_TIMEOUT_MS).toBe('456');
     expect(process.env.DB_TLS_PROFILE).toBe('legacy');
+  });
+
+  test('rejects a non-Navigator host', async () => {
+    await expect(handler({ url: 'https://example.test/' })).rejects.toThrow(/Navigator API host/);
+  });
+
+  test('rejects non-HTTPS and non-GET/POST requests', async () => {
+    await expect(handler({ url: 'http://app.services-bahn.de/mob/location/search' })).rejects.toThrow(/HTTPS/);
+    await expect(handler({ url: 'https://app.services-bahn.de/mob/location/search', method: 'PUT' })).rejects.toThrow(
+      /GET and POST/
+    );
+  });
+
+  test('rejects URL credentials and non-443 ports', async () => {
+    await expect(handler({ url: 'https://user:pass@app.services-bahn.de/mob/location/search' })).rejects.toThrow(
+      /credentials/
+    );
+    await expect(handler({ url: 'https://app.services-bahn.de:8443/mob/location/search' })).rejects.toThrow(/non-443/);
   });
 
   test('ignores an invalid profile hint', async () => {
@@ -100,6 +120,6 @@ describe('DB proxy handler', () => {
       return proxyResponse('{}');
     });
 
-    await handler({ url: 'https://example.test', profile: 'not a profile' });
+    await handler({ url: 'https://app.services-bahn.de/mob/location/search', profile: 'not a profile' });
   });
 });

@@ -158,8 +158,8 @@ CloudWatch alarms, AWS Budgets, silver build failures and quality warnings publi
 to Pushover. Alarm state changes and build failures are high priority with the siren; recovery,
 quality warnings and budget alerts are normal priority.
 
-There are nine CloudWatch alarms, ten custom metrics and two dashboards. One alarm slot and the
-third dashboard slot are free; the custom-metric allowance is fully used. Do not add an eleventh
+There are ten CloudWatch alarms, ten custom metrics and two dashboards. The alarm and
+custom-metric allowances are fully used; the third dashboard slot is free. Do not add an eleventh
 alarm or custom metric without accepting the cost. See [operations.md](operations.md) for the alarm
 list and runbooks.
 
@@ -180,7 +180,7 @@ TLS-1.3-only and TLS-1.2-only orders all returned 201/200 on the real tagesbestp
 locations endpoint, from a residential IP and from Lambda in eu-central-1. Node's default order and
 the public 2026-10-20 Chrome order are refused. The transport carries six profiles, tries them in
 the `DB_TLS_PROFILES` order (default `chrome,legacy,firefox,safari,tls13,tls12`) and rotates on a
-refusal or a `429`.
+refusal; a `429` is retried with backoff.
 
 The transport sends only the minimal headers DB accepts; db-vendo-client's own User-Agent and
 correlation headers turn an accepted request into a 403. Pacing is measured too: 6 parallel calls
@@ -207,8 +207,8 @@ restriction at the web API; the Navigator API later added its own fingerprint an
 On 2026-11-25 the Navigator API also began refusing eu-central-1 Lambda egress. The app now deploys
 `DbProxyStack` once per region (`CDK_DB_PROXY_REGIONS`, default `us-east-1,eu-central-1`); the
 poller and backend invoke them with `lambda:InvokeFunction` through `DB_PROXY_FUNCTIONS`. The caller
-tries the healthiest region first and fails over on a refusal or a `429`, skipping the failed
-region for two minutes. Each proxy is bounded at 20 s (below the API's 29 s cap), the caller aborts
+tries the healthiest region first, fails over on a refusal, retries a `429` with backoff and
+skips a refused region for two minutes. Each proxy is bounded at 20 s (below the API's 29 s cap), the caller aborts
 the invoke at `DB_REQUEST_TIMEOUT_MS`, and the response body is gzipped to keep cross-region traffic
 small. This is a different AWS egress, not a vendor proxy: no VPC, NAT, alarm or fixed cost.
 
@@ -237,7 +237,7 @@ pacing remains the floor for the rate limit.
   `429`; the app-owned `DbProxyStack` Lambdas provide egress from two regions and the caller fails
   over between them. See [DB transport](#db-transport) for the measured history and
   `shared/db-fetch.ts` for the implementation.
-- **Alert budget.** Nine alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
+- **Alert budget.** Ten alarms, ten custom metrics, two dashboards and a $1 monthly budget are the
   deliberate ceiling.
 
 ## Diagrams

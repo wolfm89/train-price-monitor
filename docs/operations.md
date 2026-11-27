@@ -1,7 +1,7 @@
 # Operations
 
 Operational alerts, dashboards, budget and runbooks. The application is designed to stay inside the
-AWS free tier: nine CloudWatch alarms, ten custom metrics, two dashboards and a **$1.00 USD** monthly
+AWS free tier: ten CloudWatch alarms, ten custom metrics, two dashboards and a **$1.00 USD** monthly
 budget.
 
 ## Alert path
@@ -21,16 +21,18 @@ an HTTPS subscription that answers `SubscriptionConfirmation`.
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | `TPM-Scraper-PollerNotRunning`    | No poller invocation for 45 minutes; missing data is treated as breaching.                  |
 | `TPM-Scraper-PollerErrors`        | The poller Lambda is failing.                                                               |
-| `TPM-Scraper-PollerThrottledByDb` | The poller DB breaker opened in two consecutive runs; the DB egress proxy is blocked.       |
-| `TPM-Scraper-PollerNoPrices`      | No successful scrape for 45 minutes.                                                        |
+| `TPM-Scraper-PollerThrottledByDb` | The poller saw DB fingerprint blocks in two consecutive runs; the proxy egress is refused.  |
+| `TPM-Scraper-PollerNoPrices`      | No target has returned prices for 45 minutes.                                               |
 | `TPM-Scraper-PollerBatchAborted`  | A run hit the 240 s abort; the log line, not a raw duration threshold.                      |
+| `TPM-Scraper-HydratorErrors`      | The nightly hydrator failed: no new scrape targets are being seeded.                        |
 | `TPM-App-SearchErrors`            | GraphQL search errors in the API.                                                           |
-| `TPM-App-RefresherErrors`         | The hourly/daily SQS worker is failing.                                                     |
+| `TPM-App-RefresherErrors`         | The hourly/daily SQS worker failed in two consecutive hourly periods.                       |
 | `TPM-App-SearchThrottled`         | The GraphQL Lambda is being throttled (account concurrency limit reached).                  |
 | `TPM-App-RefresherDLQ`            | A refresh message reached the dead-letter queue. Investigate, then purge; it stays 14 days. |
 
-Nine alarms remain after the vendor fallback was removed. Region failovers are shown on the App
-dashboard (`TransportRegionRotations`) but are not alarmed: failing over is expected behavior.
+Ten alarms: the vendor fallback was removed and a hydrator-errors alarm was added. Region
+failovers are shown on the dashboards (`TransportRegionRotations`) but are not alarmed: failing
+over is expected behavior.
 
 Do not add an eleventh alarm or custom metric without accepting the cost. Do not use metric math,
 Metrics Insights or anomaly-detection bands in alarms; they are billed differently from the free
@@ -72,13 +74,14 @@ then.
 
 ### DB throttling or `403 OPS_BLOCKED`
 
-1. Check the poller transport counters (`directThrottled`, `breakerOpened`, `regionRotations`,
-   `profileRotations`) and the `DbProxyStack` log group in both regions.
+1. Check the poller transport counters (`directThrottled`, `blocks`, `breakerOpened`,
+   `regionRotations`, `profileRotations`) and the `DbProxyStack` log group in both regions. `blocks`
+   counts 452/OPS_BLOCKED; a 429 is a rate limit and is retried with backoff.
 2. The backend reaches the Navigator API through the proxied regions; the transport tries the
    healthiest region and the configured fingerprint order, and there is no vendor fallback.
 3. On a proxy block the poller ends the batch; untouched targets are retried by the next run. Do not
    raise `SCRAPER_BATCH_SIZE`. A few `directThrottled` retries per run are normal; the alarm fires
-   when the poller's breaker opens in two consecutive runs.
+   when `blocks` is non-zero in two consecutive runs.
 4. On 2026-11-27 `tls12` (the previously pinned profile) was refused with `452 OPS_BLOCKED` while
    `chrome` and `legacy` returned 200 from the same IP. The `tlsProfile` field in the poller's
    transport counters shows the current winner. If every fingerprint is refused, update
@@ -104,7 +107,7 @@ then.
 1. Check Lambda `ConcurrentExecutions` and account concurrency limits. The API and refresher share
    the account's concurrency pool; a traffic spike or a stuck refresher can starve the API.
 2. Reduce traffic, stop the refresher temporarily, or request a quota increase. The backend does not
-   use reserved concurrency, but each DB proxy reserves 5; a proxy concurrency rejection surfaces as
+   use reserved concurrency, but each DB proxy reserves 6; a proxy concurrency rejection surfaces as
    a search error, and the transport tries the next region.
 
 ### Refresher errors or DLQ

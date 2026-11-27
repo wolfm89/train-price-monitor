@@ -25,6 +25,7 @@ import { LoyaltyCardData, validateLoyaltyCard } from '../lib/loyaltyCards';
 import { findMatchingJourney } from '../lib/journeyMatcher';
 import { requireInternal, requireUserAccess } from '../lib/auth';
 import { journeyTtl, notificationTtl } from '../lib/retention';
+import { setDbTransportDeadline } from '../../../shared/db-fetch';
 
 /**
  * Stop starting new journey refreshes past this point in a run, leaving headroom
@@ -282,36 +283,49 @@ export const updateJourneyMonitors: NonNullable<MutationResolvers['updateJourney
   let attempted = 0;
   let refreshed = 0;
 
-  for (const journey of journeys) {
-    // Leave room to finish the journey in flight before the Lambda timeout.
-    // Anything skipped is simply picked up by the next scheduled run.
-    if (Date.now() - startedAt > REFRESH_ABORT_THRESHOLD_MS) {
-      // Counts attempts, not successes: a journey that threw was still
-      // processed and is not waiting for the next run.
-      Logger.warn('Approaching timeout, deferring remaining journeys to the next run', {
-        remaining: journeys.length - attempted,
-      });
-      break;
-    }
+  // A journey started just before the threshold would otherwise get a fresh
+  // per-request budget and overrun the Lambda timeout.
+  setDbTransportDeadline(startedAt + REFRESH_ABORT_THRESHOLD_MS);
+  try {
+    for (const journey of journeys) {
+      // Leave room to finish the journey in flight before the Lambda timeout.
+      // Anything skipped is simply picked up by the next scheduled run.
+      if (Date.now() - startedAt > REFRESH_ABORT_THRESHOLD_MS) {
+        // Counts attempts, not successes: a journey that threw was still
+        // processed and is not waiting for the next run.
+        Logger.warn('Approaching timeout, deferring remaining journeys to the next run', {
+          remaining: journeys.length - attempted,
+        });
+        break;
+      }
 
-    attempted++;
+      attempted++;
 
-    try {
-      // Expired journeys are refreshed too, not skipped: refreshJourneyMonitor
-      // is what deletes them and notifies the user, so skipping them here left
-      // them stored forever.
-      await refreshJourneyMonitor(context, journey.userId, journey.id);
-      refreshed++;
-    } catch (error) {
-      Logger.error('Failed to refresh journey', {
-        journeyId: journey.id,
-        userId: journey.userId,
-        error: error instanceof Error ? error.message : error,
-        // The 2026-10-27 failures only had "Cannot read properties of undefined
-        // (reading 'split')" and could not be located after the journeys expired.
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+      try {
+        // Expired journeys are refreshed too, not skipped: refreshJourneyMonitor
+        // is what deletes them and notifies the user, so skipping them here left
+        // them stored forever.
+        await refreshJourneyMonitor(context, journey.userId, journey.id);
+        refreshed++;
+      } catch (error) {
+        Logger.error('Failed to refresh journey', {
+          journeyId: journey.id,
+          userId: journey.userId,
+          error: error instanceof Error ? error.message : error,
+          // The 2026-10-27 failures only had "Cannot read properties of undefined
+          // (reading 'split')" and could not be located after the journeys expired.
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
     }
+  } finally {
+    setDbTransportDeadline(null);
+  }
+
+  // Every attempted journey failed (typically the breaker is open): return an
+  // error so the SQS message is retried instead of silently acked.
+  if (attempted > 0 && refreshed === 0) {
+    throw new Error('Every journey refresh failed in this run');
   }
 
   // The number actually refreshed, not the number found: a run can stop early
@@ -548,7 +562,7 @@ async function refreshJourneyMonitorInner(
       userId: userId,
       id: journeyId,
       refreshToken: journey.refreshToken ?? dbJourney.Item.refreshToken,
-      cachedPrice: journey.price?.amount,
+      cachedPrice: journey.price?.amount ?? dbJourney.Item.cachedPrice,
       cachedDeparture: cachedDeparture ? new Date(cachedDeparture).toISOString() : undefined,
       cachedArrival: cachedArrival ? new Date(cachedArrival).toISOString() : undefined,
       cachedMeans: JSON.stringify(getMeans(journey)),
@@ -567,7 +581,7 @@ async function refreshJourneyMonitorInner(
     departure: cachedDeparture ? new Date(cachedDeparture) : undefined,
     arrival: cachedArrival ? new Date(cachedArrival) : undefined,
     means: getMeans(journey),
-    price: journey.price?.amount,
+    price: journey.price?.amount ?? dbJourney.Item.cachedPrice,
   };
 
   const newPrice = journey.price?.amount;

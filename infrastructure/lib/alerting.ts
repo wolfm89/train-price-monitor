@@ -310,7 +310,7 @@ export class AlertingStack extends cdk.Stack {
         conditions: {
           StringEquals: { 'aws:SourceAccount': this.account },
           ArnLike: {
-            'aws:SourceArn': `arn:${cdk.Stack.of(this).partition}:budgets::${this.account}:*`,
+            'aws:SourceArn': `arn:${cdk.Stack.of(this).partition}:budgets::${this.account}:budget/*`,
           },
         },
       })

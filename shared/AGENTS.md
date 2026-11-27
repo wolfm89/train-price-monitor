@@ -46,8 +46,8 @@ no vendor fallback.
 **Cross-region proxy.** `DB_PROXY_FUNCTIONS` is a comma-separated list of proxy Lambda ARNs, one per
 region (normally us-east-1 and eu-central-1); the legacy single `DB_PROXY_FUNCTION` is still read.
 The handler lives in `../infrastructure/lambda/db-proxy` and uses the same direct path. The caller
-tries the healthiest region first, fails over on a refusal or a 429, and skips a failed region for
-`DB_REGION_COOLDOWN_MS` (2 min). `DB_PROXY_REGION` is only the hint for a single unparsable ARN.
+tries the healthiest region first, fails over on a refusal, retries a 429 with backoff, and skips a
+refused region for `DB_REGION_COOLDOWN_MS` (2 min). `DB_PROXY_REGION` is only the hint for a single unparsable ARN.
 
 **Dynamic fingerprints.** DB matches the TLS ClientHello and changes which order it accepts without
 notice: `tls12` worked on 2026-11-25 and was refused again on 2026-11-27, while `chrome` and

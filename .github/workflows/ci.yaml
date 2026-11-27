@@ -281,9 +281,19 @@ jobs:
     name: Deploy
     # Never on pull requests, and only once every module job is green. A manual
     # dispatch can deploy the selected ref only when `deploy` is explicitly set.
+    #
+    # SECURITY: repository secrets are available to any branch workflow. Keep a
+    # protected `production` environment (required reviewers, main-only) so a
+    # branch dispatch needs approval; the environment is declared here.
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
     needs: [frontend, backend, scraper, infrastructure, analytics]
     runs-on: ubuntu-26.04
+    environment: production
+    # One deploy at a time across refs; a branch deploy and a main deploy must
+    # not interleave on the same CloudFormation stacks.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -337,7 +347,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-external-id: ${{ secrets.AWS_ROLE_EXTERNAL_ID }}
-          role-duration-seconds: 1200
+          role-duration-seconds: 3600
           role-session-name: GithubWorkflow
 
       # Pushover credentials for the alarm forwarder (AlertingStack). CI writes

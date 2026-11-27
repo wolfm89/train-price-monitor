@@ -347,9 +347,14 @@ export function scraperWidgets(props: ScraperDashboardProps): cloudwatch.IWidget
       }),
     ],
     [
-      logsTable('Diagnostics — recent failed target scrapes', props.pollerLogGroup, [
+      logsTable('Diagnostics — recent failed or throttled target scrapes', props.pollerLogGroup, [
         'fields @timestamp, route_id, departure_date, err',
         'filter message = "Failed to scrape target"',
+        '  or message = "DB is throttling this environment, ending the batch early"',
+        '  or message = "Rate limited by Vendo API"',
+        '  or message = "DB proxy busy, retrying target later"',
+        '  or message = "One class failed, preserving the other and retrying target later"',
+        '  or message = "Failed to update schedule after upload"',
         'sort @timestamp desc',
         'limit 10',
       ]),

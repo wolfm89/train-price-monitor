@@ -49,18 +49,20 @@ const dbProxyStacks = DB_PROXY_REGIONS.map(
       },
     })
 );
-const dbProxyFunctionArns = DB_PROXY_REGIONS.map((region) =>
+const dbProxyFunctionArns = DB_PROXY_REGIONS.map((region, index) =>
   cdk.Arn.format(
     {
-      partition: dbProxyStacks[0].partition,
+      // Derive the partition/account from this region's own stack so a
+      // mixed-partition list cannot produce an ARN in the wrong partition.
+      partition: dbProxyStacks[index].partition,
       service: 'lambda',
       region,
-      account: cdk.Aws.ACCOUNT_ID,
+      account: dbProxyStacks[index].account,
       resource: 'function',
       resourceName: DB_PROXY_FUNCTION_NAME,
       arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
     },
-    dbProxyStacks[0]
+    dbProxyStacks[index]
   )
 );
 

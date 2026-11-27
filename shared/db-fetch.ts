@@ -120,6 +120,17 @@ export class DbThrottledError extends Error {
   }
 }
 
+/**
+ * The proxy's Lambda concurrency reservation is full. This is our own capacity
+ * pressure, not a DB block: callers should retry later, not stop the batch.
+ */
+export class DbProxyBusyError extends Error {
+  constructor(message = 'DB proxy is busy (Lambda concurrency limit)') {
+    super(message);
+    this.name = 'DbProxyBusyError';
+  }
+}
+
 export interface DbTransportStats {
   directOk: number;
   directThrottled: number;
@@ -127,6 +138,8 @@ export interface DbTransportStats {
   retries: number;
   breakerOpened: number;
   breakerSkips: number;
+  /** Fingerprint blocks (452/OPS_BLOCKED) or proxy-reported DbThrottledError. */
+  blocks: number;
   /** The proxy rejected an invoke because its concurrency limit was full. */
   proxyBusy: number;
   /** How often DB refused the preferred profile and the next one was used. */
@@ -147,6 +160,7 @@ const stats: DbTransportStats = {
   retries: 0,
   breakerOpened: 0,
   breakerSkips: 0,
+  blocks: 0,
   proxyBusy: 0,
   profileRotations: 0,
   regionRotations: 0,
@@ -368,17 +382,34 @@ function agentFor(profile: TlsProfile): https.Agent {
   return created;
 }
 
-function isProfileBlocked(profile: TlsProfile): boolean {
-  return (blockedProfiles.get(profile.name) ?? 0) > Date.now();
+/**
+ * Health is scoped to the endpoint: DB can refuse one Navigator endpoint on a
+ * fingerprint/region while accepting another. A block seen on `recon` must not
+ * disable `tagesbestpreis` in the same warm container.
+ */
+function endpointScope(url: string): string {
+  const target = new URL(url);
+  return `${target.host}${target.pathname}`;
 }
 
-function markProfileBlocked(profile: TlsProfile): void {
-  blockedProfiles.set(profile.name, Date.now() + intFromEnv('DB_PROFILE_BLOCK_COOLDOWN_MS', 15 * 60_000));
+function profileHealthKey(profile: TlsProfile, scope: string): string {
+  return `${profile.name}|${scope}`;
 }
 
-/** Preferred order first, skipping profiles that recently answered OPS_BLOCKED. */
-function availableProfiles(): TlsProfile[] {
-  return configuredProfileOrder().filter((profile) => !isProfileBlocked(profile));
+function isProfileBlocked(profile: TlsProfile, scope: string): boolean {
+  return (blockedProfiles.get(profileHealthKey(profile, scope)) ?? 0) > Date.now();
+}
+
+function markProfileBlocked(profile: TlsProfile, scope: string): void {
+  blockedProfiles.set(
+    profileHealthKey(profile, scope),
+    Date.now() + intFromEnv('DB_PROFILE_BLOCK_COOLDOWN_MS', 15 * 60_000)
+  );
+}
+
+/** Preferred order first, skipping profiles that recently answered OPS_BLOCKED for this endpoint. */
+function availableProfiles(scope: string): TlsProfile[] {
+  return configuredProfileOrder().filter((profile) => !isProfileBlocked(profile, scope));
 }
 
 function isFingerprintBlocked(status: number, bodyText: string): boolean {
@@ -556,23 +587,29 @@ function lambdaClientFor(region: string): InstanceType<LambdaSdk['LambdaClient']
   return client;
 }
 
-/** Regions that are not cooling down, in configured order. */
-function availableProxyTargets(targets: ProxyTarget[]): ProxyTarget[] {
+function proxyHealthKey(target: ProxyTarget, scope: string): string {
+  return `${target.arn}|${scope}`;
+}
+
+/** Regions that are not cooling down for this endpoint, in configured order. */
+function availableProxyTargets(targets: ProxyTarget[], scope: string): ProxyTarget[] {
   const now = Date.now();
-  return targets.filter((target) => (proxyHealth.get(target.arn)?.blockedUntil ?? 0) <= now);
+  return targets.filter((target) => (proxyHealth.get(proxyHealthKey(target, scope))?.blockedUntil ?? 0) <= now);
 }
 
-function markProxyUnhealthy(target: ProxyTarget): void {
-  const health = proxyHealth.get(target.arn) ?? { blockedUntil: 0, preferredProfile: null };
+function markProxyUnhealthy(target: ProxyTarget, scope: string): void {
+  const key = proxyHealthKey(target, scope);
+  const health = proxyHealth.get(key) ?? { blockedUntil: 0, preferredProfile: null };
   health.blockedUntil = Date.now() + intFromEnv('DB_REGION_COOLDOWN_MS', 120_000);
-  proxyHealth.set(target.arn, health);
+  proxyHealth.set(key, health);
 }
 
-function markProxyHealthy(target: ProxyTarget, usedProfile: string | null): void {
-  const health = proxyHealth.get(target.arn) ?? { blockedUntil: 0, preferredProfile: null };
+function markProxyHealthy(target: ProxyTarget, scope: string, usedProfile: string | null): void {
+  const key = proxyHealthKey(target, scope);
+  const health = proxyHealth.get(key) ?? { blockedUntil: 0, preferredProfile: null };
   health.blockedUntil = 0;
   if (usedProfile) health.preferredProfile = usedProfile;
-  proxyHealth.set(target.arn, health);
+  proxyHealth.set(key, health);
 }
 
 /** Bounds one proxy invoke by the configured timeout and the caller's remaining budget. */
@@ -691,7 +728,9 @@ async function proxyFetch(
   deadline: number
 ): Promise<FetchCompatibleResponse> {
   const maxRounds = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
+  const scope = endpointScope(url);
   let lastResponse: FetchCompatibleResponse | null = null;
+  let lastRateLimitResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
   let sawBlocked = false;
   let sawRateLimit = false;
@@ -700,13 +739,13 @@ async function proxyFetch(
   let attempted = 0;
 
   for (let round = 0; round < maxRounds && Date.now() < deadline; round++) {
-    const available = availableProxyTargets(targets);
+    const available = availableProxyTargets(targets, scope);
     if (available.length === 0) break;
 
     for (let index = 0; index < available.length && Date.now() < deadline; index++) {
       const target = available[index];
-      if (index > 0) stats.regionRotations++;
-      const profile = proxyHealth.get(target.arn)?.preferredProfile ?? null;
+      if (target.arn !== targets[0]?.arn) stats.regionRotations++;
+      const profile = proxyHealth.get(proxyHealthKey(target, scope))?.preferredProfile ?? null;
       const release = await acquireSlot();
       if (Date.now() >= deadline) {
         release();
@@ -723,19 +762,21 @@ async function proxyFetch(
         if (!throttled && response.ok) {
           recordSuccess();
           stats.directOk++;
-          markProxyHealthy(target, usedProfile);
+          markProxyHealthy(target, scope, usedProfile);
           return response;
         }
 
         if (blocked) {
           stats.directThrottled++;
+          stats.blocks++;
           sawBlocked = true;
-          markProxyUnhealthy(target);
+          markProxyUnhealthy(target, scope);
         } else if (rateLimited) {
           // A 429 is a rate limit, not a regional block: keep the region
-          // available so the next round (with its backoff) can retry it.
+          // available so the next round (with its longer backoff) can retry it.
           stats.directThrottled++;
           sawRateLimit = true;
+          lastRateLimitResponse = response;
         } else {
           stats.directFailed++;
           sawNonThrottleFailure = true;
@@ -755,8 +796,9 @@ async function proxyFetch(
           // The proxy's own breaker is open. It answers in ~100 ms; retrying is
           // noise, and this is a block, not a generic failure.
           stats.directThrottled++;
+          stats.blocks++;
           sawBlocked = true;
-          markProxyUnhealthy(target);
+          markProxyUnhealthy(target, scope);
           lastError = error;
           lastResponse = null;
         } else {
@@ -764,7 +806,7 @@ async function proxyFetch(
           // proxy is not the first choice on every request.
           stats.directFailed++;
           sawNonThrottleFailure = true;
-          markProxyUnhealthy(target);
+          markProxyUnhealthy(target, scope);
           lastError = error;
           lastResponse = null;
         }
@@ -777,24 +819,33 @@ async function proxyFetch(
 
     if (round < maxRounds - 1 && Date.now() < deadline) {
       stats.retries++;
-      await sleep(Math.min(intFromEnv('DB_RETRY_BACKOFF_MS', 3000) * (round + 1), Math.max(0, deadline - Date.now())));
+      const backoff = sawRateLimit
+        ? intFromEnv('DB_RATE_LIMIT_BACKOFF_MS', 5000)
+        : intFromEnv('DB_RETRY_BACKOFF_MS', 3000);
+      await sleep(Math.min(backoff * (round + 1), Math.max(0, deadline - Date.now())));
     }
   }
 
-  if (attempted === 0 || sawBlocked) {
-    // Every region was cooling down, or at least one returned a fingerprint
-    // block (452/OPS_BLOCKED) with no success. Stop immediately: the caller
-    // must not keep hammering a blocked egress.
+  if (attempted === 0) {
+    // Every region is cooling down for this endpoint. Nothing new was learned
+    // about DB, so fail fast without extending the breaker.
+    throw new DbThrottledError();
+  }
+
+  if (sawBlocked && !sawRateLimit && !sawNonThrottleFailure && !sawBusy) {
+    // A block with no other signal: stop the caller immediately.
     openBreaker();
     throw new DbThrottledError();
   }
 
   if (sawBusy && !sawNonThrottleFailure && !sawRateLimit) {
-    throw new DbThrottledError('DB proxy is busy (Lambda concurrency limit)');
+    throw new DbProxyBusyError();
   }
 
   recordFailure();
   if (breakerOpen()) throw new DbThrottledError();
+  // Prefer the retryable rate-limit response over a block from the other region.
+  if (lastRateLimitResponse) return lastRateLimitResponse;
   if (lastResponse) return lastResponse;
   throw lastError instanceof Error ? lastError : new Error('DB proxy request failed');
 }
@@ -805,6 +856,7 @@ async function proxyFetch(
 
 async function directFetch(url: string, init: FetchInit, deadline: number): Promise<FetchCompatibleResponse> {
   const maxAttempts = Math.max(1, intFromEnv('DB_MAX_ATTEMPTS', 2));
+  const scope = endpointScope(url);
   let lastResponse: FetchCompatibleResponse | null = null;
   let lastError: unknown = null;
   let allProfilesBlocked = false;
@@ -817,7 +869,7 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
       break;
     }
     try {
-      const candidates = availableProfiles();
+      const candidates = availableProfiles(scope);
       if (candidates.length === 0) {
         // Every profile is cooling down after OPS_BLOCKED; do not spend the
         // budget on another guaranteed refusal. The caller must stop the batch.
@@ -843,8 +895,12 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
         bodyText = await response.text();
 
         if (isFingerprintBlocked(response.status, bodyText)) {
-          markProfileBlocked(profile);
+          stats.blocks++;
+          markProfileBlocked(profile, scope);
           if (index === candidates.length - 1 || Date.now() >= deadline) break;
+          // Space the profile attempts: six immediate ClientHellos from the
+          // same egress look like a burst to DB's rate limiter.
+          await sleep(Math.min(intFromEnv('DB_PROFILE_ROTATION_GAP_MS', 250), Math.max(0, deadline - Date.now())));
           continue;
         }
 
@@ -903,15 +959,34 @@ async function directFetch(url: string, init: FetchInit, deadline: number): Prom
     }
   }
 
-  if (allProfilesBlocked) throw new DbThrottledError();
+  if (allProfilesBlocked) {
+    stats.blocks++;
+    throw new DbThrottledError();
+  }
+  // A 429 is a rate limit, not a regional block: return it without opening this
+  // environment's breaker. The caller counts it and retries/fails over.
+  if (lastResponse?.status === 429) return lastResponse;
   recordFailure();
   if (breakerOpen()) throw new DbThrottledError();
   if (lastResponse) return lastResponse;
   throw lastError instanceof Error ? lastError : new Error('DB request failed');
 }
 
+/**
+ * Optional run-level deadline. The refresher sets it once per SQS message so a
+ * journey started near the Lambda timeout cannot spend a fresh per-request
+ * budget and overrun the invocation.
+ */
+let runDeadline = 0;
+
+/** Bound all subsequent requests to a run-level deadline; `null` clears it. */
+export function setDbTransportDeadline(deadline: number | null): void {
+  runDeadline = deadline && deadline > 0 ? deadline : 0;
+}
+
 export async function fetch(url: string, init: FetchInit = {}): Promise<FetchCompatibleResponse> {
-  const deadline = Date.now() + intFromEnv('DB_TOTAL_BUDGET_MS', 24_000);
+  const budgetDeadline = Date.now() + intFromEnv('DB_TOTAL_BUDGET_MS', 24_000);
+  const deadline = runDeadline > 0 ? Math.min(budgetDeadline, runDeadline) : budgetDeadline;
 
   if (breakerOpen()) {
     stats.breakerSkips++;

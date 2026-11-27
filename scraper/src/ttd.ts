@@ -98,7 +98,7 @@ export function computeTtdTier(departureDateStr: string, now: Date): TtdTier {
  *
  * Both clamps are spread over a window: every route sharing a departure date
  * would otherwise become due at the same instant, which defeats the jitter and
- * piles 140 targets onto a poller that serves 25 per run.
+ * piles 140 targets onto a poller that serves 20 per run.
  */
 export function computeNextScrapeAt(tier: TtdTier, now: Date, departureDate: string, rng: Rng = Math.random): Date {
   const { nearEntry, hardStop } = scheduleBounds(departureDate);

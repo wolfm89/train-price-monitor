@@ -68,7 +68,9 @@ Shared by the backend and scraper.
 | `DB_PROXY_FUNCTIONS`            | Backend + scraper | ARNs of both `DbProxyStack`s, comma-separated                  | CDK             | Proxy Lambdas to invoke; the transport tries them in order and fails over.        |
 | `DB_PROXY_FUNCTION`             | Backend + scraper | unset                                                          | developer       | Legacy single-ARN alias; `DB_PROXY_FUNCTIONS` wins when both are set.             |
 | `DB_PROXY_REGION`               | Backend + scraper | `us-east-1`                                                    | developer       | Region hint for a single ARN that cannot be parsed.                               |
-| `DB_REGION_COOLDOWN_MS`         | Backend + scraper | `120000`                                                       | developer       | How long a proxy region is skipped after a refusal or a `429`.                    |
+| `DB_REGION_COOLDOWN_MS`         | Backend + scraper | `120000`                                                       | developer       | How long a proxy region is skipped after a refusal; a `429` is retried.           |
+| `DB_RATE_LIMIT_BACKOFF_MS`      | Backend + scraper | `5000`                                                         | developer       | Backoff before retrying after a `429` (instead of the 3 s default).               |
+| `DB_PROFILE_ROTATION_GAP_MS`    | Backend + scraper | `250`                                                          | developer       | Pause between fingerprint attempts after a refusal, to avoid a burst.             |
 
 `DB_REQUEST_TIMEOUT_MS` is the caller's invoke deadline. The proxy caps its own DB request at 15 s so
 it can return a structured response before its 20 s Lambda timeout.
@@ -101,7 +103,7 @@ directly.
 | --------------------------- | ------- | ------------------ | --------- | ------------------------------------------------------------------ |
 | `SCRAPER_TABLE_NAME`        | Scraper | —                  | CDK       | DynamoDB schedule table.                                           |
 | `SCRAPER_BUCKET_NAME`       | Scraper | —                  | CDK       | S3 bucket for bronze Parquet.                                      |
-| `SCRAPER_BATCH_SIZE`        | Scraper | `25`               | CDK       | Targets per poller run; one target is two DB calls.                |
+| `SCRAPER_BATCH_SIZE`        | Scraper | `20`               | CDK       | Targets per poller run; one target is two DB calls.                |
 | `HYDRATOR_LOOKAHEAD_DAYS`   | Scraper | `60`               | CDK       | Days ahead to seed.                                                |
 | `HYDRATOR_SEED_WINDOW_DAYS` | Scraper | `3`                | CDK       | Newest days re-seeded per nightly run.                             |
 | `HYDRATOR_FULL_SEED`        | Scraper | unset              | developer | `1` seeds the whole lookahead window and prunes beyond it; manual. |
